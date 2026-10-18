@@ -758,10 +758,15 @@ pub fn strip_card_for_persist(card: &Value) -> Value {
 /// sessionId ("" when absent, the contract put_log_session keeps). DA0GN1CS: built from the resident
 /// layer in first-insert order, so no DuckDB scan is needed.
 pub fn persist_records_from(cards: &[Arc<Value>]) -> IndexMap<String, Value> {
-    cards
-        .iter()
-        .map(|c| (c.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(), strip_card_for_persist(c)))
-        .collect()
+    cards.iter().map(persist_record).collect()
+}
+
+/// One card's delta-log record: (sessionId or "", the persist-stripped card). TRDD-2JOIAH2G: the
+/// ONE definition restore_reused's seed and save_cards' stream both use, so the seeded hashes and
+/// the saved records cannot drift; both stream it one card at a time instead of collecting a map
+/// (a full stripped copy of the corpus at restore and at every save).
+fn persist_record(card: &Arc<Value>) -> (String, Value) {
+    (card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(), strip_card_for_persist(card))
 }
 
 
@@ -1033,15 +1038,18 @@ impl DurableState {
         // Idempotent (rows already demoted are skipped); needed because the hot-set size may have
         // changed between boots. Once, not per card.
         state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
-        // Seed the delta-log hashes with exactly what `save_cards` would compute. Both call
-        // `persist_records_from` over the resident layer, so the seeded hashes and the saved records
+        // Seed the delta-log hashes with exactly what `save_cards` would compute. Both map
+        // `persist_record` over the resident layer, so the seeded hashes and the saved records
         // cannot drift, and the 72 MB snapshot is never loaded. Without the seed the first save would
-        // append the whole corpus (72 MB) and compact. WHY AFTER the demotion: cards demoted at this start
-        // are persisted stripped; hashing them before the demotion would make the first save see them as
-        // changed and append them again.
-        let records = persist_records_from(&state.cards.parsed_cards());
-        self.cards.seed_written(&records);
-        drop(records);
+        // append the whole corpus (72 MB) and compact. WHY AFTER the demotion (keep this order): cards
+        // demoted at this start are persisted stripped; hashing them before the demotion would make the
+        // first save see them as changed and append them again.
+        // TRDD-2JOIAH2G: streamed, one stripped card at a time, into the seed. It used to collect every
+        // stripped card into a map first, a full copy of the corpus on top of the resident layer at
+        // restore (measured ~540 MB committed, reports/rss-crash-loop/20261018_114500+0200-head-paired-run.md).
+        let parsed = state.cards.parsed_cards();
+        self.cards.seed_written(parsed.iter().map(persist_record));
+        drop(parsed);
         // The full restore bumps `data_version` once per card; a reused store would stay at 0 and
         // version-keyed caches (summary, SSE pusher) would see no change after the build.
         state.data_version += 1;
@@ -1265,9 +1273,12 @@ impl DurableState {
             let st = state.lock_timed();
             st.cards.persist_snapshot()
         };
-        let records = persist_records_from(&snap);
+        // TRDD-2JOIAH2G: the records are streamed from the Arc snapshot, each stripped card built and
+        // dropped in turn (twice when the save compacts), instead of collected into a map first — a
+        // full stripped copy of the corpus every 300 s and at shutdown.
+        let saved = self.cards.save_from(|| snap.iter().map(persist_record));
         drop(snap);
-        match self.cards.save(&records) {
+        match saved {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
                 {

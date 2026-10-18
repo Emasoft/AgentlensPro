@@ -11,6 +11,7 @@
 //! every record before the rename, and deletes the delta only after the rename — a short or
 //! corrupt snapshot write keeps the old snapshot AND the delta intact.
 
+use std::borrow::Borrow;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -451,8 +452,17 @@ impl DeltaLog {
     /// unchanged corpus costs zero bytes. Known gap, by design: a record the snapshot lags behind
     /// the database on (changed after the last pre-crash save) is not re-appended until it changes
     /// again — the snapshot is only the FALLBACK for a database that cannot be reused.
-    pub fn seed_written(&mut self, records: &IndexMap<String, Value>) {
-        self.written = records.iter().map(|(k, v)| (k.clone(), hash_json(&serde_json::to_string(v).unwrap_or_default()))).collect();
+    ///
+    /// TRDD-2JOIAH2G: takes a stream, not a map. WHY: the caller used to build every stripped card
+    /// into an IndexMap first, a full copy of the corpus that was live at the same time as the
+    /// resident layer (~540 MB committed at restore, measured); now each record is hashed and
+    /// dropped before the next is built. A key that appears twice keeps its FIRST position and its
+    /// LAST value's hash — what collecting into the IndexMap gave.
+    pub fn seed_written(&mut self, records: impl IntoIterator<Item = (String, Value)>) {
+        self.written = records.into_iter().map(|(k, v)| {
+            let h = hash_json(&serde_json::to_string(&v).unwrap_or_default());
+            (k, h)
+        }).collect();
     }
 
     /// Rewrite the snapshot from `records`, VERIFY it from disk, then drop the delta.
@@ -464,20 +474,36 @@ impl DeltaLog {
     /// docs_dev/20261017-ajgtq007-streaming-report.md). Same contract as before: the snapshot is
     /// exactly `records`, in its order (save() calls this BEFORE its changed lines reach the delta,
     /// so `records`, not the files, is the source of truth here).
-    fn compact(&self, records: &IndexMap<String, Value>) -> Result<u64, String> {
+    ///
+    /// TRDD-2JOIAH2G: `records` is an iterator (save_from's pass 2), consumed once, so its records
+    /// are never collected (save_cards used to build every stripped card into a map first, a full
+    /// copy of the corpus every 300 s and at shutdown). `expected` is how many records the caller's
+    /// previous pass over the same source saw; a different count here means the source changed
+    /// between the passes, so the snapshot is refused before the verify. WHY the verify compares
+    /// a (key hash, value hash) pair recorded while writing, not the records: there is no second
+    /// iteration to compare against (each one rebuilds every record), and compact_from_disk already
+    /// verifies by hash. 16 bytes per record, no key or value cloned. A key repeated in `records`
+    /// is written twice, replays as one, and so fails the verify's count check: Err, delta kept.
+    fn compact<K: AsRef<str>, V: Borrow<Value>>(&self, records: impl Iterator<Item = (K, V)>, expected: usize) -> Result<u64, String> {
         let mut tmp = TmpSnapshot::create(&self.snapshot_path)?;
+        let mut sums: Vec<(u64, u64)> = Vec::with_capacity(expected);
         for (k, v) in records {
+            let (k, v): (&str, &Value) = (k.as_ref(), v.borrow());
+            let json = serde_json::to_string(v).unwrap_or_default();
             // TRDD-1RJBOEI1: a failed write removes `<snapshot>.tmp` before returning; a bare `?`
             // here used to leave the half-written temp file next to the snapshot.
-            if let Err(e) = tmp.push(k, &serde_json::to_string(v).unwrap_or_default()) {
+            if let Err(e) = tmp.push(k, &json) {
                 tmp.discard();
                 return Err(e);
             }
+            sums.push((hash_json(k), hash_json(&json)));
+        }
+        if sums.len() != expected {
+            tmp.discard();
+            return Err(format!("{}: compaction saw {} records, the pass before it saw {expected}; delta KEPT, snapshot NOT replaced", self.snapshot_path.display(), sums.len()));
         }
         let (tmp, bytes) = tmp.finish()?;
-        // WHY Value equality and not a hash: `records` is in memory, so the exact old check (every
-        // record equal) costs nothing extra.
-        self.commit_verified(&tmp, records.keys().map(String::as_str), |pos, v| records.get_index(pos).map(|(_, r)| r) == Some(v))?;
+        self.commit_verified(&tmp, sums.len(), |pos, k, v| sums.get(pos) == Some(&(hash_json(k), hash_json(&serde_json::to_string(v).unwrap_or_default()))))?;
         Ok(bytes)
     }
 
@@ -493,22 +519,25 @@ impl DeltaLog {
     /// same parse and torn-tail rules a later load() applies. WHY a torn or corrupt `tmp` now counts
     /// as a failed verify (it used to return the replay error and leave `tmp` behind): it IS a
     /// failed verify, and the old snapshot and delta are untouched either way.
-    fn commit_verified<'a>(
+    ///
+    /// TRDD-2JOIAH2G: `expected` (a count) and `same(pos, key, v)` replace an ordered key list,
+    /// because the streamed compact() has no key list to hand over (it keeps one hash pair per
+    /// record instead of cloning the keys). WHY that is still the old "every key, in order" check:
+    /// the count matches, and visit_winners hands every winner over exactly once with its replay
+    /// position, so `same` judges each position's key and value once.
+    fn commit_verified(
         &self,
         tmp: &Path,
-        keys: impl ExactSizeIterator<Item = &'a str>,
-        mut same: impl FnMut(usize, &Value) -> bool,
+        expected: usize,
+        mut same: impl FnMut(usize, &str, &Value) -> bool,
     ) -> Result<(), String> {
         let verified = (|| -> Result<(), String> {
             let ix = Self::index_files(&[tmp])?;
-            if ix.live.len() != keys.len() {
-                return Err(format!("holds {} records, expected {}", ix.live.len(), keys.len()));
-            }
-            if let Some((got, want)) = ix.live.keys().zip(keys).find(|(got, want)| got.as_str() != *want) {
-                return Err(format!("record {want:?} is not durable in the snapshot (found {got:?} in its place)"));
+            if ix.live.len() != expected {
+                return Err(format!("holds {} records, expected {expected}", ix.live.len()));
             }
             let winners = ix.winners();
-            Self::visit_winners(&ix.files, &winners, |pos, k, v| if same(pos, &v) { Ok(()) } else { Err(format!("record {k:?} is not durable in the snapshot")) })
+            Self::visit_winners(&ix.files, &winners, |pos, k, v| if same(pos, &k, &v) { Ok(()) } else { Err(format!("record {k:?} is not durable in the snapshot")) })
             // `ix` drops here, closing `tmp` before the rename (Windows refuses to rename an open file).
         })();
         if let Err(m) = verified {
@@ -658,10 +687,10 @@ impl DeltaLog {
         let Some(tmp) = out else { return Ok(0) };
         let (tmp, bytes) = tmp.finish()?;
         let written = &self.written;
-        self.commit_verified(&tmp, written.keys().map(String::as_str), |pos, v| {
+        self.commit_verified(&tmp, written.len(), |pos, k, v| {
             // WHY a hash and not the record: there is no record map here, by design. The seeded hash
             // is of `to_string(v)` as written; the parsed-back `v` must serialize to the same bytes.
-            written.get_index(pos).map(|(_, h)| *h) == Some(hash_json(&serde_json::to_string(v).unwrap_or_default()))
+            written.get_index(pos).is_some_and(|(key, h)| key == k && *h == hash_json(&serde_json::to_string(v).unwrap_or_default()))
         })?;
         Ok(bytes)
     }
@@ -674,16 +703,33 @@ impl DeltaLog {
         let mut body = String::new();
         let mut appended = 0usize;
         for (k, v) in records {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let h = hash_json(&json);
-            if self.written.get(k) == Some(&h) {
-                continue; // unchanged — the whole saving
+            if self.note_record(k, v, &mut body).1 {
+                appended += 1;
             }
-            body.push_str(&format!("{{\"k\":{},\"v\":{json}}}\n", serde_json::to_string(k).unwrap_or_default()));
-            self.written.insert(k.clone(), h);
-            appended += 1;
         }
         (body, appended)
+    }
+
+    /// One record of `changed_lines` / `save_from`'s pass 1: hash its serialized form and, when the
+    /// hash differs from `written` (or the key is new), push its `{"k":...,"v":...}` line onto `body`
+    /// and record the new hash. Returns (the key's index in `written`, whether a line was pushed).
+    /// TRDD-2JOIAH2G: one definition shared by both, so the streamed save cannot drift from
+    /// append_changed in line format or in when `written` changes. WHY `written` is updated here,
+    /// BEFORE the line reaches the disk: today's semantics, kept — a failed write leaves the record
+    /// marked written, so it is not re-appended until it changes again.
+    fn note_record(&mut self, k: &str, v: &Value, body: &mut String) -> (usize, bool) {
+        let json = serde_json::to_string(v).unwrap_or_default();
+        let h = hash_json(&json);
+        let i = match self.written.get_full_mut(k) {
+            Some((i, _, slot)) if *slot == h => return (i, false), // unchanged — the whole saving
+            Some((i, _, slot)) => {
+                *slot = h;
+                i
+            }
+            None => self.written.insert_full(k.to_owned(), h).0,
+        };
+        body.push_str(&format!("{{\"k\":{},\"v\":{json}}}\n", serde_json::to_string(k).unwrap_or_default()));
+        (i, true)
     }
 
     /// Persist `records`, writing ONLY what changed. Nothing changed ⇒ ZERO bytes written.
@@ -691,16 +737,64 @@ impl DeltaLog {
     /// assume any key missing from `records` was deleted. A caller with only a subset must use
     /// `append_changed` instead.
     pub fn save(&mut self, records: &IndexMap<String, Value>) -> Result<SaveResult, String> {
+        // TRDD-2JOIAH2G: the map is iterated BORROWED, twice at most — no key or value cloned.
+        self.save_from(|| records.iter())
+    }
+
+    /// TRDD-2JOIAH2G — `save` over a record SOURCE instead of a map: `records()` yields the FULL
+    /// record set, the same set in the same order every time it is called. WHY: save_cards used to
+    /// build every stripped card into an IndexMap before saving, a full copy of the corpus held
+    /// every 300 s and at shutdown (inferred, docs_dev/20261018_1210-measure-streaming-save.md); a
+    /// source lets each record be built, hashed and dropped one at a time. Same contract as `save`
+    /// (a missing key is a deletion), same bytes on disk for the same records.
+    ///
+    /// Pass 1 (`records()`): each record through `note_record`, as `changed_lines` does. Deletions
+    /// are found without cloning a key: `seen` marks every pre-existing `written` index a record
+    /// hit; a key first inserted in pass 1 lands at an index >= the original length and is never a
+    /// deletion candidate. The unseen original keys are tombstoned in `written` order, as before.
+    /// Pass 2 (`records()` again) happens only when the save compacts, and streams into compact().
+    /// The keys must be unique: both callers guarantee it (an IndexMap; the card store's resident
+    /// layer, keyed by the same sessionId-or-"" rule persist_record uses), and a repeated key makes
+    /// the compaction verify fail (Err, delta kept) instead of writing a wrong snapshot.
+    ///
+    /// Out of scope, as before: on a mass change `body` still holds every changed line in memory.
+    pub fn save_from<F, I, K, V>(&mut self, records: F) -> Result<SaveResult, String>
+    where
+        F: Fn() -> I,
+        I: Iterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: Borrow<Value>,
+    {
         if let Some(dir) = self.snapshot_path.parent() {
             fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
-        let (mut body, appended) = self.changed_lines(records);
+        let original = self.written.len();
+        let mut seen = vec![false; original];
+        let mut body = String::new();
+        let (mut appended, mut count) = (0usize, 0usize);
+        for (k, v) in records() {
+            let v: &Value = v.borrow();
+            let (i, pushed) = self.note_record(k.as_ref(), v, &mut body);
+            if i < original {
+                seen[i] = true;
+            }
+            appended += usize::from(pushed);
+            count += 1;
+        }
         let mut deleted = 0usize;
-        let gone: Vec<String> = self.written.keys().filter(|k| !records.contains_key(*k)).cloned().collect();
-        for k in gone {
-            body.push_str(&format!("{{\"k\":{},\"d\":1}}\n", serde_json::to_string(&k).unwrap_or_default())); // tombstone
-            self.written.shift_remove(&k);
+        // `zip` stops at `seen`'s end, so only the original keys are candidates.
+        for ((k, _), _) in self.written.iter().zip(&seen).filter(|(_, s)| !**s) {
+            body.push_str(&format!("{{\"k\":{},\"d\":1}}\n", serde_json::to_string(k).unwrap_or_default())); // tombstone
             deleted += 1;
+        }
+        if deleted > 0 {
+            // One ordered pass; pass 1 only appended, so index `i` here is the original index `i`.
+            let mut i = 0usize;
+            self.written.retain(|_, _| {
+                let keep = i >= original || seen[i];
+                i += 1;
+                keep
+            });
         }
         if body.is_empty() {
             return Ok(SaveResult::default());
@@ -708,7 +802,8 @@ impl DeltaLog {
         let snap_bytes = size_of(&self.snapshot_path);
         let delta_bytes = size_of(&self.delta_path) + body.len() as u64;
         if delta_bytes > COMPACT_MIN_BYTES && delta_bytes as f64 > snap_bytes as f64 * COMPACT_RATIO {
-            let bytes = self.compact(records)?;
+            // Pass 2. `count` is pass 1's: compact() refuses a pass 2 that sees a different number.
+            let bytes = self.compact(records(), count)?;
             return Ok(SaveResult { appended, deleted, bytes, compacted: true });
         }
         // TRDD-0R0NGVK6: append branch only (compaction above rewrites the snapshot and removes the
@@ -766,7 +861,7 @@ impl DeltaLog {
         if size_of(&self.delta_path) == 0 {
             return Ok(0);
         }
-        self.compact(records)
+        self.compact(records.iter(), records.len())
     }
     /// Total bytes on disk (both files).
     pub fn disk_bytes(&self) -> u64 {
@@ -824,13 +919,120 @@ mod tests {
             let tmp = PathBuf::from(format!("{}.tmp", log.snapshot_path.display()));
             fs::write(&tmp, tmp_body).unwrap();
             let err = log
-                .commit_verified(&tmp, expected.keys().map(String::as_str), |pos, v| expected.get_index(pos).map(|(_, r)| r) == Some(v))
+                .commit_verified(&tmp, expected.len(), |pos, k, v| expected.get_index(pos).is_some_and(|(key, r)| key == k && r == v))
                 .unwrap_err();
             assert!(err.contains("verify failed"), "{name}: refused by the verify: {err}");
             assert!(fs::symlink_metadata(&tmp).is_err(), "{name}: the temp snapshot is removed");
             assert_eq!(fs::read(&log.snapshot_path).unwrap(), snap_before, "{name}: old snapshot byte-identical");
             assert_eq!(fs::read(&log.delta_path).unwrap(), delta_before, "{name}: delta still present");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    fn unit_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("al-deltalog-unit-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A file's text, "" when it does not exist.
+    fn text(p: &Path) -> String {
+        fs::read_to_string(p).unwrap_or_default()
+    }
+
+    /// TRDD-2JOIAH2G — the streamed seed_written hashes each record exactly as load() and
+    /// changed_lines do (`to_string`, not any other spelling), and a key streamed twice keeps its
+    /// FIRST position with its LAST value's hash, which is what collecting into the old map gave.
+    #[test]
+    fn a_streamed_seed_hashes_like_load_and_a_repeated_key_keeps_first_position_last_value() {
+        let dir = unit_dir("seed");
+        let mut log = DeltaLog::new(&dir, "seed");
+        let recs = vec![
+            ("a".to_string(), json!({"x": 1, "y": [1, 2]})),
+            ("b".to_string(), json!([1, 2])),
+            ("a".to_string(), json!({"last": true})),
+        ];
+        log.seed_written(recs);
+        let got: Vec<(String, u64)> = log.written.iter().map(|(k, h)| (k.clone(), *h)).collect();
+        let want = vec![
+            ("a".to_string(), hash_json(&serde_json::to_string(&json!({"last": true})).unwrap())),
+            ("b".to_string(), hash_json(&serde_json::to_string(&json!([1, 2])).unwrap())),
+        ];
+        assert_eq!(got, want, "first position, last value, to_string hashes");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// TRDD-2JOIAH2G — save_from writes the same bytes save always wrote, checked against literal
+    /// file contents: an insert, a change, a delete, an unchanged save (0 bytes), and a save where a
+    /// change, an insert and a delete land together with a compaction, with an UNCHANGED record in
+    /// the set (so a compaction that wrote only the changed records would show in the snapshot).
+    #[test]
+    fn save_from_writes_exactly_the_changed_lines_tombstones_and_a_full_compacted_snapshot() {
+        let dir = unit_dir("save-from");
+        let snap = dir.join("s.snapshot.ndjson");
+        let delta = dir.join("s.delta.ndjson");
+        let mut log = DeltaLog::new(&dir, "s");
+        let save = |log: &mut DeltaLog, recs: &[(&str, Value)]| log.save_from(|| recs.iter().map(|(k, v)| (*k, v))).unwrap();
+
+        let r = save(&mut log, &[("a", json!({"n": 1})), ("b", json!({"n": 2}))]);
+        assert_eq!((r.appended, r.deleted, r.compacted), (2, 0, false), "insert");
+        assert_eq!(text(&delta), "{\"k\":\"a\",\"v\":{\"n\":1}}\n{\"k\":\"b\",\"v\":{\"n\":2}}\n");
+        assert_eq!(r.bytes, text(&delta).len() as u64);
+
+        let r = save(&mut log, &[("a", json!({"n": 10})), ("b", json!({"n": 2})), ("c", json!({"n": 3})), ("e", json!({"n": 5}))]);
+        assert_eq!((r.appended, r.deleted, r.compacted), (3, 0, false), "change + insert");
+        let two = "{\"k\":\"a\",\"v\":{\"n\":1}}\n{\"k\":\"b\",\"v\":{\"n\":2}}\n\
+                   {\"k\":\"a\",\"v\":{\"n\":10}}\n{\"k\":\"c\",\"v\":{\"n\":3}}\n{\"k\":\"e\",\"v\":{\"n\":5}}\n";
+        assert_eq!(text(&delta), two);
+
+        let after_delete = [("a", json!({"n": 10})), ("c", json!({"n": 3})), ("e", json!({"n": 5}))];
+        let r = save(&mut log, &after_delete);
+        assert_eq!((r.appended, r.deleted, r.compacted), (0, 1, false), "delete");
+        assert_eq!(text(&delta), format!("{two}{{\"k\":\"b\",\"d\":1}}\n"), "one tombstone appended");
+        let len = text(&delta).len();
+
+        assert_eq!(save(&mut log, &after_delete), SaveResult::default(), "unchanged: nothing written");
+        assert_eq!(text(&delta).len(), len);
+        assert!(!snap.exists(), "nothing compacted yet");
+
+        // Big enough to pass COMPACT_MIN_BYTES with no snapshot (ratio against 0 bytes).
+        let big = "x".repeat(COMPACT_MIN_BYTES as usize + 1);
+        let last = [("c", json!({"n": 3})), ("a", json!(big)), ("d", json!({"n": 4}))];
+        let r = save(&mut log, &last);
+        assert_eq!((r.appended, r.deleted, r.compacted), (2, 1, true), "change a + insert d + delete e, compacted");
+        let want = format!("{{\"k\":\"c\",\"v\":{{\"n\":3}}}}\n{{\"k\":\"a\",\"v\":\"{big}\"}}\n{{\"k\":\"d\",\"v\":{{\"n\":4}}}}\n");
+        assert!(text(&snap) == want, "the snapshot is exactly the full record set, in its order");
+        assert_eq!(r.bytes, want.len() as u64);
+        assert!(!delta.exists(), "the delta is removed after a compaction");
+        assert!(!dir.join("s.snapshot.ndjson.tmp").exists());
+        let back = DeltaLog::new(&dir, "s").load().unwrap();
+        assert_eq!(back.keys().collect::<Vec<_>>(), ["c", "a", "d"]);
+        assert_eq!(save(&mut log, &last), SaveResult::default(), "after the compaction `written` matches the snapshot");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// TRDD-2JOIAH2G — save_from over OWNED items (the shape log_reader's card stream has) and a
+    /// non-card record set shaped like log-offsets: only the one record whose offset moved is
+    /// appended, and an unchanged save writes nothing.
+    #[test]
+    fn save_from_owned_offsets_shaped_records_appends_only_the_moved_offset() {
+        let dir = unit_dir("offsets");
+        let delta = dir.join("o.delta.ndjson");
+        let mut log = DeltaLog::new(&dir, "o");
+        let off = |b: u64| json!({"bytesRead": b, "mtimeMs": 1785578400000.0, "ino": 42, "size": b});
+        let mut recs: Vec<(String, Value)> = vec![("/p/one.jsonl".into(), off(120)), ("/p/two.jsonl".into(), off(7))];
+        let r = log.save_from(|| recs.iter().cloned()).unwrap();
+        assert_eq!((r.appended, r.deleted), (2, 0));
+        let first = "{\"k\":\"/p/one.jsonl\",\"v\":{\"bytesRead\":120,\"mtimeMs\":1785578400000.0,\"ino\":42,\"size\":120}}\n\
+                     {\"k\":\"/p/two.jsonl\",\"v\":{\"bytesRead\":7,\"mtimeMs\":1785578400000.0,\"ino\":42,\"size\":7}}\n";
+        assert_eq!(text(&delta), first);
+        recs[1].1 = off(9);
+        let r = log.save_from(|| recs.iter().cloned()).unwrap();
+        assert_eq!((r.appended, r.deleted), (1, 0));
+        assert_eq!(text(&delta), format!("{first}{{\"k\":\"/p/two.jsonl\",\"v\":{{\"bytesRead\":9,\"mtimeMs\":1785578400000.0,\"ino\":42,\"size\":9}}}}\n"));
+        assert_eq!(log.save_from(|| recs.iter().cloned()).unwrap(), SaveResult::default());
         let _ = fs::remove_dir_all(&dir);
     }
 }
