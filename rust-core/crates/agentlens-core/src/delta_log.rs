@@ -48,6 +48,11 @@ fn hash_json(s: &str) -> u64 {
     h.finish()
 }
 
+/// WHY shared: the order test must exercise the closure production compact verifies with (TRDD-2JOIAH2G), so drift in compact fails it.
+fn sums_match(sums: &[(u64, u64)]) -> impl Fn(usize, &str, &Value) -> bool + '_ {
+    move |pos, k, v| sums.get(pos) == Some(&(hash_json(k), hash_json(&serde_json::to_string(v).unwrap_or_default())))
+}
+
 fn size_of(p: &Path) -> u64 {
     fs::metadata(p).map(|m| m.len()).unwrap_or(0)
 }
@@ -503,7 +508,7 @@ impl DeltaLog {
             return Err(format!("{}: compaction saw {} records, the pass before it saw {expected}; delta KEPT, snapshot NOT replaced", self.snapshot_path.display(), sums.len()));
         }
         let (tmp, bytes) = tmp.finish()?;
-        self.commit_verified(&tmp, sums.len(), |pos, k, v| sums.get(pos) == Some(&(hash_json(k), hash_json(&serde_json::to_string(v).unwrap_or_default()))))?;
+        self.commit_verified(&tmp, sums.len(), sums_match(&sums))?;
         Ok(bytes)
     }
 
@@ -947,7 +952,7 @@ mod tests {
 
     /// TRDD-2JOIAH2G — the order half of "every key, in order": a `.tmp` holding exactly the right
     /// keys and values but in the WRONG order must fail the verify. `pos` is the record's position
-    /// in replay (`ix.live`) order, and the `same` closure here is shaped like compact()'s (a
+    /// in replay (`ix.live`) order, and the `same` closure here IS compact()'s, `sums_match` (a
     /// (key hash, value hash) per position, recorded in the order the records were written), so a
     /// swap reads as a mismatch at position 0. WHY driven through commit_verified and not compact():
     /// compact() writes its own `.tmp` from `records`, so it cannot be handed a pre-made out-of-order
@@ -958,25 +963,36 @@ mod tests {
         let dir = unit_dir("order");
         let recs = [("a", json!(1)), ("b", json!({"x": 2}))];
         let sums: Vec<(u64, u64)> = recs.iter().map(|(k, v)| (hash_json(k), hash_json(&serde_json::to_string(v).unwrap()))).collect();
-        let same = |pos: usize, k: &str, v: &Value| sums.get(pos) == Some(&(hash_json(k), hash_json(&serde_json::to_string(v).unwrap())));
+        // Twins: two keys with one value, swapped. Only the key hash tells their positions apart.
+        let twins = [("a", json!(1)), ("b", json!(1))];
+        let twin_sums: Vec<(u64, u64)> = twins.iter().map(|(k, v)| (hash_json(k), hash_json(&serde_json::to_string(v).unwrap()))).collect();
+        let same = sums_match(&sums);
+        let twin_same = sums_match(&twin_sums);
         let in_order = "{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":{\"x\":2}}\n";
         let reversed = "{\"k\":\"b\",\"v\":{\"x\":2}}\n{\"k\":\"a\",\"v\":1}\n";
+        let twins_in_order = "{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":1}\n";
+        let twins_reversed = "{\"k\":\"b\",\"v\":1}\n{\"k\":\"a\",\"v\":1}\n";
         let snap_before = b"{\"k\":\"a\",\"v\":0}\n".to_vec();
         let delta_before = b"{\"k\":\"a\",\"v\":1}\n{\"k\":\"b\",\"v\":{\"x\":2}}\n".to_vec();
-        for (name, tmp_body, ok) in [("reversed", reversed, false), ("in-order", in_order, true)] {
+        for (name, tmp_body, ok, expected, check) in [
+            ("reversed", reversed, false, recs.len(), &same),
+            ("in-order", in_order, true, recs.len(), &same),
+            ("twins-reversed", twins_reversed, false, twins.len(), &twin_same),
+            ("twins-in-order", twins_in_order, true, twins.len(), &twin_same),
+        ] {
             let log = DeltaLog::new(&dir, name);
             fs::write(&log.snapshot_path, &snap_before).unwrap();
             fs::write(&log.delta_path, &delta_before).unwrap();
             let tmp = PathBuf::from(format!("{}.tmp", log.snapshot_path.display()));
             fs::write(&tmp, tmp_body).unwrap();
-            let r = log.commit_verified(&tmp, recs.len(), same);
+            let r = log.commit_verified(&tmp, expected, check);
             assert!(fs::symlink_metadata(&tmp).is_err(), "{name}: the temp snapshot is gone either way");
             if ok {
                 assert!(r.is_ok(), "{name}: the right order commits: {r:?}");
                 assert_eq!(text(&log.snapshot_path), tmp_body, "{name}: the snapshot is the temp body");
                 assert!(!log.delta_path.exists(), "{name}: the delta is removed");
             } else {
-                let err = r.unwrap_err();
+                let err = r.expect_err(name);
                 assert!(err.contains("verify failed"), "{name}: refused by the verify: {err}");
                 assert_eq!(fs::read(&log.snapshot_path).unwrap(), snap_before, "{name}: old snapshot byte-identical");
                 assert_eq!(fs::read(&log.delta_path).unwrap(), delta_before, "{name}: delta still present");
