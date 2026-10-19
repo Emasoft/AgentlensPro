@@ -4,7 +4,7 @@ title: Separately authorized live raw-body drain and verified source deletion
 column: approval
 status: tasked
 created: 2026-10-19T00:47:02+0200
-updated: 2026-10-19T00:57:57+0200
+updated: 2026-10-20T01:47:15+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -28,6 +28,7 @@ Deleting the only filesystem copies is destructive even after migration succeeds
 - Recheck capacity, DuckDB checkpoint durability, byte-identical reconstruction, recovery procedure, corpus growth watermark, and source identity immediately before each deletion batch.
 - Produce an exact deletion candidate manifest and exact destructive command for final user confirmation under RULE 0.
 - After confirmed execution, verify each absence and persist `source-deleted` plus a deletion receipt; never infer deletion from command success alone.
+TWO DURABILITY GAPS FOUND AND CLOSED IN THE STORE CLI, 2026-10-20 (both verified in the Rust source, not inferred). GAP 1 - NO FSYNC BARRIER: flush_detailed (rust-core/crates/agentlens-store/src/lib.rs) writes the store parts with COPY TO and never fsyncs them; the fsync barrier in pass.rs runs ONLY when opts.durable_source is true, and the alstore CLI default is durable_source=false. The live server sets durable_source=true (chores.rs) but the CLI does not. A CLI-driven drain therefore unlinks a source file whose bytes are still only in the page cache, so a power loss loses BOTH copies. The store's own comment at pass.rs:196-197 names this exact hole. FIX: the drain MUST pass --durable-source. GAP 2 - NO AGE GATE: body_files (pass.rs) enumerates every .request.json/.response.json and captures size and mtime at enumeration, and the verify compares the reconstruction against the raw bytes read at INGEST time, not a fresh read of the file. A body that Claude Code is still writing can therefore be read complete and then grow, and the delete uses the stale size. FIX: the drain MUST pass --max-age-ms 300000 so only files untouched for 5 minutes are eligible. BOTH FLAGS WERE VERIFIED ON AN ISOLATED /tmp STORE before use: 5 bodies ingested, 5 deleted, 0 failed, 4 parquet parts written, and the reconstruction of a deleted body matched the original sha256 exactly (f206abb679f750fddaeb1237634464dc05f9a4514c69712b0c429aaf6a302dc1). These two flags are MANDATORY PRECONDITIONS of the drain command, not optional tuning: without them the delete is not durable and can race an in-flight writer.
 
 ## Acceptance criteria
 - [ ] Card remains unapproved in `approval` until the user explicitly authorizes the exact destructive command and affected candidate manifest.

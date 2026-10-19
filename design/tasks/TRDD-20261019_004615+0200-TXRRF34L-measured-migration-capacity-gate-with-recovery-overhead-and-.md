@@ -4,7 +4,7 @@ title: Measured migration capacity gate with recovery overhead and 20 GiB reserv
 column: todo
 status: tasked
 created: 2026-10-19T00:46:15+0200
-updated: 2026-10-19T00:57:55+0200
+updated: 2026-10-20T01:47:02+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -30,6 +30,7 @@ The measured backlog is larger than currently free space, so migration must not 
 - Measure database growth, raw compression, typed expansion, WAL, checkpoints, temporary spill, reconstruction workspace, crash recovery, filesystem allocation, and safety-copy overhead.
 - Derive a conservative byte-level admission formula and preflight gate for each bounded migration batch.
 - Include continued source growth and the immutable 20 GiB free-space reserve.
+MEASURED 2026-10-20 (live machine, real corpus + real store) - read before quoting any compression figure. Raw bytes already ingested: 167,907,132,892 (167.9 GB) over 492,088 bodies. Total store on disk: 1.78 GB (blobs 736 MB + parts 974 MB + bodies 69 MB + api_calls 66 MB). The naive ratio 167.9 GB / 1.78 GB = ~94x is a CUMULATIVE, DEDUPLICATED figure and is NOT a capacity basis. The MARGINAL ratio for new content is ~12.5x: one live pass reported bytesIn=536,540,321 and bytesStored=42,875,585. A single verified body (712,898 bytes) produced 235 new blobs / 629,949 new bytes. Projected store for the remaining ~212 GB: ~17 GB at the marginal ratio, ~2.2 GB at the cumulative ratio. THE MARGINAL NUMBER IS THE PLANNING NUMBER; the cumulative one understates the store by ~8x. Free space at measurement: 86 GB at 96% full, so the 20 GiB reserve must survive a ~17 GB store plus WAL, checkpoints, working set, and the 4,861 + 4,836 parquet parts the fsync barrier touches. NEITHER ratio is a typed-column DuckDB compression ratio: the store is Parquet parts and the typed-DuckDB projection (TRDD-TC8HW857) is UNMEASURED, so this card must measure the typed path itself rather than extrapolating from the Parquet store.
 
 ## Acceptance criteria
 - [ ] Benchmarks cover representative source sizes, payload shapes, ages, and pathological high-expansion inputs.
