@@ -55,14 +55,22 @@ export interface SourceFingerprint {
   tail: string
 }
 
-/** How a source's state compares with the persisted record for its path. */
+/**
+ * How a source's state compares with the persisted record for its path.
+ *
+ * 'unchanged' means "the same bytes" — it is the class of a file that was re-read and turned
+ * out to be identical. A source whose METADATA is unchanged is normally never re-read at all
+ * (the cheap fingerprint path short-circuits it), so 'unchanged' records are rare by design.
+ * It is a legitimate class because a re-read can happen (a deep verify, a metadata touch) and
+ * the result must be expressible.
+ */
 export type SourceClass = 'new' | 'unchanged' | 'changed' | 'truncated' | 'replaced'
 
 /** Bytes hashed at each end of a file for the cheap fingerprint. */
-export const FINGERPRINT_WINDOW_BYTES = 4096
+const FINGERPRINT_WINDOW_BYTES = 4096
 
 /** Domain separation for the identity hash — bump it when the encoding changes. */
-export const IDENTITY_SCHEME = 'alsp-v1'
+const IDENTITY_SCHEME = 'alsp-v1'
 
 /** Streaming read size for the content digest. */
 const READ_CHUNK_BYTES = 1024 * 1024
@@ -208,15 +216,20 @@ export function classifyFromMetadata(prior: PriorState, current: CurrentState): 
 /**
  * Classification once the file has been read.
  *
- * UNCHANGED  — the content digest matches: the bytes are identical (a metadata-only touch).
- * REPLACED   — the inode changed: a DIFFERENT file now occupies this path.
+ * REPLACED   — the inode changed: a DIFFERENT file object now occupies this path. This is
+ *              checked FIRST, and deliberately so: a replacement whose bytes happen to be
+ *              identical is still a replacement — a new file object at the path — and calling
+ *              it "unchanged" would hide the event a migration stage has to know about. The
+ *              identity is content-derived, so the identity does NOT change; only the
+ *              classification does.
+ * UNCHANGED  — the content digest matches: the same file object, the same bytes.
  * TRUNCATED  — the file got shorter: the tail was cut.
  * CHANGED    — the content changed and the file was neither truncated nor replaced.
  */
 export function classifyFromContent(prior: PriorState, current: CurrentState): SourceClass {
-  if (current.contentDigest === prior.contentDigest) return 'unchanged'
   const inoDiffers = prior.ino > 0 && current.ino > 0 && prior.ino !== current.ino
   if (inoDiffers) return 'replaced'
+  if (current.contentDigest === prior.contentDigest) return 'unchanged'
   if (current.size < prior.size) return 'truncated'
   return 'changed'
 }

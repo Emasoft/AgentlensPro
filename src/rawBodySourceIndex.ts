@@ -13,7 +13,7 @@
 //
 // WHY APPEND-ONLY AND NEVER REWRITTEN: the checkpoint must be crash-safe at every boundary.
 // A record is written to the log in ONE append of ONE complete line, and the durable boundary
-// advances only AFTER the append returns. A crash therefore leaves the log with either a
+// advances only AFTER the append is fsynced. A crash therefore leaves the log with either a
 // complete record or a torn tail line — never a half-written record that a later load would
 // mistake for data.
 //
@@ -42,13 +42,19 @@
 //   digest       the full content sha256
 //   class        the classification against the previous record for this path
 //   firstSeenMs  when the path was first observed
-//   lastSeenMs   when the path was last observed
+//   lastSeenMs   when the path was last observed in this state
 //   provenance   { messageUuid, sessionId, timestamp, querySource, model } or null
+//   refusal      { reason: 'identity-collision', otherPaths: [...] } or null
 //   boundary     the durable boundary: the number of complete records BEFORE this one
 //
 // THE BOUNDARY IS THE POINT. `boundary` is the count of complete records that precede this
 // record, so a reader can tell exactly how far the log is durable. A record whose boundary is
 // not exactly one more than its predecessor's is INTERNALLY INCONSISTENT and is refused.
+//
+// A REFUSAL IS A RECORD, NOT AN ABSENCE. When a source's identity is already claimed by a
+// different path, the source is REFUSED rather than one of the two being silently preferred.
+// The refusal is written down, naming the other path, so a later migration stage that reads
+// only this log still learns that the source is contested and must not be migrated blind.
 import * as fs from 'fs'
 import * as path from 'path'
 import {
@@ -73,6 +79,13 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
   return path.join(stateDir, sourceIndexFileName(version))
 }
 
+/** Why a source was refused instead of accepted. */
+export interface SourceRefusal {
+  reason: 'identity-collision'
+  /** The other paths that claim the same identity. */
+  otherPaths: string[]
+}
+
 /** One persisted record. */
 export interface SourceIndexRecord {
   v: number
@@ -89,6 +102,7 @@ export interface SourceIndexRecord {
   firstSeenMs: number
   lastSeenMs: number
   provenance: SourceProvenance | null
+  refusal: SourceRefusal | null
   boundary: number
 }
 
@@ -137,8 +151,27 @@ function requireNumber(obj: Record<string, unknown>, key: string, line: number):
   return v
 }
 
+function validateRefusal(v: unknown, line: number): SourceRefusal | null {
+  if (v === undefined || v === null) return null
+  if (!isPlainObject(v)) throw new SourceIndexError(line, "field 'refusal' must be an object or null")
+  const reason = v.reason
+  if (reason !== 'identity-collision') {
+    throw new SourceIndexError(line, `field 'refusal.reason' must be 'identity-collision'`)
+  }
+  const other = v.otherPaths
+  if (!Array.isArray(other) || other.length === 0) {
+    throw new SourceIndexError(line, "field 'refusal.otherPaths' must be a non-empty array of paths")
+  }
+  for (const p of other) {
+    if (typeof p !== 'string' || p.length === 0) {
+      throw new SourceIndexError(line, "field 'refusal.otherPaths' must contain non-empty strings")
+    }
+  }
+  return { reason, otherPaths: other as string[] }
+}
+
 function validateProvenance(v: unknown, line: number): SourceProvenance | null {
-  if (v === null) return null
+  if (v === undefined || v === null) return null
   if (!isPlainObject(v)) throw new SourceIndexError(line, "field 'provenance' must be an object or null")
   const str = (k: string): string | null => {
     const raw = v[k]
@@ -176,7 +209,7 @@ export function validateSourceIndexRecord(
   if (!isHex64(id)) throw new SourceIndexError(line, "field 'id' must be a 64-char lowercase hex sha256")
   const kind = requireString(value, 'kind', line)
   if (kind !== 'request' && kind !== 'response') {
-    throw new SourceIndexError(line, `field 'kind' must be 'request' or 'response'`)
+    throw new SourceIndexError(line, "field 'kind' must be 'request' or 'response'")
   }
   const cls = requireString(value, 'class', line)
   if (!CLASSES.includes(cls as SourceClass)) {
@@ -206,9 +239,10 @@ export function validateSourceIndexRecord(
     throw new SourceIndexError(line, "field 'lastSeenMs' must not precede 'firstSeenMs'")
   }
   const provenance = validateProvenance(value.provenance, line)
+  const refusal = validateRefusal(value.refusal, line)
   return {
     v, id, path: requireString(value, 'path', line), kind, size, mtimeMs, ino, head, tail, digest,
-    class: cls as SourceClass, firstSeenMs, lastSeenMs, provenance, boundary,
+    class: cls as SourceClass, firstSeenMs, lastSeenMs, provenance, refusal, boundary,
   }
 }
 
@@ -224,15 +258,17 @@ export function loadSourceIndex(indexPath: string): LoadedSourceIndex {
   } catch {
     return { records: [], durableCount: 0, tornTailCount: 0, hasTornTail: false }
   }
-  if (raw.length === 0) return { records: [], durableCount: 0, tornTailCount: 0, hasTornTail: false }
+  if (raw.length === 0) {
+    return { records: [], durableCount: 0, tornTailCount: 0, hasTornTail: false }
+  }
   const endsWithNewline = raw.endsWith('\n')
   const lines = raw.split('\n')
   // A file ending in a newline has an empty trailing element; a file that does not ends mid-line.
-  const tailCandidate = endsWithNewline ? null : lines[lines.length - 1]
-  const bodyLines = endsWithNewline ? lines.slice(0, lines.length - 1) : lines.slice(0, lines.length - 1)
+  // Either way the LAST element is not a complete, terminated record.
+  const completeLines = lines.slice(0, lines.length - 1)
   const records: SourceIndexRecord[] = []
-  for (let i = 0; i < bodyLines.length; i++) {
-    const text = bodyLines[i]
+  for (let i = 0; i < completeLines.length; i++) {
+    const text = completeLines[i]
     if (text.length === 0) throw new SourceIndexError(i + 1, 'empty line inside the index')
     let parsed: unknown
     try {
@@ -242,46 +278,15 @@ export function loadSourceIndex(indexPath: string): LoadedSourceIndex {
     }
     records.push(validateSourceIndexRecord(parsed, i + 1, records.length))
   }
-  let tornTailCount = 0
-  if (tailCandidate !== null) {
-    tornTailCount = 1
-    // A trailing complete-but-unterminated line is still unpersisted: without its newline it
-    // cannot be told apart from a torn write, so it is treated the same way.
+  // The trailing element is dropped: without its terminating newline it cannot be told apart
+  // from a torn write, so it counts as not-yet-persisted rather than as data.
+  const tornTailCount = endsWithNewline ? 0 : 1
+  return {
+    records,
+    durableCount: records.length,
+    tornTailCount,
+    hasTornTail: tornTailCount > 0,
   }
-  return { records, durableCount: records.length, tornTailCount, hasTornTail: tornTailCount > 0 }
-}
-
-/** Serialize one record to its exact on-disk line (no trailing newline). */
-export function serializeSourceIndexRecord(record: Omit<SourceIndexRecord, 'v' | 'boundary'> & { boundary?: number }): string {
-  const { v, boundary, ...rest } = record as SourceIndexRecord
-  const payload: Record<string, unknown> = { v: SOURCE_INDEX_FORMAT_VERSION, ...rest }
-  if (boundary !== undefined) payload.boundary = boundary
-  return JSON.stringify(payload)
-}
-
-/**
- * Append ONE record to the checkpoint. The append is a single write of a single complete line
- * followed by a flush; the caller advances the durable boundary only after this returns.
- *
- * `expectedBoundary` is the count of complete records already in the log — the boundary the new
- * record must carry. A mismatch is refused rather than written, because a wrong boundary breaks
- * the chain that makes the log auditable.
- */
-export function appendSourceIndexRecord(
-  indexPath: string,
-  record: Omit<SourceIndexRecord, 'v' | 'boundary'>,
-  expectedBoundary: number,
-): SourceIndexRecord {
-  const full: SourceIndexRecord = {
-    v: SOURCE_INDEX_FORMAT_VERSION,
-    ...record,
-    boundary: expectedBoundary,
-  }
-  // Validate BEFORE appending: a record that would be refused on load must never reach the disk.
-  validateSourceIndexRecord(full, expectedBoundary + 1, expectedBoundary)
-  fs.mkdirSync(path.dirname(indexPath), { recursive: true })
-  fs.appendFileSync(indexPath, JSON.stringify(full) + '\n')
-  return full
 }
 
 /** The latest record for each path, in log order — the state discovery compares against. */
@@ -291,13 +296,124 @@ export function latestByPath(records: SourceIndexRecord[]): Map<string, SourceIn
   return byPath
 }
 
-/** Every record for one identity, in log order. */
-export function recordsByIdentity(records: SourceIndexRecord[]): Map<string, SourceIndexRecord[]> {
-  const byId = new Map<string, SourceIndexRecord[]>()
-  for (const r of records) {
-    const list = byId.get(r.id)
-    if (list) list.push(r)
-    else byId.set(r.id, [r])
+/**
+ * Append-only writer over a checkpoint file.
+ *
+ * The writer owns the durable boundary: `count` is the number of complete records written, and
+ * `durableCount` is the number of those whose bytes have been fsynced. A record is only ever
+ * reported as persisted after the append returns; a caller that needs the bytes on the platter
+ * calls `sync()`.
+ *
+ * TAIL REPAIR: if the log ends with a torn line (a crash during a previous append), the writer
+ * truncates those unpersisted bytes before its first append. Truncating is safe BECAUSE those
+ * bytes were never durable and their content is re-derivable from the corpus; the next
+ * discovery pass re-appends the source. This is the only write this module ever makes that
+ * removes bytes, and it removes ONLY bytes that were never a complete record.
+ */
+export class SourceIndexWriter {
+  readonly indexPath: string
+  private fd: number | null = null
+  private written = 0
+  private synced = 0
+  private tornBytesRepaired = 0
+
+  constructor(indexPath: string) {
+    this.indexPath = indexPath
   }
-  return byId
+
+  /** Number of complete records written by this writer. */
+  get count(): number {
+    return this.written
+  }
+
+  /** Number of complete records known to be on the platter. */
+  get durableCount(): number {
+    return this.synced
+  }
+
+  /** Bytes of a torn tail discarded by this writer. */
+  get repairedTornBytes(): number {
+    return this.tornBytesRepaired
+  }
+
+  private open(): number {
+    if (this.fd === null) {
+      fs.mkdirSync(path.dirname(this.indexPath), { recursive: true })
+      this.repairTail()
+      this.fd = fs.openSync(this.indexPath, 'a')
+    }
+    return this.fd
+  }
+
+  /**
+   * Discard an unterminated trailing line, if any, and report how many bytes went.
+   *
+   * The repair is done EAGERLY — a caller that is about to append must repair first, and a
+   * caller that appends NOTHING must also be able to repair (a pass over an unchanged corpus
+   * writes no record, and the torn bytes would otherwise sit there for ever). A crash
+   * interrupted an append, so those bytes were never a complete record; the source they
+   * described is re-derivable from the corpus, and the next pass re-appends it.
+   */
+  repairTornTail(): number {
+    this.repairTail()
+    return this.tornBytesRepaired
+  }
+
+  /** Discard an unterminated trailing line, if any. */
+  private repairTail(): void {
+    let raw: Buffer
+    try {
+      raw = fs.readFileSync(this.indexPath)
+    } catch {
+      return
+    }
+    if (raw.length === 0) return
+    // The cut is computed in BYTES, not characters: a body path can carry non-ASCII, and a
+    // character-index cut would truncate a multi-byte sequence and leave a corrupt file.
+    const lastNewline = raw.lastIndexOf(0x0a)
+    if (lastNewline === raw.length - 1) return // the log ends with a newline: nothing torn
+    const keep = lastNewline + 1 // 0 when there is no complete line at all
+    fs.truncateSync(this.indexPath, keep)
+    this.tornBytesRepaired = raw.length - keep
+  }
+
+  /**
+   * Append ONE record. The record must carry the boundary of its position; a mismatch is
+   * refused rather than written, because a wrong boundary breaks the chain that makes the log
+   * auditable. The record is validated BEFORE it reaches the disk.
+   *
+   * `onAfterWrite` is a CRASH-INJECTION SEAM: it runs after each append reaches the OS but
+   * before the write is counted. A test that throws from it simulates a crash at that exact
+   * checkpoint boundary — the bytes are on disk, the writer's own bookkeeping is not. The next
+   * run must recover from that state without omitting or duplicating a source. It is optional
+   * and defaults to undefined, so production code cannot come to depend on it.
+   */
+  append(
+    record: Omit<SourceIndexRecord, 'v' | 'boundary'>,
+    boundary: number,
+    onAfterWrite?: () => void,
+  ): SourceIndexRecord {
+    const full: SourceIndexRecord = { v: SOURCE_INDEX_FORMAT_VERSION, ...record, boundary }
+    validateSourceIndexRecord(full, boundary + 1, boundary)
+    const fd = this.open()
+    fs.writeSync(fd, JSON.stringify(full) + '\n')
+    if (onAfterWrite) onAfterWrite()
+    this.written++
+    return full
+  }
+
+  /** Flush the appended bytes to the platter. */
+  sync(): void {
+    if (this.fd === null) return
+    fs.fsyncSync(this.fd)
+    this.synced = this.written
+  }
+
+  close(): void {
+    if (this.fd === null) return
+    try { fs.fsyncSync(this.fd) } catch { /* the fd is going away anyway */ }
+    this.synced = this.written
+    try { fs.closeSync(this.fd) } catch { /* already closed */ }
+    this.fd = null
+  }
 }
