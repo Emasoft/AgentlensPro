@@ -63,6 +63,13 @@ export interface SourceFingerprint {
  * (the cheap fingerprint path short-circuits it), so 'unchanged' records are rare by design.
  * It is a legitimate class because a re-read can happen (a deep verify, a metadata touch) and
  * the result must be expressible.
+ *
+ * IT CAN APPEAR IN THE LOG, and when it does it is NOT the material class. A source whose
+ * provenance arrives late is re-read, found byte-identical, and recorded — but the record
+ * CARRIES THE PRIOR MATERIAL CLASS FORWARD (a source first seen as 'new' stays 'new'), because
+ * relabelling it 'unchanged' would erase the evidence that it was never migrated. The
+ * discriminating field is `reason` on the record: 'refined' means the identity was refined and
+ * the bytes did not change; 'content' means the bytes changed.
  */
 export type SourceClass = 'new' | 'unchanged' | 'changed' | 'truncated' | 'replaced'
 
@@ -227,6 +234,12 @@ export function classifyFromMetadata(prior: PriorState, current: CurrentState): 
  * CHANGED    — the content changed and the file was neither truncated nor replaced.
  */
 export function classifyFromContent(prior: PriorState, current: CurrentState): SourceClass {
+  // PRECONDITION ON 'replaced': the inode is only available where the filesystem reports one.
+  // Where it does not (some FUSE and network filesystems report ino === 0), the 'replaced'
+  // class is UNAVAILABLE and a replacement is classified 'changed' or 'truncated' instead.
+  // The corpus lives on APFS, which reports real inodes, so this does not bite today — but a
+  // consumer that reads "replaced" as "a different file object" would be silently wrong on
+  // such a filesystem, and must not assume the class is always reachable.
   const inoDiffers = prior.ino > 0 && current.ino > 0 && prior.ino !== current.ino
   if (inoDiffers) return 'replaced'
   if (current.contentDigest === prior.contentDigest) return 'unchanged'

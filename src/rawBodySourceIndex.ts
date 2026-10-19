@@ -45,6 +45,7 @@
 //   lastSeenMs   when the path was last observed in this state
 //   provenance   { messageUuid, sessionId, timestamp, querySource, model } or null
 //   refusal      { reason: 'identity-collision', otherPaths: [...] } or null
+//   reason       why this record was written: discovered | content | refined | refused | retracted
 //   boundary     the durable boundary: the number of complete records BEFORE this one
 //
 // THE BOUNDARY IS THE POINT. `boundary` is the count of complete records that precede this
@@ -79,6 +80,25 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
   return path.join(stateDir, sourceIndexFileName(version))
 }
 
+/**
+ * WHY a record was written.
+ *
+ * The class alone cannot tell a LATE-IDENTITY REFINEMENT from a CONTENT CHANGE, and the two
+ * must be told apart: a refinement means "a Claude Code provenance row appeared, so this
+ * source now has a stronger identity" and the source's bytes are untouched; a content change
+ * means "the bytes moved". A reconciliation stage reading the log needs to know which it is —
+ * a refinement after a migration is bookkeeping, a content change after a migration is a
+ * tampering signal. Without this field the log says only "a new record for this path", and
+ * the two are indistinguishable.
+ *
+ *   'discovered'   — the first observation of this path.
+ *   'content'      — the bytes changed (changed / truncated / replaced).
+ *   'refined'      — the identity was refined (a provenance row appeared); the bytes did not.
+ *   'refused'      — the source is contested; the record carries a refusal.
+ *   'retracted'    — a refusal was lifted because the collision was resolved.
+ */
+export type SourceRecordReason = 'discovered' | 'content' | 'refined' | 'refused' | 'retracted'
+
 /** Why a source was refused instead of accepted. */
 export interface SourceRefusal {
   reason: 'identity-collision'
@@ -103,6 +123,7 @@ export interface SourceIndexRecord {
   lastSeenMs: number
   provenance: SourceProvenance | null
   refusal: SourceRefusal | null
+  reason: SourceRecordReason
   boundary: number
 }
 
@@ -240,9 +261,26 @@ export function validateSourceIndexRecord(
   }
   const provenance = validateProvenance(value.provenance, line)
   const refusal = validateRefusal(value.refusal, line)
+  const reason = value.reason
+  if (reason !== 'discovered' && reason !== 'content' && reason !== 'refined'
+      && reason !== 'refused' && reason !== 'retracted') {
+    throw new SourceIndexError(line, "field 'reason' must be one of discovered, content, refined, refused, retracted")
+  }
+  if (reason === 'refused' && refusal === null) {
+    throw new SourceIndexError(line, "field 'refusal' is required when reason is 'refused'")
+  }
+  if (reason === 'retracted' && refusal !== null) {
+    // A retraction LIFTS a refusal, so the record must NOT carry one. Carrying a refusal on a
+    // retraction would leave the contested claim standing.
+    throw new SourceIndexError(line, "field 'refusal' must be null when reason is 'retracted'")
+  }
+  if ((reason === 'discovered' || reason === 'content' || reason === 'refined') && refusal !== null) {
+    throw new SourceIndexError(line, `field 'refusal' must be null when reason is '${reason}'`)
+  }
   return {
     v, id, path: requireString(value, 'path', line), kind, size, mtimeMs, ino, head, tail, digest,
-    class: cls as SourceClass, firstSeenMs, lastSeenMs, provenance, refusal, boundary,
+    class: cls as SourceClass, firstSeenMs, lastSeenMs, provenance, refusal,
+    reason: reason as SourceRecordReason, boundary,
   }
 }
 

@@ -166,10 +166,11 @@ suite('discovery — deterministic classification of change', () => {
     assert.strictEqual(latest.get(p)!.class, 'new', 'the source is still unmigrated, so it stays new')
   })
 
-  test('a provenance row that appears re-identifies the source, and the class is unchanged', () => {
+  test('a provenance row that appears re-identifies the source and CARRIES THE MATERIAL CLASS FORWARD', () => {
     const p = write('a.request.json', body(100), NOW)
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
     const before = latestByPath(loadSourceIndex(indexPath).records).get(p)!
+    assert.strictEqual(before.class, 'new', 'the source is unmigrated')
     // Claude Code's index.jsonl gains a row for this file: the PROVENANCE changed, so the
     // identity changes even though the bytes did not. The observation itself is UNCHANGED.
     fs.writeFileSync(path.join(corpus, 'index.jsonl'), JSON.stringify({
@@ -182,8 +183,35 @@ suite('discovery — deterministic classification of change', () => {
     assert.strictEqual(t.recorded.length, 1, 'but the identity moved, so a record IS written')
     const after = latestByPath(loadSourceIndex(indexPath).records).get(p)!
     assert.notStrictEqual(after.id, before.id, 'the identity followed the provenance')
-    assert.strictEqual(after.class, 'unchanged')
+    // THE MATERIAL CLASS SURVIVES THE REFINEMENT. Relabelling the source 'unchanged' would
+    // erase the evidence that it was never migrated — the latest-by-path view would then
+    // say 'unchanged' about a source that has still never been moved.
+    assert.strictEqual(after.class, 'new', 'the source is STILL unmigrated after the refinement')
+    assert.strictEqual(after.reason, 'refined', 'the record says the identity was refined')
     assert.strictEqual(after.provenance!.messageUuid, 'uuid-1')
+  })
+
+  test('a collision that is later resolved RETRACTS the stale refusal', () => {
+    const same = body(100)
+    const a = write('a.request.json', same, NOW)
+    const b = write('b.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    let latest = latestByPath(loadSourceIndex(indexPath).records)
+    assert.notStrictEqual(latest.get(a)!.refusal, null, 'the collision refuses both')
+    assert.notStrictEqual(latest.get(b)!.refusal, null, 'the collision refuses both')
+
+    // The collision is RESOLVED: b gains a provenance row, so b gets a distinct identity.
+    fs.writeFileSync(path.join(corpus, 'index.jsonl'), JSON.stringify({
+      timestamp: 't', session_id: 's', query_source: 'q', model: 'm', message_id: 'mid',
+      message_uuid: 'uuid-b', request_file: 'b.request.json', response_file: null,
+    }) + '\n')
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    latest = latestByPath(loadSourceIndex(indexPath).records)
+    // A refusal that is no longer true must not stand for ever: a consumer reading the
+    // latest record per path would see a permanently refused source and never migrate it.
+    assert.strictEqual(latest.get(a)!.refusal, null, 'the stale refusal was retracted')
+    assert.strictEqual(latest.get(a)!.reason, 'retracted')
+    assert.strictEqual(latest.get(b)!.refusal, null, 'the re-identified path is not refused')
   })
 
   test('deepVerify re-reads an unchanged file and still finds it unchanged', () => {
@@ -314,7 +342,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
       id: sha256Hex('x'), path: path.join(corpus, 'a.request.json'), kind: 'request' as const,
       size: 10, mtimeMs: NOW, ino: 1, head: sha256Hex('h'), tail: sha256Hex('t'),
       digest: sha256Hex('d'), class: 'new' as const, firstSeenMs: NOW, lastSeenMs: NOW,
-      provenance: null, refusal: null,
+      provenance: null, refusal: null, reason: 'discovered' as const,
     }
     writer.append(rec, 0)
     assert.strictEqual(writer.count, 1, 'the record is written')
@@ -330,7 +358,8 @@ suite('index format — versioned, validated', () => {
     const rec = {
       v: 99, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1, mtimeMs: 1, ino: 1,
       head: sha256Hex('h'), tail: sha256Hex('t'), digest: sha256Hex('d'), class: 'new',
-      firstSeenMs: 1, lastSeenMs: 1, provenance: null, refusal: null, boundary: 0,
+      firstSeenMs: 1, lastSeenMs: 1, provenance: null, refusal: null, reason: 'discovered',
+      boundary: 0,
     }
     assert.throws(() => validateSourceIndexRecord(rec, 1, 0), /unknown format version 99/)
   })
@@ -344,7 +373,8 @@ suite('index format — versioned, validated', () => {
     const rec = {
       v: SOURCE_INDEX_FORMAT_VERSION, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1,
       mtimeMs: 1, ino: 1, head: sha256Hex('h'), tail: sha256Hex('t'), digest: sha256Hex('d'),
-      class: 'new', firstSeenMs: 10, lastSeenMs: 5, provenance: null, refusal: null, boundary: 0,
+      class: 'new', firstSeenMs: 10, lastSeenMs: 5, provenance: null, refusal: null,
+      reason: 'discovered', boundary: 0,
     }
     assert.throws(() => validateSourceIndexRecord(rec, 1, 0), /must not precede/)
   })
@@ -363,7 +393,8 @@ suite('index format — versioned, validated', () => {
     const good = {
       v: SOURCE_INDEX_FORMAT_VERSION, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1,
       mtimeMs: 1, ino: 1, head: sha256Hex('h'), tail: sha256Hex('t'), digest: sha256Hex('d'),
-      class: 'new', firstSeenMs: 1, lastSeenMs: 1, provenance: null, refusal: null, boundary: 0,
+      class: 'new', firstSeenMs: 1, lastSeenMs: 1, provenance: null, refusal: null,
+      reason: 'discovered', boundary: 0,
     }
     fs.writeFileSync(indexPath, JSON.stringify(good) + '\n' + 'garbage\n' + JSON.stringify({ ...good, boundary: 1 }) + '\n')
     assert.throws(() => loadSourceIndex(indexPath), /not valid JSON/)
@@ -394,9 +425,22 @@ suite('corpus provenance', () => {
     assert.strictEqual(prov.get('a.response.json')!.messageUuid, 'uuid-1')
   })
 
-  test('a corrupt line in the middle of the corpus index is refused', () => {
-    fs.writeFileSync(path.join(corpus, 'index.jsonl'), 'garbage\n{"a":1}\n')
-    assert.throws(() => readCorpusProvenance(corpus), /not valid JSON/)
+  test('a corrupt line in the middle of the corpus index is SKIPPED, not fatal', () => {
+    // Claude Code's index.jsonl is a FOREIGN file: we do not own it and its integrity is not
+    // our checkpoint's contract. A damaged row costs us provenance; it must not abort a
+    // discovery pass over the whole corpus. The skip is COUNTED so the caller can see it.
+    fs.writeFileSync(path.join(corpus, 'index.jsonl'),
+      'garbage\n' +
+      JSON.stringify({
+        timestamp: 't', session_id: 's', query_source: 'q', model: 'm', message_id: 'mid',
+        message_uuid: 'uuid-1', request_file: 'a.request.json', response_file: null,
+      }) + '\n' +
+      '{"not":"an object we use"}\n')
+    const stats = { skippedLines: 0, rowsRead: 0 }
+    const prov = readCorpusProvenance(corpus, stats)
+    assert.strictEqual(stats.skippedLines, 1, 'the unparseable line was counted')
+    assert.strictEqual(stats.rowsRead, 2, 'the two parseable lines were read')
+    assert.strictEqual(prov.get('a.request.json')!.messageUuid, 'uuid-1')
   })
 })
 

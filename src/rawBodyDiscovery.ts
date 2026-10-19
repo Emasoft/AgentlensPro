@@ -47,6 +47,28 @@
 // MEMORY: the pass holds one map entry per distinct identity (~one per source) to detect
 // collisions. For the full 800k-file corpus that is a few hundred MB — proportionate to an
 // operation over 205GB, and bounded by `maxFiles` for a batched run.
+//
+// THE CONSUMER CONTRACT — READ THIS BEFORE USING `work`.
+//
+// `work` is "what THIS PASS observed as material", NOT "what remains to be migrated". The two
+// are different, and confusing them is a silent data-loss bug:
+//
+//   - `work` is EMPTY on a pass over an unchanged corpus. That is the idempotence property
+//     the card demands, and it is correct. But it means an empty `work` list does NOT mean
+//     "there is nothing to migrate" — it means "nothing changed since the last pass".
+//   - The DURABLE LOG is the record of what has been discovered. A consumer that needs
+//     "outstanding sources" must read the log (the latest record per path) and compare it
+//     against its OWN record of what it has already migrated. The checkpoint deliberately
+//     carries NO 'migrated' flag: migration execution is a sibling card's job
+//     (TRDD-IFOQAQYV), and inventing a settled-marker here would let this card assert a
+//     migration it cannot verify.
+//   - A source whose latest record refuses is CONTESTED and must not be migrated blind; a
+//     source whose latest record carries a class of 'new'/'changed'/'truncated'/'replaced' has
+//     not been migrated yet. The class is the MATERIAL class — it survives an identity
+//     refinement, so a late-arriving provenance row does not make an unmigrated source look
+//     settled.
+//
+// So: consume the LOG for "outstanding", consume `work` for "what just moved".
 import * as fs from 'fs'
 import * as path from 'path'
 import {
@@ -55,19 +77,44 @@ import {
   readFileEvidence,
 } from './rawBodySourceIdentity'
 import {
-  SourceIndexRecord, SourceIndexWriter, loadSourceIndex, latestByPath,
+  SourceIndexRecord, SourceIndexWriter, SourceRecordReason, loadSourceIndex, latestByPath,
 } from './rawBodySourceIndex'
 
 /** The provenance map, keyed by corpus file name. */
 export type CorpusProvenanceMap = Map<string, SourceProvenance>
 
 /**
- * Read Claude Code's own `index.jsonl` from the corpus dir. It is written concurrently by
- * Claude Code, so its final line may be a partial append: a line that does not parse is
- * SKIPPED (it is not yet durable on their side) rather than fatal. A line that parses but is
- * structurally wrong IS refused — that is corruption, not a torn write.
+ * What the read of Claude Code's own index.jsonl found. `skippedLines` counts the lines that
+ * did not parse — a torn append, or a damaged row. A non-zero count means some sources lost
+ * their provenance, which can make a byte-identical source collide with another. It is
+ * reported, never fatal: the file is foreign and its damage is not our checkpoint's business.
  */
-export function readCorpusProvenance(corpusDir: string): CorpusProvenanceMap {
+export interface CorpusIndexStats {
+  skippedLines: number
+  rowsRead: number
+}
+
+/**
+ * Read Claude Code's own `index.jsonl` from the corpus dir. It is written concurrently by
+ * Claude Code, and it is a FOREIGN FILE: we do not own it, we do not write it, and its
+ * integrity is not our contract. The card's refusal conditions are about OUR checkpoint's
+ * integrity, so a defect in THEIR file must not abort OUR pass — it must only cost us
+ * provenance.
+ *
+ * So every unparseable line is SKIPPED and counted, wherever it is. The first assumption was
+ * that only the LAST line can be torn (a single-writer appender leaves a torn line last),
+ * and that a bad line in the middle is corruption. That assumption is about ANOTHER PROCESS's
+ * behaviour, which this module does not control: a retry, a multi-writer, or a partial line
+ * followed by a successful append all put a torn line in the middle. Treating that as fatal
+ * would let a defect in a file we do not own abort a discovery pass over 205GB of data that
+ * is perfectly readable.
+ *
+ * The cost of the tolerant policy: a damaged row means a source loses its provenance, and a
+ * source that loses its provenance can collide with a byte-identical one. The skipped-line
+ * count is REPORTED so the caller can see that happened; a large count is a signal that
+ * Claude Code's writer is misbehaving.
+ */
+export function readCorpusProvenance(corpusDir: string, stats?: CorpusIndexStats): CorpusProvenanceMap {
   const out: CorpusProvenanceMap = new Map()
   const indexPath = path.join(corpusDir, 'index.jsonl')
   let raw: string
@@ -84,12 +131,14 @@ export function readCorpusProvenance(corpusDir: string): CorpusProvenanceMap {
     try {
       parsed = JSON.parse(text)
     } catch {
-      // Only the LAST line can be a torn append; anything else is corruption.
-      if (i === lines.length - 1) continue
-      throw new Error(`corpus index.jsonl line ${i + 1} is not valid JSON`)
+      // A torn or damaged line in a FOREIGN file: skip it, keep going. The count is
+      // reported so the caller can see the damage.
+      if (stats) stats.skippedLines++
+      continue
     }
     if (typeof parsed !== 'object' || parsed === null) {
-      throw new Error(`corpus index.jsonl line ${i + 1} is not an object`)
+      if (stats) stats.skippedLines++
+      continue
     }
     const j = parsed as Record<string, unknown>
     const str = (k: string): string | null => (typeof j[k] === 'string' ? (j[k] as string) : null)
@@ -100,6 +149,7 @@ export function readCorpusProvenance(corpusDir: string): CorpusProvenanceMap {
       querySource: str('query_source'),
       model: str('model'),
     }
+    if (stats) stats.rowsRead++
     const req = str('request_file')
     const resp = str('response_file')
     if (req) out.set(req, provenance)
@@ -165,6 +215,8 @@ export interface DiscoveryResult {
   counts: Record<SourceClass, number>
   /** Bytes of a torn tail discarded before this pass's first append. */
   repairedTornBytes: number
+  /** What the read of Claude Code's own corpus index found. */
+  corpusIndex: CorpusIndexStats
 }
 
 /** Options for a discovery pass. */
@@ -223,6 +275,7 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   const result: DiscoveryResult = {
     recorded: [], work: [], refusals: [], scannedFiles: 0, vanished: 0, unreadable: 0,
     unchanged: 0, durableCount: 0, counts, repairedTornBytes: 0,
+    corpusIndex: { skippedLines: 0, rowsRead: 0 },
   }
 
   const loaded = loadSourceIndex(opts.indexPath)
@@ -251,7 +304,8 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   }
   names.sort() // deterministic order, so two passes over the same corpus append in the same order
 
-  const provenance = readCorpusProvenance(opts.corpusDir)
+  const corpusStats: CorpusIndexStats = { skippedLines: 0, rowsRead: 0 }
+  const provenance = readCorpusProvenance(opts.corpusDir, corpusStats)
   const writer = new SourceIndexWriter(opts.indexPath)
   // EAGER REPAIR: a torn tail left by a crash is discarded even if this pass appends
   // nothing. The bytes were never a complete record; the source they described is
@@ -351,6 +405,8 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
         head: evidence.head, tail: evidence.tail, contentDigest: evidence.digest,
       }
 
+      const id = computeSourceIdentity(kind, evidence.digest, prov)
+
       let cls: SourceClass
       let firstSeenMs = opts.nowMs
       if (hasPrior) {
@@ -361,7 +417,23 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
       }
       counts[cls]++
 
-      const id = computeSourceIdentity(kind, evidence.digest, prov)
+      // THE CLASS IS CARRIED FORWARD WHEN ONLY THE IDENTITY MOVED. A late-arriving Claude Code
+      // provenance row refines the identity without touching a byte. Relabelling the source
+      // 'unchanged' in that case would OVERWRITE the material class ('new', 'changed', …) and
+      // so erase the evidence that the source was never migrated — the latest-by-path view
+      // would then say 'unchanged' about a source that has still never been moved. The
+      // material class therefore survives a refinement; only the IDENTITY changes.
+      const identityMoved = hasPrior && priorRecord!.id !== id
+      let effectiveClass = cls
+      let reason: SourceRecordReason = 'discovered'
+      if (hasPrior) {
+        if (identityMoved && cls === 'unchanged') {
+          effectiveClass = priorRecord!.class
+          reason = 'refined'
+        } else {
+          reason = 'content'
+        }
+      }
 
       // Identity collision: a DIFFERENT path already claims this identity. The claim set holds
       // EVERY path that currently maps to this identity, refused ones included, so a third
@@ -383,12 +455,13 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
       // fact that it still needs migrating is never erased by a later no-op observation.
       // The identity and the refusal state are still checked, because a provenance row that
       // appeared in the meantime DOES change the identity, and that change must be recorded.
-      const identityMoved = hasPrior && priorRecord!.id !== id
       const refusalMoved = !sameRefusal(priorRecord?.refusal ?? null, refusal)
       if (cls === 'unchanged' && !identityMoved && !refusalMoved) {
         result.unchanged++
         continue
       }
+      // A contested source is recorded as REFUSED, whatever else changed about it.
+      if (refusal !== null) reason = 'refused'
 
       // A path that changed identity stops claiming its old identity. The claim map is the
       // CURRENT state, so a path that was refused and then re-identified must stop being
@@ -398,6 +471,63 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
         if (old) {
           old.delete(filePath)
           if (old.size === 0) claims.delete(priorRecord.id)
+        }
+        // A REFUSAL THAT IS NO LONGER TRUE MUST BE RETRACTED, or it is permanent. The other
+        // claimant's record refuses THIS path, naming it as a colliding partner. Once this
+        // path has been re-identified — its provenance arrived, or its bytes changed — the
+        // collision no longer exists, but the other claimant's refusal still stands in the
+        // log, and a consumer reading the latest record per path would see that path
+        // permanently refused and never migrate it. The retraction is an appended record; the
+        // append-only log has no other way to undo a statement.
+        if (priorRecord.refusal !== null) {
+          for (const other of priorRecord.refusal.otherPaths) {
+            const otherRecord = latest.get(other)
+            if (!otherRecord || otherRecord.refusal === null) continue
+            if (!otherRecord.refusal.otherPaths.includes(filePath)) continue
+            const remaining = otherRecord.refusal.otherPaths
+              .filter(p => p !== filePath)
+              .concat(others.filter(p => p !== other))
+              .sort()
+            if (remaining.length === 0) {
+              // The collision is fully resolved: the other claimant is no longer refused at
+              // all, and its material class is what it was.
+              appendRecord({
+                id: otherRecord.id,
+                path: otherRecord.path,
+                kind: otherRecord.kind,
+                size: otherRecord.size,
+                mtimeMs: otherRecord.mtimeMs,
+                ino: otherRecord.ino,
+                head: otherRecord.head,
+                tail: otherRecord.tail,
+                digest: otherRecord.digest,
+                class: otherRecord.class,
+                firstSeenMs: otherRecord.firstSeenMs,
+                lastSeenMs: opts.nowMs,
+                provenance: otherRecord.provenance,
+                refusal: null,
+                reason: 'retracted',
+              })
+            } else {
+              appendRecord({
+                id: otherRecord.id,
+                path: otherRecord.path,
+                kind: otherRecord.kind,
+                size: otherRecord.size,
+                mtimeMs: otherRecord.mtimeMs,
+                ino: otherRecord.ino,
+                head: otherRecord.head,
+                tail: otherRecord.tail,
+                digest: otherRecord.digest,
+                class: otherRecord.class,
+                firstSeenMs: otherRecord.firstSeenMs,
+                lastSeenMs: opts.nowMs,
+                provenance: otherRecord.provenance,
+                refusal: { reason: 'identity-collision', otherPaths: remaining },
+                reason: 'refused',
+              })
+            }
+          }
         }
       }
 
@@ -411,11 +541,12 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
         head: current.head,
         tail: current.tail,
         digest: current.contentDigest,
-        class: cls,
+        class: effectiveClass,
         firstSeenMs,
         lastSeenMs: opts.nowMs,
         provenance: prov,
         refusal,
+        reason,
       })
 
       if (refusal) {
@@ -445,6 +576,7 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
             lastSeenMs: opts.nowMs,
             provenance: otherRecord.provenance,
             refusal: { reason: 'identity-collision', otherPaths },
+            reason: 'refused',
           })
         }
       }
@@ -470,5 +602,6 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   }
 
   result.durableCount = boundary
+  result.corpusIndex = corpusStats
   return result
 }
