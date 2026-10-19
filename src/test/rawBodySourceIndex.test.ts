@@ -273,6 +273,111 @@ suite('discovery — refusals', () => {
 })
 
 suite('discovery — crash at every checkpoint boundary', () => {
+  test('a retraction never installs a refusal against a partner that never collided', () => {
+    // The three-file case: 'a' and 'z' are byte-identical (a collision), 'c' holds different
+    // bytes. Then 'a' changes to become byte-identical to 'c', so 'a' is re-identified and
+    // its collision with 'z' is retracted. The retraction must NOT leave 'z' refused against
+    // 'c' — 'z' and 'c' hold different bytes and never collided. A false refusal there would
+    // block 'z' from ever being migrated.
+    const same = body(100)
+    const other = body(999)
+    const a = write('a.request.json', same, NOW)
+    const z = write('z.request.json', same, NOW)
+    const c = write('c.request.json', other, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    let latest = latestByPath(loadSourceIndex(indexPath).records)
+    assert.notStrictEqual(latest.get(a)!.refusal, null, 'a and z collide')
+    assert.notStrictEqual(latest.get(z)!.refusal, null, 'a and z collide')
+
+    // a's bytes change to match c.
+    fs.writeFileSync(a, other)
+    fs.utimesSync(a, new Date(NOW + 1000), new Date(NOW + 1000))
+    const retracting = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+
+    latest = latestByPath(loadSourceIndex(indexPath).records)
+    const zr = latest.get(z)!
+    // Read the refusal's partners through a local, so the assertion on the whole refusal
+    // below does not narrow the type away.
+    const zrPartners: string[] = zr.refusal ? zr.refusal.otherPaths : []
+    assert.ok(!zrPartners.includes(c), 'z is not refused against c, which holds different bytes')
+    assert.strictEqual(zr.refusal, null, 'z is not refused at all')
+    // z is now uncontested, so the pass that retracted the refusal must put it in the work
+    // list: it is a real source that has still never been migrated.
+    assert.ok(retracting.work.some(w => w.path === z), 'an uncontested source is migratable again')
+  })
+
+  test('a partner reclaimed from the corpus no longer blocks the source', () => {
+    // The raw-body corpus reclaims bodies (src/bodiesActivity.ts: ~72h), so a collision
+    // partner can vanish. A refusal naming a vanished partner would block the source from
+    // ever being migrated.
+    const same = body(100)
+    const a = write('a.request.json', same, NOW)
+    const z = write('z.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    assert.notStrictEqual(latestByPath(loadSourceIndex(indexPath).records).get(a)!.refusal, null)
+
+    fs.unlinkSync(z) // the reclaim
+    const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    const latest = latestByPath(loadSourceIndex(indexPath).records)
+    assert.strictEqual(latest.get(a)!.refusal, null, 'the vanished partner no longer contests a')
+    assert.ok(r.work.some(w => w.path === a), 'a is migratable again')
+  })
+
+  test('a stale refusal is lifted on the CHEAP path, when the source itself never moved', () => {
+    // The reclaimed-partner case, and the one that matters: the refused source's OWN metadata
+    // never moves, so the cheap fingerprint path short-circuits it and it is never re-read.
+    // If the stale refusal were only re-derived on the read path, the source would keep the
+    // refusal for ever and never be migrated.
+    const same = body(100)
+    const a = write('a.request.json', same, NOW)
+    const z = write('z.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    assert.notStrictEqual(latestByPath(loadSourceIndex(indexPath).records).get(a)!.refusal, null)
+
+    fs.unlinkSync(z) // the reclaim — and a is NOT touched, so a stays on the cheap path
+    const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    const latest = latestByPath(loadSourceIndex(indexPath).records)
+    assert.strictEqual(latest.get(a)!.refusal, null, 'the vanished partner no longer contests a')
+    assert.strictEqual(latest.get(a)!.reason, 'retracted')
+    assert.ok(r.work.some(w => w.path === a), 'a is migratable again')
+  })
+
+  test('a byte-identical source never claims a content change', () => {
+    // 'content' means THE BYTES CHANGED, and a reconciliation stage reads it as a tampering
+    // signal. A byte-identical source must never claim it.
+    write('a.request.json', body(100), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    // Touch a: same bytes, new mtime. The cheap path re-reads it.
+    fs.utimesSync(path.join(corpus, 'a.request.json'), new Date(NOW + 1000), new Date(NOW + 1000))
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    for (const rec of loadSourceIndex(indexPath).records) {
+      if (rec.reason === 'content') {
+        assert.ok(rec.class === 'changed' || rec.class === 'truncated' || rec.class === 'replaced',
+          `a 'content' record must carry a changed/truncated/replaced class, got '${rec.class}'`)
+      }
+    }
+  })
+
+  test('the corpus index reports a schema change as rows without provenance', () => {
+    // A row that parses but carries none of the fields we read is a SCHEMA CHANGE, not a torn
+    // write: Claude Code renamed a field. Every source's identity would change at once, so
+    // the count is an alarm the caller can see.
+    fs.writeFileSync(path.join(corpus, 'index.jsonl'),
+      JSON.stringify({ timestamp: 't', session_id: 's', query_source: 'q', model: 'm' }) + '\n' +
+      JSON.stringify({
+        timestamp: 't', session_id: 's2', query_source: 'q', model: 'm', message_id: 'mid',
+        message_uuid: 'u1', request_file: 'a.request.json', response_file: null,
+      }) + '\n')
+    const stats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 }
+    readCorpusProvenance(corpus, stats)
+    // The first row has session_id but NO message_uuid: it cannot use the strongest
+    // discriminator, so it is counted as a weaker-provenance row, and it is NOT the
+    // provenance-less case (it still has a session_id, so it can discriminate something).
+    assert.strictEqual(stats.rowsWithoutProvenance, 0, 'it still has a session_id')
+    assert.strictEqual(stats.rowsWithoutMessageUuid, 1, 'the row lost its message_uuid')
+    assert.strictEqual(stats.skippedLines, 0, 'it parsed, so it is not a skipped line')
+  })
+
   test('a crash after each of N appends resumes without omitting or duplicating a source', () => {
     const N = 6
     for (let i = 0; i < N; i++) write(`s${i}.request.json`, body(100 + i), NOW)
@@ -436,7 +541,7 @@ suite('corpus provenance', () => {
         message_uuid: 'uuid-1', request_file: 'a.request.json', response_file: null,
       }) + '\n' +
       '{"not":"an object we use"}\n')
-    const stats = { skippedLines: 0, rowsRead: 0 }
+    const stats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 }
     const prov = readCorpusProvenance(corpus, stats)
     assert.strictEqual(stats.skippedLines, 1, 'the unparseable line was counted')
     assert.strictEqual(stats.rowsRead, 2, 'the two parseable lines were read')

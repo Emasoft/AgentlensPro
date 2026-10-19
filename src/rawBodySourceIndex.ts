@@ -142,7 +142,22 @@ export class SourceIndexError extends Error {
 /** The result of loading a checkpoint. */
 export interface LoadedSourceIndex {
   records: SourceIndexRecord[]
-  /** How many complete records were loaded. */
+  /**
+   * How many complete records were read back.
+   *
+   * THIS IS A COUNT OF COMPLETE RECORDS, NOT A PROOF OF DURABILITY, and the difference
+   * matters. A record that reached the page cache but was never fsynced is indistinguishable
+   * from a durable one after a crash: the loader cannot tell them apart, because nothing in
+   * the file says which records were synced. So the loader does NOT claim durability it
+   * cannot prove — it reports what it can prove, which is that the record is COMPLETE
+   * (newline-terminated, valid, and part of an intact boundary chain).
+   *
+   * The durability guarantee is the OTHER half of the contract, and it is enforced by the
+   * writer: `SourceIndexWriter.sync()` fsyncs, and `SourceIndexWriter.durableCount` counts
+   * only the records that were synced. A caller that needs the stronger guarantee asks the
+   * writer, not the loader. Fsyncing per record would cost 800k fsyncs on a full-corpus
+   * pass; the writer syncs once per pass, and the pass boundary is the durability boundary.
+   */
   durableCount: number
   /** How many trailing bytes were discarded as a torn (unpersisted) tail line. 0 or 1. */
   tornTailCount: number
@@ -276,6 +291,13 @@ export function validateSourceIndexRecord(
   }
   if ((reason === 'discovered' || reason === 'content' || reason === 'refined') && refusal !== null) {
     throw new SourceIndexError(line, `field 'refusal' must be null when reason is '${reason}'`)
+  }
+  // 'content' means THE BYTES CHANGED. A byte-identical source must never claim it: a
+  // reconciliation stage reads 'content' as a tampering signal, so a false one on the
+  // artifact whose whole purpose is to make a 205GB retirement auditable is worse than no
+  // signal at all. The class is the observable content state, so this is checkable.
+  if (reason === 'content' && cls !== 'changed' && cls !== 'truncated' && cls !== 'replaced') {
+    throw new SourceIndexError(line, `field 'reason' is 'content' but class is '${cls}' — only changed, truncated or replaced may claim a content change`)
   }
   return {
     v, id, path: requireString(value, 'path', line), kind, size, mtimeMs, ino, head, tail, digest,

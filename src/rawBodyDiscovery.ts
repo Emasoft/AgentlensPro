@@ -92,6 +92,31 @@ export type CorpusProvenanceMap = Map<string, SourceProvenance>
 export interface CorpusIndexStats {
   skippedLines: number
   rowsRead: number
+  /**
+   * Rows that parsed but carry NO message_uuid AND NO session_id — a row that cannot
+   * discriminate anything, so the source falls back to the bare content-and-kind identity.
+   *
+   * This is a SCHEMA-CHANGE ALARM. A row that fails to parse is counted as a skipped line,
+   * but a row that parses perfectly and carries none of the fields we read is a different
+   * failure: Claude Code renamed `message_uuid` to `messageId`, or dropped it. Every source's
+   * provenance would then go empty at once, which means every source's IDENTITY changes at
+   * once (a mass re-identification) and the byte-identical sources that were distinguished
+   * only by their provenance collapse into ONE identity (a mass collision, and a mass
+   * refusal). Nothing else in the log would show why.
+   */
+  rowsWithoutProvenance: number
+  /**
+   * Rows that carry a session_id but NO message_uuid.
+   *
+   * These are the STRONGER schema-change signal, and they are counted SEPARATELY because
+   * the two failures are not the same. The identity's strongest discriminator is
+   * message_uuid; session_id + timestamp is only the fallback. So a row that lost
+   * message_uuid still produces a non-empty provenance KEY, and the key-based check cannot
+   * see it — but the identity it produces is a WEAKER one, which is a different identity from
+   * the one the source had before. Every such row is therefore an individual re-identification
+   * of its source, not a mass event, and a count of zero is the normal, healthy state.
+   */
+  rowsWithoutMessageUuid: number
 }
 
 /**
@@ -152,6 +177,18 @@ export function readCorpusProvenance(corpusDir: string, stats?: CorpusIndexStats
     if (stats) stats.rowsRead++
     const req = str('request_file')
     const resp = str('response_file')
+    // THE ALARM KEYS ON THE FIELDS THE IDENTITY DEPENDS ON, NOT ON THE KEY BEING EMPTY. The
+    // key falls back to session_id + timestamp, so a row that lost only message_uuid still
+    // yields a non-empty key and a key-based check cannot see it — yet the identity it
+    // produces is a weaker one, which is a DIFFERENT identity from the one the source had.
+    if (stats) {
+      if (provenance.messageUuid === null && provenance.sessionId === null) {
+        stats.rowsWithoutProvenance++
+      }
+      if (provenance.messageUuid === null) {
+        stats.rowsWithoutMessageUuid++
+      }
+    }
     if (req) out.set(req, provenance)
     if (resp) out.set(resp, provenance)
   }
@@ -211,7 +248,12 @@ export interface DiscoveryResult {
   unchanged: number
   /** The durable boundary at the end of the pass. */
   durableCount: number
-  /** The class tally. */
+  /**
+   * The tally of OBSERVATIONS by class, NOT of records. `counts.unchanged` counts the
+   * observations that turned out to be byte-identical, including the ones that were then
+   * recorded with a carried-forward material class (a refinement records 'new', not
+   * 'unchanged'). The RECORDED class tally is what the log holds; read the log for that.
+   */
   counts: Record<SourceClass, number>
   /** Bytes of a torn tail discarded before this pass's first append. */
   repairedTornBytes: number
@@ -275,7 +317,7 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   const result: DiscoveryResult = {
     recorded: [], work: [], refusals: [], scannedFiles: 0, vanished: 0, unreadable: 0,
     unchanged: 0, durableCount: 0, counts, repairedTornBytes: 0,
-    corpusIndex: { skippedLines: 0, rowsRead: 0 },
+    corpusIndex: { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 },
   }
 
   const loaded = loadSourceIndex(opts.indexPath)
@@ -289,6 +331,19 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
     let set = claims.get(r.id)
     if (!set) { set = new Set<string>(); claims.set(r.id, set) }
     set.add(r.path)
+  }
+  // The set of paths the corpus still holds. A refused path names its partners, and a
+  // PARTNER THAT IS GONE FROM THE CORPUS CANNOT CONTEST ANYTHING: the raw-body corpus
+  // reclaims bodies (src/bodiesActivity.ts documents a ~72h reclaim), so a collision partner
+  // can simply disappear. A refusal naming a vanished partner is a refusal that would block
+  // the source from ever being migrated, on a corpus whose bytes are about to be deleted.
+  const presentPaths = new Set<string>()
+  try {
+    for (const n of fs.readdirSync(opts.corpusDir)) {
+      if (bodyFileKind(n) !== null) presentPaths.add(path.join(opts.corpusDir, n))
+    }
+  } catch {
+    // The corpus dir is unreadable; the pass below will find nothing anyway.
   }
   // The LATEST record per path, including the ones this pass has already written. The
   // symmetric refusal has to correct a claimant that was recorded moments ago in THIS pass,
@@ -304,7 +359,7 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   }
   names.sort() // deterministic order, so two passes over the same corpus append in the same order
 
-  const corpusStats: CorpusIndexStats = { skippedLines: 0, rowsRead: 0 }
+  const corpusStats: CorpusIndexStats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 }
   const provenance = readCorpusProvenance(opts.corpusDir, corpusStats)
   const writer = new SourceIndexWriter(opts.indexPath)
   // EAGER REPAIR: a torn tail left by a crash is discarded even if this pass appends
@@ -371,6 +426,41 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
         const provKeyNow = provenanceKey(prov)
         const provKeyBefore = provenanceKey(priorRecord.provenance)
         if (metaVerdict === 'unchanged' && !opts.deepVerify && provKeyNow === provKeyBefore) {
+          // A STALE REFUSAL MUST BE RE-DERIVED EVEN ON THE CHEAP PATH. The refusal names the
+          // paths that contest this source, and a partner that has been RECLAIMED from the
+          // corpus (src/bodiesActivity.ts documents a ~72h reclaim) cannot contest anything.
+          // A refusal naming a vanished partner would block the source from ever being
+          // migrated — silently, on a corpus whose bytes are about to be deleted. The
+          // re-derivation happens here, before the cheap path's `continue`, because a source
+          // whose own metadata never moved is exactly the one that would otherwise keep a
+          // stale refusal for ever.
+          const stalePartners = priorRecord.refusal
+            ? priorRecord.refusal.otherPaths.filter(p => !presentPaths.has(p))
+            : []
+          if (priorRecord.refusal !== null && stalePartners.length > 0) {
+            const remaining = priorRecord.refusal.otherPaths
+              .filter(p => presentPaths.has(p))
+              .sort()
+            appendRecord({
+              id: priorRecord.id,
+              path: priorRecord.path,
+              kind: priorRecord.kind,
+              size: priorRecord.size,
+              mtimeMs: priorRecord.mtimeMs,
+              ino: priorRecord.ino,
+              head: priorRecord.head,
+              tail: priorRecord.tail,
+              digest: priorRecord.digest,
+              class: priorRecord.class,
+              firstSeenMs: priorRecord.firstSeenMs,
+              lastSeenMs: opts.nowMs,
+              provenance: priorRecord.provenance,
+              refusal: remaining.length > 0
+                ? { reason: 'identity-collision', otherPaths: remaining }
+                : null,
+              reason: remaining.length > 0 ? 'refused' : 'retracted',
+            })
+          }
           counts.unchanged++
           result.unchanged++
           continue // no record, no work: the idempotence property
@@ -417,19 +507,28 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
       }
       counts[cls]++
 
-      // THE CLASS IS CARRIED FORWARD WHEN ONLY THE IDENTITY MOVED. A late-arriving Claude Code
-      // provenance row refines the identity without touching a byte. Relabelling the source
-      // 'unchanged' in that case would OVERWRITE the material class ('new', 'changed', …) and
-      // so erase the evidence that the source was never migrated — the latest-by-path view
-      // would then say 'unchanged' about a source that has still never been moved. The
-      // material class therefore survives a refinement; only the IDENTITY changes.
+      // THE MATERIAL CLASS IS CARRIED FORWARD ON EVERY UNCHANGED OBSERVATION. The class is the
+      // last material CONTENT state of the source, so only an actual content change may
+      // overwrite it. Two things can happen to a source without its bytes changing: a
+      // late-arriving Claude Code provenance row refines its IDENTITY, and a collision being
+      // resolved lifts or imposes a REFUSAL. In both cases relabelling the source 'unchanged'
+      // would OVERWRITE the material class ('new', 'changed', …) and so erase the evidence
+      // that the source was never migrated — the latest-by-path view would then say
+      // 'unchanged' about a source that has still never been moved.
+      //
+      // The reason is derived from WHAT ACTUALLY HAPPENED, never from a default:
+      //   refused   — the source is contested (the refusal is present).
+      //   refined   — the identity moved and the bytes did not.
+      //   retracted — a refusal was lifted and the bytes did not.
+      //   content   — the bytes changed. ONLY a real content change may say 'content'; a
+      //               byte-identical source must never claim it, because a reconciliation
+      //               stage reads 'content' as a tampering signal.
       const identityMoved = hasPrior && priorRecord!.id !== id
       let effectiveClass = cls
       let reason: SourceRecordReason = 'discovered'
       if (hasPrior) {
-        if (identityMoved && cls === 'unchanged') {
+        if (cls === 'unchanged') {
           effectiveClass = priorRecord!.class
-          reason = 'refined'
         } else {
           reason = 'content'
         }
@@ -439,7 +538,11 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
       // EVERY path that currently maps to this identity, refused ones included, so a third
       // colliding path names all of the others rather than only the first one seen.
       const claimants = claims.get(id)
-      const others = claimants ? [...claimants].filter(p => p !== filePath).sort() : []
+      // A partner that is no longer in the corpus cannot contest this identity, so it does not
+      // make this path refused. (See `presentPaths` for why a partner can vanish.)
+      const others = claimants
+        ? [...claimants].filter(p => p !== filePath && presentPaths.has(p)).sort()
+        : []
       const refusal = others.length > 0
         ? { reason: 'identity-collision' as const, otherPaths: others }
         : null
@@ -460,8 +563,15 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
         result.unchanged++
         continue
       }
-      // A contested source is recorded as REFUSED, whatever else changed about it.
-      if (refusal !== null) reason = 'refused'
+      // A contested source is recorded as REFUSED, whatever else changed about it. A refusal
+      // dominates the reason: a contested source must not be migrated blind, and that is the
+      // fact a consumer acts on. The identity change is still visible from the id differing
+      // from the prior record's id.
+      if (refusal !== null) {
+        reason = 'refused'
+      } else if (hasPrior && cls === 'unchanged') {
+        reason = identityMoved ? 'refined' : 'retracted'
+      }
 
       // A path that changed identity stops claiming its old identity. The claim map is the
       // CURRENT state, so a path that was refused and then re-identified must stop being
@@ -484,9 +594,15 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
             const otherRecord = latest.get(other)
             if (!otherRecord || otherRecord.refusal === null) continue
             if (!otherRecord.refusal.otherPaths.includes(filePath)) continue
+            // THE REMAINING PARTNERS ARE EXACTLY THE OLD PARTNERS MINUS THE ONE BEING
+            // RETRACTED. `otherRecord.refusal.otherPaths` already holds every genuine partner
+            // of `other`; removing the re-identified path IS the retraction. Nothing else may
+            // be added: `others` holds the claimants of the RE-IDENTIFIED path's NEW identity,
+            // which has nothing to do with the collision being retracted, and mixing the two
+            // sets installs a refusal against a partner that never existed — a false refusal
+            // that blocks a source from ever being migrated.
             const remaining = otherRecord.refusal.otherPaths
-              .filter(p => p !== filePath)
-              .concat(others.filter(p => p !== other))
+              .filter(p => p !== filePath && presentPaths.has(p))
               .sort()
             if (remaining.length === 0) {
               // The collision is fully resolved: the other claimant is no longer refused at

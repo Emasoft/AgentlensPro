@@ -64,6 +64,12 @@ export interface SourceFingerprint {
  * It is a legitimate class because a re-read can happen (a deep verify, a metadata touch) and
  * the result must be expressible.
  *
+ * THE CLASS IS A CONTENT STATE, NOT A MIGRATION STATE. A source that a later stage migrated
+ * keeps its class ('new') until its BYTES change; the checkpoint deliberately carries no
+ * migration state, because migration execution belongs to a sibling card and this card cannot
+ * verify a migration it did not perform. A consumer that reads the class as a workflow state
+ * will misread a migrated source as still pending.
+ *
  * IT CAN APPEAR IN THE LOG, and when it does it is NOT the material class. A source whose
  * provenance arrives late is re-read, found byte-identical, and recorded — but the record
  * CARRIES THE PRIOR MATERIAL CLASS FORWARD (a source first seen as 'new' stays 'new'), because
