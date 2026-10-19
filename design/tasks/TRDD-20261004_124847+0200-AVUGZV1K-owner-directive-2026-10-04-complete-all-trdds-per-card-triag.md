@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: dev
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-05T18:03:56+0200
+updated: 2026-10-14T15:38:11+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-04T12:48:47+0200
+implementation-commits: d74c74dd
 ---
 
 # Owner directive 2026-10-04 complete all TRDDs - per-card triage then work in waves
@@ -135,3 +136,10 @@ CORRECTION to the deploy-check bullet above and to the DEPLOY CHECK notes on ZIW
 - 2026-10-05 11:49, the three candidates in `testing` were read in part by the main agent: frontmatter, STATE head and acceptance lines. FGN5TY7E and DRH4ZRGB were not read whole, and their heads date from September. Z0A777XW, read whole: four of five boxes ticked; the fifth needs a 2-minute run against an isolated alcore. FGN5TY7E, by its head of 2026-09-05: boxes 1 and 2 met, box 3's mutation never run, box 4 an open code decision. DRH4ZRGB: three acceptance rows ticked; by a worker's read two rows of its split section are undone, the LOCAL card it names exists, and no project memory page states the positional rule. Its child TRDD-7FA3NIXU is in `backburner` with the owner's decision as its next action; by a worker's read the code names it cites no longer exist in reviewGate.ts. None was moved. The session stopped spawning here: about 25 workers and 20 reviews since the session clear, for four card outcomes and the head above.
 - 2026-10-05 12:25, after a session clear: FGN5TY7E and DRH4ZRGB were read whole by the main agent. The head line above said FGN5TY7E needs one mutation run and was wrong (the card records that run on 2026-10-04, not seen by this session); that line was replaced at about 12:33. Its box 4 was split out as TRDD-HDUETCU7 (alcore sends the bodies pass counters as literal zeros); a first proposal to delete the two declarations was withdrawn after review. FGN5TY7E stays in `testing`; boxes 1 and 2 were re-verified and ticked at about 12:30 (commit d1eb1de9), with exceptions recorded on that card. DRH4ZRGB stays in `testing`: two rows of its split are undone and its EHT TRDD-7FA3NIXU is in `backburner`. Load at 12:19 was 45 and falling; no test was run.
 - 2026-10-05 18:10, replacing the NEXT ACTION in the head above: TRDD-HDUETCU7's code landed as commit 97f6806a and the card is in testing. Next: the full agentlens-core test run at a 1-minute load under 20, recorded on that card, then its box ticks; then TRDD-Z0A777XW's 2-minute run against an isolated alcore. Five commits are local and unpushed (11c34385, d1eb1de9, 330e2817, 97f6806a and the card commit that follows this entry); this session ran no push. Not deployed, not restarted.
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
+
+2026-10-14 release-goal state (owner goal: fix all issues, complete all TRDDs, publish). Work happens on branch fix/setup-agent-preflight; the review-gate work there (TRDD-QQ2XIIZ6, TRDD-LR4SI79M) is a detour the owner ordered mid-goal.
+NOT DONE: setup stepSkill agent preflight (dry-run returns before agent drift is checked; skills install before a missing agent source is detected) — only checkpoints cf6af337 and 4a9e87e9 exist, no fix; Dockerfile still copies and runs the retired standalone/server.js (lines 39, 65) and lacks a target-platform alcore build, media/index.html and sidebar.js; scripts/check-dist-contents.js checks only forbidden paths, not declared skills/agents or Git tracking.
+TRDD-CS2W7E77: focused serverCalibration run passed 5/5 on 2026-10-14 with alcore built at rust-core/target/release; the first full unit-suite run in a fresh worktree had 2,979 passing, 45 pending, 73 failing (exit 73), with 45 Cannot find module lines naming standalone/cli — run node esbuild.js before the suite; two consecutive full-suite runs are still required.
+Environment: the collector was RUNNING but not answering on port 3000 after a 'revive backoff: 6 quick crashes' warning (not restarted); more than a dozen agent worktrees under .claude/worktrees likely cause the 5 s 'git worktree list' timeouts that crash janitor detectors; the main checkout carries unrelated dirty files (src/cli/hookInstall.ts AGENT_NAMES, agents/*.md, untracked agents/cheap-worker.md fast-worker.md smart-worker.md, a staged empty design/requirements/PRRD.md) that must be handled before merging to main.

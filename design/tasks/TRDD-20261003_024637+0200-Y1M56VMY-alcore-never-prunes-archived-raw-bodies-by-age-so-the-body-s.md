@@ -4,7 +4,7 @@ title: alcore never prunes archived raw bodies by age so the body store grows wi
 column: todo
 status: tasked
 created: 2026-10-03T02:46:37+0200
-updated: 2026-10-03T02:50:49+0200
+updated: 2026-10-19T00:53:07+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,9 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-03T02:46:37+0200
+derived: false
+npt: []
+eht: []
 ---
 
 # alcore never prunes archived raw bodies by age so the body store grows without bound now that capture is mandatory
@@ -43,3 +46,9 @@ The over-cap valve (bodiesMaxGb) has no dedicated test; chores_bodies_spool_drai
 ## Field provenance
 
 - mandate: true was written by `trddgrep new` at mint; it is NOT an owner mandate for this card (trddgrep refuses to change it outside create/approve). The owner order behind it is only the 2026-10-02 order making raw-body capture mandatory.
+
+## STATE
+
+2026-10-19T00:47:39+0200 — OWNER: this card owns the unbounded archive failure. `bodiesMaxGb` caps only the live raw-body spool; `bodiesRetentionDays` has no Rust consumer, so archived/store data remains unbounded.
+Related migration architecture: TRDD-LHCHVK9Z. Capacity and reserve proof: TRDD-TXRRF34L. Full manifest reconciliation: TRDD-JK4I9MFY. Separately authorized live drain and verified deletion: TRDD-IGPWXZ1M. This retention card is not replaced by those cards.
+Execution state: no migration and no deletion has run. The 2026-10-19 card work documents the approved design breakdown only; TRDD-IGPWXZ1M still requires final user confirmation of the exact destructive command and affected sources.
