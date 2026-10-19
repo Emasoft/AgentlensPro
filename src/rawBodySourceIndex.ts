@@ -299,6 +299,17 @@ export function validateSourceIndexRecord(
   if (reason === 'content' && cls !== 'changed' && cls !== 'truncated' && cls !== 'replaced') {
     throw new SourceIndexError(line, `field 'reason' is 'content' but class is '${cls}' — only changed, truncated or replaced may claim a content change`)
   }
+  // THE MATERIAL-CLASS INVARIANT. A record's class is the last MATERIAL content state of the
+  // source, so only a real content change may set it to 'changed'/'truncated'/'replaced', and
+  // 'unchanged' — which is the class of an OBSERVATION, never of a record — must never appear
+  // in a persisted record. A record that is not a content change carries the prior material
+  // class forward, which is never 'unchanged'. This is the machine check that keeps the class
+  // carry-forward from regressing: without it, a record with reason 'refined' and class
+  // 'unchanged' would load cleanly and be silently wrong — which is exactly the bug the
+  // carry-forward was added to prevent.
+  if (reason !== 'content' && cls === 'unchanged') {
+    throw new SourceIndexError(line, `field 'class' is 'unchanged' but reason is '${reason}' — 'unchanged' is an observation, never a persisted material class`)
+  }
   return {
     v, id, path: requireString(value, 'path', line), kind, size, mtimeMs, ino, head, tail, digest,
     class: cls as SourceClass, firstSeenMs, lastSeenMs, provenance, refusal,

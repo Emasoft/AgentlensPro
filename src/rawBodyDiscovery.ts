@@ -337,14 +337,13 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   // reclaims bodies (src/bodiesActivity.ts documents a ~72h reclaim), so a collision partner
   // can simply disappear. A refusal naming a vanished partner is a refusal that would block
   // the source from ever being migrated, on a corpus whose bytes are about to be deleted.
+  //
+  // IT IS BUILT FROM THE SAME READDIR AS `names` BELOW, and that is load-bearing. The corpus
+  // is ACTIVELY GROWING, so two readdirs of it can disagree: a file that appears between
+  // them would be in `names` but not in `presentPaths`, and every refusal naming it would be
+  // judged stale — a FALSE RETRACTION OF A LIVE COLLISION, on a corpus whose bytes are about
+  // to be deleted. One readdir, one truth.
   const presentPaths = new Set<string>()
-  try {
-    for (const n of fs.readdirSync(opts.corpusDir)) {
-      if (bodyFileKind(n) !== null) presentPaths.add(path.join(opts.corpusDir, n))
-    }
-  } catch {
-    // The corpus dir is unreadable; the pass below will find nothing anyway.
-  }
   // The LATEST record per path, including the ones this pass has already written. The
   // symmetric refusal has to correct a claimant that was recorded moments ago in THIS pass,
   // not only one from a previous run — otherwise the first-seen path would keep its
@@ -358,6 +357,9 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
     return result
   }
   names.sort() // deterministic order, so two passes over the same corpus append in the same order
+  for (const n of names) {
+    if (bodyFileKind(n) !== null) presentPaths.add(path.join(opts.corpusDir, n))
+  }
 
   const corpusStats: CorpusIndexStats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 }
   const provenance = readCorpusProvenance(opts.corpusDir, corpusStats)
@@ -438,6 +440,39 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
             ? priorRecord.refusal.otherPaths.filter(p => !presentPaths.has(p))
             : []
           if (priorRecord.refusal !== null && stalePartners.length > 0) {
+            // THE VANISHED PARTNER'S OWN RECORD ALSO NAMES US, and it keeps that refusal for
+            // ever: the partner is gone from the corpus, so the pass never visits it and
+            // never re-derives its refusal. A log-only reader would see a path refusing a
+            // live source, and could conclude the live source is contested. Lifting the
+            // partner's refusal is cheap — the partner is named — and it keeps the log
+            // internally true.
+            for (const gone of stalePartners) {
+              const goneRecord = latest.get(gone)
+              if (!goneRecord || goneRecord.refusal === null) continue
+              if (!goneRecord.refusal.otherPaths.includes(priorRecord.path)) continue
+              const goneRemaining = goneRecord.refusal.otherPaths
+                .filter(p => p !== priorRecord.path && presentPaths.has(p))
+                .sort()
+              appendRecord({
+                id: goneRecord.id,
+                path: goneRecord.path,
+                kind: goneRecord.kind,
+                size: goneRecord.size,
+                mtimeMs: goneRecord.mtimeMs,
+                ino: goneRecord.ino,
+                head: goneRecord.head,
+                tail: goneRecord.tail,
+                digest: goneRecord.digest,
+                class: goneRecord.class,
+                firstSeenMs: goneRecord.firstSeenMs,
+                lastSeenMs: opts.nowMs,
+                provenance: goneRecord.provenance,
+                refusal: goneRemaining.length > 0
+                  ? { reason: 'identity-collision', otherPaths: goneRemaining }
+                  : null,
+                reason: goneRemaining.length > 0 ? 'refused' : 'retracted',
+              })
+            }
             const remaining = priorRecord.refusal.otherPaths
               .filter(p => presentPaths.has(p))
               .sort()

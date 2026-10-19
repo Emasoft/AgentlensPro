@@ -342,6 +342,41 @@ suite('discovery — crash at every checkpoint boundary', () => {
     assert.ok(r.work.some(w => w.path === a), 'a is migratable again')
   })
 
+  test('the corpus is read ONCE per pass, so a growing corpus cannot disagree with itself', () => {
+    // The pass decides both WHICH files to visit and WHICH partners are still present from
+    // ONE readdir. Two readdirs of an actively-growing directory can disagree: a file that
+    // appears between them would be judged VANISHED while it is present, and every refusal
+    // naming it would be falsely retracted — a live collision retracted, on a corpus whose
+    // bytes are about to be deleted. The observable proof that there is one readdir: the
+    // pass visits a file that appears DURING the pass and still treats it as present.
+    const same = body(100)
+    const a = write('a.request.json', same, NOW)
+    const z = write('z.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    assert.notStrictEqual(latestByPath(loadSourceIndex(indexPath).records).get(a)!.refusal, null)
+
+    // z is reclaimed; a is untouched, so a stays on the cheap path.
+    fs.unlinkSync(z)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    const latest = latestByPath(loadSourceIndex(indexPath).records)
+    assert.strictEqual(latest.get(a)!.refusal, null, 'the vanished partner no longer contests a')
+    // AND the vanished partner's own record no longer refuses a live source.
+    assert.strictEqual(latest.get(z)!.refusal, null, "the vanished partner no longer refuses a")
+  })
+
+  test('a persisted record can never carry the observation class', () => {
+    // 'unchanged' is the class of an OBSERVATION. A record's class is the last material
+    // content state, so a record carrying 'unchanged' is a regression in the class
+    // carry-forward, and the loader must refuse it rather than load a silently wrong log.
+    const rec = {
+      v: SOURCE_INDEX_FORMAT_VERSION, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1,
+      mtimeMs: 1, ino: 1, head: sha256Hex('h'), tail: sha256Hex('t'), digest: sha256Hex('d'),
+      class: 'unchanged', firstSeenMs: 1, lastSeenMs: 1, provenance: null, refusal: null,
+      reason: 'refined', boundary: 0,
+    }
+    assert.throws(() => validateSourceIndexRecord(rec, 1, 0), /'unchanged' is an observation/)
+  })
+
   test('a byte-identical source never claims a content change', () => {
     // 'content' means THE BYTES CHANGED, and a reconciliation stage reads it as a tampering
     // signal. A byte-identical source must never claim it.

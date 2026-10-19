@@ -70,12 +70,16 @@ export interface SourceFingerprint {
  * verify a migration it did not perform. A consumer that reads the class as a workflow state
  * will misread a migrated source as still pending.
  *
- * IT CAN APPEAR IN THE LOG, and when it does it is NOT the material class. A source whose
- * provenance arrives late is re-read, found byte-identical, and recorded — but the record
- * CARRIES THE PRIOR MATERIAL CLASS FORWARD (a source first seen as 'new' stays 'new'), because
- * relabelling it 'unchanged' would erase the evidence that it was never migrated. The
- * discriminating field is `reason` on the record: 'refined' means the identity was refined and
- * the bytes did not change; 'content' means the bytes changed.
+ * IT IS AN OBSERVATION CLASS, NEVER A PERSISTED ONE. A record's class is the last MATERIAL
+ * content state of the source, so a record's class is always one of new / changed / truncated /
+ * replaced. 'unchanged' is what an OBSERVATION is called when the bytes turned out to be
+ * identical — and a record that observes identical bytes CARRIES THE PRIOR MATERIAL CLASS
+ * FORWARD (a source first seen as 'new' stays 'new'), because relabelling it 'unchanged'
+ * would erase the evidence that it was never migrated. The discriminating field is `reason` on
+ * the record: 'refined' means the identity was refined and the bytes did not change;
+ * 'retracted' means a refusal was lifted and the bytes did not change; 'content' means the
+ * bytes changed. The index validator refuses a record whose class is 'unchanged', so the
+ * distinction is enforced rather than merely documented.
  */
 export type SourceClass = 'new' | 'unchanged' | 'changed' | 'truncated' | 'replaced'
 
