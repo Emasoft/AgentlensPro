@@ -34,6 +34,12 @@ function write(name: string, content: string, mtimeMs: number): string {
   return p
 }
 
+// The outcome object the caller passes to outstandingSources. It is an OBJECT, not a
+// bare boolean, so a caller cannot assert completeness it never checked: the
+// compiler stops `true` where `{ complete: boolean }` is required.
+const COMPLETE = { complete: true }
+const INCOMPLETE = { complete: false }
+
 function body(pad: number): string {
   return JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'x'.repeat(pad) }] })
 }
@@ -532,7 +538,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
 
     const records = loadSourceIndex(indexPath).records
     const corpusNow = new Set([live, partner])
-    const outstanding = outstandingSources(records, corpusNow, undefined, true)
+    const outstanding = outstandingSources(records, corpusNow, undefined, COMPLETE)
 
     // 'live' and 'partner' are byte-identical and both present: they collide, so BOTH are
     // refused and NEITHER is outstanding.
@@ -550,11 +556,11 @@ suite('discovery — crash at every checkpoint boundary', () => {
     // Now an uncontested, present, unmigrated source IS outstanding.
     const solo = write('solo.request.json', body(200), NOW)
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
-    const out2 = outstandingSources(loadSourceIndex(indexPath).records, new Set([live, partner, solo]), undefined, true)
+    const out2 = outstandingSources(loadSourceIndex(indexPath).records, new Set([live, partner, solo]), undefined, COMPLETE)
     assert.ok(out2.some(o => o.path === solo), 'an uncontested present source is outstanding')
 
     // And an already-migrated one is not, even though everything else qualifies.
-    const out3 = outstandingSources(loadSourceIndex(indexPath).records, new Set([live, partner, solo]), new Set([solo]), true)
+    const out3 = outstandingSources(loadSourceIndex(indexPath).records, new Set([live, partner, solo]), new Set([solo]), COMPLETE)
     assert.ok(!out3.some(o => o.path === solo), 'an already-migrated source is not outstanding')
   })
 
@@ -584,7 +590,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
       'and it names only the vanished partner',
     )
 
-    const outstanding = outstandingSources(records, new Set([live]), undefined, true)
+    const outstanding = outstandingSources(records, new Set([live]), undefined, COMPLETE)
     assert.ok(
       outstanding.some(o => o.path === live),
       'a source whose only rival has vanished IS outstanding — it must not be withheld for ever',
@@ -599,7 +605,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const partner = write('partner.request.json', same, NOW)
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
     const records = loadSourceIndex(indexPath).records
-    const outstanding = outstandingSources(records, new Set([live, partner]), undefined, true)
+    const outstanding = outstandingSources(records, new Set([live, partner]), undefined, COMPLETE)
     assert.ok(!outstanding.some(o => o.path === live), 'a contested source is not outstanding')
     assert.ok(!outstanding.some(o => o.path === partner), 'a contested source is not outstanding')
   })
@@ -616,12 +622,12 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const digest = latestByPath(records).get(solo)!.digest
 
     // The correct key works.
-    const ok = outstandingSources(records, new Set([solo]), new Set([solo]), true)
+    const ok = outstandingSources(records, new Set([solo]), new Set([solo]), COMPLETE)
     assert.ok(!ok.some(o => o.path === solo), 'a path key excludes the migrated source')
 
     // The wrong key is refused, loudly.
     assert.throws(
-      () => outstandingSources(records, new Set([solo]), new Set([digest]), true),
+      () => outstandingSources(records, new Set([solo]), new Set([digest]), COMPLETE),
       /alreadyMigratedPaths contains an IDENTITY/,
       'passing identities where paths are expected must throw, not silently match nothing',
     )
@@ -641,7 +647,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     assert.ok(records.some(r => r.path === p), 'the hex-named file was discovered')
 
     // The full path is accepted as a key: no throw.
-    const out = outstandingSources(records, new Set([p]), new Set([p]), true)
+    const out = outstandingSources(records, new Set([p]), new Set([p]), COMPLETE)
     assert.ok(!out.some(o => o.path === p), 'the hex-named path is treated as a path and excludes the source')
 
     // And the IDENTITY — the content digest — is still recognised as an identity and throws.
@@ -650,7 +656,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     // file, and it still catches a digest that is not 64 lowercase hex characters.
     const digest = latestByPath(records).get(p)!.digest
     assert.throws(
-      () => outstandingSources(records, new Set([p]), new Set([digest]), true),
+      () => outstandingSources(records, new Set([p]), new Set([digest]), COMPLETE),
       /alreadyMigratedPaths contains an IDENTITY/,
       'the content digest is an identity, not a path',
     )
@@ -668,11 +674,11 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const digest = latestByPath(records).get(p)!.digest
 
     // The good call works.
-    assert.strictEqual(outstandingSources(records, new Set([p]), undefined, true).length, 1, 'the correct key returns the source')
+    assert.strictEqual(outstandingSources(records, new Set([p]), undefined, COMPLETE).length, 1, 'the correct key returns the source')
 
     // The bad one throws, and the message names the offending set.
     assert.throws(
-      () => outstandingSources(records, new Set([digest]), undefined, true),
+      () => outstandingSources(records, new Set([digest]), undefined, COMPLETE),
       /corpusPaths contains an IDENTITY/,
       'identities in corpusPaths must throw, not return an empty set',
     )
@@ -689,7 +695,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const records = loadSourceIndex(indexPath).records
 
     // The correct key returns the source — never an empty list for a present source.
-    const good = outstandingSources(records, new Set([p]), undefined, true)
+    const good = outstandingSources(records, new Set([p]), undefined, COMPLETE)
     assert.strictEqual(good.length, 1, 'a present, unmigrated source is returned')
 
     // Every way of getting it wrong either throws or returns the source. NONE of them
@@ -706,7 +712,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
       let result: SourceIndexRecord[] | null = null
       let threw = false
       try {
-        result = outstandingSources(records, corpusPaths, undefined, true)
+        result = outstandingSources(records, corpusPaths, undefined, COMPLETE)
       } catch {
         threw = true
       }
@@ -731,18 +737,18 @@ suite('discovery — crash at every checkpoint boundary', () => {
 
     // Both are caught.
     assert.throws(
-      () => outstandingSources(records, new Set([p]), new Set([rec.id]), true),
+      () => outstandingSources(records, new Set([p]), new Set([rec.id]), COMPLETE),
       /alreadyMigratedPaths contains an IDENTITY/,
       'the SOURCE IDENTITY is caught',
     )
     assert.throws(
-      () => outstandingSources(records, new Set([p]), new Set([rec.digest]), true),
+      () => outstandingSources(records, new Set([p]), new Set([rec.digest]), COMPLETE),
       /alreadyMigratedPaths contains an IDENTITY/,
       'the CONTENT DIGEST is caught',
     )
     // And in the corpusPaths direction too.
     assert.throws(
-      () => outstandingSources(records, new Set([rec.id]), undefined, true),
+      () => outstandingSources(records, new Set([rec.id]), undefined, COMPLETE),
       /corpusPaths contains an IDENTITY/,
       'the SOURCE IDENTITY is caught in corpusPaths as well',
     )
@@ -752,7 +758,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     // the log never saw it.)
     const foreign = 'c'.repeat(64)
     assert.throws(
-      () => outstandingSources(records, new Set([p]), new Set([foreign]), true),
+      () => outstandingSources(records, new Set([p]), new Set([foreign]), COMPLETE),
       /alreadyMigratedPaths contains an IDENTITY/,
       'a foreign identity is caught by the shape backstop',
     )
@@ -817,7 +823,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     assert.ok(after.observedMaterial.some(m => m.path === b), 'the restored body is material again')
 
     // And it is OUTSTANDING: present, unmigrated, not refused, and no longer tombstoned.
-    const outstanding = outstandingSources(loadSourceIndex(indexPath).records, new Set([b]), undefined, true)
+    const outstanding = outstandingSources(loadSourceIndex(indexPath).records, new Set([b]), undefined, COMPLETE)
     assert.ok(outstanding.some(o => o.path === b),
       "a restored body must not be excluded by a tombstone about the past")
   })
@@ -849,13 +855,13 @@ suite('discovery — crash at every checkpoint boundary', () => {
       path.join(corpus, 'b.request.json'),
     ])
     assert.throws(
-      () => outstandingSources(records, corpusNow, undefined, false),
+      () => outstandingSources(records, corpusNow, undefined, INCOMPLETE),
       /does not describe the whole corpus/,
       'the outstanding set REFUSES to answer from an incomplete log',
     )
     // And it still answers from a complete one: after the full pass both bodies are
     // recorded, so both are outstanding.
-    const out = outstandingSources(records, corpusNow, undefined, true)
+    const out = outstandingSources(records, corpusNow, undefined, COMPLETE)
     assert.strictEqual(out.length, 2, 'a complete log answers normally')
     assert.deepStrictEqual(out.map(r => path.basename(r.path)).sort(), ['a.request.json', 'b.request.json'])
   })
@@ -871,7 +877,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     fs.writeFileSync(indexPath, tampered.map(r => JSON.stringify(r)).join('\n') + '\n')
     fs.unlinkSync(p)
 
-    const outstanding = outstandingSources(loadSourceIndex(indexPath).records, new Set<string>(), undefined, true)
+    const outstanding = outstandingSources(loadSourceIndex(indexPath).records, new Set<string>(), undefined, COMPLETE)
     assert.ok(!outstanding.some(o => o.path === p), 'a genuinely absent body is not outstanding')
   })
 

@@ -63,10 +63,13 @@
 // becomes a comment.
 //
 // WHAT THIS MODULE ENFORCES, so you do not have to remember it:
-//   - The OUTSTANDING MIGRATION SET is `outstandingSources(records, corpusPaths, alreadyMigrated, logComplete)`
-//     (src/rawBodySourceIndex.ts). It applies all four conditions — still present in the
+//   - The OUTSTANDING MIGRATION SET is `outstandingSources(records, corpusPaths, alreadyMigrated, passOutcome)`
+//     (src/rawBodySourceIndex.ts). It applies all four EXCLUSION conditions — still present in the
 //     corpus, latest reason is not 'gone', not refused, and a material class — so a consumer
-//     CANNOT forget one. Deriving it by hand from the class field alone is wrong: a 'gone'
+//     CANNOT forget one. AND IT HAS A PRECONDITION the four are not: the pass that produced
+//     the log must have been COMPLETE, and the caller passes the pass's own outcome object to
+//     say so. A pass that stopped early leaves tombstones standing for bodies it never reached,
+//     and a tombstone is authoritative, so a present and unmigrated body would be excluded. Deriving it by hand from the class field alone is wrong: a 'gone'
 //     record carries class 'new' ("it was never migrated"), which is exactly the shape of a
 //     source that still needs migrating.
 //   - The pass's own output is PER-PASS, and it is EMPTY on a pass over an unchanged corpus.
