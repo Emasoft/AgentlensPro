@@ -4,7 +4,7 @@ title: Measured migration capacity gate with recovery overhead and 20 GiB reserv
 column: todo
 status: tasked
 created: 2026-10-19T00:46:15+0200
-updated: 2026-10-20T19:44:44+0200
+updated: 2026-10-20T20:06:42+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -68,18 +68,37 @@ and the 12 GiB point 5.78 GiB, and a linear read at 10.02 GiB gives ≈4.7 GiB. 
 which end is read.
 
 **THE DESTINATION IS SETTLED, AND IT IS THE STORE'S OWN PATH** (`reports_dev/20261020_duckdb-file-vs-store-path.md`).
-The bodies are stored in DuckDB's OWN compressed, columnar representation, at 5.09–6.33×, and they
-are queryable as DuckDB tables (`all_of('body')`, lib.rs:133-138, returns the native table, so the
-corpus's full view never touches a Parquet scan). THE SHAPE BEHIND THAT: the Parquet corpus is the
-SOURCE OF TRUTH and `body_durable` is a DERIVED INDEX over it — `flush_detailed` writes the Parquet
-FIRST (`COPY {table} TO ... (FORMAT PARQUET, COMPRESSION ZSTD)`, lib.rs:310) and only THEN mirrors it
-into the native table (lib.rs:301-303), and at every open the native table is REBUILT from the Parquet
-(lib.rs:229). SO A DUCKDB DATABASE FILE HOLDING THE BODIES IS NOT WHAT THE STORE HAS. Whether such a
-file would be a better home is UNMEASURED: one arm measured it 5.7×–24.6× LARGER on the same bytes,
-but that comparison is a ROW-ORIENTED FILE against a COLUMNAR WRITE PATH, so it settles a
-SCHEMA-LAYOUT difference, not a technology difference, and it must not be quoted as a DuckDB-versus-
-DuckDB result. WHAT REMAINS GENUINELY OPEN IS NOT THE DESTINATION BUT THE TYPED PROJECTION
-(TRDD-TC8HW857), which has never been measured.
+The bodies are stored in DuckDB's OWN compressed, columnar representation, and they are READ through
+DuckDB's Parquet reader. THE STORE'S OWN-PATH RATIO IS **6.158×** on the large stratum (40,005,027
+raw → 6,496,412 stored, byte-identical across all 5 repetitions) — that is the number this card's `R`
+uses (6.4 on the admission report's 40-file sample; 17.2 on a live pass, which dedups and so is not
+a migration ratio). THE SHAPE BEHIND THAT: the Parquet corpus is the SOURCE OF TRUTH and
+`body_durable` is a DERIVED INDEX over it — `flush_detailed` writes the Parquet FIRST (`COPY {table}
+TO ... (FORMAT PARQUET, COMPRESSION ZSTD)`, lib.rs:310) and only THEN mirrors it into the native
+table (lib.rs:301-303), and at every open the native table is REBUILT from the Parquet (lib.rs:229).
+**THE MIRROR IS METADATA-ONLY, AND THAT BOUNDS WHAT THIS PARAGRAPH MAY CLAIM:** the `body` table
+carries NO payload column (body_id, src_name, kind, session_id, ts, model, raw_bytes, body_sha256 —
+lib.rs:167-170) and the mirror fires only for that table (`if table == "body"`, lib.rs:299), so
+`all_of('body')` (lib.rs:133-138) returns the native table and the METADATA view never touches a
+Parquet scan — while the body BYTES are read through `read_parquet` (lib.rs:139-150, 586). A reader
+must NOT take that as "the payload is natively queryable": it is not, and the report says so in its
+own words ("the `body_durable` table is a *metadata* mirror — the `body` table carries no body
+column"). **A DUCKDB DATABASE FILE HOLDING THE BODIES IS NOT WHAT THE STORE HAS, AND THE
+MEASUREMENT ANSWERS THAT QUESTION NO:** the same rows written to a DuckDB database file came out
+**5.7×–24.6× LARGER** (small 24.61×, medium 7.99×, large 5.73×; arm A's durable size was
+bit-identical across all repetitions, arm B's spread ≤2.1%). THE MECHANISM, AS MEASURED RATHER THAN
+REASONED: **BOTH ARMS ARE DUCKDB, AND DUCKDB IS COLUMNAR IN BOTH** — arm B is a columnar file in
+which the payload column simply came out `Uncompressed`. The split is the proof: values BELOW 4096
+bytes compress at **5.121×** and values ABOVE 4096 bytes do not compress at all (1.340, and
+`Uncompressed`), and changing the column TYPE does not help (BLOB is identical to VARCHAR) — the
+threshold is on the VALUE'S LENGTH, not the column's type, and not on a row-versus-column layout. So
+this IS a DuckDB-versus-DuckDB result, and the finding is a WRITE-PATH difference (DuckDB's native
+storage layer does not compress these payloads, while the same build's Parquet writer compresses the
+identical bytes at 5.51× with ZSTD) — a LARGE one, with a 573–2361% gap against ≤2.1% noise. **WHAT
+REMAINS GENUINELY OPEN IS NOT THE DESTINATION BUT THE TYPED PROJECTION** (TRDD-TC8HW857), which has
+never been measured — and the typed-schema card's own Scope still says "ingest this backlog directly
+into DuckDB; never route it through the legacy Parquet store", which this card does not reinterpret
+and which must be amended by that card's owner.
 
 **THREE FINDINGS THAT CHANGE WHAT THE CARD'S OTHER SECTIONS SAY.**
 Read them before the Scope paragraph: it carried the first one as a live figure, and that
@@ -162,8 +181,8 @@ figure has now been corrected IN PLACE rather than merely labelled.
   340 spill block files were on disk and the WAL held 320 bytes; the spill files survive the kill
   and are present during recovery) — BUT THE MEASUREMENT IS NARROW: one memory limit (500 MB)
   and one kill offset (4,000 ms), so it establishes that the coexistence OCCURS, not how it
-  SCALES. THE
-  file-backed model it belongs to is superseded in that report by the measured `D + G + W`,
+  SCALES. THE FILE-BACKED MODEL IT BELONGS TO IS SUPERSEDED in that report by the
+  measured `D + G + W`,
   whose `G` tracks the BATCH (correlation +0.77 against the batch's raw bytes, −0.58 against
   the accumulated live content) at a mean 2.02×B, with the backlog's own case still the
   report's "most important remaining unmeasured scenario".
@@ -180,7 +199,6 @@ recovery are the same 2.00x", "a conservative choice", and "the 17.2x ... is the
 gate must plan against", all retracted. Where the body, the Scope paragraph, and this block
 disagree, **this block wins** — and the Scope's own 17.2x sentence and its stale reserve
 arithmetic have now been CORRECTED IN PLACE, not merely labelled, so a reader who lands there
-does not read a superseded position.
 
 ## WHY
 The measured backlog is larger than currently free space, so migration must not start from raw-size arithmetic or optimistic compression assumptions; it needs a measured peak-space model that includes every concurrent copy and preserves a hard 20 GiB reserve.
@@ -240,3 +258,4 @@ This is a depth-one atomic implementation card: `npt` and `eht` are empty and it
 2026-10-20T16:05:00+0200 - THE SCOPE IS NOW EXPLICITLY AUTHORITATIVE OVER THIS LOG, because the log is append-only and the card therefore permanently carries wording that later entries retract. The Scope says so in its own words: 'THIS PARAGRAPH IS THE CURRENT POSITION; THE APPROVAL LOG BELOW IS THE HISTORY OF HOW IT WAS REACHED, AND WHERE THE TWO DISAGREE, THIS PARAGRAPH WINS.' The card has no STATE block, so that precedence could not be assumed. A reader arriving at the card sees the corrections LAST, which helps, but the card now says which text governs.
 2026-10-20T16:30:00+0200 - FORWARD POINTER, so the retraction is findable from this log's side. The entries above this one are APPEND-ONLY and therefore PERMANENTLY carry wording that later entries retract: 'THE CHECKPOINT AND THE CRASH RECOVERY ARE NOT ADDITIVE - THEY ARE THE SAME 2.00x' (15:00) and 'THAT IS A CONSERVATIVE CHOICE' (15:25) are BOTH RETRACTED. The current position is in the card's STATE BLOCK at the top, which supersedes the body and this log: the model exists (PEAK_DISK(B) ~= 2.93 * B for the batch-load scenario), the GATE DOES NOT, and three things are open - the admission formula and the 20 GiB reserve arithmetic do not exist yet, the crash-vs-spill coexistence is unmeasured so 2.93x is a LOWER BOUND for the crash scenario rather than a worst case, and the gate needs a memory-limit assumption. The merge of the checkpoint and recovery terms is a MODELLING ASSUMPTION UNVERIFIED IN THE PESSIMISTIC DIRECTION, not a conservative choice. READ THE STATE BLOCK, NOT THE LOG, TO KNOW THE CURRENT POSITION.
 2026-10-20T17:05:00+0200 - THE SCOPE'S RESERVE ARITHMETIC WAS STALE AND IS NOW LABELLED. The review caught that the Scope's 'RESERVE ARITHMETIC: 87 GB free at 96 percent full, minus the 20 GiB reserve, leaves roughly 66 GB usable...' was stated in the PRESENT TENSE while the live machine has 318.8 GiB free at 83 percent full (2026-10-20, 17:00), the corpus is 40.5 GB DECIMAL (this entry originally read '40.5 GiB', and the label was WRONG: read as 40.5 GiB the figure is 9.8% above the corpus's measured allocated size and is EXCLUDED by that measurement, while read as 40.5 decimal GB it is 2.2% above and within the corpus's own drift) and the store 4.1 GiB - so a reader planning from it would UNDER-PLAN BY ROUGHLY 3x. The passage is now marked STALE and dated, and is kept as EVIDENCE rather than as a current number: the SHAPE of the arithmetic (free space, minus the 20 GiB reserve, minus the projected store, minus the transients) is the shape the admission formula must have, and the store's 9,697 parquet parts (4,836 blobs + 4,861 parts) that the fsync barrier must touch are still current. The current position - that the reserve arithmetic DOES NOT EXIST YET - is in the STATE block, which owns it. THIS ALSO NARROWS THE PREVIOUS COMMIT'S 'EXACTLY ONE PLACE' CLAIM: the POSITION's figures (2.93x, 2.00x, the lower-bound qualification, the destination result) live in the STATE block alone, but the Scope keeps the measured INPUTS, and one of those inputs - the reserve arithmetic - is itself stale. The distinction that matters for drift is POSITION versus EVIDENCE, and the fix here is to label the stale evidence rather than to delete it.
+2026-10-20T19:45:00+0200 - THE "ROW-ORIENTED FILE versus COLUMNAR WRITE PATH" FRAMING IS RETRACTED, IN THE 16:50, 17:55 AND 14:25 ENTRIES, AND THE PAYLOAD-QUERYABILITY PARENTHESIS IS RETRACTED WITH IT. An adversarial review of the STATE block found that the three log entries above assert a mechanism the report's OWN MEASUREMENT REFUTES. THE 16:50 ENTRY SAID the comparison was 'a ROW-ORIENTED FILE, not of two technologies'; THE 17:55 ENTRY SAID it was 'a ROW-ORIENTED-VERSUS-COLUMNAR ONE, NOT A DUCKDB VERSUS DUCKDB ONE' and that 'the 0.93-0.98x arm put a whole body in a VARCHAR column of a row-oriented database FILE'. ALL THREE ARE WRONG ON THE REPORT'S OWN NUMBERS: arm B IS A COLUMNAR FILE (DuckDB is a columnar engine in both arms), and the report's measured split is a CODEC THRESHOLD ON VALUE LENGTH - values BELOW 4096 bytes compress at 5.121x while values ABOVE 4096 bytes do not compress at all (1.340, and Uncompressed), and changing the column TYPE does not help (BLOB is identical to VARCHAR). So the threshold is on the VALUE'S LENGTH, not on a row-versus-column layout, and the correct finding is a WRITE-PATH difference WITHIN DuckDB: DuckDB's native storage layer does not compress these payloads while the same build's Parquet writer compresses the identical bytes at 5.51x with ZSTD. That is a LARGE difference, not a cosmetic one - a 573-2361% gap against <=2.1% noise - and calling it a layout difference UNDERSTATES the result while being false. THE 14:25 ENTRY'S CLAIM that 'the full view never touches a Parquet scan' is retracted for the PAYLOAD: the `body` table carries NO payload column (body_id, src_name, kind, session_id, ts, model, raw_bytes, body_sha256 - lib.rs:167-170) and the mirror fires only for that table (`if table == "body"`, lib.rs:299), so `all_of('body')` (lib.rs:133-138) avoids a Parquet scan for the METADATA view ONLY; every body BYTE is read through `read_parquet` (lib.rs:139-150, 586). The report says so in its own words: 'the `body_durable` table is a metadata mirror - the `body` table carries no body column'. A 5.09-6.33x figure was also carried here; that number belongs to a DIFFERENT report's one-row-per-body Parquet CONTROL (20261020_native-duckdb-capacity-measurement.md), not to the store's blob/part path, whose own large-stratum ratio is 6.158x (this report) and 6.41x (the admission report's 40-file sample) - and 6.4x is what the card's R uses. THE STATE BLOCK NOW STATES THE CORRECTED FORM, and the destination itself is UNCHANGED and UNCHANGING: a DuckDB database file is 5.7x-24.6x LARGER on the same bytes, so the store's own Parquet path IS the destination for the RAW BODIES, and the typed projection (TRDD-TC8HW857) is what remains open.
