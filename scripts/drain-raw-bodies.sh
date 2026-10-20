@@ -385,12 +385,19 @@ run_pass() {
         # and the final 'mv' is skipped, so nothing is installed.
         ;;
     esac
-    # '-s' is load-bearing on the final move: it refuses to install an EMPTY file over the
-    # live log. That case is unreachable by argument today (the outer guard implies a
-    # non-empty log, and 'tail -c N' on a non-empty file yields a non-empty file), but
-    # 'unreachable by argument' is one argument away from reachable, and this block is
-    # about not losing a log.
-    if [ "$truncate_ok" -eq 1 ] && [ -s "$ERRLOG.trimmed" ]; then
+    # '-f' AND NOT '-s' ON THE FINAL MOVE, AND THE DIFFERENCE MATTERS. The guard refuses to
+    # move over the live log when the temp file is MISSING. It must NOT refuse when the temp
+    # file is EMPTY, because that is a legitimate result: when the retained window holds a
+    # single line, the fragment strip produces an empty file, and the truncation's job is to
+    # leave the log holding only the last ERRLOG_MAX_BYTES - which here is nothing. An
+    # earlier version of this guard used '-s' and it was a REGRESSION: it refused the empty
+    # result, so the 'mv' was skipped, so the log stayed UNTRUNCATED and grew past its
+    # ceiling on every iteration - the exact failure this block exists to prevent. (The
+    # missing-file case the guard is really for is unreachable by argument too: the temp
+    # file is written by the successful byte cut and removed only by the branch that sets
+    # 'truncate_ok=0', which the guard already covers. It is here so that a MISSING file
+    # cannot be moved into place, which is one argument away from reachable.)
+    if [ "$truncate_ok" -eq 1 ] && [ -f "$ERRLOG.trimmed" ]; then
       mv "$ERRLOG.trimmed" "$ERRLOG"
     fi
   fi
