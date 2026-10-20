@@ -200,11 +200,21 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
  *                     not visit.
  *
  * A 'gone' RECORD IS NOT OUTSTANDING WORK, whatever its class says. The class is the honest
- * history ("it was never migrated"), not a claim that it still needs migrating. A consumer
- * must apply BOTH rules: the path must still be present in the corpus, AND its latest
- * record's reason must not be 'gone'. Either rule alone is not enough — the corpus check
- * excludes a reclaimed body, and the 'gone' reason excludes a body the log knows is gone
- * even when a corpus check is skipped.
+ * history ("it was never migrated"), not a claim that it still needs migrating.
+ *
+ * PRESENCE IS THE GROUND TRUTH, AND THE 'gone' REASON IS NOT BY ITSELF ENOUGH. A 'gone'
+ * record is a statement about the PAST — "this path was not here when the pass ran" — and a
+ * body can come back (restored from a backup, moved back by the retention policy). So a
+ * 'gone' record does not exclude a source that is PRESENT in the corpus: the corpus wins.
+ * A 'gone' record for a path that is absent from the corpus is excluded, but so is every
+ * other record for an absent path — the exclusion is really the corpus check, and the reason
+ * is the log's explanation of WHY.
+ *
+ * WHY THE REASON IS STILL WORTH HAVING: it tells a consumer that the log KNOWS about this
+ * path and deliberately recorded its absence, which is different from a path the log has
+ * never seen. And it is the reason a restored body must SUPERSEDE its own tombstone — the
+ * pass writes a fresh record for a path that is back, so the tombstone stops being the
+ * latest statement about it.
  *
  * THE FORMAT MODELS ABSENCE. Every other record is an OBSERVATION about a path at a time —
  * "this path was here, then". A 'gone' record is the one that asserts a path is NOT there,
@@ -637,6 +647,11 @@ export function outstandingSources(
     // This is the same shape as the corpus check below, and it is why both are applied:
     // the reason check excludes a body the log KNOWS is gone even when the corpus check is
     // skipped, and the corpus check catches a body the log THINKS is gone but which is back.
+    // A 'gone' record for a path that is ABSENT is excluded here, and so is every other
+    // record for an absent path by the corpus check below. The exclusion is really the
+    // CORPUS CHECK; the reason is the log's explanation of WHY. The branch is kept because
+    // it names the one case where a reader's first instinct is wrong - a tombstone whose
+    // path is BACK is outstanding work - and the reason is what a reader checks.
     if (rec.reason === 'gone' && !corpusPaths.has(rec.path)) continue
     // A REFUSAL CONTESTS ONLY A PARTNER THAT STILL EXISTS. The persisted refusal names the
     // partners that collided AT THE TIME the record was written, and the log is append-only:
