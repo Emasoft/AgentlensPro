@@ -207,12 +207,22 @@ run_pass() {
     local truncate_ok=1
     size=$(wc -c < "$ERRLOG")
     start=$(( size - ERRLOG_MAX_BYTES ))
-    # IF ANY STEP OF THIS TRUNCATION FAILS, THE ORIGINAL LOG IS LEFT UNTOUCHED AND THE mv
-    # IS SKIPPED. An earlier version of this block emptied the temp file on a 'tail'
-    # failure and then moved it into place - which REPLACED THE LIVE LOG WITH ZERO BYTES
-    # and lost every diagnostic in it. The failure was reported on stderr, but the log the
-    # operator would look in was the one that had been emptied. So the rule here is the
-    # opposite: a failed truncation leaves the log exactly as it was, and says so.
+    # THE TWO FAILURES ARE NOT EQUIVALENT, AND THE RULE DIFFERS FOR EACH.
+    #
+    # If the BYTE CUT fails, nothing usable was produced: there is no truncated file to
+    # install, so the truncation is skipped and the ORIGINAL LOG IS LEFT UNTOUCHED. (An
+    # earlier version of this block emptied the temp file on this failure and then moved it
+    # into place - which REPLACED THE LIVE LOG WITH ZERO BYTES and lost every diagnostic in
+    # it. The failure was reported on stderr, but the log the operator would look in was the
+    # one that had been emptied.)
+    #
+    # If only the FRAGMENT STRIP fails, the byte cut already SUCCEEDED and wrote a complete,
+    # valid, bounded file. The strip is a REFINEMENT that drops one partial line, and a
+    # refinement that fails must not cost the whole truncation: the un-stripped file is
+    # installed instead. ONE PARTIAL LINE IN A DIAGNOSTIC LOG IS COSMETIC; AN UNBOUNDED LOG
+    # IS THE FAILURE THIS BLOCK EXISTS TO PREVENT - the log would grow past its ceiling on
+    # every iteration, on a volume that is 83 percent full. So that branch keeps the cut
+    # file and says so.
     if ! tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null; then
       echo "drain-raw-bodies: the error-log truncation FAILED (the tail could not read the log); the log is LEFT AS IT IS" >&2
       rm -f "$ERRLOG.trimmed"
@@ -233,19 +243,27 @@ run_pass() {
     # 'LC_ALL=C' is load-bearing: the error log can carry any bytes the pass's stderr carried,
     # so the byte must be read in a single-byte locale.
     local first_line_is_whole=0
-    if [ "$start" -gt 0 ] && [ -s "$ERRLOG.trimmed" ]; then
+    if [ "$truncate_ok" -eq 1 ] && [ "$start" -gt 0 ] && [ -s "$ERRLOG.trimmed" ]; then
       local before
       # '|| true' is load-bearing: if $ERRLOG vanished between the -f test above and this
-      # read, 'head' exits 1, the pipeline's status is 1 under pipefail, and under set -e
-      # that ABORTS THE WHOLE DRAIN LOOP. The consequence of not reading the byte is that
-      # the cut is treated as mid-line and the fragment is dropped - the safe direction.
+      # read, 'head' exits 1, the pipeline's status is 1 under pipefail (the rightmost
+      # non-zero stage's status), and under set -e that ABORTS THE WHOLE DRAIN LOOP.
       before=$(LC_ALL=C head -c "$start" "$ERRLOG" 2>/dev/null | tail -c 1 | od -An -tu1 | tr -d ' \n' || true)
-      # 10 is the byte value of a newline.
-      if [ "$before" = "10" ]; then
+      if [ -z "$before" ]; then
+        # AN EMPTY READ MEANS THE STATE IS UNKNOWN, NOT THAT THE CUT IS MID-LINE. A
+        # successful read of the byte before the cut always yields a value; an empty result
+        # means the read FAILED. So the truncation is skipped rather than GUESSING a
+        # classification for a file we cannot read - and the boundary is not even consulted
+        # when the byte cut itself failed (the 'truncate_ok' test above).
+        echo "drain-raw-bodies: the error-log truncation FAILED (the log could not be re-read); the log is LEFT AS IT IS" >&2
+        rm -f "$ERRLOG.trimmed"
+        truncate_ok=0
+      elif [ "$before" = "10" ]; then
+        # 10 is the byte value of a newline.
         first_line_is_whole=1
       fi
     fi
-    if [ -s "$ERRLOG.trimmed" ] && [ "$first_line_is_whole" -eq 0 ]; then
+    if [ "$truncate_ok" -eq 1 ] && [ -s "$ERRLOG.trimmed" ] && [ "$first_line_is_whole" -eq 0 ]; then
       # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the line
       # whose head was cut away. It is a whole line but not the start of one, so it is dropped
       # and every line after it is kept. 'tail -n +2' drops exactly that first line.
@@ -264,9 +282,10 @@ run_pass() {
       # that produced an empty file here would be moved over the good one and then over the
       # live log - the same destruction, one step later, and with no diagnostic at all.
       if ! tail -n "+2" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null; then
-        echo "drain-raw-bodies: the error-log truncation FAILED (the fragment could not be stripped); the log is LEFT AS IT IS" >&2
-        rm -f "$ERRLOG.trimmed" "$ERRLOG.trimmed.2"
-        truncate_ok=0
+        # THE CUT FILE IS KEPT. It is bounded and complete; it carries at most one partial
+        # line, at its head. Dropping it would leave the log unbounded, which is worse.
+        echo "drain-raw-bodies: the error-log truncation could not strip the fragment; the log keeps the cut file, with at most one partial line" >&2
+        rm -f "$ERRLOG.trimmed.2"
       else
         mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
       fi
