@@ -47,11 +47,37 @@ if [ ! -d "$BODIES" ]; then
 fi
 mkdir -p "$(dirname "$LOG")"
 
+# The pass counter, so every log line names its pass. It starts from the highest pass number
+# already in the log, so a restart continues the sequence instead of restarting it.
+PASS_N=1
+if [ -f "$LOG" ]; then
+  PASS_N=$(( $(grep -o 'pass=[0-9]*' "$LOG" | tail -1 | cut -d= -f2) + 1 ))
+fi
+[ -n "$PASS_N" ] || PASS_N=1
+
+# The pass prints its summary as one bare JSON line on stdout. It is written to the log WITH a
+# "pass=N dur=Ms " prefix, and that prefix is load-bearing: a reader (or a script) that matches
+# lines by shape must be able to tell one pass from the next. A pass whose line lacks the prefix
+# is SKIPPED by such a reader, and a parser that assumes the format then reports "no pass ran"
+# for a pass that ran. That mistake was made here: the restart's own pass 94 was written without
+# the prefix and a parser counted 93 passes and concluded nothing had happened.
+#
+# The prefix is also how a pass KILLED MID-FLIGHT is detected: the summary is printed at the END
+# of a pass, so a killed pass leaves no line at all. A missing line between two present ones is
+# therefore evidence of a killed pass, and only the prefix makes the gap visible.
 run_pass() {
-  "$BIN" pass "$STORE" "$BODIES" \
-    --max-bytes 2147483648 \
-    --durable-source \
-    --max-age-ms 300000 >> "$LOG" 2>&1
+  local out
+  local start
+  start=$(date +%s)
+  if out="$("$BIN" pass "$STORE" "$BODIES" \
+      --max-bytes 2147483648 \
+      --durable-source \
+      --max-age-ms 300000 2>&1)"; then
+    printf 'pass=%s dur=%ss %s\n' "$PASS_N" "$(( $(date +%s) - start ))" "$out" >> "$LOG"
+  else
+    printf 'pass=%s dur=%ss FAILED %s\n' "$PASS_N" "$(( $(date +%s) - start ))" "$out" >> "$LOG"
+  fi
+  PASS_N=$(( PASS_N + 1 ))
 }
 
 if [ "${1:-}" = "--once" ]; then
