@@ -248,9 +248,11 @@ run_pass() {
     # 'LC_ALL=C' is load-bearing: the error log can carry any bytes the pass's stderr carried,
     # so the byte must be read in a single-byte locale.
     local first_line_is_whole=0
-    # 'boundary_unknown' is set when the byte before the cut could not be read. The
-    # fragment is then dropped as if the cut were mid-line, so the file installed is
-    # always a whole-line suffix.
+    # 'boundary_unknown' is set when the byte before the cut could not be read, so the cut's
+    # position is not known. IT IS NOT A FRAGMENT: the fragment is NOT dropped in that case.
+    # The file is kept UNSTRIPPED, because stripping on a guess can delete a whole record
+    # and leaving one line unseparated deletes nothing. The strip below therefore runs only
+    # when the cut is KNOWN to be mid-line.
     local boundary_unknown=0
     if [ "$truncate_ok" -eq 1 ] && [ "$start" -gt 0 ] && [ -s "$ERRLOG.trimmed" ]; then
       local before
