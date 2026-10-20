@@ -757,7 +757,16 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
       if (refusal !== null) {
         reason = 'refused'
       } else if (hasPrior && cls === 'unchanged') {
-        reason = identityMoved ? 'refined' : 'retracted'
+        if (priorRecord!.reason === 'gone') {
+          // THE BODY IS BACK. The prior record was a 'gone' tombstone, so the path was not in
+          // the corpus when the pass last ran — and now it is, and the pass visited it. The
+          // alternatives are both false statements: 'retracted' claims a refusal was lifted
+          // (none was) and 'refined' claims the identity moved (it did not — the bytes are
+          // the same). A reader asking "is this body here?" needs the answer in the log.
+          reason = 'restored'
+        } else {
+          reason = identityMoved ? 'refined' : 'retracted'
+        }
       }
 
       // A path that changed identity stops claiming its old identity. The claim map is the

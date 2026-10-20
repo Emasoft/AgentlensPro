@@ -181,6 +181,13 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
  *   'retracted'    — a refusal was lifted because the collision was resolved. The path is
  *                     STILL IN THE CORPUS: it was RE-IDENTIFIED (its provenance arrived, or
  *                     its bytes changed), so the collision it was in no longer exists.
+ *   'restored'     — THE PATH IS BACK. A body that was reclaimed and then came back (restored
+ *                     from a backup, moved back by the retention policy) is VISITED by the pass
+ *                     again, and this record supersedes its own 'gone' tombstone. It is its own
+ *                     reason because the alternatives are both false statements: 'retracted'
+ *                     claims a refusal was lifted (none was) and 'refined' claims the identity
+ *                     moved (it did not — the bytes are the same). A reader asking "is this body
+ *                     here?" needs the answer to be in the log, and 'restored' says it.
  *   'gone'         — THE PATH IS NO LONGER IN THE CORPUS. This is a different statement from
  *                     'retracted' and the difference is the one a migration runner needs:
  *                     'retracted' means "this source is still here but no longer contested";
@@ -199,8 +206,9 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
  *                     A 'gone' record is the only record a pass may write for a path it did
  *                     not visit.
  *
- * A 'gone' RECORD IS NOT OUTSTANDING WORK, whatever its class says. The class is the honest
- * history ("it was never migrated"), not a claim that it still needs migrating.
+ * A 'gone' RECORD IS NOT OUTSTANDING WORK WHILE THE PATH IS ABSENT, whatever its class says.
+ * The class is the honest history ("it was never migrated"), not a claim that it still needs
+ * migrating.
  *
  * PRESENCE IS THE GROUND TRUTH, AND THE 'gone' REASON IS NOT BY ITSELF ENOUGH. A 'gone'
  * record is a statement about the PAST — "this path was not here when the pass ran" — and a
@@ -228,6 +236,7 @@ export type SourceRecordReason =
   | 'refined'
   | 'refused'
   | 'retracted'
+  | 'restored'
   | 'gone'
 
 /** Why a source was refused instead of accepted. */
@@ -413,8 +422,8 @@ export function validateSourceIndexRecord(
   const reason = value.reason
   if (reason !== 'discovered' && reason !== 'content' && reason !== 'replaced'
       && reason !== 'refined' && reason !== 'refused' && reason !== 'retracted'
-      && reason !== 'gone') {
-    throw new SourceIndexError(line, "field 'reason' must be one of discovered, content, replaced, refined, refused, retracted, gone")
+      && reason !== 'restored' && reason !== 'gone') {
+    throw new SourceIndexError(line, "field 'reason' must be one of discovered, content, replaced, refined, refused, retracted, restored, gone")
   }
   if (reason === 'refused' && refusal === null) {
     throw new SourceIndexError(line, "field 'refusal' is required when reason is 'refused'")
@@ -428,7 +437,7 @@ export function validateSourceIndexRecord(
     throw new SourceIndexError(line, "field 'refusal' must be null when reason is 'retracted'")
   }
   if ((reason === 'discovered' || reason === 'content' || reason === 'replaced'
-       || reason === 'refined') && refusal !== null) {
+       || reason === 'refined' || reason === 'restored') && refusal !== null) {
     throw new SourceIndexError(line, `field 'refusal' must be null when reason is '${reason}'`)
   }
   if (reason === 'gone' && refusal !== null) {
@@ -473,6 +482,8 @@ export function validateSourceIndexRecord(
   // 'unchanged' would load cleanly and be silently wrong — which is exactly the bug the
   // carry-forward was added to prevent.
   if (reason !== 'content' && reason !== 'replaced' && reason !== 'gone' && cls === 'unchanged') {
+    // 'restored' is in this list: a restored body carries the MATERIAL class forward (its
+    // bytes are the same), so its class is never 'unchanged'.
     throw new SourceIndexError(line, `field 'class' is 'unchanged' but reason is '${reason}' — 'unchanged' is an observation, never a persisted material class`)
   }
   return {
@@ -633,26 +644,27 @@ export function outstandingSources(
   const latest = latestByPath(records)
   const out: SourceIndexRecord[] = []
   for (const rec of latest.values()) {
-    // PRESENCE IS THE GROUND TRUTH THE LOG CANNOT KNOW ALONE.
+    // A 'gone' TOMBSTONE IS AUTHORITATIVE, AND IT IS NOT DEAD CODE.
     //
-    // A 'gone' record is the log's statement that the path was no longer in the corpus when
-    // the pass ran. But the corpus changes after the pass: a body can be RESTORED — the same
-    // bytes, the same inode, restored from a backup or moved back by the retention policy —
-    // and then the tombstone is simply WRONG about the present. A source that is present and
-    // unmigrated must not be excluded by a statement about the past.
+    // A 'gone' record is the log's statement that the path was not in the corpus WHEN THE
+    // PASS LAST RAN. It is the BACKSTOP against a corpus set that is not fresh: if the
+    // consumer's `corpusPaths` still lists a body that has since been reclaimed, the corpus
+    // check cannot catch it — the file is in the set — and the tombstone can. Removing that
+    // backstop would offer a RECLAIMED body to a deletion runner, which is the one thing
+    // this card must never do.
     //
-    // So the 'gone' reason is honoured only when the path is NOT in the current corpus. If
-    // it IS in the corpus, the corpus wins: the file is here, so it is outstanding work.
+    // THE RESTORED BODY IS HANDLED BY THE PASS, NOT HERE. When a body comes back (restored
+    // from a backup, moved back by the retention policy), the next pass VISITS it and writes
+    // a fresh record that supersedes its own tombstone — with reason 'restored'. So a
+    // restored body's latest record is no longer 'gone', and it IS offered. The tombstone
+    // only ever survives for a path the pass did not see, which is exactly the case where
+    // the corpus check cannot be trusted.
     //
-    // This is the same shape as the corpus check below, and it is why both are applied:
-    // the reason check excludes a body the log KNOWS is gone even when the corpus check is
-    // skipped, and the corpus check catches a body the log THINKS is gone but which is back.
-    // A 'gone' record for a path that is ABSENT is excluded here, and so is every other
-    // record for an absent path by the corpus check below. The exclusion is really the
-    // CORPUS CHECK; the reason is the log's explanation of WHY. The branch is kept because
-    // it names the one case where a reader's first instinct is wrong - a tombstone whose
-    // path is BACK is outstanding work - and the reason is what a reader checks.
-    if (rec.reason === 'gone' && !corpusPaths.has(rec.path)) continue
+    // THE CALLER OBLIGATION THIS IMPLIES: the outstanding set is computed from a log that
+    // reflects the LATEST pass, so the caller must run the pass before asking for the
+    // outstanding set. A log that has never been passed over has no 'gone' records at all,
+    // and a stale log's tombstones are as authoritative as its other records.
+    if (rec.reason === 'gone') continue
     // A REFUSAL CONTESTS ONLY A PARTNER THAT STILL EXISTS. The persisted refusal names the
     // partners that collided AT THE TIME the record was written, and the log is append-only:
     // if a partner has since been reclaimed and no pass has lifted the refusal, the stale

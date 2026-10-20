@@ -760,33 +760,65 @@ suite('discovery — crash at every checkpoint boundary', () => {
 
   test('a RESTORED body supersedes its own gone tombstone', () => {
     // A 'gone' record is the log's statement that the path was not in the corpus when the
-    // pass ran. But a body can be RESTORED — the same bytes, the same inode, restored from a
-    // backup or moved back — and then the tombstone is simply WRONG about the present.
+    // pass ran. But a body can be RESTORED — the same bytes, the same inode, the same mtime,
+    // restored from a backup or moved back — and then the tombstone is simply WRONG about
+    // the present.
     //
     // The bug this covers: the byte-identical observation writes no record, and the cheap
     // path short-circuits on 'unchanged'. So a restored file produced NO record, its latest
     // record stayed 'gone', and the outstanding set excluded a body that was PRESENT and
     // UNMIGRATED — permanently invisible, silently. That is the exact failure the card
     // exists to prevent.
-    const p = write('restored.request.json', body(100), NOW)
+    //
+    // THE SCENARIO IS A REAL ONE, NOT A HAND-WRITTEN TOMBSTONE. `rename` PRESERVES the
+    // inode and the mtime (it is a directory-entry change, not a content write), so moving
+    // a body aside and moving it back reproduces exactly what a restore from a backup does —
+    // and the pass writes REAL tombstones for the paths while they are away, over REFUSED
+    // prior records (a tombstone is only written for a path that was a collision partner).
+    //
+    // BOTH bodies are moved aside, and only ONE is restored: a restored body that still has
+    // a live collision partner is legitimately REFUSED, and the outstanding set rightly
+    // excludes it. The bug needs the restored body to be ALONE, so that it is material
+    // outstanding work that the tombstone would wrongly hide.
+    const same = body(100)
+    const a = write('a.request.json', same, NOW)
+    const b = write('b.request.json', same, NOW)
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
 
-    // Hand the pass a 'gone' tombstone for a path that is still present with the SAME inode
-    // — the state a restored file is in.
-    const records = loadSourceIndex(indexPath).records
-    const tampered = records.map(r => r.path === p ? { ...r, reason: 'gone' as const, refusal: null } : r)
-    fs.writeFileSync(indexPath, tampered.map(r => JSON.stringify(r)).join('\n') + '\n')
-    assert.strictEqual(latestByPath(loadSourceIndex(indexPath).records).get(p)!.reason, 'gone',
-      'the tombstone is in place')
+    // Move 'b' aside. 'a' is STILL LIVE, and a live path is what TRIGGERS the lift of a
+    // refusal naming a vanished partner — so this pass writes the real tombstone for 'b'.
+    // (With no live path at all there is no trigger, and no tombstone is written.)
+    const asideB = path.join(corpus, 'b.away')
+    fs.renameSync(b, asideB)
+    const inoBefore = fs.statSync(asideB).ino
+    const mtimeBefore = fs.statSync(asideB).mtimeMs
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
 
-    const after = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
-    const latest = latestByPath(loadSourceIndex(indexPath).records).get(p)!
+    // The PASS wrote a real tombstone for 'b'.
+    const tomb = latestByPath(loadSourceIndex(indexPath).records).get(b)!
+    assert.strictEqual(tomb.reason, 'gone', 'the pass wrote a real tombstone')
+    assert.strictEqual(tomb.ino, inoBefore, 'and it preserved the inode')
+
+    // Now move 'a' aside as well, so the restored 'b' is ALONE — a restored body that still
+    // has a live collision partner is legitimately REFUSED, and the outstanding set rightly
+    // excludes it. The bug needs the restored body to be material outstanding work.
+    const asideA = path.join(corpus, 'a.away')
+    fs.renameSync(a, asideA)
+
+    // Restore 'b': same bytes, same inode, same mtime, and no live partner.
+    fs.renameSync(asideB, b)
+    assert.strictEqual(fs.statSync(b).ino, inoBefore, 'the restore preserved the inode')
+    assert.strictEqual(fs.statSync(b).mtimeMs, mtimeBefore, 'and the mtime')
+
+    const after = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
+    const latest = latestByPath(loadSourceIndex(indexPath).records).get(b)!
     assert.notStrictEqual(latest.reason, 'gone', 'the tombstone is superseded by a record')
-    assert.ok(after.observedMaterial.some(m => m.path === p), 'the restored body is material again')
+    assert.strictEqual(latest.reason, 'restored', "and the reason says the body is BACK")
+    assert.ok(after.observedMaterial.some(m => m.path === b), 'the restored body is material again')
 
     // And it is OUTSTANDING: present, unmigrated, not refused, and no longer tombstoned.
-    const outstanding = outstandingSources(loadSourceIndex(indexPath).records, new Set([p]))
-    assert.ok(outstanding.some(o => o.path === p),
+    const outstanding = outstandingSources(loadSourceIndex(indexPath).records, new Set([b]))
+    assert.ok(outstanding.some(o => o.path === b),
       "a restored body must not be excluded by a tombstone about the past")
   })
 
