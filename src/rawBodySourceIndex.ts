@@ -62,8 +62,26 @@ import {
   SourceClass, SourceKind, SourceProvenance, isHex64,
 } from './rawBodySourceIdentity'
 
-/** The format version this build writes. */
-export const SOURCE_INDEX_FORMAT_VERSION = 1
+/**
+ * The format version this build writes.
+ *
+ * IT IS 2, AND THE BUMP IS DELIBERATE. The first version of this format did not have the
+ * `reason` field, and its validator accepted a record whose class was 'unchanged'. Both
+ * changed: `reason` was added (a record must say WHY it was written, so a refinement is
+ * distinguishable from a content change) and the validator became STRICTER (a record's class
+ * is the last MATERIAL content state, so 'unchanged' is an observation and never a persisted
+ * class). A validator stricter than the format it claims to read REFUSES a legitimate log —
+ * verified: a log written by the first version of this format does not load under the
+ * stricter rules, and it is not loadable because the `reason` field is absent entirely.
+ *
+ * The bump makes that refusal EXPLICIT: a version-1 log is refused as an unknown version,
+ * with a message that says why, instead of being refused for a malformed field. A
+ * version-1 log holds no data anyone could lose — this substrate has never been run
+ * against the real corpus, and the real corpus is read-only for it — so there is nothing to
+ * migrate. The version is a CONTRACT, and a contract that changes without a version bump is
+ * a contract that lies.
+ */
+export const SOURCE_INDEX_FORMAT_VERSION = 2
 
 /** The file name of a version-N checkpoint inside the state dir. */
 export function sourceIndexFileName(version = SOURCE_INDEX_FORMAT_VERSION): string {
@@ -99,9 +117,18 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
  *                     calling that 'content' would make a byte-identical replacement
  *                     indistinguishable from a byte change. 'content' is what a reconciliation
  *                     stage reads as a tampering signal, so the two must not share it.
+ *                     'replaced' is the ONE reason whose class is implied by the reason
+ *                     itself: a writer sets both from the same observation, and the validator
+ *                     requires them to agree — so the pair is self-checking.
  *   'refined'      — the identity was refined (a provenance row appeared); the bytes did not.
  *   'refused'      — the source is contested; the record carries a refusal.
  *   'retracted'    — a refusal was lifted because the collision was resolved.
+ *   'gone'         — the path is NO LONGER IN THE CORPUS (reclaimed by the 72h retention
+ *                     policy). The record keeps the path's ORIGINAL lastSeenMs — the time it
+ *                     was really last seen — so it never claims the file is live, and it
+ *                     exists to clear a refusal that would otherwise name a live source for
+ *                     ever. A 'gone' record is the only record a pass may write for a path
+ *                     it did not visit.
  */
 export type SourceRecordReason =
   | 'discovered'
@@ -110,6 +137,7 @@ export type SourceRecordReason =
   | 'refined'
   | 'refused'
   | 'retracted'
+  | 'gone'
 
 /** Why a source was refused instead of accepted. */
 export interface SourceRefusal {
@@ -251,7 +279,7 @@ export function validateSourceIndexRecord(
     throw new SourceIndexError(line, "field 'v' must be an integer format version")
   }
   if (v !== SOURCE_INDEX_FORMAT_VERSION) {
-    throw new SourceIndexError(line, `unknown format version ${v} (this build reads version ${SOURCE_INDEX_FORMAT_VERSION})`)
+    throw new SourceIndexError(line, `unknown format version ${v} (this build reads version ${SOURCE_INDEX_FORMAT_VERSION}) — a version-${v} log is a different format and is not converted here`)
   }
   const id = requireString(value, 'id', line)
   if (!isHex64(id)) throw new SourceIndexError(line, "field 'id' must be a 64-char lowercase hex sha256")
@@ -290,11 +318,15 @@ export function validateSourceIndexRecord(
   const refusal = validateRefusal(value.refusal, line)
   const reason = value.reason
   if (reason !== 'discovered' && reason !== 'content' && reason !== 'replaced'
-      && reason !== 'refined' && reason !== 'refused' && reason !== 'retracted') {
-    throw new SourceIndexError(line, "field 'reason' must be one of discovered, content, replaced, refined, refused, retracted")
+      && reason !== 'refined' && reason !== 'refused' && reason !== 'retracted'
+      && reason !== 'gone') {
+    throw new SourceIndexError(line, "field 'reason' must be one of discovered, content, replaced, refined, refused, retracted, gone")
   }
   if (reason === 'refused' && refusal === null) {
     throw new SourceIndexError(line, "field 'refusal' is required when reason is 'refused'")
+  }
+  if (reason === 'gone' && refusal !== null && refusal.otherPaths.length === 0) {
+    throw new SourceIndexError(line, "field 'refusal' must be null or name a partner when reason is 'gone'")
   }
   if (reason === 'retracted' && refusal !== null) {
     // A retraction LIFTS a refusal, so the record must NOT carry one. Carrying a refusal on a
@@ -304,6 +336,13 @@ export function validateSourceIndexRecord(
   if ((reason === 'discovered' || reason === 'content' || reason === 'replaced'
        || reason === 'refined') && refusal !== null) {
     throw new SourceIndexError(line, `field 'refusal' must be null when reason is '${reason}'`)
+  }
+  if (reason === 'gone' && refusal !== null) {
+    // A 'gone' record may still refuse the partners that ARE present, so a refusal is
+    // allowed here — but only one that names at least one partner.
+    if (refusal.otherPaths.length === 0) {
+      throw new SourceIndexError(line, "field 'refusal' must be null when reason is 'gone' and it names no partner")
+    }
   }
   // 'content' means THE BYTES CHANGED. A byte-identical source must never claim it: a
   // reconciliation stage reads 'content' as a tampering signal, so a false one on the
@@ -329,7 +368,7 @@ export function validateSourceIndexRecord(
   // carry-forward from regressing: without it, a record with reason 'refined' and class
   // 'unchanged' would load cleanly and be silently wrong — which is exactly the bug the
   // carry-forward was added to prevent.
-  if (reason !== 'content' && reason !== 'replaced' && cls === 'unchanged') {
+  if (reason !== 'content' && reason !== 'replaced' && reason !== 'gone' && cls === 'unchanged') {
     throw new SourceIndexError(line, `field 'class' is 'unchanged' but reason is '${reason}' — 'unchanged' is an observation, never a persisted material class`)
   }
   return {

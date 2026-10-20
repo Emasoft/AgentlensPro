@@ -83,6 +83,11 @@
 //     not been migrated yet. The class is the MATERIAL class — it survives an identity
 //     refinement, so a late-arriving provenance row does not make an unmigrated source look
 //     settled.
+//   - ONLY A SOURCE'S OWN LATEST RECORD SAYS IT IS CONTESTED. A partner's record naming a
+//     source is NOT evidence that the source is contested: a partner that was reclaimed keeps
+//     its last record for ever, and that record names the live source. So "is this source
+//     contested?" is a question about ONE path's latest record — never a question about every
+//     record that mentions it.
 //
 // So: consume the LOG for "outstanding", consume `observedMaterial` for "what just moved",
 // and check the CORPUS for whether a path still exists.
@@ -255,8 +260,12 @@ export interface ObservedMaterial {
 
 /** The outcome of a discovery pass. */
 export interface DiscoveryResult {
-  /** Sources this pass appended to the checkpoint. */
-  recorded: DiscoveredSource[]
+  /**
+   * The sources THIS PASS appended to the checkpoint — the pass's own output, NOT the
+   * corpus's state. It is EMPTY on a pass over an unchanged corpus, exactly like
+   * `observedMaterial`, and for the same reason: nothing changed. It is not a todo list.
+   */
+  recordedThisPass: DiscoveredSource[]
   /**
    * The sources THIS PASS observed as material — their bytes changed, their identity was
    * refined, or their contestability moved. NOT the outstanding migration set: it is EMPTY on
@@ -264,7 +273,11 @@ export interface DiscoveryResult {
    * plus the consumer's own record of what it has migrated. See the module header.
    */
   observedMaterial: ObservedMaterial[]
-  /** Sources whose identity is contested — the latest record for each of these paths refuses. */
+  /**
+   * The sources THIS PASS found to be contested. PER-PASS, like `observedMaterial`: a source
+   * refused in an EARLIER pass and unchanged since is NOT in this list. The authoritative
+   * contestability state is the LOG — one path's latest record.
+   */
   refusals: DiscoveredSource[]
   /** How many body files were seen in the corpus dir. */
   scannedFiles: number
@@ -277,10 +290,13 @@ export interface DiscoveryResult {
   /** The durable boundary at the end of the pass. */
   durableCount: number
   /**
-   * The tally of OBSERVATIONS by class, NOT of records. `counts.unchanged` counts the
-   * observations that turned out to be byte-identical, including the ones that were then
-   * recorded with a carried-forward material class (a refinement records 'new', not
-   * 'unchanged'). The RECORDED class tally is what the log holds; read the log for that.
+   * The tally of OBSERVATIONS by class, NOT of records, and NOT of material. It diverges
+   * from the material list in four ways: a genuine no-op (unchanged observation, no record,
+   * no material); a refinement (unchanged observation, record written, material emitted); a
+   * lift of a stale refusal (unchanged observation, record written, material emitted); and a
+   * retraction (unchanged observation, record written, material emitted). So a number
+   * scanned out of `counts` says NOTHING about what the material list holds. Read the LOG
+   * for the corpus's state.
    */
   counts: Record<SourceClass, number>
   /** Bytes of a torn tail discarded before this pass's first append. */
@@ -343,7 +359,7 @@ function sameRefusal(
 export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult {
   const counts: Record<SourceClass, number> = { new: 0, unchanged: 0, changed: 0, truncated: 0, replaced: 0 }
   const result: DiscoveryResult = {
-    recorded: [], observedMaterial: [], refusals: [], scannedFiles: 0, vanished: 0, unreadable: 0,
+    recordedThisPass: [], observedMaterial: [], refusals: [], scannedFiles: 0, vanished: 0, unreadable: 0,
     unchanged: 0, durableCount: 0, counts, repairedTornBytes: 0,
     corpusIndex: { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0 },
   }
@@ -410,7 +426,7 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
     boundary++
     latest.set(written.path, written)
     touched.add(written.path)
-    result.recorded.push({ ...record, refusal: record.refusal })
+    result.recordedThisPass.push({ ...record, refusal: record.refusal })
     if (record.refusal) {
       result.refusals.push({ ...record, refusal: record.refusal })
     }
@@ -468,18 +484,51 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
             ? priorRecord.refusal.otherPaths.filter(p => !presentPaths.has(p))
             : []
           if (priorRecord.refusal !== null && stalePartners.length > 0) {
-            // THE VANISHED PARTNER'S OWN RECORD IS NOT CORRECTED, AND DELIBERATELY SO.
-            // `gone` is by construction NOT in the corpus: the pass never visits it, so a
-            // record written for it now would carry lastSeenMs = now for a file that does
-            // not exist — a log that claims a vanished source is live, current and
-            // migratable. That is precisely what an append-only log exists to prevent.
+            // THE VANISHED PARTNER'S REFUSAL IS CLEARED, WITH A RECORD THAT DOES NOT CLAIM
+            // THE PARTNER IS LIVE.
             //
-            // The partner's stale refusal is left in the log as HISTORY. It is harmless:
-            // a consumer reads the LATEST record per path, and the partner's latest record
-            // is the one the pass wrote BEFORE it was reclaimed — a record that says "seen
-            // at <old time>", which a consumer can date. The partner is not in the corpus,
-            // so it is not outstanding work (see the work-list filter, which admits only
-            // paths the corpus still holds).
+            // `gone` is by construction NOT in the corpus: the pass never visits it. A record
+            // written for it with lastSeenMs = now would claim a vanished source is live,
+            // current and migratable — precisely what an append-only log exists to prevent.
+            //
+            // But writing NOTHING leaves the partner's refusal naming a LIVE source for
+            // ever, and a consumer asking "is this source contested?" by looking at every
+            // record that names it would say YES — silently, on a live body that then never
+            // gets migrated.
+            //
+            // So a record IS written for the vanished partner, and it is honest: its
+            // lastSeenMs is the ORIGINAL time the partner was last seen, NOT now, and its
+            // reason is 'gone' so a reader can tell a vanished path from a live one. It
+            // claims nothing about the present; it records that the partner was seen at a
+            // past time and is no longer here.
+            for (const gone of stalePartners) {
+              const goneRecord = latest.get(gone)
+              if (!goneRecord || goneRecord.refusal === null) continue
+              if (!goneRecord.refusal.otherPaths.includes(priorRecord.path)) continue
+              const goneRemaining = goneRecord.refusal.otherPaths
+                .filter(p => p !== priorRecord.path && presentPaths.has(p))
+                .sort()
+              appendRecord({
+                id: goneRecord.id,
+                path: goneRecord.path,
+                kind: goneRecord.kind,
+                size: goneRecord.size,
+                mtimeMs: goneRecord.mtimeMs,
+                ino: goneRecord.ino,
+                head: goneRecord.head,
+                tail: goneRecord.tail,
+                digest: goneRecord.digest,
+                class: goneRecord.class,
+                firstSeenMs: goneRecord.firstSeenMs,
+                // THE ORIGINAL lastSeenMs, NOT now: the partner was NOT seen now.
+                lastSeenMs: goneRecord.lastSeenMs,
+                provenance: goneRecord.provenance,
+                refusal: goneRemaining.length > 0
+                  ? { reason: 'identity-collision', otherPaths: goneRemaining }
+                  : null,
+                reason: 'gone',
+              })
+            }
             const remaining = priorRecord.refusal.otherPaths
               .filter(p => presentPaths.has(p))
               .sort()
@@ -760,9 +809,14 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   for (const p of [...touched].sort()) {
     const rec = latest.get(p)
     if (!rec || rec.refusal !== null) continue
-    // ONLY A SOURCE THE CORPUS STILL HOLDS CAN BE WORK. A path that has been reclaimed
-    // (src/bodiesActivity.ts documents a ~72h reclaim) is not a file to migrate, and a work
-    // item for it would send a migration runner after a file that does not exist.
+    // ONLY A SOURCE THE CORPUS STILL HOLDS CAN BE MATERIAL. A path that has been reclaimed
+    // (src/bodiesActivity.ts documents a ~72h reclaim) is not a file to migrate, and a
+    // material item for it would send a migration runner after a file that does not exist.
+    //
+    // THE PRESENCE IS LIST-TIME, not read-time: the pass lists the corpus once, at the
+    // start. A body reclaimed in the narrow window between the listing and the end of the
+    // pass would still be offered. The migration runner, which opens the file, catches that;
+    // this pass cannot, and does not pretend to.
     if (!presentPaths.has(rec.path)) continue
     result.observedMaterial.push({
       path: rec.path, id: rec.id, kind: rec.kind, class: rec.class, size: rec.size, digest: rec.digest,

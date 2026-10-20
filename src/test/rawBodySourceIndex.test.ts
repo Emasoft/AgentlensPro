@@ -99,12 +99,12 @@ suite('discovery — idempotence', () => {
     write('a.request.json', body(10), NOW)
     write('b.response.json', body(20), NOW)
     const first = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
-    assert.strictEqual(first.recorded.length, 2)
+    assert.strictEqual(first.recordedThisPass.length, 2)
     assert.strictEqual(first.observedMaterial.length, 2)
     assert.strictEqual(first.durableCount, 2)
 
     const second = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
-    assert.strictEqual(second.recorded.length, 0, 'no new record for an unchanged source')
+    assert.strictEqual(second.recordedThisPass.length, 0, 'no new record for an unchanged source')
     assert.strictEqual(second.observedMaterial.length, 0, 'no work for an unchanged source')
     assert.strictEqual(second.unchanged, 2)
     assert.strictEqual(loadSourceIndex(indexPath).records.length, 2, 'the log did not grow')
@@ -159,7 +159,7 @@ suite('discovery — deterministic classification of change', () => {
     fs.utimesSync(p, new Date(NOW + 5000), new Date(NOW + 5000))
     const t = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 6000 })
     assert.strictEqual(t.counts.unchanged, 1, 'the re-read found identical bytes')
-    assert.strictEqual(t.recorded.length, 0, 'an identical observation writes no record')
+    assert.strictEqual(t.recordedThisPass.length, 0, 'an identical observation writes no record')
     const loaded = loadSourceIndex(indexPath)
     assert.strictEqual(loaded.records.length, 1, 'the log did not grow')
     const latest = latestByPath(loaded.records)
@@ -180,7 +180,7 @@ suite('discovery — deterministic classification of change', () => {
     }) + '\n')
     const t = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
     assert.strictEqual(t.counts.unchanged, 1, 'the bytes are identical')
-    assert.strictEqual(t.recorded.length, 1, 'but the identity moved, so a record IS written')
+    assert.strictEqual(t.recordedThisPass.length, 1, 'but the identity moved, so a record IS written')
     const after = latestByPath(loadSourceIndex(indexPath).records).get(p)!
     assert.notStrictEqual(after.id, before.id, 'the identity followed the provenance')
     // THE MATERIAL CLASS SURVIVES THE REFINEMENT. Relabelling the source 'unchanged' would
@@ -219,7 +219,7 @@ suite('discovery — deterministic classification of change', () => {
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
     const t = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000, deepVerify: true })
     assert.strictEqual(t.counts.unchanged, 1)
-    assert.strictEqual(t.recorded.length, 0, 'a deep verify that agrees writes nothing')
+    assert.strictEqual(t.recordedThisPass.length, 0, 'a deep verify that agrees writes nothing')
     assert.strictEqual(t.observedMaterial.length, 0, 'and produces no work')
     assert.strictEqual(loadSourceIndex(indexPath).records.length, 1, 'the log did not grow')
   })
@@ -266,7 +266,7 @@ suite('discovery — refusals', () => {
     // A DIRECTORY named like a body file: path existence alone must not make it a source.
     fs.mkdirSync(path.join(corpus, 'dir.request.json'))
     const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
-    assert.strictEqual(r.recorded.length, 1, 'only the real file is discovered')
+    assert.strictEqual(r.recordedThisPass.length, 1, 'only the real file is discovered')
     const paths = loadSourceIndex(indexPath).records.map(x => x.path)
     assert.ok(!paths.some(p => p.includes('dir.request.json')))
   })
@@ -381,13 +381,15 @@ suite('discovery — crash at every checkpoint boundary', () => {
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
     const latest = latestByPath(loadSourceIndex(indexPath).records)
     assert.strictEqual(latest.get(a)!.refusal, null, 'the vanished partner no longer contests a')
-    // AND the vanished partner's own record is NOT rewritten. The pass never visits it, so
-    // a record written for it now would carry lastSeenMs = now for a file that does not
-    // exist — a log claiming a vanished source is live, which is exactly what an append-only
-    // log exists to prevent. Its stale refusal stays as HISTORY, dated by the last time the
-    // partner really was seen.
-    assert.notStrictEqual(latest.get(z)!.refusal, null, "the vanished partner's stale refusal is left as history")
-    assert.ok(latest.get(z)!.lastSeenMs < NOW + 1000, 'and it is not dated as if the partner had just been seen')
+    // AND the vanished partner's refusal is CLEARED, by a record that does NOT claim the
+    // partner is live: its lastSeenMs is the ORIGINAL time it was last seen, not now, and
+    // its reason is 'gone'. Left standing, it would name the live source for ever, and a
+    // consumer asking "is `a` contested?" by looking at every record mentioning `a` would
+    // say yes — silently, on a live body that then never gets migrated.
+    const goneRec = latest.get(z)!
+    assert.strictEqual(goneRec.refusal, null, "the vanished partner no longer refuses a")
+    assert.strictEqual(goneRec.reason, 'gone', 'the record says the partner is gone')
+    assert.ok(goneRec.lastSeenMs < NOW + 1000, 'and it is NOT dated as if the partner had just been seen')
   })
 
   test('a persisted record can never carry the observation class', () => {
@@ -497,7 +499,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
       // The crashed pass wrote k records; the resume must write exactly the remaining N-k.
       // The k already-written sources are unchanged, so they produce NO record — that is the
       // idempotence property, and it is what makes the resume non-duplicating.
-      assert.strictEqual(resumed.recorded.length, N - k, `the resume wrote the missing ${N - k}`)
+      assert.strictEqual(resumed.recordedThisPass.length, N - k, `the resume wrote the missing ${N - k}`)
 
       const loaded = loadSourceIndex(idx)
       const latest = latestByPath(loaded.records)
@@ -553,6 +555,46 @@ suite('discovery — crash at every checkpoint boundary', () => {
 })
 
 suite('index format — versioned, validated', () => {
+  test('a version-1 log is refused as a VERSION, not as a malformed field', () => {
+    // The format gained the `reason` field and a stricter validator without the version
+    // being bumped, which meant a version-1 log was refused for a missing field — a refusal
+    // that reads like corruption rather than like a version difference. The version is now 2,
+    // so the refusal is explicit and legible. No version-1 log holds any data anyone could
+    // lose: this substrate has never been run against the real corpus.
+    const rec = {
+      v: 1, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1, mtimeMs: 1, ino: 1,
+      head: sha256Hex('h'), tail: sha256Hex('t'), digest: sha256Hex('d'), class: 'new',
+      firstSeenMs: 1, lastSeenMs: 1, provenance: null, refusal: null, boundary: 0,
+    }
+    fs.writeFileSync(indexPath, JSON.stringify(rec) + '\n')
+    assert.throws(() => loadSourceIndex(indexPath), /unknown format version 1 \(this build reads version 2\)/)
+  })
+
+  test('the current format version is 2, and the file name carries it', () => {
+    assert.strictEqual(SOURCE_INDEX_FORMAT_VERSION, 2)
+    assert.strictEqual(sourceIndexFileName(), 'source-index.v2.jsonl')
+  })
+
+  test('a gone record carries no refusal, or one that names a real partner', () => {
+    // A 'gone' record clears the vanished path's refusal. It may still refuse the partners
+    // that ARE present, so a refusal is allowed — but only one that names at least one.
+    const base = {
+      v: SOURCE_INDEX_FORMAT_VERSION, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1,
+      mtimeMs: 1, ino: 1, head: sha256Hex('h'), tail: sha256Hex('t'), digest: sha256Hex('d'),
+      class: 'new', firstSeenMs: 1, lastSeenMs: 1, provenance: null, reason: 'gone', boundary: 0,
+    }
+    // No refusal at all: the cleanest 'gone' record, and it is accepted.
+    assert.doesNotThrow(() => validateSourceIndexRecord({ ...base, refusal: null }, 1, 0))
+    // A refusal naming a real partner: also accepted.
+    assert.doesNotThrow(() => validateSourceIndexRecord({
+      ...base, refusal: { reason: 'identity-collision', otherPaths: ['/q'] },
+    }, 1, 0))
+    // A refusal naming NOBODY is refused: it is a refusal that contests nothing.
+    assert.throws(() => validateSourceIndexRecord({
+      ...base, refusal: { reason: 'identity-collision', otherPaths: [] },
+    }, 1, 0), /non-empty array of paths/)
+  })
+
   test('an unknown version is refused', () => {
     const rec = {
       v: 99, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1, mtimeMs: 1, ino: 1,
