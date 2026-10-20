@@ -244,3 +244,53 @@ fn staging_settles_at_the_group_boundary_before_the_pass_budget_accumulates() {
     assert!(parts >= 2, "two groups ⇒ two flushes ⇒ two part files (one = accumulate-then-flush-once); got {parts}");
     assert!(names.iter().all(|n| !bodies.join(n).exists()));
 }
+
+#[test]
+fn reemission_during_ingest_is_never_deleted_against_the_older_store_bytes() {
+    // The corpus is LIVE: a re-emission (same name, same bytes, fresh mtime) can land between
+    // enumeration and the settle's delete. The delete is gated on a fresh stat — if the file
+    // changed since enumeration (size or mtime), the delete must ABORT and the new bytes stay
+    // on disk for the next pass; deleting would lose them (the store only holds the older bytes
+    // and this pass verified THOSE). The observer hook fires between ingest and the settle, so
+    // it deterministically simulates the re-emission landing in that window.
+    let (bodies, store_dir) = fixture("reemit-midpass");
+    let raw = body("midpass");
+    write_body(&bodies, "midpass.request.json", &raw, 60_000);
+
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+
+    let p = bodies.join("midpass.request.json");
+    let mut observed = {
+        let p = p.clone();
+        move |name: &str, text: &str| {
+            assert_eq!(name, "midpass.request.json");
+            // Re-emit: same bytes, mtime +24h — indistinguishable from the live-corpus case.
+            fs::write(&p, text).expect("re-emit write");
+            let future = std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 3600);
+            let f = fs::OpenOptions::new().write(true).open(&p).expect("open");
+            f.set_times(fs::FileTimes::new().set_modified(future)).expect("set future mtime");
+        }
+    };
+    let r = agentlens_store::pass::ingest_pass_observed(
+        &mut store, &opts, &mut skip, &mut stranded, &mut fsynced, Some(&mut observed),
+    );
+    assert!(r.ingested == 1, "the original ingest happens: {:?}", r.failed);
+    assert!(p.exists(), "a file re-emitted since enumeration must NOT be deleted: {:?}", r.failed);
+    assert!(
+        r.failed.iter().any(|m| m.contains("delete ABORTED") && m.contains("midpass.request.json")),
+        "the abort must name the file and the reason: {:?}",
+        r.failed
+    );
+    assert_eq!(fs::read_to_string(&p).unwrap(), raw, "the new bytes survive for the next pass");
+    assert_eq!(r.deleted, 0, "nothing was deleted: the gate aborted");
+
+    // Next pass: no observer. The name is already a skip name (pass 1 ingested it), so it goes
+    // through the durable gate: the verify re-proves the store reproduces the bytes, the fresh
+    // stat now matches enumeration (no one re-emitted it this pass), and it deletes cleanly.
+    let r2 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert!(!p.exists(), "the re-emitted file deletes on the next pass: {:?}", r2.failed);
+    assert!(r2.failed.is_empty(), "{:?}", r2.failed);
+    assert!(r2.ingested + r2.deleted + r2.reclaimed_reemitted >= 1, "accounted: {:?}", r2);
+}

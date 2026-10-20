@@ -188,6 +188,34 @@ fn body_files(dir: &Path) -> Vec<BodyFile> {
     out
 }
 
+/// Re-stat a body file immediately before its unlink and compare it with the values captured
+/// at enumeration. WHY: the corpus is live and a body can be re-emitted under the same path
+/// with new bytes between enumeration and the delete. Deleting then loses the new bytes while
+/// the store holds the old ones. A moved size or mtime means the file is NOT the one the
+/// verify proved, so the delete must be aborted, not performed.
+fn unchanged_since_enumeration(b: &BatchItem) -> Result<(), String> {
+    let st = fs::metadata(&b.p).map_err(|e| format!("{}: re-stat before delete failed — kept ({e})", b.name))?;
+    let mtime_ms = st
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    if st.len() != b.size {
+        return Err(format!(
+            "{}: delete ABORTED — file changed since enumeration (size {} -> {}); the store holds the older bytes, the new bytes stay on disk",
+            b.name, b.size, st.len()
+        ));
+    }
+    if mtime_ms != b.mtime_ms {
+        return Err(format!(
+            "{}: delete ABORTED — file changed since enumeration (mtime {} -> {}); the store holds the older bytes, the new bytes stay on disk",
+            b.name, b.mtime_ms, mtime_ms
+        ));
+    }
+    Ok(())
+}
+
 fn fsync_path(p: &Path) -> std::io::Result<()> {
     let f = fs::File::open(p)?;
     match f.sync_all() {
@@ -427,18 +455,24 @@ pub fn ingest_pass_observed_with(
                                 for (b, _) in &items {
                                     let v = results.get(&b.name);
                                     match v {
+                                        // Gated on a fresh stat: the corpus is live and a re-emission must
+                                        // not be deleted against the store's older bytes.
                                         Some(v) if v.ok => {
                                             if opts.delete_after {
-                                                match fs::remove_file(&b.p) {
-                                                    Ok(()) => {
-                                                        res.deleted += 1;
-                                                        res.bytes_freed += b.size;
-                                                        if b.durable {
-                                                            res.reclaimed_durable += 1;
+                                                if let Err(abort) = unchanged_since_enumeration(b) {
+                                                    res.failed.push(abort);
+                                                } else {
+                                                    match fs::remove_file(&b.p) {
+                                                        Ok(()) => {
+                                                            res.deleted += 1;
+                                                            res.bytes_freed += b.size;
+                                                            if b.durable {
+                                                                res.reclaimed_durable += 1;
+                                                            }
                                                         }
+                                                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                                        Err(e) => res.failed.push(format!("{}: {e}", b.name)),
                                                     }
-                                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                                                    Err(e) => res.failed.push(format!("{}: {e}", b.name)),
                                                 }
                                             }
                                         }
@@ -459,7 +493,11 @@ pub fn ingest_pass_observed_with(
                                             // capture time with the re-emit's mtime, then next pass parks
                                             // it again forever).
                                             if b.durable && reason.contains("stored ts ") && reason.contains("!= capture time") {
-                                                if opts.delete_after {
+                                                if let Err(abort) = unchanged_since_enumeration(b) {
+                                                    res.failed.push(abort);
+                                                } else if opts.delete_after {
+                                                    // Gated on a fresh stat: the corpus is live and a re-emission
+                                                    // must not be deleted against the store's older bytes.
                                                     match fs::remove_file(&b.p) {
                                                         Ok(()) => {
                                                             res.deleted += 1;
