@@ -275,14 +275,26 @@ run_pass() {
         # Discarding a bounded file here - as an earlier version of this branch did - is
         # the same unbounded-growth failure the fragment-strip branch was fixed for, one
         # branch away, and it is the failure this block exists to prevent.
-        echo "drain-raw-bodies: the error-log truncation could not read the boundary byte; the log keeps the cut file, treating the cut as mid-line" >&2
+        # THE FILE IS KEPT UNSTRIPPED. The cut's position is unknown, and the two possible
+        # classifications have DIFFERENT COSTS: guessing 'mid-line' drops the first line,
+        # which is a WHOLE RECORD when the cut was in fact on a newline - the very loss
+        # this block's positional rule exists to prevent; guessing 'on a newline' keeps a
+        # first line that may be a fragment joined to the next record, which costs that
+        # record's separateness and nothing else. The second guess deletes NO record, and
+        # it is the one this branch takes. (The trimmed file alone CANNOT settle it: a
+        # mid-line cut's first line is 'fragment + record', which is indistinguishable
+        # from a whole record by any property of that file.)
+        echo "drain-raw-bodies: the error-log truncation could not read the boundary byte; the log keeps the cut file unstripped (its first line may be a fragment joined to the next record, which is not deleted)" >&2
         boundary_unknown=1
       elif [ "$before" = "10" ]; then
         # 10 is the byte value of a newline.
         first_line_is_whole=1
       fi
     fi
-    if [ "$truncate_ok" -eq 1 ] && [ -s "$ERRLOG.trimmed" ] && { [ "$first_line_is_whole" -eq 0 ] || [ "$boundary_unknown" -eq 1 ]; }; then
+    # The strip runs ONLY when the cut is KNOWN to be mid-line. When the boundary is
+    # unknown the file is kept unstripped, because stripping on a guess can delete a whole
+    # record - and the cost of not stripping is one hybrid first line.
+    if [ "$truncate_ok" -eq 1 ] && [ "$boundary_unknown" -eq 0 ] && [ -s "$ERRLOG.trimmed" ] && [ "$first_line_is_whole" -eq 0 ]; then
       # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the line
       # whose head was cut away. It is a whole line but not the start of one, so it is dropped
       # and every line after it is kept. 'tail -n +2' drops exactly that first line.
@@ -301,15 +313,17 @@ run_pass() {
       # that produced an empty file here would be moved over the good one and then over the
       # live log - the same destruction, one step later, and with no diagnostic at all.
       if ! tail -n "+2" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null; then
-        # THE CUT FILE IS KEPT. It is bounded, and it is a CONTIGUOUS SUFFIX of the log -
-        # but its FIRST LINE is not merely a partial line: it is the FRAGMENT JOINED TO THE
-        # FRONT OF THE NEXT WHOLE RECORD (the fragment has no trailing newline, so the next
-        # record's text continues it). That record is therefore unreadable, and the log's
-        # 'no whole LINE is deleted' property does NOT hold in this path - one whole record
-        # is lost. The damage does not COMPOUND across iterations: each iteration's cut
-        # discards everything before it, so every iteration leaves a contiguous suffix with
-        # at most one such hybrid line at its head. Dropping the file would leave the log
-        # unbounded, which is worse.
+        # THE CUT FILE IS KEPT. It is bounded, and it is a CONTIGUOUS SUFFIX of the log.
+        # Its FIRST LINE is EITHER a whole record (when the cut was on a newline) OR a
+        # FRAGMENT JOINED TO THE FRONT OF THE NEXT WHOLE RECORD (when the cut was
+        # mid-line: the fragment has no trailing newline, so the next record's text
+        # continues it). In the second case that record is no longer separately readable,
+        # so the log's 'no whole LINE is deleted' property DOES NOT HOLD in this path - but
+        # no record is DELETED, only one is left unseparated. The damage does not COMPOUND
+        # into a growing corrupted prefix, because each iteration's cut discards everything
+        # before it - but the COUNT of unseparated records GROWS BY ONE PER FAILURE, so
+        # 'does not compound' is a statement about the file's shape, not about the total
+        # damage. Dropping the file would leave the log unbounded, which is worse.
         echo "drain-raw-bodies: the error-log truncation could not strip the fragment; the log keeps the cut file, whose first line is a fragment joined to the next record (that one record is unreadable)" >&2
         rm -f "$ERRLOG.trimmed.2"
       else
