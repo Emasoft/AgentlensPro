@@ -226,6 +226,24 @@ enum ContentGate {
 /// is never held in memory a second time (the corpus is tens of GB and the pass already holds the
 /// verified `raw` in full). A read failure is an ABORT, never a delete — a file we cannot read is
 /// not a file we can prove.
+///
+/// WHY `verified.as_bytes()` IS THE FILE'S BYTES: `verified` came from `fs::read_to_string`, which
+/// VALIDATES UTF-8 and copies every byte — it does not strip a BOM and does not normalise
+/// newlines. So for every body that reaches this gate the in-memory string IS the file's byte
+/// sequence, and the comparison is byte-for-byte. A body that is NOT valid UTF-8 never reaches
+/// this gate at all: `read_to_string` fails on it, and the pass skips it (it is never ingested and
+/// never deleted), so the gate's guarantee covers exactly the bodies the store can hold.
+///
+/// WHY THE EXPECTED SIDE IS THE PASS'S OWN MEMORY AND NOT THE STORE'S KEY: both are the same
+/// value. The store indexes bodies by `body_id_of(raw)` = `sha256_hex(raw)` (lib.rs:335), and the
+/// VERIFY that runs immediately before this gate already proves the store's copy against that
+/// same `raw` — it reconstructs the body from the store's parts and compares
+/// `sha256_hex(rebuilt) != sha256_hex(&it.raw)` (lib.rs:800), and it JOINS the store's rows on
+/// `body_id_of(raw)`. So by the time a delete is considered, the chain is already proven:
+/// the store reconstructs to this `raw`, and this gate proves the file still IS this `raw`. The
+/// gate does not need to re-derive a digest of the expected side to close that chain — it needs
+/// to answer one question the chain has not answered: has the FILE changed since the `raw` was
+/// read? Only the file's current bytes can answer that.
 fn content_unchanged_since_read(p: &Path, verified: &str) -> ContentGate {
     let name = p
         .file_name()

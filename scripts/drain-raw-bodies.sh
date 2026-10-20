@@ -143,7 +143,17 @@ run_pass() {
     # The last 2000 LINES would not bound the file: a run of output with no newline in it is
     # ONE line of any length, so the line-based cut kept the whole file. The cut is by BYTES:
     # the last ERRLOG_MAX_BYTES of the file, which bounds it whatever the line structure is.
+    #
+    # A BYTE cut lands mid-LINE, and a first line that is the FRAGMENT of an earlier record is a
+    # record a reader cannot classify - the same defect the one-line-per-pass property exists to
+    # prevent. So the first line of the trimmed file is DROPPED: what follows the cut's first
+    # newline is a whole record.
     tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null || : > "$ERRLOG.trimmed"
+    # Drop the partial first line: everything before the first newline is a fragment.
+    if [ -s "$ERRLOG.trimmed" ]; then
+      tail -n +2 "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null || : > "$ERRLOG.trimmed.2"
+      mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
+    fi
     mv "$ERRLOG.trimmed" "$ERRLOG"
   fi
   local summary

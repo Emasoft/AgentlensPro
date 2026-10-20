@@ -163,17 +163,16 @@ fn reemission_during_ingest_is_never_deleted_against_the_older_store_bytes() {
     // the settle's delete. The pass must NEVER delete a file whose current bytes are not the
     // bytes the store ingested and proved it can reproduce.
     //
-    // WHERE THE RE-EMISSION IS CAUGHT DEPENDS ON WHEN IT LANDS, and this test pins the case the
-    // observer hook can reach. The hook fires right after the body is INGESTED — before the
-    // settle re-reads the file and re-verifies it against the store. So a re-emission with
-    // DIFFERENT bytes is caught by the VERIFY ("unknown body": the store has no row for the new
-    // bytes), which is a different, EARLIER guard than the delete gate. The delete gate's own
-    // window — the file changing between the verify and the unlink — is pinned by the unit tests
-    // in src/pass.rs (`the_content_gate_sees_a_reemission_that_preserves_the_size_and_the_mtime`),
-    // because the observer hook cannot reach that window.
+    // WHERE THE RE-EMISSION IS CAUGHT DEPENDS ON WHEN IT LANDS, and this test deliberately does
+    // NOT pin WHICH guard catches it — that is an implementation detail, and a test that pinned
+    // it would go stale when the catch point moves. The observer hook fires right after the body
+    // is ingested, so a re-emission with different bytes is caught by whichever guard sees it
+    // first; the delete gate's own window — the file changing between the verify and the unlink —
+    // is not reachable through this hook and is pinned by the unit tests in src/pass.rs
+    // (`the_content_gate_sees_a_reemission_that_preserves_the_size_and_the_mtime`).
     //
-    // Either way the invariant is the same and is what this test asserts: the file is NOT
-    // deleted, and the bytes on disk afterwards are the NEW ones.
+    // The invariant is what this test asserts, and it holds wherever the catch happens: the file
+    // is NOT deleted, and the bytes on disk afterwards are the NEW ones.
     let (bodies, store_dir) = fixture("reemit-midpass");
     let raw = body("midpass");
     write_body(&bodies, "midpass.request.json", &raw, 60_000);
