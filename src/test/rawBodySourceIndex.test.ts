@@ -37,8 +37,8 @@ function write(name: string, content: string, mtimeMs: number): string {
 // The outcome object the caller passes to outstandingSources. It is an OBJECT, not a
 // bare boolean, so a caller cannot assert completeness it never checked: the
 // compiler stops `true` where `{ complete: boolean }` is required.
-const COMPLETE = { complete: true }
-const INCOMPLETE = { complete: false }
+const COMPLETE = { complete: true, durableCount: 0 }
+const INCOMPLETE = { complete: false, durableCount: 0 }
 
 function body(pad: number): string {
   return JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'x'.repeat(pad) }] })
@@ -864,6 +864,39 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const out = outstandingSources(records, corpusNow, undefined, COMPLETE)
     assert.strictEqual(out.length, 2, 'a complete log answers normally')
     assert.deepStrictEqual(out.map(r => path.basename(r.path)).sort(), ['a.request.json', 'b.request.json'])
+  })
+
+  test('a STALE pass outcome is refused, so it cannot answer for a different log', () => {
+    // The outcome object carries the pass's durable record count, and the log carries its
+    // own. A caller that runs the pass, does other work, and then asks with a STALE outcome
+    // - or the outcome of a DIFFERENT pass - would otherwise be believed, and the check on
+    // completeness would be applied to the wrong pass. The two counts are compared, and a
+    // mismatch throws.
+    const p = write('a.request.json', body(100), NOW)
+    const pass = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    assert.strictEqual(pass.complete, true, 'the pass was complete')
+    const records = loadSourceIndex(indexPath).records
+    const logCount = loadSourceIndex(indexPath).durableCount
+
+    // The honest pair: the outcome of the pass that produced THIS log.
+    const out = outstandingSources(records, new Set([p]), undefined,
+      { complete: pass.complete, durableCount: pass.durableCount }, logCount)
+    assert.strictEqual(out.length, 1, 'the matching outcome answers')
+
+    // A STALE outcome - one claiming more records than the log holds.
+    assert.throws(
+      () => outstandingSources(records, new Set([p]), undefined,
+        { complete: true, durableCount: pass.durableCount + 5 }, logCount),
+      /does not belong to this log/,
+      'a stale outcome is refused',
+    )
+    // And a log OLDER than the outcome is the same mismatch seen from the other side.
+    assert.throws(
+      () => outstandingSources(records, new Set([p]), undefined,
+        { complete: true, durableCount: pass.durableCount }, logCount - 1),
+      /does not belong to this log/,
+      'a log older than the outcome is refused',
+    )
   })
 
   test('a gone tombstone still excludes a body that is genuinely ABSENT', () => {

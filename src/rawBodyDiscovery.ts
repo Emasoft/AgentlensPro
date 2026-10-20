@@ -345,6 +345,13 @@ export interface DiscoveryResult {
    * The caller MUST NOT compute the outstanding set from an incomplete pass. This flag is
    * how it knows: `complete: false` means the pass stopped early, and the log it wrote does
    * not describe the corpus.
+   *
+   * WHAT 'complete' DOES AND DOES NOT MEAN. It means EVERY BODY FILE IN THE LISTING WAS
+   * VISITED - it does NOT mean every body was fully PROCESSED. A body that was present but
+   * UNREADABLE was visited and could not be read: the pass could not produce identity
+   * evidence for it, so it has no record and no tombstone, and an absent record excludes
+   * nothing. The one exception: a path that carried a tombstone from an EARLIER pass keeps
+   * that stale tombstone while it stays unreadable, and the tombstone excludes it.
    */
   complete: boolean
   /**

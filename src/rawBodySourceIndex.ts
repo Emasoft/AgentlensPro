@@ -614,7 +614,8 @@ export function outstandingSources(
   records: SourceIndexRecord[],
   corpusPaths: ReadonlySet<string>,
   alreadyMigratedPaths: ReadonlySet<string> | undefined,
-  passOutcome: { readonly complete: boolean },
+  passOutcome: { readonly complete: boolean; readonly durableCount: number },
+  logDurableCount?: number,
 ): SourceIndexRecord[] {
   // THE LOG MUST DESCRIBE THE WHOLE CORPUS, OR THIS FUNCTION CANNOT ANSWER.
   //
@@ -637,6 +638,22 @@ export function outstandingSources(
   // purpose: a default of `true` would let a caller who forgot to think about it get a
   // silently incomplete answer, and the whole point of this check is that the incomplete
   // answer must never be returned quietly.
+  // THE OUTCOME MUST BELONG TO THE PASS THAT PRODUCED THIS LOG. A caller that runs the
+  // pass, does other work, and then asks with a STALE outcome - or with the outcome of a
+  // DIFFERENT pass - would otherwise be believed. The outcome carries the pass's durable
+  // record count, and the log carries its own, so the two can be compared: the log must be
+  // AT LEAST as new as the pass that produced it.
+  //
+  // This is checked only when the caller supplies the log's own count. A caller that omits
+  // it is trusting itself, and the card says so; the check is cheap and catches the likely
+  // mistake - a stale outcome from an earlier pass - which is a mismatch, not a lie.
+  if (logDurableCount !== undefined && logDurableCount < passOutcome.durableCount) {
+    throw new SourceIndexError(0,
+      `outstandingSources: the pass outcome does not belong to this log - the outcome says the pass ` +
+      `wrote ${passOutcome.durableCount} durable records, but the log holds only ${logDurableCount}. ` +
+      'The outcome is from a LATER pass than this log, or from a different pass entirely. Pass the ' +
+      'outcome of the pass that produced THIS log.')
+  }
   if (!passOutcome.complete) {
     throw new SourceIndexError(0,
       'outstandingSources: the log does not describe the whole corpus (the discovery pass stopped early), ' +
