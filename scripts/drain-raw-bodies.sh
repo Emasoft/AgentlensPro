@@ -247,11 +247,11 @@ run_pass() {
     # and every stage of this pipeline exits 0 on empty input, so 'set -euo pipefail' is safe.)
     # 'LC_ALL=C' is load-bearing: the error log can carry any bytes the pass's stderr carried,
     # so the byte must be read in a single-byte locale.
-    # 'boundary' has FOUR states, and EVERY ONE OF THEM IS DISTINGUISHED by the strip's
-    # condition below - none is documentation-only, because a state the code never reads
-    # looks vestigial to the next editor and gets deleted, taking the distinction it
-    # encoded with it. The strip runs ONLY on 'midline'; the other three each skip it for
-    # their own stated reason.
+    # 'boundary' has FOUR states, and EVERY ONE OF THEM IS BRANCHED ON by the 'case' below
+    # - none is documentation-only, because a state the code never reads looks vestigial to
+    # the next editor and gets deleted, taking the distinction it encoded with it. The strip
+    # runs ONLY in the 'midline' arm; the other three arms each do nothing, each for its
+    # own stated reason.
     #
     #   midline  - the byte before the cut was read and was NOT a newline: the cut is inside
     #              a line, so the trimmed file's first line IS a fragment and must be dropped.
@@ -321,53 +321,53 @@ run_pass() {
     # it does.
     case "$boundary" in
       midline)
-        # THE FRAGMENT IS KNOWN TO BE THERE: the read succeeded and the byte before the cut
-        # was not a newline, so the cut is inside a line and the trimmed file's first line
-        # is the fragment. It is dropped.
-        if [ "$truncate_ok" -eq 1 ] && [ -s "$ERRLOG.trimmed" ]; then
-      # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the line
-      # whose head was cut away. It is a whole line but not the start of one, so it is dropped
-      # and every line after it is kept. 'tail -n +2' drops exactly that first line.
-      #
-      # A trimmed file with NO newline at all is ONE line: a single fragment with no whole
-      # line in it. Dropping it would empty the log of everything, so it is left as it is.
-      #
-      # WHAT IS AND IS NOT PRESERVED, precisely: the retained content is always a CONTIGUOUS
-      # SUFFIX of the original and never contains a partial LINE. A LOGICAL RECORD that spans
-      # several lines (the script writes one, for a multi-line stdout diversion) can still
-      # lose its head when the cut lands inside it - the lines that survive are a suffix of
-      # that record, not the record. What is guaranteed is that no whole LINE is deleted by
-      # the truncation. The retained suffix keeps the original's trailing-newline-or-not
-      # property, because the cut only removes a PREFIX.
-      # The same rule as the 'tail -c' above: on failure, the log is left as it is. A guard
-      # that produced an empty file here would be moved over the good one and then over the
-      # live log - the same destruction, one step later, and with no diagnostic at all.
-      if ! tail -n "+2" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null; then
-        # THE CUT FILE IS KEPT. It is bounded, and it is a CONTIGUOUS SUFFIX of the log.
-        # Its FIRST LINE is EITHER a whole record (when the cut was on a newline) OR a
-        # FRAGMENT JOINED TO THE FRONT OF THE NEXT WHOLE RECORD (when the cut was
-        # mid-line: the fragment has no trailing newline, so the next record's text
-        # continues it). In the second case that record is no longer separately readable,
-        # so the log's 'no whole LINE is deleted' property DOES NOT HOLD in this path - but
-        # THE RETAINED WINDOW'S EDGE IS WHERE THE RECORDS CAN BE, NOT THE GUESS. The block
-        # keeps only the last ERRLOG_MAX_BYTES, so everything before the cut is DISCARDED BY
-        # DESIGN - that is the window's boundary, not damage. A LOGICAL RECORD can span
-        # several lines (the script writes one, for a multi-line stdout diversion), so the
-        # window's edge can fall inside such a record and leave only its tail. The guess
-        # cannot do that: it can only additionally lose ONE whole single-line record, and
-        # it is chosen so that it does not. So the accurate statement is: the window's edge
-        # may fall inside a multi-line record; the guess deletes no record.
-        # The damage does not COMPOUND
-        # into a growing corrupted prefix, because each iteration's cut discards everything
-        # before it - but the COUNT of unseparated records GROWS BY ONE PER FAILURE, so
-        # 'does not compound' is a statement about the file's shape, not about the total
-        # damage. Dropping the file would leave the log unbounded, which is worse.
-        echo "drain-raw-bodies: the error-log truncation could not strip the fragment; the log keeps the cut file, whose first line is a fragment joined to the next record (that one record is unreadable)" >&2
-        rm -f "$ERRLOG.trimmed.2"
-        else
+          # THE FRAGMENT IS KNOWN TO BE THERE: the read succeeded and the byte before the cut
+          # was not a newline, so the cut is inside a line and the trimmed file's first line
+          # is the fragment. It is dropped.
+          if [ "$truncate_ok" -eq 1 ] && [ -s "$ERRLOG.trimmed" ]; then
+        # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the line
+        # whose head was cut away. It is a whole line but not the start of one, so it is dropped
+        # and every line after it is kept. 'tail -n +2' drops exactly that first line.
+        #
+        # A trimmed file with NO newline at all is ONE line: a single fragment with no whole
+        # line in it. Dropping it would empty the log of everything, so it is left as it is.
+        #
+        # WHAT IS AND IS NOT PRESERVED, precisely: the retained content is always a CONTIGUOUS
+        # SUFFIX of the original and never contains a partial LINE. A LOGICAL RECORD that spans
+        # several lines (the script writes one, for a multi-line stdout diversion) can still
+        # lose its head when the cut lands inside it - the lines that survive are a suffix of
+        # that record, not the record. What is guaranteed is that no whole LINE is deleted by
+        # the truncation. The retained suffix keeps the original's trailing-newline-or-not
+        # property, because the cut only removes a PREFIX.
+        # The same rule as the 'tail -c' above: on failure, the log is left as it is. A guard
+        # that produced an empty file here would be moved over the good one and then over the
+        # live log - the same destruction, one step later, and with no diagnostic at all.
+          if ! tail -n "+2" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null || [ ! -s "$ERRLOG.trimmed.2" ]; then
+          # THE CUT FILE IS KEPT. It is bounded, and it is a CONTIGUOUS SUFFIX of the log.
+          # Its FIRST LINE is EITHER a whole record (when the cut was on a newline) OR a
+          # FRAGMENT JOINED TO THE FRONT OF THE NEXT WHOLE RECORD (when the cut was
+          # mid-line: the fragment has no trailing newline, so the next record's text
+          # continues it). In the second case that record is no longer separately readable,
+          # so the log's 'no whole LINE is deleted' property DOES NOT HOLD in this path - but
+          # THE RETAINED WINDOW'S EDGE IS WHERE THE RECORDS CAN BE, NOT THE GUESS. The block
+          # keeps only the last ERRLOG_MAX_BYTES, so everything before the cut is DISCARDED BY
+          # DESIGN - that is the window's boundary, not damage. A LOGICAL RECORD can span
+          # several lines (the script writes one, for a multi-line stdout diversion), so the
+          # window's edge can fall inside such a record and leave only its tail. The guess
+          # cannot do that: it can only additionally lose ONE whole single-line record, and
+          # it is chosen so that it does not. So the accurate statement is: the window's edge
+          # may fall inside a multi-line record; the guess deletes no record.
+          # The damage does not COMPOUND
+          # into a growing corrupted prefix, because each iteration's cut discards everything
+          # before it - but the COUNT of unseparated records GROWS BY ONE PER FAILURE, so
+          # 'does not compound' is a statement about the file's shape, not about the total
+          # damage. Dropping the file would leave the log unbounded, which is worse.
+          echo "drain-raw-bodies: the error-log truncation could not strip the fragment; the log keeps the cut file, whose first line is a fragment joined to the next record (that one record is unreadable)" >&2
+          rm -f "$ERRLOG.trimmed.2"
+          else
           mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
-        fi
-        fi
+          fi
+          fi
         ;;
       newline)
         # THE CUT IS ON A RECORD BOUNDARY, so the trimmed file's first line is a WHOLE
@@ -378,11 +378,13 @@ run_pass() {
       unknown)
         # THE CUT'S POSITION IS NOT KNOWN. The file is kept UNSTRIPPED, because stripping
         # on a guess can delete a whole record, and the cost of not stripping is one
-        # unseparated line.
+        # unseparated line. The file that is kept is BOUNDED and is a CONTIGUOUS SUFFIX of
+        # the log, so the block's primary property still holds.
         ;;
       not_read)
-        # THE BLOCK NEVER LOOKED, because the byte cut failed: the temp file was removed
-        # and the final 'mv' is skipped, so nothing is installed.
+        # THE BLOCK NEVER LOOKED AT A BOUNDARY: either the byte cut failed (the temp file
+        # was removed and the final 'mv' is skipped), or there was no cut file to look at.
+        # Either way nothing is installed.
         ;;
     esac
     # '-f' AND NOT '-s' ON THE FINAL MOVE, AND THE DIFFERENCE MATTERS. The guard refuses to
@@ -397,7 +399,7 @@ run_pass() {
     # file is written by the successful byte cut and removed only by the branch that sets
     # 'truncate_ok=0', which the guard already covers. It is here so that a MISSING file
     # cannot be moved into place, which is one argument away from reachable.)
-    if [ "$truncate_ok" -eq 1 ] && [ -f "$ERRLOG.trimmed" ]; then
+    if [ "$truncate_ok" -eq 1 ] && [ -s "$ERRLOG.trimmed" ]; then
       mv "$ERRLOG.trimmed" "$ERRLOG"
     fi
   fi
