@@ -144,15 +144,36 @@ run_pass() {
     # ONE line of any length, so the line-based cut kept the whole file. The cut is by BYTES:
     # the last ERRLOG_MAX_BYTES of the file, which bounds it whatever the line structure is.
     #
-    # A BYTE cut lands mid-LINE, and a first line that is the FRAGMENT of an earlier record is a
-    # record a reader cannot classify - the same defect the one-line-per-pass property exists to
-    # prevent. So the first line of the trimmed file is DROPPED: what follows the cut's first
-    # newline is a whole record.
+    # A BYTE cut lands mid-LINE. What follows the cut's first newline is a whole record, and
+    # what PRECEDES it is the tail of a record whose start was cut away - a fragment a reader
+    # cannot classify, the same defect the one-line-per-pass property exists to prevent.
+    #
+    # The fragment is removed WITHOUT losing the record it was joined to. 'tail -n +2' would
+    # drop BOTH: the cut leaves the fragment and the next record on ONE line (the fragment has
+    # no trailing newline, so the next record's text continues it), and dropping that line
+    # discards a valid record with the fragment. So the fragment is stripped by BYTE OFFSET
+    # instead: find the first newline and keep everything AFTER it.
     tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null || : > "$ERRLOG.trimmed"
-    # Drop the partial first line: everything before the first newline is a fragment.
     if [ -s "$ERRLOG.trimmed" ]; then
-      tail -n +2 "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null || : > "$ERRLOG.trimmed.2"
-      mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
+      # The BYTE OFFSET of the first newline: everything from just after it on is whole records.
+      # 'grep -abo' is the instrument - awk's index() would never match, because a record read by
+      # awk has no newline IN it, so its index was always 0 and the whole log was emptied.
+      local cut
+      cut=$(LC_ALL=C grep -abo -m 1 $'\n' "$ERRLOG.trimmed" 2>/dev/null | head -1 | cut -d: -f1)
+      if [ -n "$cut" ]; then
+        tail -c "+$(( cut + 1 ))" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null || : > "$ERRLOG.trimmed.2"
+        mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
+      fi
+      # A CUT THAT LANDS EXACTLY ON A NEWLINE leaves the first line WHOLE, and the rule above
+      # would then discard a valid record. So the first line is kept when it LOOKS like a record
+      # and dropped only when it does not. The error log's records start with 'pass='.
+      if [ -n "$(head -1 "$ERRLOG.trimmed" 2>/dev/null)" ] \
+         && ! head -1 "$ERRLOG.trimmed" 2>/dev/null | grep -q '^pass='; then
+        tail -n +2 "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null || : > "$ERRLOG.trimmed.2"
+        mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
+      fi
+      # No newline at all: the whole file is one fragment and there is no whole record in it, so
+      # it is left as it is - an EMPTYING of the log would lose the records that follow.
     fi
     mv "$ERRLOG.trimmed" "$ERRLOG"
   fi
