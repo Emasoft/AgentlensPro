@@ -30,16 +30,47 @@ fn bucket_path(dir: &Path, ts_ms: i64) -> PathBuf {
     dir.join(format!("{}.ndjsonl", &day[..10]))
 }
 
-/// ndjsonBuckets.appendBucketLine — append `json` + newline to the day's bucket; returns the
-/// bytes written (the caller's persistence accounting). The TS also returns the exact append
-/// position for the spool drain's durability proof — unported with the drain.
-pub fn append_bucket_line(dir: &Path, ts_ms: i64, line_json: &str) -> std::io::Result<u64> {
+
+/// ndjsonBuckets.AppendPosition — the exact on-disk location of one appended line: enough to
+/// read it back and PROVE it is durable before destroying the only other copy (TRDD-K3WDPR7M
+/// verify-before-delete).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppendPosition {
+    /// The daily bucket the line was appended to.
+    pub bucket_path: PathBuf,
+    /// Byte offset where the line STARTS — the bucket size immediately before the append.
+    pub offset: u64,
+    /// Byte length of the appended line, INCLUDING its trailing newline.
+    pub length: u64,
+}
+
+/// Append EXACT bytes (already newline-terminated) to the day bucket for `ts_ms`; returns the
+/// append position.
+///
+/// The offset is captured BEFORE the write: an append-only bucket grows at the end, so its size at
+/// that moment is exactly where these bytes begin — which is what lets a verifier SEEK to this
+/// line and read only it, instead of re-reading the whole day bucket per spooled event.
+fn append_bucket_raw(dir: &Path, ts_ms: i64, line: &str) -> std::io::Result<AppendPosition> {
     use std::io::Write;
     std::fs::create_dir_all(dir)?;
-    let line = format!("{line_json}\n");
-    let mut f = std::fs::OpenOptions::new().append(true).create(true).open(bucket_path(dir, ts_ms))?;
+    let bucket = bucket_path(dir, ts_ms);
+    let mut f = std::fs::OpenOptions::new().append(true).create(true).open(&bucket)?;
+    let offset = f.metadata()?.len();
     f.write_all(line.as_bytes())?;
-    Ok(line.len() as u64)
+    Ok(AppendPosition { bucket_path: bucket, offset, length: line.len() as u64 })
+}
+
+
+/// ndjsonBuckets.appendBucketLine — append `json` + newline to the day bucket; returns the exact
+/// append position (the byte offset where the line starts, and its byte length INCLUDING the
+/// newline) so a caller can read the line back and PROVE it is durable before deleting a source
+/// copy (TRDD-K3WDPR7M). The byte count is `pos.length`.
+///
+/// The offset is captured BEFORE the write: an append-only bucket only grows at the end, so its
+/// size at that moment is exactly where these bytes begin.
+pub fn append_bucket_line(dir: &Path, ts_ms: i64, line_json: &str) -> std::io::Result<AppendPosition> {
+    let line = format!("{line_json}\n");
+    append_bucket_raw(dir, ts_ms, &line)
 }
 
 /// ndjsonBuckets.purgeBuckets — delete daily buckets strictly older than `retention_days`.
@@ -110,11 +141,22 @@ pub fn build_hook_event_record(payload: &Map<String, Value>, ts_ms: i64) -> Valu
     Value::Object(rec)
 }
 
-/// hookEventStore.appendHookEvent — build + append; returns (record, bytes written).
-pub fn append_hook_event(dir: &Path, payload: &Map<String, Value>, ts_ms: i64) -> std::io::Result<(Value, u64)> {
+/// hookEventStore.appendHookEvent — build + append; returns (record, bytes written, the exact
+/// append position, and the exact line bytes).
+///
+/// The position + line are what let a caller read the line back and PROVE it is durable before
+/// deleting a source copy (TRDD-K3WDPR7M: a source file may be deleted ONLY after the durable
+/// destination is confirmed to hold its data). The returned line INCLUDES its trailing newline —
+/// its byte length is exactly `pos.length`, which is what the verifier compares.
+pub fn append_hook_event(
+    dir: &Path,
+    payload: &Map<String, Value>,
+    ts_ms: i64,
+) -> std::io::Result<(Value, u64, AppendPosition, String)> {
     let rec = build_hook_event_record(payload, ts_ms);
-    let bytes = append_bucket_line(dir, ts_ms, &rec.to_string())?;
-    Ok((rec, bytes))
+    let line = format!("{rec}\n");
+    let pos = append_bucket_raw(dir, ts_ms, &line)?;
+    Ok((rec, pos.length, pos, line))
 }
 
 #[derive(Default)]
@@ -195,13 +237,18 @@ pub fn statusline_stream(ev: &str) -> Option<&'static str> {
 /// `raw` is the exact text `payload` was parsed from (the POST body, or the spooled file's text):
 /// the spool tap writes THOSE bytes, because a re-serialised `Value` would alter integers beyond
 /// 64 bits and drop duplicate keys.
-pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, raw: &[u8], now_ms: i64) -> (u16, Value) {
+pub fn ingest_hook_event(
+    st: &mut crate::CoreState,
+    payload: &Value,
+    raw: &[u8],
+    now_ms: i64,
+) -> (u16, Value, Option<(AppendPosition, String)>) {
     let Some(p) = payload.as_object() else {
-        return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }));
+        return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }), None);
     };
     let ev = p.get("hook_event_name").and_then(Value::as_str).unwrap_or("");
     if ev.is_empty() {
-        return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }));
+        return (400, json!({ "error": "payload must be a JSON object with hook_event_name" }), None);
     }
     if let Some(stream) = statusline_stream(ev) {
         // The version-skew bridge lands in the SAME store as the dedicated endpoint (row 5) —
@@ -214,15 +261,15 @@ pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, raw: &[u8],
         if let Some(tap) = &st.spool_tap {
             tap.statusline(p, stream);
         }
-        return (200, json!({ "ok": true, "routed": "statusline" }));
+        return (200, json!({ "ok": true, "routed": "statusline" }), None);
     }
     if !st.hook_runtime.capture_enabled {
         // Switch off = accept and DROP: the hook script is a fire-and-forget dumb pipe, and a
         // non-2xx would make disabled capture look like a server outage.
-        return (200, json!({ "ok": true, "dropped": "captureEnabled=false" }));
+        return (200, json!({ "ok": true, "dropped": "captureEnabled=false" }), None);
     }
     match append_hook_event(&st.data_dir.join("hook-events"), p, now_ms) {
-        Ok((rec, bytes)) => {
+        Ok((rec, bytes, pos, line)) => {
             // SPOOL TAP: after the capture gate (a dropped event is not spooled: the tap inherits
             // the user's capture switch) AND after the existing store accepted the event. The CLI
             // spools a payload it could not deliver and the boot/periodic drain re-delivers it
@@ -262,9 +309,9 @@ pub fn ingest_hook_event(st: &mut crate::CoreState, payload: &Value, raw: &[u8],
                     println!("{} [AgentlensPro] capacity calibration skipped: {}", crate::log_ts(), outcome.reason);
                 }
             }
-            (200, json!({ "ok": true }))
+            (200, json!({ "ok": true }), Some((pos, line)))
         }
-        Err(e) => (500, json!({ "error": e.to_string() })),
+        Err(e) => (500, json!({ "error": e.to_string() }), None),
     }
 }
 
@@ -303,7 +350,9 @@ pub struct SpoolDrain {
 /// Idempotent: a crash mid-drain leaves the remaining files for the next boot.
 ///
 /// `max_files` bounds how many spool files one call processes. The state lock (`st`) is held by
-/// the caller across the whole loop, and each event costs a file read plus a bucket read-back —
+/// the caller across the whole loop, and each event costs a file read plus a SEEKED read-back of
+/// exactly the appended bytes (the earlier implementation re-read the whole day bucket per event,
+/// which on a 69 MB bucket meant ~86 GB of reads and transient allocations for a 1248-event tick) —
 /// on the boot path (`usize::MAX`) that is fine, nothing else needs the lock yet. On the periodic
 /// drain tick added for TRDD-L6V1UUW0 (the server is up and serving requests), an unbounded loop
 /// over a large backlog would hold the lock for multiple seconds and stall every request in
@@ -327,7 +376,6 @@ pub fn drain_hook_spool(st: &mut crate::CoreState, now_ms: i64, max_files: usize
     names.truncate(max_files);
     let mut out = SpoolDrain::default();
     let rejected_dir = spool_dir.join("rejected");
-    let events_dir = st.data_dir.join("hook-events");
     for name in names {
         let file = spool_dir.join(&name);
         let Ok(raw) = std::fs::read_to_string(&file) else { continue }; // vanished / unreadable — skip
@@ -337,22 +385,31 @@ pub fn drain_hook_spool(st: &mut crate::CoreState, now_ms: i64, max_files: usize
         };
         // The record the append WOULD write, computed before ingesting so the read-back has an
         // exact byte string to look for. `build_hook_event_record` is pure and takes the same
-        // `now_ms` the ingest below uses, so the two cannot disagree.
-        let expected_line = payload.as_object().map(|p| build_hook_event_record(p, now_ms).to_string());
-        let (status, body) = ingest_hook_event(st, &payload, raw.as_bytes(), now_ms);
+        // `now_ms` the ingest below uses, so the two cannot disagree. The trailing newline is part
+        // of the appended bytes, so it is part of the expected string.
+        let expected_line = payload
+            .as_object()
+            .map(|p| format!("{}\n", build_hook_event_record(p, now_ms)));
+        let (status, _body, proof) = ingest_hook_event(st, &payload, raw.as_bytes(), now_ms);
         if status != 200 {
             quarantine(&file, &rejected_dir, &mut out);
             continue;
         }
         // A 200 that appended nothing: routed to the statusline store, or dropped because capture
-        // is off. Distinguished by the response body, which is the only signal `ingest_hook_event`
-        // gives — it returns `{"ok":true}` alone ONLY on the append path.
-        let appended = body.get("routed").is_none() && body.get("dropped").is_none();
-        let Some(expected) = expected_line.filter(|_| appended) else {
+        // is off. The ingest call itself reports this — it hands back the append proof ONLY on the
+        // append path, so a `None` proof IS the "nothing was appended" signal.
+        let Some((pos, appended_line)) = proof else {
             out.kept += 1;
             continue;
         };
-        if bucket_contains_line(&events_dir, now_ms, &expected) {
+        // The independently rebuilt line must be the SAME bytes the append actually wrote. If the
+        // two disagree, the durable copy is unproven and the spool file is kept.
+        let Some(expected) = expected_line.filter(|l| *l == appended_line) else {
+            out.unverified += 1;
+            eprintln!("{} [AgentlensPro] hook-spool: append NOT verified for {name} — keeping spool file (durable copy unproven)", crate::log_ts());
+            continue;
+        };
+        if verify_appended_line(&pos, &expected) {
             // Durable copy PROVEN — now, and only now, is the spool copy redundant.
             let _ = std::fs::remove_file(&file);
             out.drained += 1;
@@ -380,14 +437,39 @@ fn quarantine(file: &Path, rejected_dir: &Path, out: &mut SpoolDrain) {
     }
 }
 
-/// Read the day-bucket back and look for `line` verbatim. This is the "prove it is durable" half
-/// of verify-before-delete: a 200 from the ingest path is a claim, and the whole point of the rule
-/// is that the claim is not accepted as proof before the only other copy is destroyed.
-fn bucket_contains_line(events_dir: &Path, ts_ms: i64, line: &str) -> bool {
-    let Ok(contents) = std::fs::read_to_string(bucket_path(events_dir, ts_ms)) else { return false };
-    // Scanned rather than "is the last line", because a concurrent append would make the last-line
-    // check spuriously fail and keep a spool file whose data IS durable.
-    contents.lines().any(|l| l == line)
+/// hookEventStore.verifyAppendedLine — read back the bytes we believe we appended and PROVE they
+/// equal `expected_line` byte-for-byte.
+///
+/// This is the "prove it is durable" half of verify-before-delete: a 200 from the ingest path is a
+/// claim, and the whole point of the rule is that the claim is not accepted as proof before the
+/// only other copy is destroyed.
+///
+/// It SEEKS to `pos.offset` and reads EXACTLY `pos.length` bytes. The previous Rust version
+/// re-read the WHOLE day bucket (69 MB) and scanned every line, once per spooled event — a drain
+/// tick over 1248 spooled events read ~86 GB and allocated ~86 GB of transient Strings, which is
+/// what drove the process past its 2048 MB RSS cap. The seek is safe because a day bucket is
+/// APPEND-ONLY: bytes are only ever added at the end, so a recorded offset never moves and never
+/// changes meaning under a concurrent append.
+///
+/// Returns false on ANY shortfall — bucket missing, short read, length mismatch, byte mismatch —
+/// so the caller KEEPS the source copy. It never panics.
+pub fn verify_appended_line(pos: &AppendPosition, expected_line: &str) -> bool {
+    let expected = expected_line.as_bytes();
+    // The recorded length must match the line we expect — a mismatch fails fast, before any read.
+    if expected.len() as u64 != pos.length {
+        return false;
+    }
+    let Ok(mut f) = std::fs::File::open(&pos.bucket_path) else { return false }; // bucket vanished — cannot prove durability
+    use std::io::{Read, Seek, SeekFrom};
+    if f.seek(SeekFrom::Start(pos.offset)).is_err() {
+        return false;
+    }
+    let mut buf = vec![0u8; pos.length as usize];
+    match f.read_exact(&mut buf) {
+        Ok(()) => buf == expected,
+        // Fewer bytes than expected — a truncated / short write.
+        Err(_) => false,
+    }
 }
 
 /// server.ts RECENT_EVENTS_CAP — the in-memory ring the gate + buildGateState read.

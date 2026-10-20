@@ -948,9 +948,9 @@ impl CoreState {
         let ts = rec.get("ts").and_then(Value::as_i64).unwrap_or_else(now_ms);
         let line = Value::Object(rec.clone()).to_string();
         match hook_events::append_bucket_line(&self.data_dir.join("log-events"), ts, &line) {
-            Ok(bytes) => {
+            Ok(pos) => {
                 self.persist.log_event_writes += 1;
-                self.persist.log_event_bytes += bytes;
+                self.persist.log_event_bytes += pos.length;
             }
             Err(e) => {
                 let msg = e.to_string();

@@ -1555,7 +1555,7 @@ async fn handle(
         match serde_json::from_slice::<Value>(&buf) {
             Err(e) => json_response(StatusCode::BAD_REQUEST, error_json(&e.to_string())),
             Ok(payload) => {
-                let (status, body) = {
+                let (status, body, _proof) = {
                     let mut st = state.lock_timed();
                     // `buf` is the exact POST body: the spool tap writes these bytes, not a re-serialised Value.
                     crate::hook_events::ingest_hook_event(&mut st, &payload, &buf, crate::now_ms())
