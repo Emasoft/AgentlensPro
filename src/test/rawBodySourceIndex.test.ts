@@ -14,7 +14,7 @@ import {
 } from '../rawBodySourceIdentity'
 import {
   SOURCE_INDEX_FORMAT_VERSION, SourceIndexError, SourceIndexWriter, latestByPath,
-  loadSourceIndex, sourceIndexFileName, validateSourceIndexRecord,
+  loadSourceIndex, outstandingSources, sourceIndexFileName, validateSourceIndexRecord,
 } from '../rawBodySourceIndex'
 import {
   discoverRawBodySources, readCorpusProvenance,
@@ -451,6 +451,14 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const settled = loadSourceIndex(indexPath).records.length
     const goneRec = latestByPath(loadSourceIndex(indexPath).records).get(z)!
     assert.strictEqual(goneRec.reason, 'gone')
+    // THE 'gone' RECORD COUNT ITSELF STAYS AT 1 — stated directly, not inferred from the
+    // total. A 'gone' record is written only when a LIVE path triggers the lift of a
+    // refusal that named the vanished partner; once the lift has happened there is no
+    // refusal left to lift, so no further 'gone' record is warranted.
+    assert.strictEqual(
+      loadSourceIndex(indexPath).records.filter(r => r.reason === 'gone').length, 1,
+      "exactly one 'gone' record exists for the vanished path",
+    )
     assert.strictEqual(goneRec.refusal, null, "z's refusal of the live sources is cleared")
     assert.ok(goneRec.lastSeenMs < NOW + 1000, 'and z is not dated as if it had just been seen')
     // A reclaimed body is never offered as material.
@@ -466,6 +474,156 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const latest = latestByPath(loadSourceIndex(indexPath).records)
     assert.notStrictEqual(latest.get(a)!.refusal, null, 'a and w still contest each other')
     assert.ok(latest.get(a)!.refusal!.otherPaths.includes(w))
+  })
+
+  test('a carried-forward class outlives its reason and the log stays appendable', () => {
+    // THE CRASH-ON-WRITE. The material class is CARRIED FORWARD on an unchanged
+    // observation, so a class outlives the reason that set it. A file that was replaced
+    // (class 'replaced') and then had its identity refined (reason 'refined') carries class
+    // 'replaced' with reason 'refined' — which is CORRECT: the class is the last material
+    // content state, the reason describes THIS observation.
+    //
+    // The validator used to enforce the converse as well (class 'replaced' implies reason
+    // 'replaced'), and it refused that record on the way IN — so the pass THREW, the log
+    // became unappendable, and on the real corpus the discovery pass would stall at that
+    // body for ever, every subsequent attempt hitting the same bad record.
+    const p = path.join(corpus, 'a.request.json')
+    const same = body(500)
+    write('a.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+
+    // Replace it: same bytes, a new file object.
+    fs.unlinkSync(p)
+    write('a.request.json', same, NOW + 1000)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
+    let rec = latestByPath(loadSourceIndex(indexPath).records).get(p)!
+    assert.strictEqual(rec.class, 'replaced')
+    assert.strictEqual(rec.reason, 'replaced')
+
+    // Now refine its identity: a provenance row appears, the bytes do not change.
+    fs.writeFileSync(path.join(corpus, 'index.jsonl'), JSON.stringify({
+      timestamp: 't', session_id: 's', query_source: 'q', model: 'm', message_id: 'mid',
+      message_uuid: 'u1', request_file: 'a.request.json', response_file: null,
+    }) + '\n')
+    assert.doesNotThrow(() => {
+      discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 3000 })
+    }, 'the pass must not throw: the log has to stay appendable')
+
+    rec = latestByPath(loadSourceIndex(indexPath).records).get(p)!
+    assert.strictEqual(rec.class, 'replaced', 'the material class is carried forward')
+    assert.strictEqual(rec.reason, 'refined', 'the reason describes this observation')
+    assert.strictEqual(rec.provenance!.messageUuid, 'u1')
+  })
+
+  test('the outstanding set is derived, and applies every condition', () => {
+    // The outstanding set is a DERIVED FUNCTION, not a rule in prose. A consumer that has to
+    // remember four conditions will eventually apply three of them, and the one it drops
+    // decides whether a runner migrates a file that does not exist.
+    const same = body(100)
+    const live = write('live.request.json', same, NOW)      // material, present
+    const partner = write('partner.request.json', same, NOW) // contested by 'live'
+    const gone = write('gone.request.json', same, NOW)      // becomes reclaimed
+
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    // Reclaim 'gone' and un-contest 'live' (its only partner leaves).
+    fs.unlinkSync(gone)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+
+    const records = loadSourceIndex(indexPath).records
+    const corpusNow = new Set([live, partner])
+    const outstanding = outstandingSources(records, corpusNow)
+
+    // 'live' and 'partner' are byte-identical and both present: they collide, so BOTH are
+    // refused and NEITHER is outstanding.
+    assert.ok(!outstanding.some(o => o.path === live), 'a contested source is not outstanding')
+    assert.ok(!outstanding.some(o => o.path === partner), 'a contested source is not outstanding')
+
+    // 'gone' carries class 'new' — the honest history ("it was never migrated"), which is
+    // exactly the shape of a source that still needs migrating. It is STILL not outstanding,
+    // because its reason is 'gone' and because the corpus no longer holds it. A consumer
+    // that filtered on the class alone would wrongly pick it up.
+    const goneRec = latestByPath(records).get(gone)!
+    assert.strictEqual(goneRec.class, 'new', "a reclaimed body's class is its honest history")
+    assert.ok(!outstanding.some(o => o.path === gone), "a 'gone' source is not outstanding")
+
+    // Now an uncontested, present, unmigrated source IS outstanding.
+    const solo = write('solo.request.json', body(200), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
+    const out2 = outstandingSources(loadSourceIndex(indexPath).records, new Set([live, partner, solo]))
+    assert.ok(out2.some(o => o.path === solo), 'an uncontested present source is outstanding')
+
+    // And an already-migrated one is not, even though everything else qualifies.
+    const out3 = outstandingSources(loadSourceIndex(indexPath).records, new Set([live, partner, solo]), new Set([solo]))
+    assert.ok(!out3.some(o => o.path === solo), 'an already-migrated source is not outstanding')
+  })
+
+  test('a stale refusal naming only a vanished partner does not withhold a source', () => {
+    // THE DEFECT. The persisted refusal names the partners that collided AT THE TIME the
+    // record was written, and the log is append-only. If a partner is reclaimed and no pass
+    // lifts the refusal, the stale name is still there — and excluding the source on the
+    // strength of a stale name withholds a LIVE, UNMIGRATED body from the outstanding set
+    // FOR EVER. The source that most needs migrating is the one that never gets it.
+    //
+    // The discovery pass re-derives contestability against the CURRENT corpus, so the
+    // function must agree with the pass: a refusal contests only a partner that STILL
+    // EXISTS.
+    const same = body(100)
+    const live = write('live.request.json', same, NOW)
+    const partner = write('partner.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+
+    // Reclaim the partner WITHOUT a pass lifting the refusal: the live source keeps a stale
+    // refusal naming only the vanished path.
+    fs.unlinkSync(partner)
+    const records = loadSourceIndex(indexPath).records
+    const liveRec = latestByPath(records).get(live)!
+    assert.strictEqual(liveRec.refusal !== null, true, 'the refusal is still persisted, stale')
+    assert.ok(
+      liveRec.refusal!.otherPaths.every(p => p === partner),
+      'and it names only the vanished partner',
+    )
+
+    const outstanding = outstandingSources(records, new Set([live]))
+    assert.ok(
+      outstanding.some(o => o.path === live),
+      'a source whose only rival has vanished IS outstanding — it must not be withheld for ever',
+    )
+  })
+
+  test('a refusal naming a partner that still exists DOES withhold a source', () => {
+    // The other side of the same rule: a live rival still contests the source, so it is
+    // not outstanding. The fix must not have turned "stale refusal" into "no refusal".
+    const same = body(100)
+    const live = write('live.request.json', same, NOW)
+    const partner = write('partner.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    const records = loadSourceIndex(indexPath).records
+    const outstanding = outstandingSources(records, new Set([live, partner]))
+    assert.ok(!outstanding.some(o => o.path === live), 'a contested source is not outstanding')
+    assert.ok(!outstanding.some(o => o.path === partner), 'a contested source is not outstanding')
+  })
+
+  test('a mismatched alreadyMigrated key is LOUD, not silently ineffective', () => {
+    // The natural handle for a migrated body is its IDENTITY (the content digest) — the
+    // whole point of the identity is that it is path-independent. A caller who passes
+    // identities where the function compares paths would have every comparison miss, every
+    // already-migrated source offered AGAIN, and the migration run twice over the same
+    // body. Silently ineffective is the worst outcome, so it throws.
+    const solo = write('solo.request.json', body(300), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    const records = loadSourceIndex(indexPath).records
+    const digest = latestByPath(records).get(solo)!.digest
+
+    // The correct key works.
+    const ok = outstandingSources(records, new Set([solo]), new Set([solo]))
+    assert.ok(!ok.some(o => o.path === solo), 'a path key excludes the migrated source')
+
+    // The wrong key is refused, loudly.
+    assert.throws(
+      () => outstandingSources(records, new Set([solo]), new Set([digest])),
+      /alreadyMigratedPaths contains an IDENTITY/,
+      'passing identities where paths are expected must throw, not silently match nothing',
+    )
   })
 
   test('a byte-identical source never claims a content change', () => {
@@ -609,8 +767,15 @@ suite('index format — versioned, validated', () => {
   })
 
   test('a gone record carries no refusal, or one that names a real partner', () => {
-    // A 'gone' record clears the vanished path's refusal. It may still refuse the partners
-    // that ARE present, so a refusal is allowed — but only one that names at least one.
+    // A 'gone' record clears the vanished path's refusal. The VALIDATOR still accepts a
+    // 'gone' record that names a partner — the format permits it — but the DISCOVERY PASS
+    // no longer produces one: a vanished path contests nobody, because an identity
+    // collision needs both paths to exist. The live paths' own records carry the
+    // retraction, so nothing is lost.
+    //
+    // The validator's leniency is deliberate: it must accept a log it claims to read, and
+    // refusing a shape the format permits would make a valid log unappendable — which is
+    // the crash-on-write class this format already had one of.
     const base = {
       v: SOURCE_INDEX_FORMAT_VERSION, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1,
       mtimeMs: 1, ino: 1, head: sha256Hex('h'), tail: sha256Hex('t'), digest: sha256Hex('d'),

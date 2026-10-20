@@ -55,48 +55,47 @@
 // up by the next pass; a file that DISAPPEARS during the pass is counted as `vanished` and
 // never marked discovered. Neither is an error, and neither loses a source.
 //
-// THE CONSUMER CONTRACT — READ THIS BEFORE USING THE PASS RESULT.
+// THE CONSUMER CONTRACT.
 //
-// `observedMaterial` is "what THIS PASS observed as material", NOT "what remains to be
-// migrated". The two are different, and confusing them is a silent data-loss bug. The field
-// is NAMED so it cannot be misread: an earlier version called it `work`, and the name WAS the
-// hazard — a migration runner iterating `work` on a repeat pass over an unchanged corpus
-// would see an EMPTY list and conclude there is nothing to migrate, silently, on 205GB of
-// data that was never migrated.
+// THE FULL CONTRACT IS ON THE CARD (TRDD-U50JCH0J, Scope section), not here. It is prose about
+// how to consume this pass, it is long, and it grows — a contract that lives in a module
+// header gets edited by whoever last touched the module, and it stops being a contract and
+// becomes a comment.
 //
-//   - `observedMaterial` is EMPTY on a pass over an unchanged corpus. That is the idempotence
-//     property the card demands, and it is correct. But an empty list does NOT mean "there
-//     is nothing to migrate" — it means "nothing CHANGED since the last pass".
-//   - The DURABLE LOG is the record of what has been discovered. A consumer that needs
-//     "outstanding sources" must read the log (the latest record per path) and compare it
-//     against its OWN record of what it has already migrated. The checkpoint deliberately
-//     carries NO 'migrated' flag: migration execution is a sibling card's job
-//     (TRDD-IFOQAQYV), and inventing a settled-marker here would let this card assert a
-//     migration it cannot verify.
-//   - A source is outstanding only if it is BOTH still present in the corpus AND unmigrated.
-//     The log alone cannot tell outstanding from RECLAIMED, because the log is append-only
-//     and never deletes a record: a body reclaimed by the 72h retention policy keeps its
-//     last record forever, carrying a material class that says "not yet migrated". A
-//     consumer MUST check the corpus for the path's presence.
+// WHAT THIS MODULE ENFORCES, so you do not have to remember it:
+//   - The OUTSTANDING MIGRATION SET is `outstandingSources(records, corpusPaths, alreadyMigrated)`
+//     (src/rawBodySourceIndex.ts). It applies all four conditions — still present in the
+//     corpus, latest reason is not 'gone', not refused, and a material class — so a consumer
+//     CANNOT forget one. Deriving it by hand from the class field alone is wrong: a 'gone'
+//     record carries class 'new' ("it was never migrated"), which is exactly the shape of a
+//     source that still needs migrating.
+//   - The pass's own output is PER-PASS, and it is EMPTY on a pass over an unchanged corpus.
+//     That is the idempotence property, and it is correct — but an empty list means "nothing
+//     CHANGED", NOT "there is nothing to migrate". The durable LOG is the record of what has
+//     been discovered.
+//
+// WHAT THIS MODULE CANNOT ENFORCE, and the card states: whether a source has ALREADY been
+// migrated. The checkpoint deliberately carries no 'migrated' flag — migration execution is a
+// sibling card's job (TRDD-IFOQAQYV), and this card cannot assert a migration it did not
+// perform. So the caller passes `alreadyMigrated`.
+//
+// THE TWO RULES A CONSUMER MOST OFTEN GETS WRONG, stated here because they are the ones
+// that decide whether a runner migrates a file that does not exist:
 //   - A RECORD WHOSE REASON IS 'gone' IS NOT OUTSTANDING WORK, whatever its class says. The
-//     'gone' reason is the log's statement that the path is no longer in the corpus; its
-//     class is the honest history ("it was never migrated"), not a claim that it still needs
-//     migrating. The two rules are BOTH needed and must be applied together: the corpus
-//     check excludes a reclaimed body, and the 'gone' reason excludes a body the log knows
-//     is gone even if a corpus check is skipped.
-//   - A source whose latest record refuses is CONTESTED and must not be migrated blind; a
-//     source whose latest record carries a class of 'new'/'changed'/'truncated'/'replaced' has
-//     not been migrated yet. The class is the MATERIAL class — it survives an identity
-//     refinement, so a late-arriving provenance row does not make an unmigrated source look
-//     settled.
+//     'gone' reason is the log's statement that the path is no longer in the corpus; its class
+//     is the honest history ("it was never migrated"), not a claim that it still needs
+//     migrating. The corpus check and the reason check are BOTH needed: the corpus check
+//     excludes a reclaimed body, and the 'gone' reason excludes a body the log knows is gone
+//     even if a corpus check is skipped.
 //   - ONLY A SOURCE'S OWN LATEST RECORD SAYS IT IS CONTESTED. A partner's record naming a
 //     source is NOT evidence that the source is contested: a partner that was reclaimed keeps
-//     its last record for ever, and that record names the live source. So "is this source
-//     contested?" is a question about ONE path's latest record — never a question about every
-//     record that mentions it.
+//     its last record for ever, and that record names the live source. "Is this source
+//     contested?" is a question about ONE path's latest record — never about every record
+//     that mentions it.
 //
-// So: consume the LOG for "outstanding", consume `observedMaterial` for "what just moved",
-// and check the CORPUS for whether a path still exists.
+// SO: consume the LOG (via `outstandingSources`) for "outstanding", consume
+// `observedMaterial` for "what just moved", and check the CORPUS for whether a path still
+// exists.
 import * as fs from 'fs'
 import * as path from 'path'
 import {
@@ -134,10 +133,15 @@ export interface CorpusIndexStats {
    *
    * IT IS RARE BY CONSTRUCTION, which is what makes it an alarm rather than a number. It
    * counts rows that lost BOTH discriminators, not rows that lost one: a row with a
-   * session_id but no message_uuid still discriminates, so it is not counted here. Measured
-   * against the real corpus (19,890 rows in ~/.agentlens/otel-bodies/index.jsonl, every one
-   * carrying a message_uuid), the count is 0 — a healthy corpus reads 0, and a non-zero
-   * count means the index format changed under us.
+   * session_id but no message_uuid still discriminates, so it is not counted here.
+   *
+   * MEASURED, ON THIS MACHINE, 2026-10-19: the corpus index at
+   * ~/.agentlens/otel-bodies/index.jsonl held 19,890 rows, every one carrying a message_uuid.
+   * (The grounding brief's ~8,936 was an EARLIER COUNT of the SAME growing file, not a
+   * different measurement — the file grows as Claude Code runs. Re-measured 2026-10-20 it
+   * held 20,958 rows, still all carrying a message_uuid.) What the measurement shows is
+   * that a HEALTHY CORPUS DOES NOT LOSE BOTH DISCRIMINATORS — not that the count is
+   * structurally zero. A non-zero count means the index format changed under us.
    *
    * AN EARLIER VERSION ALSO COUNTED ROWS MISSING ONLY message_uuid. It was DROPPED: on a
    * corpus where some writer variant omits message_uuid, that counter is permanently
@@ -284,11 +288,37 @@ export interface DiscoveryResult {
    * refused in an EARLIER pass and unchanged since is NOT in this list. The authoritative
    * contestability state is the LOG — one path's latest record.
    *
-   * THE THREE LISTS' RELATIONSHIP, so a consumer does not have to reconstruct it:
-   * `observedMaterial` + `refusals` = `recordedThisPass`. A source this pass wrote a record
-   * for is EITHER material (its contestability or identity moved and it is not contested) OR
-   * refused (it is contested and must not be migrated blind). A contested source produces
-   * NO material — that is the whole point of refusing it.
+   * THE THREE LISTS' RELATIONSHIP, so a consumer does not have to reconstruct it. IT IS NOT
+   * A PARTITION, and the counts do not add up — do not write `material.length +
+   * refusals.length === recordedThisPass.length`, it is false.
+   *
+   * WHAT EACH LIST COUNTS:
+   *   - `recordedThisPass` COUNTS APPENDS, not distinct sources. One path can produce
+   *     several appends in a single pass (a discovery, then a refusal, then a corrected
+   *     refusal), so it is a count of WRITES, not of sources. Three mutually identical
+   *     files produce 6 appends across 3 paths.
+   *   - `observedMaterial` counts DISTINCT PATHS.
+   *   - `refusals` counts REFUSING RECORDS: one entry per append that carried a refusal, so
+   *     it can list a path more than once.
+   *
+   * THE TRUE RELATIONSHIP, stated as a partition of the APPENDS rather than of the paths:
+   *
+   *     every append this pass wrote is exactly one of:
+   *       - a MATERIAL append      — the path ends up in `observedMaterial`;
+   *       - a REFUSING append      — the path ends up in `refusals`;
+   *       - a 'gone' append        — neither list: the path is NOT in the corpus, so it is
+   *                                not material, and it carries no refusal, so it is not a
+   *                                refusal. THIS IS WHERE THE REMAINDER GOES, and it is the
+   *                                only kind of remainder.
+   *
+   * So a consumer asking "which recorded paths are in neither list?" gets exactly the
+   * 'gone' records — the records written for paths that were RECLAIMED. There is no other
+   * remainder, and no other reason for a recorded path to be missing from both lists.
+   *
+   * `observedMaterial` and `refusals` DO NOT OVERLAP as sets of PATHS: a path whose latest
+   * record refuses is excluded from the material list, so no path is in both. (They are two
+   * different views of the appends, not a partition of the paths — a path can appear in
+   * `refusals` for one append and in `observedMaterial` for another.)
    */
   refusals: DiscoveredSource[]
   /** How many body files were seen in the corpus dir. */
@@ -516,10 +546,24 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
             for (const gone of stalePartners) {
               const goneRecord = latest.get(gone)
               if (!goneRecord || goneRecord.refusal === null) continue
+              // THE 'gone' RECORD IS WRITTEN ONCE PER VANISHED PATH, NOT ONCE PER TRIGGERING
+              // LIVE PATH. This block runs for EVERY live path that refused the vanished
+              // partner, so with two live paths refusing 'z', both compute 'z' as a stale
+              // partner and both would append a 'gone' record for it. The log is append-only,
+              // so the second append is a DUPLICATE STATEMENT about the same fact — and the
+              // log then grows on every pass over an idle corpus, which breaks the growth
+              // property the format depends on.
+              //
+              // The lift is a fact about the VANISHED PATH, not about the trigger: once the
+              // vanished path's latest record says 'gone', there is nothing left to say about
+              // it. `latest` is updated by appendRecord, so the first trigger's append is
+              // visible to the second trigger in the SAME pass — one record, not two.
+              //
+              // The check is on the latest record's REASON, not on 'has this path been
+              // written about': a vanished path that was never refused has no 'gone' record
+              // and none is warranted.
+              if (goneRecord.reason === 'gone') continue
               if (!goneRecord.refusal.otherPaths.includes(priorRecord.path)) continue
-              const goneRemaining = goneRecord.refusal.otherPaths
-                .filter(p => p !== priorRecord.path && presentPaths.has(p))
-                .sort()
               appendRecord({
                 id: goneRecord.id,
                 path: goneRecord.path,
@@ -535,9 +579,21 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
                 // THE ORIGINAL lastSeenMs, NOT now: the partner was NOT seen now.
                 lastSeenMs: goneRecord.lastSeenMs,
                 provenance: goneRecord.provenance,
-                refusal: goneRemaining.length > 0
-                  ? { reason: 'identity-collision', otherPaths: goneRemaining }
-                  : null,
+                // A VANISHED PATH CONTESTS NOBODY, so its 'gone' record carries NO REFUSAL.
+                //
+                // The earlier shape kept a partial refusal naming the partners that were
+                // still present — but a path that is not in the corpus cannot contest
+                // anything: the ambiguity a refusal protects against (two paths claiming one
+                // identity) needs BOTH paths to exist. Keeping the partner names also made
+                // the write order-dependent: the first triggering live path wrote a record
+                // naming the remaining partners, and the second trigger then had to write
+                // ANOTHER record to clear its own name out of that refusal — which is how two
+                // 'gone' records for one path came to exist.
+                //
+                // The live paths' OWN records carry the retraction (their refusal is rewritten
+                // to name only the partners still present), so nothing is lost by clearing it
+                // here: the collision among the survivors is stated on THEIR records.
+                refusal: null,
                 reason: 'gone',
               })
             }

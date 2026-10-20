@@ -75,12 +75,20 @@ import {
  * stricter rules, and it is not loadable because the `reason` field is absent entirely.
  *
  * The bump makes that refusal EXPLICIT: a version-1 log is refused as an unknown version,
- * with a message that says why, instead of being refused for a malformed field. A
- * version-1 log holds no data anyone could lose — this substrate has never been run
- * against the real corpus, and the real corpus is read-only for it — so there is nothing to
- * migrate. The version is a CONTRACT, and a contract that changes without a version bump is
- * a contract that lies.
+ * with a message that says why, instead of being refused for a malformed field. The version
+ * is a CONTRACT, and a contract that changes without a version bump is a contract that lies.
+ *
+ * WHAT THE BUMP DOES NOT SAY. An earlier draft of this comment claimed that no version-1 log
+ * holds data worth keeping, because this substrate has never been run against the real
+ * corpus. That was true on the machine where this was written, and it is a claim about a
+ * SESSION, not about the format — and a permanent library must not tell an operator to
+ * delete a file on the strength of someone else's session. The refusal message therefore
+ * says only what the code knows: the formats differ, this build does not convert, and if the
+ * old log holds anything you need, keep a copy.
  */
+/** A source identity is a sha256 hex digest; a path never is. Used to detect a mismatched key. */
+const IDENTITY_PATTERN = /^[0-9a-f]{64}$/
+
 export const SOURCE_INDEX_FORMAT_VERSION = 2
 
 /** The file name of a version-N checkpoint inside the state dir. */
@@ -129,15 +137,31 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
  *                     'retracted' and the difference is the one a migration runner needs:
  *                     'retracted' means "this source is still here but no longer contested";
  *                     'gone' means "this source is not here any more". Both lift a refusal
- *                     and both carry `refusal: null` when the refusal is fully lifted, so the
- *                     REASON is the only field that tells them apart — a consumer that
- *                     ignores it cannot distinguish a live-but-retracted source from a
- *                     reclaimed one.
+ *                     and both carry `refusal: null`, so the REASON is the only field that
+ *                     tells them apart — a consumer that ignores it cannot distinguish a
+ *                     live-but-retracted source from a reclaimed one.
+ *
+ *                     A 'gone' record NEVER NAMES ANOTHER PATH: its refusal is always null.
+ *                     That is the mechanical support for the rule that only a source's OWN
+ *                     latest record says it is contested — a consumer scanning the partner
+ *                     names in a log finds nothing to misread in a 'gone' record.
  *                     A 'gone' record keeps the path's ORIGINAL lastSeenMs — the time it was
  *                     really last seen — so it never claims the file is live, and it exists
  *                     to clear a refusal that would otherwise name a live source for ever.
  *                     A 'gone' record is the only record a pass may write for a path it did
  *                     not visit.
+ *
+ * A 'gone' RECORD IS NOT OUTSTANDING WORK, whatever its class says. The class is the honest
+ * history ("it was never migrated"), not a claim that it still needs migrating. A consumer
+ * must apply BOTH rules: the path must still be present in the corpus, AND its latest
+ * record's reason must not be 'gone'. Either rule alone is not enough — the corpus check
+ * excludes a reclaimed body, and the 'gone' reason excludes a body the log knows is gone
+ * even when a corpus check is skipped.
+ *
+ * THE FORMAT MODELS ABSENCE. Every other record is an OBSERVATION about a path at a time —
+ * "this path was here, then". A 'gone' record is the one that asserts a path is NOT there,
+ * which is a different kind of statement, and the only one a pass may make about a path it
+ * did not visit.
  */
 export type SourceRecordReason =
   | 'discovered'
@@ -288,7 +312,7 @@ export function validateSourceIndexRecord(
     throw new SourceIndexError(line, "field 'v' must be an integer format version")
   }
   if (v !== SOURCE_INDEX_FORMAT_VERSION) {
-    throw new SourceIndexError(line, `unknown format version ${v} (this build reads version ${SOURCE_INDEX_FORMAT_VERSION}) — a version-${v} log is a different format, there is no converter, and no version-${v} log holds data worth keeping: this substrate has never been run against the real corpus, so the log can simply be deleted and rebuilt`)
+    throw new SourceIndexError(line, `unknown format version ${v} (this build reads version ${SOURCE_INDEX_FORMAT_VERSION}) — a version-${v} log is a different format and this build does not convert it; if it holds anything you need, keep a copy before replacing it`)
   }
   const id = requireString(value, 'id', line)
   if (!isHex64(id)) throw new SourceIndexError(line, "field 'id' must be a 64-char lowercase hex sha256")
@@ -366,9 +390,19 @@ export function validateSourceIndexRecord(
   if (reason === 'replaced' && cls !== 'replaced') {
     throw new SourceIndexError(line, `field 'reason' is 'replaced' but class is '${cls}'`)
   }
-  if (reason !== 'content' && reason !== 'replaced' && cls === 'replaced') {
-    throw new SourceIndexError(line, `field 'class' is 'replaced' but reason is '${reason}' — a replacement must carry reason 'replaced'`)
-  }
+  // THE INVARIANT IS ONE-DIRECTIONAL, AND IT MUST STAY THAT WAY.
+  //
+  // A reason of 'content' or 'replaced' IMPLIES the matching class. The converse is NOT
+  // enforced, and enforcing it was a CRASH-ON-WRITE: the material class is CARRIED FORWARD
+  // on an unchanged observation, so a class outlives the reason that set it. A file that
+  // was replaced (class 'replaced') and then had its identity refined (reason 'refined')
+  // carries class 'replaced' with reason 'refined' — which is CORRECT, because the class is
+  // the last material content state and the reason describes THIS observation. The
+  // two-directional rule refused that record on the way IN, so the pass threw, the log
+  // became unappendable, and on the real corpus the discovery pass would stall at that
+  // body for ever — every subsequent attempt hitting the same bad record.
+  //
+  // So: a reason implies a class, but a class does NOT imply a reason.
   // THE MATERIAL-CLASS INVARIANT. A record's class is the last MATERIAL content state of the
   // source, so only a real content change may set it to 'changed'/'truncated'/'replaced', and
   // 'unchanged' — which is the class of an OBSERVATION, never of a record — must never appear
@@ -435,6 +469,103 @@ export function latestByPath(records: SourceIndexRecord[]): Map<string, SourceIn
   const byPath = new Map<string, SourceIndexRecord>()
   for (const r of records) byPath.set(r.path, r)
   return byPath
+}
+
+/**
+ * The OUTSTANDING MIGRATION SET, derived from the log.
+ *
+ * WHY THIS IS A FUNCTION AND NOT A RULE IN PROSE. A consumer that has to REMEMBER four
+ * conditions (present in the corpus, unmigrated, not 'gone', not refused) will eventually
+ * apply three of them, and the one it drops decides whether the runner migrates a file that
+ * does not exist or skips a file that does. The class field alone is not enough to derive
+ * this: a 'gone' record carries the honest class history ("it was never migrated", i.e.
+ * class 'new'), which is exactly the shape of a source that still needs migrating.
+ *
+ * THE FOUR CONDITIONS, AND WHAT EACH ONE IS FOR:
+ *   - STILL PRESENT IN THE CORPUS. The log is append-only and never deletes a record, so a
+ *     body reclaimed by the retention policy keeps its last record for ever. The log alone
+ *     cannot tell outstanding from reclaimed, so the corpus must be consulted.
+ *   - ITS OWN LATEST RECORD'S REASON IS NOT 'gone'. This excludes a body the log already
+ *     KNOWS is gone even when the corpus check is skipped or is stale. Either the corpus
+ *     check or the reason check alone is not enough.
+ *   - ITS OWN LATEST RECORD DOES NOT REFUSE IT. A contested source must not be migrated
+ *     blind.
+ *   - ITS CLASS IS MATERIAL (not 'unchanged'). 'unchanged' is an OBSERVATION, never a
+ *     persisted class — the log never carries it — so a record with class 'unchanged' is
+ *     malformed and is refused by the validator. This condition is therefore normally
+ *     vacuous, and it is spelled out so the function stays correct if a future format
+ *     version makes 'unchanged' persistable.
+ *
+ * 'MATERIAL' means class 'new' | 'changed' | 'truncated' | 'replaced' — the classes that
+ * say "this content has not been migrated yet".
+ *
+ * NOTE ON WHAT THIS FUNCTION DOES NOT KNOW: whether a source has ALREADY been migrated.
+ * The checkpoint deliberately carries no 'migrated' flag, because migration execution is a
+ * sibling card's job (TRDD-IFOQAQYV) and this card cannot assert a migration it did not
+ * perform. So the caller supplies `alreadyMigratedPaths` — a set of PATHS, not identities —
+ * and a path in that set is excluded even if everything else qualifies.
+ *
+ * THE KEYING IS BY PATH, AND IT IS DELIBERATE. Both sets are paths, because the function's
+ * question is "what does the corpus hold RIGHT NOW", and the corpus is a set of paths.
+ *
+ * A RENAME IS HANDLED CORRECTLY, and this was MEASURED rather than assumed: after a file is
+ * renamed, the pass writes a record under the NEW path carrying the SAME identity (the
+ * identity is path-independent — that is the module's whole point), and the old path's
+ * record lingers in the append-only log. Because the function also requires the path to be
+ * in the CURRENT corpus, the old path is excluded (it is not a file that exists any more)
+ * and the new path is offered. So a rename neither duplicates a source nor loses one.
+ *
+ * The one thing the caller must get right is that `corpusPaths` is the CURRENT corpus. A
+ * STALE set silently excludes live sources, and there is no way for the function to detect
+ * that from the log alone — the log cannot know what is on disk now. That is why the
+ * discovery pass, which does know, is the natural caller.
+ */
+export function outstandingSources(
+  records: SourceIndexRecord[],
+  corpusPaths: ReadonlySet<string>,
+  alreadyMigratedPaths?: ReadonlySet<string>,
+): SourceIndexRecord[] {
+  // A MISMATCHED KEY MUST BE LOUD, NOT SILENT. The caller might hand us a set of
+  // IDENTITIES (the content digest) where the function compares PATHS — every comparison
+  // then misses, every already-migrated source is offered AGAIN, and the migration runs
+  // twice over the same body. An identity is a 64-character hex string and a path is not,
+  // so a mismatched key is DETECTABLE, and detectable mismatches throw rather than
+  // silently doing nothing.
+  if (alreadyMigratedPaths) {
+    for (const entry of alreadyMigratedPaths) {
+      if (IDENTITY_PATTERN.test(entry)) {
+        throw new Error(
+          `outstandingSources: alreadyMigratedPaths contains an IDENTITY ("${entry}"), not a path. ` +
+          'This function is keyed by PATH; pass the paths of the sources you have already migrated. ' +
+          'Passing identities here silently matches nothing and every migrated source is offered again.',
+        )
+      }
+    }
+  }
+
+  const latest = latestByPath(records)
+  const out: SourceIndexRecord[] = []
+  for (const rec of latest.values()) {
+    if (rec.reason === 'gone') continue
+    // A REFUSAL CONTESTS ONLY A PARTNER THAT STILL EXISTS. The persisted refusal names the
+    // partners that collided AT THE TIME the record was written, and the log is append-only:
+    // if a partner has since been reclaimed and no pass has lifted the refusal, the stale
+    // names are still there. Excluding the source on the strength of a stale name withholds
+    // a LIVE, UNMIGRATED body from the outstanding set for ever — the source that most
+    // needs migrating is the one that never gets it.
+    //
+    // This is the SAME rule the discovery pass uses: it re-derives contestability against
+    // the CURRENT corpus (its partner list is filtered by presence), so the function and the
+    // pass must agree on what "contested" means. The function is the one that decides what
+    // gets deleted, so it follows the pass.
+    if (rec.refusal !== null && rec.refusal.otherPaths.some(p => corpusPaths.has(p))) continue
+    if (!corpusPaths.has(rec.path)) continue
+    if (alreadyMigratedPaths && alreadyMigratedPaths.has(rec.path)) continue
+    if (rec.class !== 'new' && rec.class !== 'changed' && rec.class !== 'truncated' && rec.class !== 'replaced') continue
+    out.push(rec)
+  }
+  out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+  return out
 }
 
 /**
