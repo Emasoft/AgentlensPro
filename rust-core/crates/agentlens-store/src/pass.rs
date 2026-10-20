@@ -24,7 +24,12 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+
+use crate::sections::sha256_hex;
 
 use crate::{flush_detailed, ingest_body_with, Store, VerifyItem, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
 
@@ -188,32 +193,56 @@ fn body_files(dir: &Path) -> Vec<BodyFile> {
     out
 }
 
-/// Re-stat a body file immediately before its unlink and compare it with the values captured
-/// at enumeration. WHY: the corpus is live and a body can be re-emitted under the same path
-/// with new bytes between enumeration and the delete. Deleting then loses the new bytes while
-/// the store holds the old ones. A moved size or mtime means the file is NOT the one the
-/// verify proved, so the delete must be aborted, not performed.
-fn unchanged_since_enumeration(b: &BatchItem) -> Result<(), String> {
-    let st = fs::metadata(&b.p).map_err(|e| format!("{}: re-stat before delete failed — kept ({e})", b.name))?;
-    let mtime_ms = st
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    if st.len() != b.size {
-        return Err(format!(
-            "{}: delete ABORTED — file changed since enumeration (size {} -> {}); the store holds the older bytes, the new bytes stay on disk",
-            b.name, b.size, st.len()
-        ));
+/// Hash a body file's CURRENT bytes and compare them against the bytes this pass VERIFIED.
+///
+/// WHY content and not metadata: the corpus is live and a body can be re-emitted under the same
+/// path with new bytes between the verify and the delete. That re-emission can preserve BOTH the
+/// size and the mtime (a `mv` back, a `cp -p`), so a size/mtime comparison CANNOT see the change
+/// — the metadata guard was bypassable exactly that way. The store's body id IS the sha256 of the
+/// raw bytes (`body_id_of`), and the verify joined the store's rows on exactly that digest, so the
+/// digest of the bytes now on disk is the only instrument that answers "is this still the file the
+/// store proved it can reproduce?".
+///
+/// The file is hashed in 1 MiB chunks: ONE pass over the bytes, never a second full copy held in
+/// memory (the corpus is tens of GB and the pass already holds the verified `raw` in full).
+/// A read failure is an ABORT, never a delete — a file we cannot read is not a file we can prove.
+fn content_unchanged_since_read(p: &Path, verified: &str) -> Result<(), String> {
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| p.to_string_lossy().into_owned());
+    let mut f = fs::File::open(p)
+        .map_err(|e| format!("{name}: re-read before delete failed — kept ({e})"))?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        let n = f
+            .read(&mut buf)
+            .map_err(|e| format!("{name}: re-read before delete failed — kept ({e})"))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
     }
-    if mtime_ms != b.mtime_ms {
+    let actual = hex_bytes(&h.finalize());
+    let expected = sha256_hex(verified);
+    if actual != expected {
         return Err(format!(
-            "{}: delete ABORTED — file changed since enumeration (mtime {} -> {}); the store holds the older bytes, the new bytes stay on disk",
-            b.name, b.mtime_ms, mtime_ms
+            "{name}: delete ABORTED — content changed since the verify (sha256 {expected} -> {actual}); the store holds the older bytes, the new bytes stay on disk"
         ));
     }
     Ok(())
+}
+
+/// Lowercase hex of a digest — the same rendering `sha256_hex` uses, so the two digests are
+/// comparable as strings.
+fn hex_bytes(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 fn fsync_path(p: &Path) -> std::io::Result<()> {
@@ -452,14 +481,18 @@ pub fn ingest_pass_observed_with(
                                         continue;
                                     }
                                 };
-                                for (b, _) in &items {
+
+                                for (b, raw) in &items {
                                     let v = results.get(&b.name);
                                     match v {
-                                        // Gated on a fresh stat: the corpus is live and a re-emission must
-                                        // not be deleted against the store's older bytes.
+                                        // Gated on the CONTENT: the corpus is live and a re-emission must
+                                        // not be deleted against the store's older bytes. A re-emission can
+                                        // preserve the size AND the mtime (a `mv` back, a `cp -p`), so the
+                                        // guard compares the sha256 of the file's current bytes against the
+                                        // sha256 of the bytes this pass VERIFIED — content, never metadata.
                                         Some(v) if v.ok => {
                                             if opts.delete_after {
-                                                if let Err(abort) = unchanged_since_enumeration(b) {
+                                                if let Err(abort) = content_unchanged_since_read(&b.p, raw) {
                                                     res.failed.push(abort);
                                                 } else {
                                                     match fs::remove_file(&b.p) {
@@ -493,11 +526,14 @@ pub fn ingest_pass_observed_with(
                                             // capture time with the re-emit's mtime, then next pass parks
                                             // it again forever).
                                             if b.durable && reason.contains("stored ts ") && reason.contains("!= capture time") {
-                                                if let Err(abort) = unchanged_since_enumeration(b) {
+
+                                                // Gated on the CONTENT, exactly like the verified arm above: the
+                                                // re-emission can preserve the size AND the mtime (a `mv` back, a
+                                                // `cp -p`), so only the sha256 of the file's current bytes against
+                                                // the sha256 of the bytes this pass VERIFIED can see it.
+                                                if let Err(abort) = content_unchanged_since_read(&b.p, raw) {
                                                     res.failed.push(abort);
                                                 } else if opts.delete_after {
-                                                    // Gated on a fresh stat: the corpus is live and a re-emission
-                                                    // must not be deleted against the store's older bytes.
                                                     match fs::remove_file(&b.p) {
                                                         Ok(()) => {
                                                             res.deleted += 1;
