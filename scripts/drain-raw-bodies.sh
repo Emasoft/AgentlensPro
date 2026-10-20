@@ -171,6 +171,10 @@ run_pass() {
     summary='NO-SUMMARY'
     printf 'pass=%s the pass printed NOTHING on stdout; the record has no summary\n' "$PASS_N" >> "$ERRLOG"
   fi
+  # The summary line carries the pass's own JSON, which already includes the abort counter
+  # (deleteAbortedReemission) as a field - so a reader can see the count without parsing the
+  # failed array. Nothing extra is appended here: the JSON IS the record, and appending a
+  # second copy of the same fact would create a second thing to keep in step with the first.
   if [ "$status" -eq 0 ]; then
     printf 'pass=%s dur=%ss %s\n' "$PASS_N" "$(( $(date +%s) - start ))" "$summary" >> "$LOG"
   else
