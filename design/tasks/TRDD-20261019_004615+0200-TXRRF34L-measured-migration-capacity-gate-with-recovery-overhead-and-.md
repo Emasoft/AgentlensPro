@@ -4,7 +4,7 @@ title: Measured migration capacity gate with recovery overhead and 20 GiB reserv
 column: todo
 status: tasked
 created: 2026-10-19T00:46:15+0200
-updated: 2026-10-20T19:01:31+0200
+updated: 2026-10-20T19:05:37+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -127,7 +127,11 @@ paragraph, which still carries the first one as a live figure.**
   which reading wins.
 - **THE CRASH-VS-SPILL TERM IS NOT APPLICABLE IN THIS SHAPE** (no WAL, no spill) and becomes
   live only if the destination changes to a DuckDB database file. It is measured for the
-  file-backed shape — see `reports_dev/20261020_peak-space-model.md` component 4 — and the
+  file-backed shape — see `reports_dev/20261020_peak-space-model.md` component 4 (at the SIGKILL,
+  340 spill block files were on disk and the WAL held 320 bytes; the spill files survive the kill
+  and are present during recovery) — BUT THE MEASUREMENT IS NARROW: one memory limit (500 MB)
+  and one kill offset (4,000 ms), so it establishes that the coexistence OCCURS, not how it
+  SCALES. THE
   file-backed model it belongs to is superseded in that report by the measured `D + G + W`,
   whose `G` tracks the BATCH (correlation +0.77 against the batch's raw bytes, −0.58 against
   the accumulated live content) at a mean 2.02×B, with the backlog's own case still the
