@@ -4,7 +4,7 @@ title: Raw-body source identity and incremental index checkpoint substrate
 column: human_review
 status: tasked
 created: 2026-10-19T00:45:50+0200
-updated: 2026-10-20T02:48:46+0200
+updated: 2026-10-20T02:49:52+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -52,13 +52,10 @@ THE OUTSTANDING MIGRATION SET IS THE RESULT OF outstandingSources(records, corpu
 - FINAL REVIEW VERDICT (2026-10-20, tenth adversarial round): the IMPLEMENTATION is complete and reviewed; the card itself sits in human_review AWAITING ACCEPTANCE by the owner, and 'DONE' here does NOT mean the card is in the complete column.
 - The reviewer could not construct a remaining path by which the log asserts a falsehood, confirmed the four conditions of outstandingSources compose correctly and MATCH the pass's own rule, confirmed the path-keying is a documented limitation and not a defect for this migration (measured: a rename writes a record under the new path with the same identity, the old path is excluded because it is absent from the current corpus, so a rename neither duplicates nor loses a source), and judged the design structurally sound - content-derived identity, an append-only log with a self-checking boundary chain, refusal-as-a-record rather than refusal-as-absence, and a DERIVED outstanding set are the right shapes for a log that gates deletions.
 - It declined to manufacture a finding.
-- One accepted limitation: the loader cannot distinguish written-but-not-fsynced from durable after a crash, so a power loss can leave the last record unflushed; the consequence is bounded and safe, but ONLY for a consumer that reads the LATEST record per path: the next pass re-derives that source and re-appends it, and because the log is append-only that re-append is a SECOND record for the same path.
-- It is idempotent AT THE CONSUMER (latestByPath and outstandingSources both collapse to the latest), not idempotent in the log.
-- A consumer that reads any record rather than the latest will double-count that source.
-- This is a CONTRACT dependency, and the contract is above.
+- One accepted limitation: the loader cannot distinguish written-but-not-fsynced from durable after a crash, so a power loss can leave the last record unflushed. The consequence is bounded and safe, but ONLY for a consumer that reads the LATEST record per path: the next pass re-derives that source and re-appends it, and because the log is append-only that re-append is a SECOND record for the same path. It is idempotent AT THE CONSUMER (latestByPath and outstandingSources both collapse to the latest), not idempotent in the log. A consumer that reads any record rather than the latest will double-count that source. This is a CONTRACT dependency, and the contract is above.
 
 ## Handoff to TRDD-IFOQAQYV
-- EVERY ONE OF THESE WILL BITE, verified against the code:
+EVERY ONE OF THESE WILL BITE, verified against the code:
 - (1) alreadyMigratedPaths is PATHS, not identities - the runner must maintain a path set; a caller recording an identity instead would re-offer that body, and the guard throws only for the exact 64-hex shape, so some other wrong key type would still match nothing silently.
 - (2) observedMaterial is PER-PASS and is empty over an unchanged corpus - the runner must call outstandingSources against the LOG, never iterate the pass output.
 - (3) The log alone cannot tell outstanding from reclaimed - the runner must pass the CURRENT corpus path set; a path absent from the corpus is excluded, which is correct and also means a reclaimed body is never migrated.
