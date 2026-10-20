@@ -247,21 +247,31 @@ run_pass() {
     # and every stage of this pipeline exits 0 on empty input, so 'set -euo pipefail' is safe.)
     # 'LC_ALL=C' is load-bearing: the error log can carry any bytes the pass's stderr carried,
     # so the byte must be read in a single-byte locale.
-    # 'boundary' has THREE states, not two booleans that must agree: 'newline' (the cut is
-    # on a record boundary), 'midline' (the cut is inside a line), and 'unknown' (the byte
-    # before the cut could not be read, so the cut's position is NOT known).
+    # 'boundary' has FOUR states, and EVERY ONE OF THEM IS DISTINGUISHED by the strip's
+    # condition below - none is documentation-only, because a state the code never reads
+    # looks vestigial to the next editor and gets deleted, taking the distinction it
+    # encoded with it. The strip runs ONLY on 'midline'; the other three each skip it for
+    # their own stated reason.
     #
-    # THREE STATES AND NOT TWO BOOLEANS, ON PURPOSE. A boolean that DEFAULTS to a fact is a
+    #   midline  - the byte before the cut was read and was NOT a newline: the cut is inside
+    #              a line, so the trimmed file's first line IS a fragment and must be dropped.
+    #   newline  - the byte before the cut was read and WAS a newline: the cut is on a
+    #              record boundary, so the trimmed file's first line is a WHOLE RECORD and
+    #              there is no fragment to drop.
+    #   unknown  - the byte before the cut could NOT be read: the cut's position is not
+    #              known, so no fragment is dropped (see below).
+    #   not_read - the block never looked, because the cut itself failed. Distinct from
+    #              'unknown' so the two are never confused, though both skip the strip.
+    #
+    # FOUR STATES AND NOT TWO BOOLEANS, ON PURPOSE. A boolean that DEFAULTS to a fact is a
     # trap: 'first_line_is_whole=0' reads as 'the cut is mid-line', which is a CLAIM about
     # the cut, and a future edit that dropped the 'unknown' guard from the strip's
-    # condition would silently turn that default back into a fact. With one variable
-    # carrying an explicit 'unknown', the strip's condition can only be satisfied by a
-    # state that was actually observed.
+    # condition would silently turn that default back into a fact.
     #
     # AND IN THE 'unknown' STATE THE FRAGMENT IS NOT DROPPED. The file is kept UNSTRIPPED,
     # because stripping on a guess can delete a whole record and leaving one line
     # unseparated deletes nothing.
-    local boundary=unknown
+    local boundary=not_read
     if [ "$truncate_ok" -eq 1 ] && [ "$start" -gt 0 ] && [ -s "$ERRLOG.trimmed" ]; then
       local before
       # '|| true' is load-bearing: if $ERRLOG vanished between the -f test above and this
@@ -303,9 +313,17 @@ run_pass() {
         boundary=midline
       fi
     fi
-    # The strip runs ONLY when the cut is KNOWN to be mid-line. When the boundary is
-    # unknown the file is kept unstripped, because stripping on a guess can delete a whole
-    # record - and the cost of not stripping is one hybrid first line.
+    # THE STRIP RUNS ONLY WHEN A READ SUCCEEDED AND SHOWED A NON-NEWLINE BYTE - that is,
+    # only when a fragment is KNOWN to be there. In every other state the file is installed
+    # unstripped, and each of those states is CONSUMED here by being distinct from
+    # 'midline':
+    #   'newline'  - the cut is on a record boundary: the trimmed file's first line is a
+    #                whole record and there is NO fragment to drop.
+    #   'unknown'  - the cut's position is not known: the file is kept unstripped, because
+    #                stripping on a guess can delete a whole record, and the cost of not
+    #                stripping is one unseparated line.
+    #   'not_read' - the block never looked, because the byte cut failed: the temp file was
+    #                removed and the final 'mv' is skipped, so nothing is installed.
     if [ "$truncate_ok" -eq 1 ] && [ "$boundary" = midline ] && [ -s "$ERRLOG.trimmed" ]; then
       # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the line
       # whose head was cut away. It is a whole line but not the start of one, so it is dropped
@@ -331,13 +349,14 @@ run_pass() {
         # mid-line: the fragment has no trailing newline, so the next record's text
         # continues it). In the second case that record is no longer separately readable,
         # so the log's 'no whole LINE is deleted' property DOES NOT HOLD in this path - but
-        # THE LOSS THAT MATTERS IS THE BYTE CUT'S, NOT THE GUESS'S. The cut removes a
-        # PREFIX of whatever it lands in - and a LOGICAL RECORD can span several lines (the
-        # script writes one, for a multi-line stdout diversion), so a cut landing inside
-        # such a record DESTROYS THAT RECORD'S EARLIER LINES outright. The guess cannot do
-        # that: it can only additionally lose ONE whole single-line record, and it is
-        # chosen so that it does not. So the accurate statement is: the cut removes a
-        # prefix (which may be part of a multi-line record); the guess deletes no record.
+        # THE RETAINED WINDOW'S EDGE IS WHERE THE RECORDS CAN BE, NOT THE GUESS. The block
+        # keeps only the last ERRLOG_MAX_BYTES, so everything before the cut is DISCARDED BY
+        # DESIGN - that is the window's boundary, not damage. A LOGICAL RECORD can span
+        # several lines (the script writes one, for a multi-line stdout diversion), so the
+        # window's edge can fall inside such a record and leave only its tail. The guess
+        # cannot do that: it can only additionally lose ONE whole single-line record, and
+        # it is chosen so that it does not. So the accurate statement is: the window's edge
+        # may fall inside a multi-line record; the guess deletes no record.
         # The damage does not COMPOUND
         # into a growing corrupted prefix, because each iteration's cut discards everything
         # before it - but the COUNT of unseparated records GROWS BY ONE PER FAILURE, so
