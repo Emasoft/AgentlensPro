@@ -4,7 +4,7 @@ title: Measured migration capacity gate with recovery overhead and 20 GiB reserv
 column: todo
 status: tasked
 created: 2026-10-19T00:46:15+0200
-updated: 2026-10-20T19:05:37+0200
+updated: 2026-10-20T19:17:11+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -25,33 +25,47 @@ eht: []
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-20
 
 **THE ADMISSION FORMULA AND THE 20 GiB RESERVE ARITHMETIC NOW EXIST. THE GATE IS NOT YET
-BUILT, AND ONE INPUT IS STILL THE OWNER'S TO GIVE.** Both deliverables are measured
-(`reports_dev/20261020_admission-formula-and-reserve-arithmetic.md`). The headline: **on this
-machine the migration is NEITHER disk-constrained NOR RAM-constrained** — the whole remaining
-corpus fits on both gates with ~15× the 20 GiB reserve to spare.
+BUILT, AND THREE INPUTS ARE STILL OPEN — TWO OF THEM ARE THE MIGRATION RUNNER'S, NOT THIS
+CARD'S.** Both deliverables are measured (`reports_dev/20261020_admission-formula-and-reserve-arithmetic.md`;
+the numbers are inlined here because the report lives in a gitignored directory). The headline:
+**on this machine the migration is NOT DISK-CONSTRAINED, and NOT RAM-CONSTRAINED AGAINST THE
+STORE'S OWN 8 GiB DUCKDB LIMIT** — the whole remaining corpus fits the disk gate with ~15x the
+20 GiB reserve to spare, and the store's END state opens under the limit. TWO CONDITIONS RIDE ON
+THAT SENTENCE: the enforced RAM limit's MEANING is undecided, and the MIGRATION RUNNER'S OWN
+WORKING SET is unmeasured — so the RAM half is a statement about the store's own path, not about
+the runner that will do the migration. The machine has 64 GiB of physical RAM.
 
 **THE FORMULA, AS MEASURED:**
 
 ```
 ADMIT(batch B)  iff   free_bytes − B/R  ≥  20 GiB            # the DISK gate
 
-                  AND open_cost(S) + batch_term(B) ≤ RAM_LIMIT  # the RAM gate
+                  AND open_cost(S') + batch_term(B) ≤ RAM_LIMIT  # the RAM gate
 
-R            = the storage ratio: 6.4 (the large stratum, measured on the store's own
-               path) .. 17.2 (the card's live-pass marginal ratio)
-S            = the store's current settled size
-open_cost(S) = SUB-LINEAR, measured: 0.371 GiB @ S=0.31, 0.570 @ 0.49, 1.415 @ 1.51,
-               2.915 @ 4.0, 3.574 @ 8.0, 5.778 @ 12.0 GiB of store
+R            = the storage ratio, UNMEASURED AT ITS WORST CASE: 6.4 (the large stratum,
+               measured on the store's own path) .. 17.2 (the card's live-pass marginal
+               ratio). NEITHER is the no-dedup ratio of a bulk historical migration, so R
+               must be MEASURED ON THE BATCH'S OWN COMPOSITION before admission — a gate
+               REFUSES a batch whose projected growth rests on a ratio measured on a
+               different shape.
+S'           = the store's size AFTER this batch is committed — the open cost is paid at the
+               NEXT open, so the pre-batch S is the wrong number to check.
+open_cost(S) = SUB-LINEAR, measured: 0.37 GiB @ S=0.31, 1.42 @ 1.51, 2.81–3.43 @ 4.0,
+
+               3.57 @ 8.0, 5.78 @ 12.0 GiB of store. The last two ratios (0.447, then 0.481)
+               are NOT monotone, so this is a BAND, not a curve.
 batch_term   = ≈1.0 GiB, SATURATING (it does NOT grow with the batch beyond ~1 GiB)
-RAM_LIMIT    = 8 GiB (DEFAULT_MEMORY_LIMIT, lib.rs:44) — a DuckDB ADMISSION limit, not a
-               process or physical ceiling. THIS IS THE OWNER DECISION THAT IS STILL OPEN.
+RAM_LIMIT    = 8 GiB (DEFAULT_MEMORY_LIMIT, lib.rs:44) — DuckDB bounds ONE INSTANCE's buffer
+               manager, so the machine-level question is how many instances run concurrently.
 ```
-
 **THE RESERVE ARITHMETIC (live, 2026-10-20):** free 311.5 GiB; reserve 20 GiB; headroom
-291.5 GiB. The remaining corpus is 37.78 GiB raw, so its settled cost is 5.90 GiB at the 6.4×
-ratio (2.20 GiB at 17.2×) — free after the WHOLE corpus is 305.6 GiB, far above the reserve.
-The store's END state would be 10.02 GiB, whose open cost is an INTERPOLATION of the measured
-law (5.778 GiB measured at a 12 GiB store) and sits under the 8 GiB limit.
+291.5 GiB. The remaining corpus is 37.78 GiB raw, so its settled cost is 5.90 GiB at the
+pessimistic 6.4x ratio (2.20 GiB at 17.2x) — free after the WHOLE corpus is 305.6 GiB, far
+above the reserve. The store's END state would be 10.02 GiB, whose open cost is an
+INTERPOLATION of the measured law and therefore a BAND: the 8 GiB point measured 3.57 GiB
+and the 12 GiB point 5.78 GiB, and a linear read at 10.02 GiB gives ≈4.7 GiB. The band
+3.6–5.8 GiB sits under the 8 GiB limit EITHER WAY, so the conclusion does not depend on
+which end is read.
 
 **THE DESTINATION IS SETTLED, AND IT IS THE STORE'S OWN PATH** (`reports_dev/20261020_duckdb-file-vs-store-path.md`).
 The bodies are stored in DuckDB's OWN compressed, columnar representation, at 5.09–6.33×, and they
@@ -67,41 +81,51 @@ SCHEMA-LAYOUT difference, not a technology difference, and it must not be quoted
 DuckDB result. WHAT REMAINS GENUINELY OPEN IS NOT THE DESTINATION BUT THE TYPED PROJECTION
 (TRDD-TC8HW857), which has never been measured.
 
-**THREE FINDINGS THAT CHANGE WHAT THE CARD'S OTHER SECTIONS SAY. Read these before the Scope
-paragraph, which still carries the first one as a live figure.**
+**THREE FINDINGS THAT CHANGE WHAT THE CARD'S OTHER SECTIONS SAY.**
+Read them before the Scope paragraph: it carried the first one as a live figure, and that
+figure has now been corrected IN PLACE rather than merely labelled.
 
 1. **THE STORE IS FILELESS BY DESIGN, SO THE FILE-BACKED PEAK-SPACE MODEL DOES NOT PRICE THIS
    SHAPE.** `lib.rs:159` is `Connection::open_in_memory()`, and `lib.rs:5` says why: "DuckDB
    rewrites row-groups in place and a persistent db burned 300x the device writes". There is
    no database file, no WAL and no checkpoint — VERIFIED on a fresh store dir, which produced
    no `.duckdb` and no `.wal` file. The peak-space model's `D + 2B` / `D + 3B` disk terms
-   belong to a DuckDB DATABASE FILE, which the destination decision did NOT choose. In the
-   store's shape there is **no disk transient to reserve** (the batch's disk cost IS its
-   settled growth: the peak store size equalled the settled store size in every run, and the
-   spill was 0 bytes in all 13 runs), and the **RAM** term is the one a gate must check. The
-   file-backed model is still the right model for the TYPED tables if they are given their own
-   database file — which is a separate decision, recorded in the typed-schema card.
-2. **THE 17.2x RATIO IS A LIVE-PASS MEASUREMENT, NOT A MIGRATION RATIO — but the 6.4x is NOT
-   its floor, and the card must not treat it as one.** The 17.2× was measured on LIVE passes,
-   where the corpus re-presents content the store ALREADY holds: pass 119 ingested
-   2,147,268,980 raw bytes and grew the store by 8,814,244 bytes (a 243.6× observation, ONE
-   pass, not a law). The migration's BACKLOG is HISTORICAL content the store has not seen, so
-   it will not dedup against what is already stored — which is why the gate must plan on a
-   ratio that is NOT the live marginal. BUT the 6.4× is the large stratum's OBSERVED ratio on
-   a 40-file sample of the store's own path, and it is **not a no-dedup floor**: a 40-file
-   sample of never-before-seen historical content would still be measured on a store that
-   already holds that content's neighbours, and the sample is too small to bound the worst
-   case. THE HONEST FORM: **6.4× is a measured point on a 40-file sample and 17.2× is a
-   measured live-pass marginal; the ratio for a no-dedup bulk migration is NEITHER, and it is
-   the largest genuinely open input on this card.** A gate must therefore treat `R` as
-   UNMEASURED-AT-ITS-WORST-CASE and refuse a batch whose projected growth rests on a ratio
-   measured on a different shape or a sample of this size.
+   belong to a DuckDB DATABASE FILE, which the destination decision did NOT choose (a DuckDB
+   file is 5.7x–24.6x LARGER on the same bytes, measured). In the store's shape there is **no
+   disk transient to reserve** over the measured range (the peak store size equalled the settled
+   store size in every run, and the spill was 0 bytes in all 13 runs — which says the spill was
+   never APPROACHED at these batch sizes, not that spilling cannot happen).
+   **WHAT THE PEAK-SPACE MODEL STILL GOVERNS, so it is not discarded:** the file-backed
+   ALTERNATIVE, if the destination is ever revisited; the QUERY path, where DuckDB OOM'd
+   instead of spilling in every shape tried — a safety finding about the migration's
+   verification step, and it applies to any DuckDB holding these payloads, in-memory or not;
+   the TYPED tables, if they are ever given their own database file (a separate decision,
+   recorded in the typed-schema card); and any future change to a persistent DuckDB.
+2. **THE 17.2x RATIO IS A LIVE-PASS MEASUREMENT, NOT A MIGRATION RATIO — and the 6.4x is NOT
+   its floor either.** The MECHANISM is the reason, and it is a property of the CORPUS, not of
+   the store: a LIVE corpus re-presents content the store ALREADY HOLDS, so a live-pass ratio
+   measures DEDUP, while the migration's BACKLOG is HISTORICAL content the store has not seen
+   and cannot dedup against. A live pass measured 243.6x — ONE pass, ONE OBSERVATION, not a
+   law, and quoted here only because it is the size of the effect — and the card's pre-existing
+   17.2x was measured the same way; neither is a number the gate can plan on. The 6.4x is the
+   large stratum's OBSERVED ratio on a 40-file sample of the store's own path, and it is **not a
+   no-dedup floor** either: a 40-file sample of never-before-seen historical content would still
+   be measured on a store that already holds that content's neighbours, and the sample is too
+   small to bound the worst case. THE HONEST FORM: **6.4x is a measured point on a 40-file
+   sample and 17.2x is a measured live-pass marginal; the ratio for a no-dedup bulk migration is
+   NEITHER, and it is the largest genuinely open input on this card.** A gate must therefore
+   treat `R` as UNMEASURED-AT-ITS-WORST-CASE, measure it on the batch's own composition, and
+   refuse a batch whose projected growth rests on a ratio measured on a different shape or a
+   sample of this size.
 3. **THE OPEN-COST LAW IS SUB-LINEAR, NOT A CONSTANT** (ratio 1.187 → 0.729 as the store grows
-   from 0.31 to 4.0 GiB, and 0.447 at 8 GiB), so a single multiplier over-reserves at small
-   scale and under-reserves at large scale. A linear extrapolation from one point (1.17×)
-   predicted the RAM limit would be crossed at a 10 GiB store; the extended measurement
-   REFUTED it — a 12 GiB store opens in 5.78 GiB. The migration's end state (≈10 GiB) is
-   inside the measured range, so its open cost is an **interpolation, not an extrapolation**.
+   from 0.31 to 4.0 GiB, then 0.447 at 8 GiB and 0.481 at 12 GiB), so a single multiplier
+   over-reserves at small scale and under-reserves at large scale, and the last two points are
+   NOT monotone — it is a BAND, not a curve. A linear extrapolation from one point (1.17x)
+   predicted the RAM limit would be crossed at a 10 GiB store; the extended measurement REFUTED
+   it — a 12 GiB store opens in 5.78 GiB. That refutation is recorded in the report rather than
+   hidden: the report's first draft extrapolated linearly and got the RAM constraint backwards.
+   The migration's end state (≈10 GiB) is inside the measured range, so its open cost is an
+   INTERPOLATION, not an extrapolation.
 
 **STILL OPEN, and the card must still refuse on these:**
 
@@ -110,9 +134,11 @@ paragraph, which still carries the first one as a live figure.**
   projected growth is computed from a ratio measured on a different shape.
 - **AN UNMEASURED STORE SIZE.** `open_cost(S)` is measured up to 12 GiB of store; a store
   larger than that is an extrapolation and must be refused until measured.
-- **A RAM LIMIT WHOSE MEANING IS UNDECIDED** (DuckDB's `SET memory_limit` vs the machine's
-  physical RAM vs an operational ceiling). This is an **owner decision**, and it is the one
-  input this card cannot supply.
+- **A RAM LIMIT WHOSE MEANING IS UNDECIDED** (DuckDB's `SET memory_limit` bounds ONE
+  INSTANCE's buffer manager, so the machine-level question is how many instances run
+  concurrently; vs the machine's physical RAM; vs an operational ceiling). This is an **owner
+  decision**. It is no longer the ONLY open input on this card — the migration runner's own
+  working set is open too — but it is the one input this card cannot supply.
 - **THE TYPED PROJECTION** (TRDD-TC8HW857): unmeasured, and it lands on `body_durable`, whose
   size the open-cost law already covers — so it is a store-size effect, but its effect on the
   RATIO is unknown.
@@ -147,7 +173,9 @@ run-to-run variance, not a third driver.
 therefore permanently contains superseded wording — including "the checkpoint and the crash
 recovery are the same 2.00x", "a conservative choice", and "the 17.2x ... is the floor the
 gate must plan against", all retracted. Where the body, the Scope paragraph, and this block
-disagree, **this block wins**.
+disagree, **this block wins** — and the Scope's own 17.2x sentence and its stale reserve
+arithmetic have now been CORRECTED IN PLACE, not merely labelled, so a reader who lands there
+does not read a superseded position.
 
 ## WHY
 The measured backlog is larger than currently free space, so migration must not start from raw-size arithmetic or optimistic compression assumptions; it needs a measured peak-space model that includes every concurrent copy and preserves a hard 20 GiB reserve.
@@ -157,14 +185,16 @@ The measured backlog is larger than currently free space, so migration must not 
 - Measure database growth, raw compression, typed expansion, WAL, checkpoints, temporary spill, reconstruction workspace, crash recovery, filesystem allocation, and safety-copy overhead.
 - Derive a conservative byte-level admission formula and preflight gate for each bounded migration batch.
 - Include continued source growth and the immutable 20 GiB free-space reserve.
-STATUS 2026-10-20 (late) - THE CURRENT POSITION IS IN THE STATE BLOCK ABOVE, WHICH SUPERSEDES THIS PARAGRAPH AND THE APPROVAL LOG BELOW. (The log is append-only, so it permanently carries superseded wording - 'the checkpoint and the crash recovery are the same 2.00x' and 'a conservative choice' both remain there, and both are retracted; the STATE block says so, so a reader entering at the log can find the retraction.) THIS PARAGRAPH CARRIES THE MEASURED INPUTS - THE EVIDENCE - AND NOT THE POSITION, so that the figures the gate will be built on live in exactly one place. THE INPUTS THAT MATTER MOST ARE THE MARGINAL STORE RATIO, THE bytesStored WARNING, AND THE RESERVE ARITHMETIC, all below. THE ONE CONSISTENT DENOMINATOR: raw bytes ingested divided by MEASURED ON-DISK STORE GROWTH. A completed drain pass on the live corpus ingested 2,146,499,796 raw bytes and grew the store by 124,694,528 bytes on disk (1,845,744 KB to 1,967,516 KB) = 17.2x. That is the MARGINAL on-disk ratio for new content and it is the planning number. The cumulative figure of ~94x (167.9 GB raw ingested against a 1.78 GB store) is DEDUPLICATED and cumulative, so it must NOT be used for new content. The pass field bytesStored (59,124,650 for that same pass) is NOT a stored-size measure: it counts only newly written UNCOMPRESSED blob bytes and excludes the inline literal part bytes, so dividing bytesIn by it yields 36x, which is not a compression ratio at all. Do not quote bytesStored as a ratio. The cumulative ratio remains an upper bound on what good dedup achieves; the marginal 17.2x is the floor the gate must plan against. RESERVE ARITHMETIC (STALE, DATED - SEE THE STATE BLOCK: THE ADMISSION FORMULA AND THE 20 GiB RESERVE ARITHMETIC DO NOT EXIST YET): STALE - THIS IS THE FIGURE THE STATE BLOCK SAYS DOES NOT EXIST YET, RECORDED HERE AS EVIDENCE AND NOT AS A CURRENT NUMBER. The passage originally read '87 GB free at 96 percent full, minus the 20 GiB reserve, leaves roughly 66 GB usable; the projected store for the remaining corpus at 17.2x is about 12-13 GB, leaving roughly 53 GB...'. That was TRUE OF THE MACHINE AT THE TIME and is now WRONG: the live machine has 318.8 GiB free at 83 percent full (2026-10-20, 17:00), the corpus is 40.5 GiB and the store 4.1 GiB. A reader planning from the old figure would under-plan by roughly 3x. It is kept, dated and labelled, because the SHAPE of the arithmetic - free space, minus the 20 GiB reserve, minus the projected store, minus the transients - is the shape the admission formula must have, and the store's 9,697 parquet parts (4,836 blobs + 4,861 parts) that the fsync barrier must touch are still current. NEITHER ratio is a typed-column DuckDB compression ratio: the store is Parquet parts, and the typed-DuckDB projection (TRDD-TC8HW857) is UNMEASURED, so this card must measure the typed path itself rather than extrapolating from the Parquet store.
+STATUS 2026-10-20 (late) - THE CURRENT POSITION IS IN THE STATE BLOCK ABOVE, WHICH SUPERSEDES THIS PARAGRAPH AND THE APPROVAL LOG BELOW. (The log is append-only, so it permanently carries superseded wording - 'the checkpoint and the crash recovery are the same 2.00x' and 'a conservative choice' both remain there, and both are retracted; the STATE block says so, so a reader entering at the log can find the retraction.) THIS PARAGRAPH CARRIES THE MEASURED INPUTS - THE EVIDENCE - AND NOT THE POSITION, so that the figures the gate will be built on live in exactly one place. THE ONE CONSISTENT DENOMINATOR: raw bytes ingested divided by MEASURED ON-DISK STORE GROWTH. A completed drain pass on the live corpus ingested 2,146,499,796 raw bytes and grew the store by 124,694,528 bytes on disk (1,845,744 KB to 1,967,516 KB) = 17.2x. That 17.2x is the MARGINAL on-disk ratio for NEW content ON A LIVE PASS, and it is NOT the planning number: a live pass re-presents content the store already holds, so it measures DEDUP, while the migration's backlog is historical content the store has not seen. It is therefore an UPPER BOUND on what good dedup achieves, and a gate must NOT plan against it. The cumulative figure of ~94x (167.9 GB raw ingested against a 1.78 GB store) is DEDUPLICATED and cumulative, so it must NOT be used for new content either. The pass field bytesStored (59,124,650 for that same pass) is NOT a stored-size measure: it counts only newly written UNCOMPRESSED blob bytes and excludes the inline literal part bytes, so dividing bytesIn by it yields 36x, which is not a compression ratio at all. Do not quote bytesStored as a ratio. THE PLANNING RATIO IS NEITHER 17.2x NOR 6.4x: 6.4x is the large stratum's OBSERVED ratio on a 40-file sample of the store's own path, measured on content the store had not seen, and it is NOT a floor in any sense: it is a point on one 40-file sample of the store's own path, and the ratio for a no-dedup bulk migration is UNMEASURED at its worst case. The ratio for the migration is UNMEASURED at its worst case and must be measured on the batch's own composition before admission (STATE block, finding 2). RESERVE ARITHMETIC (live, 2026-10-20, SUPERSEDES THE EARLIER FIGURES - the older text below is kept, dated, as evidence): free 311.5 GiB, reserve 20 GiB, headroom 291.5 GiB; the remaining corpus is 37.78 GiB raw, so its settled cost is 5.90 GiB at the pessimistic 6.4x ratio and free space after the WHOLE corpus is 305.6 GiB, far above the reserve. The store's end state would be 10.02 GiB, whose open cost is 4.7-5.8 GiB against the store's own 8 GiB DuckDB limit. THE EARLIER FIGURE - '87 GB free at 96 percent full, minus the 20 GiB reserve, leaves roughly 66 GB usable; the projected store for the remaining corpus at 17.2x is about 12-13 GB, leaving roughly 53 GB' - WAS TRUE OF THE MACHINE AT THE TIME and is now WRONG: the live machine has 318.8 GiB free at 83 percent full (2026-10-20, 17:00), the corpus is 40.5 GiB and the store 4.1 GiB. A reader planning from the old figure would under-plan by roughly 3x. It is kept, dated and labelled, because the SHAPE of the arithmetic - free space, minus the 20 GiB reserve, minus the projected store, minus the transients - is the shape the admission formula must have, and the store's 9,697 parquet parts (4,836 blobs + 4,861 parts) that the fsync barrier must touch are still current. NEITHER ratio is a typed-column DuckDB compression ratio: the store is Parquet parts, and the typed-DuckDB projection (TRDD-TC8HW857) is UNMEASURED, so this card must measure the typed path itself rather than extrapolating from the Parquet store.
 
 ## Acceptance criteria
-- [ ] Benchmarks cover representative source sizes, payload shapes, ages, and pathological high-expansion inputs.
-- [ ] Peak observed and conservatively projected bytes are reported separately for database, WAL, checkpoint, temporary, reconstruction, and recovery components.
-- [ ] The gate refuses a batch unless projected post-allocation free space remains at least 20 GiB.
-- [ ] The gate re-measures actual free space and current database/WAL state immediately before every admitted batch.
-- [ ] Prediction error is tested against held-out batches and the safety margin covers the observed worst case.
+- [ ] Benchmarks cover representative source sizes, payload shapes, ages, and pathological high-expansion inputs. MEASURED on the store's own path (strata at 0.31/0.49/1.51/4.0/8.0/12.0 GiB of store) and on the native-DuckDB path (small/medium/large); the HISTORICAL-BACKLOG stratum, which is the one the migration actually ingests, is NOT yet benchmarked.
+- [ ] Peak observed and conservatively projected bytes are reported separately for database, WAL, checkpoint, temporary, reconstruction, and recovery components. database and WAL are MEASURED for the native path; the file-backed shape's components are measured to a NARROW range (one memory limit, one kill offset); the store's own shape has no WAL and no checkpoint because it is FILELESS, so those components do not exist there to report.
+- [ ] The gate refuses a batch unless projected post-allocation free space remains at least 20 GiB. The FORMULA is measured and stated in the STATE block; the GATE itself is NOT BUILT.
+- [ ] The gate re-measures actual free space and current database/WAL state immediately before every admitted batch. The formula requires it; the gate is NOT BUILT, and in the store's own shape the second half (database/WAL state) has no equivalent to re-measure.
+- [ ] Prediction error is tested against held-out batches and the safety margin covers the observed worst case. NOT MET, and NOT MEASURABLE YET: R is UNMEASURED at its worst case (STATE block, finding 2), so a held-out prediction test would only test a guess.
+- RECONCILED, ADDED (2026-10-20): the gate refuses a batch whose projected growth rests on a ratio measured on a DIFFERENT shape, and whose POST-BATCH store size has no measured open cost.
+- RECONCILED, ADDED (2026-10-20): the gate's RAM limit is an OWNER DECISION (a per-instance DuckDB limit, the machine's physical RAM, or an operational ceiling), and the MIGRATION RUNNER's own working set is measured before the runner is admitted.
 - MEASUREMENT DONE (2026-10-20) - THE NATIVE-DUCKDB 'database' COMPONENT, AND IT COMES OUT AGAINST THE NATIVE PATH. The report is at reports_dev/20261020_native-duckdb-capacity-measurement.md (DuckDB v1.5.4, real body files, deterministic sample, each shape measured in its own fresh process). THE HEADLINE: DuckDB's own compression does NOT compress these payloads. A whole body in a VARCHAR column lands at 0.93-0.98 of the raw bytes - the file is LARGER than the data it holds, because DuckDB selects the Uncompressed codec for them. The mechanism is a 4096-byte string-size threshold, reproduced at VARCHAR and BLOB: 4000-byte strings compress 22.36x, 4096-byte strings 0.96x. Chunking below the threshold recovers only part of it: 1.41-1.53 (chunked VARCHAR, FSST) and 2.32-3.09 (zstd-precompressed BLOB), against the ZSTD-PARQUET CONTROL ON THE SAME BYTES at 5.09-6.33. THE PARQUET PATH IS BETTER PER BYTE than the native path the owner's directive asked for, AND THE FACTOR DEPENDS ON WHICH NATIVE SHAPE IS THE BASELINE, so the number is stated against BOTH: against the native path's OWN codec (a whole body in one VARCHAR column, 0.93-0.98) the Parquet control's 5.09-6.33 is 5.2-6.8x; against the native path's BEST measured shape (chunked VARCHAR at 1.41-1.53, or the zstd-precompressed BLOB at 2.32-3.09) it is 1.7-4.1x, which is the 2-4x the earlier wording referred to. The 2-4x figure is the FAVOURABLE-to-native reading; the 5.2-6.8x figure is the like-for-like one against the shape the directive described. The bounds are the WORST-CASE divisions in each direction (5.09/0.98 and 6.33/0.93; 5.09/3.09 and 6.33/1.53), not rounded numbers. WHAT THIS DOES NOT SETTLE: it settles ONE component of the peak-space model this card requires (the database component), and the other components - WAL, checkpoint, temporary, reconstruction, recovery - REMAIN UNMEASURED. The card is NOT satisfied by it and the peak-space model STILL DOES NOT EXIST. The measurement also found two measurement TRAPS worth knowing before anyone re-runs it: the FIRST DuckDB instance in a process behaves differently from later ones (two earlier runs of this same shape disagreed by 50% for exactly that reason), and DuckDB's codec choice is NOT deterministic (the same shape and corpus gave 1.414, 1.414, 0.957, 1.414), so a single run is not a number - the RANGE is.
 
 
