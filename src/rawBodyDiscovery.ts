@@ -335,6 +335,12 @@ export interface DiscoveryResult {
   /** The durable boundary at the end of the pass. */
   durableCount: number
   /**
+   * The number of records in the log after this pass - the same quantity as the log's own
+   * record count. A caller passes this (with the log's count) to outstandingSources, which
+   * compares the two to prove the outcome belongs to THIS log.
+   */
+  recordCount: number
+  /**
    * Whether this pass SCANNED THE WHOLE CORPUS.
    *
    * A pass that stopped early (maxFiles) leaves tombstones standing for bodies it never
@@ -425,7 +431,7 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   const counts: Record<SourceClass, number> = { new: 0, unchanged: 0, changed: 0, truncated: 0, replaced: 0 }
   const result: DiscoveryResult = {
     recordedThisPass: [], observedMaterial: [], refusals: [], scannedFiles: 0, vanished: 0, unreadable: 0,
-    unchanged: 0, durableCount: 0, counts, repairedTornBytes: 0, complete: true,
+    unchanged: 0, durableCount: 0, recordCount: 0, counts, repairedTornBytes: 0, complete: true,
     corpusIndex: { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0 },
   }
 
@@ -972,6 +978,11 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   }
 
   result.durableCount = boundary
+  // The record count the outcome carries for the identity check: the number of records in
+  // the log after this pass. The boundary is exactly that - it starts from the loaded record
+  // count and increments once per appended record - and it is what a caller compares with
+  // the log's own count to prove the outcome belongs to THIS log.
+  result.recordCount = boundary
   result.corpusIndex = corpusStats
   return result
 }

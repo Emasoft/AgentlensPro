@@ -614,8 +614,8 @@ export function outstandingSources(
   records: SourceIndexRecord[],
   corpusPaths: ReadonlySet<string>,
   alreadyMigratedPaths: ReadonlySet<string> | undefined,
-  passOutcome: { readonly complete: boolean; readonly durableCount: number },
-  logDurableCount?: number,
+  passOutcome: { readonly complete: boolean; readonly recordCount: number },
+  logRecordCount: number,
 ): SourceIndexRecord[] {
   // THE LOG MUST DESCRIBE THE WHOLE CORPUS, OR THIS FUNCTION CANNOT ANSWER.
   //
@@ -640,17 +640,24 @@ export function outstandingSources(
   // answer must never be returned quietly.
   // THE OUTCOME MUST BELONG TO THE PASS THAT PRODUCED THIS LOG. A caller that runs the
   // pass, does other work, and then asks with a STALE outcome - or with the outcome of a
-  // DIFFERENT pass - would otherwise be believed. The outcome carries the pass's durable
-  // record count, and the log carries its own, so the two can be compared: the log must be
-  // AT LEAST as new as the pass that produced it.
+  // DIFFERENT pass - would otherwise be believed. Both sides carry a RECORD COUNT - the
+  // number of records in the log - and the log must hold AT LEAST as many as the outcome
+  // claims the pass wrote.
   //
-  // This is checked only when the caller supplies the log's own count. A caller that omits
-  // it is trusting itself, and the card says so; the check is cheap and catches the likely
-  // mistake - a stale outcome from an earlier pass - which is a mismatch, not a lie.
-  if (logDurableCount !== undefined && logDurableCount < passOutcome.durableCount) {
+  // BOTH COUNTS ARE RECORD COUNTS, AND THE NAME SAYS SO. The loader's field is called
+  // `durableCount` but it holds `records.length`; the writer's field of the same name
+  // holds the FSYNCED count, which is a different quantity. Comparing the pass's boundary
+  // against the loader's `records.length` is comparing like with like - the pass's boundary
+  // starts from the loaded record count and increments once per appended record, so after
+  // the pass it equals the file's record count. MEASURED on a fresh pass and on a pass
+  // following a repaired torn tail: the two agree, and the natural call is not refused.
+  //
+  // THE ARGUMENT IS REQUIRED: a caller that has the log's records has the log's count, so
+  // requiring it costs the natural call nothing and cannot be opted out of.
+  if (logRecordCount < passOutcome.recordCount) {
     throw new SourceIndexError(0,
       `outstandingSources: the pass outcome does not belong to this log - the outcome says the pass ` +
-      `wrote ${passOutcome.durableCount} durable records, but the log holds only ${logDurableCount}. ` +
+      `wrote ${passOutcome.recordCount} records, but the log holds only ${logRecordCount}. ` +
       'The outcome is from a LATER pass than this log, or from a different pass entirely. Pass the ' +
       'outcome of the pass that produced THIS log.')
   }
