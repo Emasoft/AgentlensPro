@@ -313,18 +313,18 @@ run_pass() {
         boundary=midline
       fi
     fi
-    # THE STRIP RUNS ONLY WHEN A READ SUCCEEDED AND SHOWED A NON-NEWLINE BYTE - that is,
-    # only when a fragment is KNOWN to be there. In every other state the file is installed
-    # unstripped, and each of those states is CONSUMED here by being distinct from
-    # 'midline':
-    #   'newline'  - the cut is on a record boundary: the trimmed file's first line is a
-    #                whole record and there is NO fragment to drop.
-    #   'unknown'  - the cut's position is not known: the file is kept unstripped, because
-    #                stripping on a guess can delete a whole record, and the cost of not
-    #                stripping is one unseparated line.
-    #   'not_read' - the block never looked, because the byte cut failed: the temp file was
-    #                removed and the final 'mv' is skipped, so nothing is installed.
-    if [ "$truncate_ok" -eq 1 ] && [ "$boundary" = midline ] && [ -s "$ERRLOG.trimmed" ]; then
+    # ONE ARM PER STATE, EACH CARRYING ITS OWN REASON AT THE BRANCH. The states are not
+    # distinguished by one comparison - a test for 'midline' alone would leave 'newline',
+    # 'unknown' and 'not_read' behaviourally identical, and a state the code never reads
+    # looks vestigial to the next editor and gets deleted, taking the distinction it
+    # encoded with it. So each state is branched on, and each arm says why it does what
+    # it does.
+    case "$boundary" in
+      midline)
+        # THE FRAGMENT IS KNOWN TO BE THERE: the read succeeded and the byte before the cut
+        # was not a newline, so the cut is inside a line and the trimmed file's first line
+        # is the fragment. It is dropped.
+        if [ "$truncate_ok" -eq 1 ] && [ -s "$ERRLOG.trimmed" ]; then
       # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the line
       # whose head was cut away. It is a whole line but not the start of one, so it is dropped
       # and every line after it is kept. 'tail -n +2' drops exactly that first line.
@@ -364,11 +364,33 @@ run_pass() {
         # damage. Dropping the file would leave the log unbounded, which is worse.
         echo "drain-raw-bodies: the error-log truncation could not strip the fragment; the log keeps the cut file, whose first line is a fragment joined to the next record (that one record is unreadable)" >&2
         rm -f "$ERRLOG.trimmed.2"
-      else
-        mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
-      fi
-    fi
-    if [ "$truncate_ok" -eq 1 ]; then
+        else
+          mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
+        fi
+        fi
+        ;;
+      newline)
+        # THE CUT IS ON A RECORD BOUNDARY, so the trimmed file's first line is a WHOLE
+        # RECORD and there is no fragment to drop. THE STRIP IS NOT RUN HERE, AND THAT IS
+        # THE POINT: running it would DROP THAT WHOLE RECORD, because 'tail -n +2' removes
+        # the first line whatever it is. Skipping it here is what preserves the record.
+        ;;
+      unknown)
+        # THE CUT'S POSITION IS NOT KNOWN. The file is kept UNSTRIPPED, because stripping
+        # on a guess can delete a whole record, and the cost of not stripping is one
+        # unseparated line.
+        ;;
+      not_read)
+        # THE BLOCK NEVER LOOKED, because the byte cut failed: the temp file was removed
+        # and the final 'mv' is skipped, so nothing is installed.
+        ;;
+    esac
+    # '-s' is load-bearing on the final move: it refuses to install an EMPTY file over the
+    # live log. That case is unreachable by argument today (the outer guard implies a
+    # non-empty log, and 'tail -c N' on a non-empty file yields a non-empty file), but
+    # 'unreachable by argument' is one argument away from reachable, and this block is
+    # about not losing a log.
+    if [ "$truncate_ok" -eq 1 ] && [ -s "$ERRLOG.trimmed" ]; then
       mv "$ERRLOG.trimmed" "$ERRLOG"
     fi
   fi
