@@ -15,6 +15,7 @@ import {
 import {
   SOURCE_INDEX_FORMAT_VERSION, SourceIndexError, SourceIndexWriter, latestByPath,
   loadSourceIndex, outstandingSources, sourceIndexFileName, validateSourceIndexRecord,
+  SourceIndexRecord,
 } from '../rawBodySourceIndex'
 import {
   discoverRawBodySources, readCorpusProvenance,
@@ -643,12 +644,165 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const out = outstandingSources(records, new Set([p]), new Set([p]))
     assert.ok(!out.some(o => o.path === p), 'the hex-named path is treated as a path and excludes the source')
 
-    // And a bare 64-hex token IS an identity, and still throws.
+    // And the IDENTITY — the content digest — is still recognised as an identity and throws.
+    // The discriminator is EXACT MEMBERSHIP in the log's digests, not a pattern: a path
+    // string does not equal a digest string, so the check cannot misfire on a hex-named
+    // file, and it still catches a digest that is not 64 lowercase hex characters.
+    const digest = latestByPath(records).get(p)!.digest
     assert.throws(
-      () => outstandingSources(records, new Set([p]), new Set([hexName])),
+      () => outstandingSources(records, new Set([p]), new Set([digest])),
       /alreadyMigratedPaths contains an IDENTITY/,
-      'a bare 64-hex token is an identity, not a path',
+      'the content digest is an identity, not a path',
     )
+  })
+
+  test('a corpusPaths set of identities is refused LOUDLY, not silently empty', () => {
+    // THE WORSE OF THE TWO FAILURE DIRECTIONS. A bad `corpusPaths` makes every comparison
+    // miss, so NO source is offered and the outstanding set comes back EMPTY. A migration
+    // over an empty outstanding set reports SUCCESS and migrates nothing — the silent
+    // failure the card exists to prevent. So the check guards BOTH sets, and names which
+    // one is wrong.
+    const p = write('solo.request.json', body(300), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    const records = loadSourceIndex(indexPath).records
+    const digest = latestByPath(records).get(p)!.digest
+
+    // The good call works.
+    assert.strictEqual(outstandingSources(records, new Set([p])).length, 1, 'the correct key returns the source')
+
+    // The bad one throws, and the message names the offending set.
+    assert.throws(
+      () => outstandingSources(records, new Set([digest])),
+      /corpusPaths contains an IDENTITY/,
+      'identities in corpusPaths must throw, not return an empty set',
+    )
+  })
+
+  test('the EMPTY-result failure mode is impossible, not merely guarded', () => {
+    // (c) The dangerous direction is not the one that throws. A bad corpusPaths makes every
+    // comparison miss, so the outstanding set comes back EMPTY — and a migration over an
+    // empty outstanding set reports SUCCESS and migrates nothing, silently. The guard must
+    // make that outcome unreachable, so the assertion is on the OUTCOME (no empty result is
+    // ever returned for a corpus that holds a live source), not merely on the throw.
+    const p = write('solo.request.json', body(300), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    const records = loadSourceIndex(indexPath).records
+
+    // The correct key returns the source — never an empty list for a present source.
+    const good = outstandingSources(records, new Set([p]))
+    assert.strictEqual(good.length, 1, 'a present, unmigrated source is returned')
+
+    // Every way of getting it wrong either throws or returns the source. NONE of them
+    // returns an empty list.
+    //
+    // (An EMPTY corpus legitimately yields an empty list — there is nothing to migrate — so
+    // that case is correct behaviour and is not in this list.)
+    const wrongKeys: Array<[string, Set<string>]> = [
+      ['the source identity', new Set([latestByPath(records).get(p)!.id])],
+      ['the content digest', new Set([latestByPath(records).get(p)!.digest])],
+      ['a foreign identity', new Set(['d'.repeat(64)])],
+    ]
+    for (const [label, corpusPaths] of wrongKeys) {
+      let result: SourceIndexRecord[] | null = null
+      let threw = false
+      try {
+        result = outstandingSources(records, corpusPaths)
+      } catch {
+        threw = true
+      }
+      if (!threw) {
+        assert.notStrictEqual(result!.length, 0,
+          `${label}: a wrong corpus must never yield an empty outstanding set silently`)
+      }
+    }
+  })
+
+  test('the guard recognises BOTH identity forms, and a foreign identity too', () => {
+    // A body has TWO identity strings and they are DIFFERENT values: the SOURCE IDENTITY
+    // (kind + content + provenance, hashed) and the CONTENT DIGEST of the bytes. Measured:
+    // `id !== digest` for the same record. A migration runner would naturally key its
+    // "already migrated" set on the SOURCE IDENTITY — the body\'s handle in this format — so
+    // a guard that recognised only the content digest would MISS the realistic misuse.
+    const p = write('solo.request.json', body(300), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    const records = loadSourceIndex(indexPath).records
+    const rec = latestByPath(records).get(p)!
+    assert.notStrictEqual(rec.id, rec.digest, 'the two identity strings are different values')
+
+    // Both are caught.
+    assert.throws(
+      () => outstandingSources(records, new Set([p]), new Set([rec.id])),
+      /alreadyMigratedPaths contains an IDENTITY/,
+      'the SOURCE IDENTITY is caught',
+    )
+    assert.throws(
+      () => outstandingSources(records, new Set([p]), new Set([rec.digest])),
+      /alreadyMigratedPaths contains an IDENTITY/,
+      'the CONTENT DIGEST is caught',
+    )
+    // And in the corpusPaths direction too.
+    assert.throws(
+      () => outstandingSources(records, new Set([rec.id])),
+      /corpusPaths contains an IDENTITY/,
+      'the SOURCE IDENTITY is caught in corpusPaths as well',
+    )
+
+    // A FOREIGN identity — one from a body this log never saw — is caught by the SHAPE
+    // backstop, so it does not silently match nothing. (Membership alone would miss it:
+    // the log never saw it.)
+    const foreign = 'c'.repeat(64)
+    assert.throws(
+      () => outstandingSources(records, new Set([p]), new Set([foreign])),
+      /alreadyMigratedPaths contains an IDENTITY/,
+      'a foreign identity is caught by the shape backstop',
+    )
+  })
+
+  test('a RESTORED body supersedes its own gone tombstone', () => {
+    // A 'gone' record is the log's statement that the path was not in the corpus when the
+    // pass ran. But a body can be RESTORED — the same bytes, the same inode, restored from a
+    // backup or moved back — and then the tombstone is simply WRONG about the present.
+    //
+    // The bug this covers: the byte-identical observation writes no record, and the cheap
+    // path short-circuits on 'unchanged'. So a restored file produced NO record, its latest
+    // record stayed 'gone', and the outstanding set excluded a body that was PRESENT and
+    // UNMIGRATED — permanently invisible, silently. That is the exact failure the card
+    // exists to prevent.
+    const p = write('restored.request.json', body(100), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+
+    // Hand the pass a 'gone' tombstone for a path that is still present with the SAME inode
+    // — the state a restored file is in.
+    const records = loadSourceIndex(indexPath).records
+    const tampered = records.map(r => r.path === p ? { ...r, reason: 'gone' as const, refusal: null } : r)
+    fs.writeFileSync(indexPath, tampered.map(r => JSON.stringify(r)).join('\n') + '\n')
+    assert.strictEqual(latestByPath(loadSourceIndex(indexPath).records).get(p)!.reason, 'gone',
+      'the tombstone is in place')
+
+    const after = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    const latest = latestByPath(loadSourceIndex(indexPath).records).get(p)!
+    assert.notStrictEqual(latest.reason, 'gone', 'the tombstone is superseded by a record')
+    assert.ok(after.observedMaterial.some(m => m.path === p), 'the restored body is material again')
+
+    // And it is OUTSTANDING: present, unmigrated, not refused, and no longer tombstoned.
+    const outstanding = outstandingSources(loadSourceIndex(indexPath).records, new Set([p]))
+    assert.ok(outstanding.some(o => o.path === p),
+      "a restored body must not be excluded by a tombstone about the past")
+  })
+
+  test('a gone tombstone still excludes a body that is genuinely ABSENT', () => {
+    // The other side of the same rule: presence is the ground truth, so a tombstone for a
+    // path that is NOT in the corpus still excludes it. The tombstone is not the mechanism;
+    // it is the log's statement about a path the corpus confirms is gone.
+    const p = write('gone.request.json', body(100), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    const records = loadSourceIndex(indexPath).records
+    const tampered = records.map(r => r.path === p ? { ...r, reason: 'gone' as const, refusal: null } : r)
+    fs.writeFileSync(indexPath, tampered.map(r => JSON.stringify(r)).join('\n') + '\n')
+    fs.unlinkSync(p)
+
+    const outstanding = outstandingSources(loadSourceIndex(indexPath).records, new Set<string>())
+    assert.ok(!outstanding.some(o => o.path === p), 'a genuinely absent body is not outstanding')
   })
 
   test('a byte-identical source never claims a content change', () => {

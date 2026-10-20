@@ -513,7 +513,17 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
         // identity would stay the weaker content-and-kind one for ever.
         const provKeyNow = provenanceKey(prov)
         const provKeyBefore = provenanceKey(priorRecord.provenance)
-        if (metaVerdict === 'unchanged' && !opts.deepVerify && provKeyNow === provKeyBefore) {
+        // A PATH THAT IS BACK MUST NOT SHORT-CIRCUIT. If the prior record is a 'gone'
+        // tombstone, the path was NOT in the corpus when the pass last ran, so the cheap
+        // path's premise — "this file is untouched since the last observation" — does not
+        // hold: the last observation was of a path that was gone. The file is HERE now, and
+        // the tombstone must be superseded by a record, not left standing for ever.
+        //
+        // Without this, a restored body (same bytes, same inode) is silently classified
+        // 'unchanged', no record is written, and its latest record stays 'gone' — so the
+        // outstanding set excludes a body that is present and unmigrated.
+        const priorIsGone = priorRecord.reason === 'gone'
+        if (metaVerdict === 'unchanged' && !opts.deepVerify && provKeyNow === provKeyBefore && !priorIsGone) {
           // A STALE REFUSAL MUST BE RE-DERIVED EVEN ON THE CHEAP PATH. The refusal names the
           // paths that contest this source, and a partner that has been RECLAIMED from the
           // corpus (src/bodiesActivity.ts documents a ~72h reclaim) cannot contest anything.
@@ -724,7 +734,19 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
       // The identity and the refusal state are still checked, because a provenance row that
       // appeared in the meantime DOES change the identity, and that change must be recorded.
       const refusalMoved = !sameRefusal(priorRecord?.refusal ?? null, refusal)
-      if (cls === 'unchanged' && !identityMoved && !refusalMoved) {
+      // A PATH THAT IS BACK SUPERSEDES ITS OWN TOMBSTONE.
+      //
+      // The byte-identical observation writes no record, so a path whose latest record is a
+      // 'gone' tombstone and whose file has come back — the same bytes, the same inode,
+      // because the file was restored rather than rewritten — would produce NO record, and
+      // the tombstone would stand for ever. The source is PRESENT, UNMIGRATED, and would be
+      // excluded from the outstanding set by its own 'gone' reason: permanently invisible,
+      // silently. That is the exact failure this card exists to prevent.
+      //
+      // So a prior 'gone' record NEVER suppresses the record. A path that is back must
+      // supersede the statement that it was not.
+      const priorIsGone = priorRecord?.reason === 'gone'
+      if (cls === 'unchanged' && !identityMoved && !refusalMoved && !priorIsGone) {
         result.unchanged++
         continue
       }

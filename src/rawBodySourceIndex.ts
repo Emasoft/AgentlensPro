@@ -86,24 +86,52 @@ import {
  * says only what the code knows: the formats differ, this build does not convert, and if the
  * old log holds anything you need, keep a copy.
  */
-/** A source identity is a sha256 hex digest. */
-const IDENTITY_PATTERN = /^[0-9a-f]{64}$/
+/**
+ * The IDENTITIES the log knows about.
+ *
+ * TWO different strings identify a body, and BOTH are in this set:
+ *   - `record.id` — the SOURCE IDENTITY (kind + content digest + provenance, hashed). This is
+ *     the body's handle in this format, and it is what a migration runner would naturally key
+ *     its "already migrated" set on.
+ *   - `record.digest` — the CONTENT DIGEST of the bytes.
+ *
+ * They are different values (measured: `id !== digest` for the same record), and a caller
+ * might reasonably key on either. The guard must recognise BOTH, or it recognises only the
+ * one nobody uses.
+ *
+ * WHY EXACT MEMBERSHIP. A SOURCE IDENTITY is a string, and a PATH is a different string, so
+ * exact membership is a perfect discriminator: a key that equals one of these identities IS
+ * an identity, and a key that does not is not. No pattern-matching, no false positives.
+ *
+ * WHY NOT A PATTERN ALONE. The obvious discriminator is "64 lowercase hex characters", but a
+ * corpus file may legitimately be NAMED by its digest (a content-addressed store), and a file
+ * whose name happens to be 64 hex characters is a real path. A pattern would refuse both.
+ *
+ * AND WHY MEMBERSHIP ALONE IS NOT ENOUGH. Membership only fires for identities THIS LOG
+ * KNOWS. The log is append-only and never deletes a record, so every identity it ever saw
+ * stays known — and the realistic misuse is a caller keying on the identities of the bodies
+ * it migrated, which are exactly the bodies this log discovered. So membership catches the
+ * realistic case. But an identity from a DIFFERENT corpus (a body this log never saw) would
+ * match nothing silently, so the shape check is kept as a BACKSTOP underneath.
+ */
+function knownIdentities(records: SourceIndexRecord[]): Set<string> {
+  const set = new Set<string>()
+  for (const r of records) {
+    set.add(r.id)
+    set.add(r.digest)
+  }
+  return set
+}
 
 /**
- * Whether a key looks like an IDENTITY rather than a path.
+ * Whether a key has the SHAPE of an identity and cannot be a path.
  *
- * The test is 64 hex characters AND nothing else that a path could be: no path separator and
- * no extension. A bare 64-hex token cannot name a corpus file — every corpus body is a
- * `.request.json` or a `.response.json` — so a token that is 64 hex chars with no separator
- * and no dot is an identity and not a path.
- *
- * THE NARROWNESS MATTERS: the check must not fire on a LEGITIMATE path. A corpus file whose
- * name happens to be 64 hex characters is real, and throwing on it would break a working
- * consumer over a file name. So a path with a separator or an extension is always a path,
- * however hex-like its last component is.
+ * 64 lowercase hex characters, with no path separator and no extension: every corpus body is
+ * a `.request.json` or a `.response.json`, so a token shaped like this cannot name one. It is
+ * the BACKSTOP for an identity from a corpus this log has never seen.
  */
-function looksLikeIdentity(key: string): boolean {
-  if (!IDENTITY_PATTERN.test(key)) return false
+function looksLikeIdentityShape(key: string): boolean {
+  if (!/^[0-9a-f]{64}$/.test(key)) return false
   if (key.includes('/') || key.includes(path.sep)) return false
   if (key.includes('.')) return false
   return true
@@ -225,7 +253,10 @@ export class SourceIndexError extends Error {
   readonly line: number
   readonly reason: string
   constructor(line: number, reason: string) {
-    super(`source index line ${line}: ${reason}`)
+    // A line of 0 means the error is NOT about a line of the log — it is about the CALLER's
+    // arguments. The message must not read "source index line 0", which is nonsense and
+    // would send a reader looking in the file for a line that does not exist.
+    super(line > 0 ? `source index line ${line}: ${reason}` : reason)
     this.name = 'SourceIndexError'
     this.line = line
     this.reason = reason
@@ -551,14 +582,40 @@ export function outstandingSources(
   // twice over the same body. An identity is a 64-character hex string and a path is not,
   // so a mismatched key is DETECTABLE, and detectable mismatches throw rather than
   // silently doing nothing.
+  // A MISMATCHED KEY MUST BE LOUD, NOT SILENT — AND IT MUST BE LOUD IN BOTH SETS.
+  //
+  // The caller might hand us a set of IDENTITIES (the content digest) where the function
+  // compares PATHS. Every comparison then misses and every already-migrated source is
+  // offered AGAIN — the migration runs twice over the same body.
+  //
+  // The TWO SETS FAIL IN OPPOSITE DIRECTIONS, and the WORSE one is unguarded if only the
+  // first is checked:
+  //   - a bad `alreadyMigratedPaths` → every source is offered again (a duplicate run);
+  //   - a bad `corpusPaths` → NO source is offered at all, and the function returns an EMPTY
+  //     list. A migration over an empty outstanding set reports SUCCESS and migrates
+  //     nothing. That is the more dangerous of the two, and it is the one a check that only
+  //     guards the first set would miss.
+  //
+  // So BOTH are checked, and the check is EXACT: a key that equals a digest the log knows is
+  // an identity, whatever it looks like.
+  const identities = knownIdentities(records)
+  const isIdentity = (key: string): boolean => identities.has(key) || looksLikeIdentityShape(key)
+  for (const entry of corpusPaths) {
+    if (isIdentity(entry)) {
+      throw new SourceIndexError(0,
+        `outstandingSources: corpusPaths contains an IDENTITY ("${entry}"), not a path. ` +
+        'This function is keyed by PATH; pass the paths of the corpus you are migrating. ' +
+        'Passing identities here matches nothing and the outstanding set comes back EMPTY — ' +
+        'a migration over an empty set reports success and migrates nothing.')
+    }
+  }
   if (alreadyMigratedPaths) {
     for (const entry of alreadyMigratedPaths) {
-      if (looksLikeIdentity(entry)) {
-        throw new Error(
+      if (isIdentity(entry)) {
+        throw new SourceIndexError(0,
           `outstandingSources: alreadyMigratedPaths contains an IDENTITY ("${entry}"), not a path. ` +
           'This function is keyed by PATH; pass the paths of the sources you have already migrated. ' +
-          'Passing identities here silently matches nothing and every migrated source is offered again.',
-        )
+          'Passing identities here silently matches nothing and every migrated source is offered again.')
       }
     }
   }
@@ -566,7 +623,21 @@ export function outstandingSources(
   const latest = latestByPath(records)
   const out: SourceIndexRecord[] = []
   for (const rec of latest.values()) {
-    if (rec.reason === 'gone') continue
+    // PRESENCE IS THE GROUND TRUTH THE LOG CANNOT KNOW ALONE.
+    //
+    // A 'gone' record is the log's statement that the path was no longer in the corpus when
+    // the pass ran. But the corpus changes after the pass: a body can be RESTORED — the same
+    // bytes, the same inode, restored from a backup or moved back by the retention policy —
+    // and then the tombstone is simply WRONG about the present. A source that is present and
+    // unmigrated must not be excluded by a statement about the past.
+    //
+    // So the 'gone' reason is honoured only when the path is NOT in the current corpus. If
+    // it IS in the corpus, the corpus wins: the file is here, so it is outstanding work.
+    //
+    // This is the same shape as the corpus check below, and it is why both are applied:
+    // the reason check excludes a body the log KNOWS is gone even when the corpus check is
+    // skipped, and the corpus check catches a body the log THINKS is gone but which is back.
+    if (rec.reason === 'gone' && !corpusPaths.has(rec.path)) continue
     // A REFUSAL CONTESTS ONLY A PARTNER THAT STILL EXISTS. The persisted refusal names the
     // partners that collided AT THE TIME the record was written, and the log is append-only:
     // if a partner has since been reclaimed and no pass has lifted the refusal, the stale
@@ -574,10 +645,18 @@ export function outstandingSources(
     // a LIVE, UNMIGRATED body from the outstanding set for ever — the source that most
     // needs migrating is the one that never gets it.
     //
-    // This is the SAME rule the discovery pass uses: it re-derives contestability against
-    // the CURRENT corpus (its partner list is filtered by presence), so the function and the
-    // pass must agree on what "contested" means. The function is the one that decides what
-    // gets deleted, so it follows the pass.
+    // This is the SAME PRESENCE FILTER the discovery pass uses: it re-derives contestability
+    // against the CURRENT corpus (its partner list is filtered by presence), so the function
+    // and the pass apply the same filter. The function is the one that decides what gets
+    // deleted, so it follows the pass.
+    //
+    // THE TWO DO NOT AGREE ON EVERYTHING, and the difference is worth stating rather than
+    // hiding: the pass ALSO re-derives contestability from CONTENT, so a partner that is
+    // still present but whose bytes have since changed no longer contests the source — and
+    // the pass writes a retraction for it, so the LOG carries the truth. The function reads
+    // the log, so it inherits that truth; it just cannot itself tell that a present partner
+    // has changed content. The window is self-correcting (the next pass retracts it), so
+    // this is an over-withholding window, not a permanent loss.
     if (rec.refusal !== null && rec.refusal.otherPaths.some(p => corpusPaths.has(p))) continue
     if (!corpusPaths.has(rec.path)) continue
     if (alreadyMigratedPaths && alreadyMigratedPaths.has(rec.path)) continue
