@@ -4,7 +4,7 @@ title: corpus_bytes scans the whole card corpus and OOMs the 256 MiB pool under 
 column: todo
 status: tasked
 created: 2026-10-20T20:57:37+0200
-updated: 2026-10-20T20:57:37+0200
+updated: 2026-10-20T22:06:29+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,7 +29,7 @@ On a corpus of ~84 MB of card text this exceeds the pool and the live server log
 
 ## Why it matters
 
-This is the ONE memory defect that survives in the current source (the Oct 3 panic that poisoned
+This is A memory defect that survives in the current source — NOT the only one: the deploy of 2026-10-20 20:57 stopped the mutex poisoning but NOT the kill loop (see the STATE section) (the Oct 3 panic that poisoned
 the mutex is already fixed by f9e0742e / TRDD-KMF02UEX). It is a diagnostics-only metric — the
 metric is lost, the tick is not — but it runs every 30 s under the state lock, so each failure
 adds an OOM abort to the hottest path in the process.
@@ -76,3 +76,7 @@ the test is what keeps it honest.
 ## Approval log
 
 - 2026-10-20T20:57:37+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## STATE — the deploy did NOT stop the kill loop
+
+MEASURED 2026-10-20 20:57-22:05, after the 81-commit deploy (the build the 20:57 commit was written against): the kill loop CONTINUED. The commit message of 7648f212 says 'Deploying the current build stops the 0-byte UI replies and the kill loop' — that claim is FALSE as measured. 11 boots in the deploy hour (21:00-21:41); the server is now in revive-backoff with consecutiveQuickDeaths=3 and the UI returns http=000 bytes=0. WHAT THE DEPLOY DID FIX: the 40,350 DuckDB OOM panics at card_store.rs:168 (they poisoned the CoreState mutex, which is why every UI route returned 0 bytes) — the new build's panic hook and no-panic demotion (542ceca2, 4d5db2dc, f9e0742e, 6afa002b) are in, and cards.duckdb shrank 784 MB -> 337 MB (447 MB of dead rows reclaimed, ddb58799) with the same 42,908 cards. WHAT IS STILL BROKEN: the process still reaches the 2048 MB cap and is killed (RSS HARD CAP, phys_footprint 2051 MB > cap 2048 MB) at 12-390 s of uptime, with mimalloc commit 1.8-2.6 GB and the non-mimalloc floor at 0-298 MB. The corpus is NOT the cause of the residual: the ISOLATED probe (a copy of the same cards.duckdb on a --data-dir copy, --no-log-scan) loads the same 42,963 cards and STABILISES at 970 MB - 1.22 GB RSS, while the live server reaches 2.9 GB. So the resident parsed layer alone does not explain the cap; the difference is what the live path does that the isolated one does not (the 47,706-file log scan + the 31-card re-parse + the summary rebuild under ingest load).
