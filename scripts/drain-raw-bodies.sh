@@ -35,6 +35,9 @@ BIN="$REPO_ROOT/rust-core/target/release/alstore"
 STORE="$HOME/.agentlens/store"
 BODIES="$HOME/.agentlens/otel-bodies"
 LOG="$REPO_ROOT/reports_dev/drain-loop.log"
+# The pass stderr goes here, NOT into the summary line: the summary must stay one parseable
+# JSON line per pass, and a failing pass's reason usually arrives on stderr.
+ERRLOG="$REPO_ROOT/reports_dev/drain-loop.err.log"
 
 if [ ! -x "$BIN" ]; then
   echo "drain-raw-bodies: $BIN is missing or not executable." >&2
@@ -58,14 +61,18 @@ mkdir -p "$(dirname "$LOG")"
 # before the prefix was added. It is invisible to the anchored match, so the counter is seeded
 # past it explicitly - otherwise the next pass would also be numbered 94 and the log would hold
 # two different passes under one number.
+# Past the legacy prefixless pass 94: if the log holds any line WITHOUT the prefix, the
+# sequence has already gone past 93, so the next number is at least 95.
 PASS_N=1
 if [ -f "$LOG" ]; then
   PASS_N=$(sed -n 's/^pass=\([0-9][0-9]*\).*/\1/p' "$LOG" | sort -n | tail -1)
   PASS_N="${PASS_N:-0}"
-  PASS_N=$(( PASS_N + 1 ))
+  # Strip any leading zeros before the arithmetic. Bash reads a leading-zero integer as OCTAL,
+  # so a log line "pass=08" would make the arithmetic below die with "value too great for base"
+  # - and under `set -e` that kills the whole script on resume. 10# forces base 10 for the
+  # same reason.
+  PASS_N=$(( 10#$PASS_N + 1 ))
 fi
-# Past the legacy prefixless pass 94: if the log holds any line WITHOUT the prefix, the
-# sequence has already gone past 93, so the next number is at least 95.
 if [ -f "$LOG" ] && [ "$(grep -c '^pass=' "$LOG")" -lt "$(grep -c . "$LOG")" ]; then
   [ "$PASS_N" -lt 95 ] && PASS_N=95
 fi
@@ -93,6 +100,7 @@ fi
 # The function returns the pass's exit status explicitly. It used to end with an arithmetic
 # assignment, which always returns 0, so the loop's "a pass failed" recovery was unreachable
 # and a failing pass was silent.
+
 run_pass() {
   local out
   local status
@@ -102,25 +110,46 @@ run_pass() {
   # bare assignment whose command substitution fails EXITS THE SHELL AT THAT LINE, so the FAILED
   # record below would never be written and the failure would be silent. In a condition the
   # status is captured instead of being fatal.
+  #
+  # STDERR GOES TO ITS OWN LOG, NOT INTO THE SUMMARY. The pass's stdout is ONE bare JSON line
+  # (measured against the real binary on a scratch corpus: exactly one line), and the summary
+  # line must stay parseable, so stderr is redirected to $ERRLOG rather than folded in. It is
+  # NOT discarded: a failing pass's explanation usually arrives on stderr, and a log line with
+  # no reason is exactly the failure mode this file had to be repaired for once.
   if out="$("$BIN" pass "$STORE" "$BODIES" \
       --max-bytes 2147483648 \
       --durable-source \
-      --max-age-ms 300000)"; then
+      --max-age-ms 300000 2>>"$ERRLOG")"; then
     status=0
   else
     status=$?
   fi
-  # One line: no embedded newline may survive into the log.
-  out="${out//$'\n'/ }"
+  # THE SUMMARY IS THE PASS'S FIRST STDOUT LINE, and any further stdout lines go to the error
+  # log. Folding the whole capture onto one line with spaces would preserve the LINE count but
+  # CORRUPT the JSON: a capture of two lines becomes one line that is not valid JSON, which is
+  # the same failure the one-line property exists to prevent, merely relocated. The real binary
+  # prints exactly one bare JSON line (measured against it on a scratch corpus), so in practice
+  # the first line IS the whole summary; taking the first line anyway makes the property hold
+  # even if that changes, instead of depending on it.
+  #
+  # The pass's stderr also goes to the error log: a failing pass's reason usually arrives there,
+  # and a log line with no reason is exactly the failure mode this file had to be repaired for.
+  local summary
+  local rest
+  summary="${out%%$'\n'*}"
+  if [ "$out" != "$summary" ]; then
+    rest="${out#*$'\n'}"
+    printf 'pass=%s extra stdout lines:\n%s\n' "$PASS_N" "$rest" >> "$ERRLOG"
+  fi
   if [ "$status" -eq 0 ]; then
-    printf 'pass=%s dur=%ss %s\n' "$PASS_N" "$(( $(date +%s) - start ))" "$out" >> "$LOG"
+    printf 'pass=%s dur=%ss %s\n' "$PASS_N" "$(( $(date +%s) - start ))" "$summary" >> "$LOG"
   else
-    printf 'pass=%s dur=%ss FAILED status=%s %s\n' "$PASS_N" "$(( $(date +%s) - start ))" "$status" "$out" >> "$LOG"
+    printf 'pass=%s dur=%ss FAILED status=%s %s\n' "$PASS_N" "$(( $(date +%s) - start ))" "$status" "$summary" >> "$LOG"
+    printf 'pass=%s FAILED — the pass stderr is in %s\n' "$PASS_N" "$ERRLOG" >> "$LOG"
   fi
   PASS_N=$(( PASS_N + 1 ))
   return "$status"
 }
-
 if [ "${1:-}" = "--once" ]; then
   run_pass
   exit 0
