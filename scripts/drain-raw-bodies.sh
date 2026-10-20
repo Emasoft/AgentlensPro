@@ -174,11 +174,35 @@ run_pass() {
     # DELETED A VALID RECORD. A position test cannot be wrong about the log's format.
     # The temp files live next to the log, so an interrupted truncation leaves debris in
     # reports_dev/ (gitignored, but unbounded across interruptions). The trap removes them.
-    trap 'rm -f "$ERRLOG.trimmed" "$ERRLOG.trimmed.2"' EXIT INT TERM
+    #
+    # ONLY THE EXIT TRAP, ON PURPOSE. A trap on INT/TERM would CHANGE THE SCRIPT'S
+    # TERMINATION SEMANTICS: bash runs a signal handler AFTER the foreground command
+    # finishes and then CONTINUES, so a handler that only removed files would make the
+    # drain ignore a `kill` - verified: with a TERM trap installed, `kill -TERM` left the
+    # process alive until its sleep returned, and a handler that only cleaned up would
+    # leave it running indefinitely. The EXIT trap is the right instrument because bash
+    # RUNS IT WHEN THE SHELL EXITS, WHATEVER CAUSED THE EXIT - so SIGTERM still stops the
+    # drain (verified: the script exited on SIGTERM and the cleanup ran), and the cleanup
+    # is a side effect of the exit rather than a replacement for it.
+    #
+    # The cleanup covers CATCHABLE signals only. A SIGKILL, an OOM-kill or a power loss
+    # leaves the debris behind: no trap can run there. It is 2 MB per interruption in a
+    # gitignored directory.
+    trap 'rm -f "$ERRLOG.trimmed" "$ERRLOG.trimmed.2"' EXIT
     local size start
     size=$(wc -c < "$ERRLOG")
     start=$(( size - ERRLOG_MAX_BYTES ))
-    tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null || : > "$ERRLOG.trimmed"
+    # If this 'tail' FAILS, the guard would replace the log with an EMPTY file and every
+    # diagnostic in it would be lost with no record that the truncation failed - the same
+    # class of failure as the content-test bug this block replaced (a rule that destroys
+    # records without saying so). So the failure is reported on stderr.
+    tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null \
+      || { echo "drain-raw-bodies: the error-log truncation FAILED - the log is left as it is" >&2; : > "$ERRLOG.trimmed"; }
+    # THIS BLOCK RUNS BEFORE THE PASS, and that order is load-bearing for the bound: the
+    # file's size after a pass is the ceiling PLUS what that pass wrote to stderr, so the
+    # bound is a SAWTOOTH, not an invariant. Moving this block to the end of the pass
+    # would change that, and the comment above would become false.
+    #
     # Did the cut land EXACTLY on a newline? The byte before the cut is the byte at index
     # start-1 of the ORIGINAL file; 'head -c start | tail -c 1' emits bytes 0..start-1, so its
     # last byte is exactly index start-1. (head -c emits what it has when the file is shorter,
@@ -188,7 +212,11 @@ run_pass() {
     local first_line_is_whole=0
     if [ "$start" -gt 0 ] && [ -s "$ERRLOG.trimmed" ]; then
       local before
-      before=$(LC_ALL=C head -c "$start" "$ERRLOG" 2>/dev/null | tail -c 1 | od -An -tu1 | tr -d ' \n')
+      # '|| true' is load-bearing: if $ERRLOG vanished between the -f test above and this
+      # read, 'head' exits 1, the pipeline's status is 1 under pipefail, and under set -e
+      # that ABORTS THE WHOLE DRAIN LOOP. The consequence of not reading the byte is that
+      # the cut is treated as mid-line and the fragment is dropped - the safe direction.
+      before=$(LC_ALL=C head -c "$start" "$ERRLOG" 2>/dev/null | tail -c 1 | od -An -tu1 | tr -d ' \n' || true)
       # 10 is the byte value of a newline.
       if [ "$before" = "10" ]; then
         first_line_is_whole=1
@@ -207,7 +235,8 @@ run_pass() {
       # several lines (the script writes one, for a multi-line stdout diversion) can still
       # lose its head when the cut lands inside it - the lines that survive are a suffix of
       # that record, not the record. What is guaranteed is that no whole LINE is deleted by
-      # the truncation.
+      # the truncation. The retained suffix keeps the original's trailing-newline-or-not
+      # property, because the cut only removes a PREFIX.
       tail -n "+2" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null || : > "$ERRLOG.trimmed.2"
       mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
     fi
