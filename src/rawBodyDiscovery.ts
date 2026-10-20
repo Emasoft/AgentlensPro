@@ -78,6 +78,12 @@
 //     and never deletes a record: a body reclaimed by the 72h retention policy keeps its
 //     last record forever, carrying a material class that says "not yet migrated". A
 //     consumer MUST check the corpus for the path's presence.
+//   - A RECORD WHOSE REASON IS 'gone' IS NOT OUTSTANDING WORK, whatever its class says. The
+//     'gone' reason is the log's statement that the path is no longer in the corpus; its
+//     class is the honest history ("it was never migrated"), not a claim that it still needs
+//     migrating. The two rules are BOTH needed and must be applied together: the corpus
+//     check excludes a reclaimed body, and the 'gone' reason excludes a body the log knows
+//     is gone even if a corpus check is skipped.
 //   - A source whose latest record refuses is CONTESTED and must not be migrated blind; a
 //     source whose latest record carries a class of 'new'/'changed'/'truncated'/'replaced' has
 //     not been migrated yet. The class is the MATERIAL class — it survives an identity
@@ -277,6 +283,12 @@ export interface DiscoveryResult {
    * The sources THIS PASS found to be contested. PER-PASS, like `observedMaterial`: a source
    * refused in an EARLIER pass and unchanged since is NOT in this list. The authoritative
    * contestability state is the LOG — one path's latest record.
+   *
+   * THE THREE LISTS' RELATIONSHIP, so a consumer does not have to reconstruct it:
+   * `observedMaterial` + `refusals` = `recordedThisPass`. A source this pass wrote a record
+   * for is EITHER material (its contestability or identity moved and it is not contested) OR
+   * refused (it is contested and must not be migrated blind). A contested source produces
+   * NO material — that is the whole point of refusing it.
    */
   refusals: DiscoveredSource[]
   /** How many body files were seen in the corpus dir. */

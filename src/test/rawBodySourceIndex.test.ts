@@ -435,6 +435,39 @@ suite('discovery — crash at every checkpoint boundary', () => {
     assert.notStrictEqual(rec.reason, 'content', "and never claims a content change")
   })
 
+  test('a gone record is written ONCE, and the log stops growing', () => {
+    // The three-path case: 'a' and 'w' are live and byte-identical, 'z' is reclaimed and
+    // had also refused 'w'. The 'gone' record for 'z' is only ever written when a LIVE path
+    // triggers the lift, so the question is whether the trigger is cleared — and whether the
+    // log grows on every pass on an idle corpus.
+    const same = body(100)
+    const a = write('a.request.json', same, NOW)
+    const w = write('w.request.json', same, NOW)
+    const z = write('z.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    fs.unlinkSync(z) // the reclaim
+
+    const after = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    const settled = loadSourceIndex(indexPath).records.length
+    const goneRec = latestByPath(loadSourceIndex(indexPath).records).get(z)!
+    assert.strictEqual(goneRec.reason, 'gone')
+    assert.strictEqual(goneRec.refusal, null, "z's refusal of the live sources is cleared")
+    assert.ok(goneRec.lastSeenMs < NOW + 1000, 'and z is not dated as if it had just been seen')
+    // A reclaimed body is never offered as material.
+    assert.ok(!after.observedMaterial.some(w2 => w2.path === z), 'the reclaimed body is not offered')
+
+    // THE LOG MUST NOT GROW ON AN IDLE CORPUS. Five more passes over the same corpus.
+    for (let i = 2; i <= 6; i++) {
+      discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + i * 1000 })
+      assert.strictEqual(loadSourceIndex(indexPath).records.length, settled,
+        `the log did not grow on pass ${i}`)
+    }
+    // The two live sources are still correctly contested with each other.
+    const latest = latestByPath(loadSourceIndex(indexPath).records)
+    assert.notStrictEqual(latest.get(a)!.refusal, null, 'a and w still contest each other')
+    assert.ok(latest.get(a)!.refusal!.otherPaths.includes(w))
+  })
+
   test('a byte-identical source never claims a content change', () => {
     // 'content' means THE BYTES CHANGED, and a reconciliation stage reads it as a tampering
     // signal. A byte-identical source must never claim it.

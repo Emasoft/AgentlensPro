@@ -122,13 +122,22 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
  *                     requires them to agree — so the pair is self-checking.
  *   'refined'      — the identity was refined (a provenance row appeared); the bytes did not.
  *   'refused'      — the source is contested; the record carries a refusal.
- *   'retracted'    — a refusal was lifted because the collision was resolved.
- *   'gone'         — the path is NO LONGER IN THE CORPUS (reclaimed by the 72h retention
- *                     policy). The record keeps the path's ORIGINAL lastSeenMs — the time it
- *                     was really last seen — so it never claims the file is live, and it
- *                     exists to clear a refusal that would otherwise name a live source for
- *                     ever. A 'gone' record is the only record a pass may write for a path
- *                     it did not visit.
+ *   'retracted'    — a refusal was lifted because the collision was resolved. The path is
+ *                     STILL IN THE CORPUS: it was RE-IDENTIFIED (its provenance arrived, or
+ *                     its bytes changed), so the collision it was in no longer exists.
+ *   'gone'         — THE PATH IS NO LONGER IN THE CORPUS. This is a different statement from
+ *                     'retracted' and the difference is the one a migration runner needs:
+ *                     'retracted' means "this source is still here but no longer contested";
+ *                     'gone' means "this source is not here any more". Both lift a refusal
+ *                     and both carry `refusal: null` when the refusal is fully lifted, so the
+ *                     REASON is the only field that tells them apart — a consumer that
+ *                     ignores it cannot distinguish a live-but-retracted source from a
+ *                     reclaimed one.
+ *                     A 'gone' record keeps the path's ORIGINAL lastSeenMs — the time it was
+ *                     really last seen — so it never claims the file is live, and it exists
+ *                     to clear a refusal that would otherwise name a live source for ever.
+ *                     A 'gone' record is the only record a pass may write for a path it did
+ *                     not visit.
  */
 export type SourceRecordReason =
   | 'discovered'
@@ -279,7 +288,7 @@ export function validateSourceIndexRecord(
     throw new SourceIndexError(line, "field 'v' must be an integer format version")
   }
   if (v !== SOURCE_INDEX_FORMAT_VERSION) {
-    throw new SourceIndexError(line, `unknown format version ${v} (this build reads version ${SOURCE_INDEX_FORMAT_VERSION}) — a version-${v} log is a different format and is not converted here`)
+    throw new SourceIndexError(line, `unknown format version ${v} (this build reads version ${SOURCE_INDEX_FORMAT_VERSION}) — a version-${v} log is a different format, there is no converter, and no version-${v} log holds data worth keeping: this substrate has never been run against the real corpus, so the log can simply be deleted and rebuilt`)
   }
   const id = requireString(value, 'id', line)
   if (!isHex64(id)) throw new SourceIndexError(line, "field 'id' must be a 64-char lowercase hex sha256")
