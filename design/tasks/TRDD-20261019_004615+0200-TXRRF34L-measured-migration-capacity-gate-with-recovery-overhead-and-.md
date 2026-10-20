@@ -4,7 +4,7 @@ title: Measured migration capacity gate with recovery overhead and 20 GiB reserv
 column: todo
 status: tasked
 created: 2026-10-19T00:46:15+0200
-updated: 2026-10-20T18:59:03+0200
+updated: 2026-10-20T19:01:31+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -52,6 +52,20 @@ RAM_LIMIT    = 8 GiB (DEFAULT_MEMORY_LIMIT, lib.rs:44) — a DuckDB ADMISSION li
 ratio (2.20 GiB at 17.2×) — free after the WHOLE corpus is 305.6 GiB, far above the reserve.
 The store's END state would be 10.02 GiB, whose open cost is an INTERPOLATION of the measured
 law (5.778 GiB measured at a 12 GiB store) and sits under the 8 GiB limit.
+
+**THE DESTINATION IS SETTLED, AND IT IS THE STORE'S OWN PATH** (`reports_dev/20261020_duckdb-file-vs-store-path.md`).
+The bodies are stored in DuckDB's OWN compressed, columnar representation, at 5.09–6.33×, and they
+are queryable as DuckDB tables (`all_of('body')`, lib.rs:133-138, returns the native table, so the
+corpus's full view never touches a Parquet scan). THE SHAPE BEHIND THAT: the Parquet corpus is the
+SOURCE OF TRUTH and `body_durable` is a DERIVED INDEX over it — `flush_detailed` writes the Parquet
+FIRST (`COPY {table} TO ... (FORMAT PARQUET, COMPRESSION ZSTD)`, lib.rs:310) and only THEN mirrors it
+into the native table (lib.rs:301-303), and at every open the native table is REBUILT from the Parquet
+(lib.rs:229). SO A DUCKDB DATABASE FILE HOLDING THE BODIES IS NOT WHAT THE STORE HAS. Whether such a
+file would be a better home is UNMEASURED: one arm measured it 5.7×–24.6× LARGER on the same bytes,
+but that comparison is a ROW-ORIENTED FILE against a COLUMNAR WRITE PATH, so it settles a
+SCHEMA-LAYOUT difference, not a technology difference, and it must not be quoted as a DuckDB-versus-
+DuckDB result. WHAT REMAINS GENUINELY OPEN IS NOT THE DESTINATION BUT THE TYPED PROJECTION
+(TRDD-TC8HW857), which has never been measured.
 
 **THREE FINDINGS THAT CHANGE WHAT THE CARD'S OTHER SECTIONS SAY. Read these before the Scope
 paragraph, which still carries the first one as a live figure.**
