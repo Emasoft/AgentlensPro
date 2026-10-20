@@ -27,10 +27,6 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
-use crate::sections::sha256_hex;
-
 use crate::{flush_detailed, ingest_body_with, Store, VerifyItem, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
 
 pub const DEFAULT_MAX_BYTES_PER_PASS: u64 = 512 * 1024 * 1024;
@@ -156,6 +152,12 @@ pub struct PassResult {
     /// the reclaim comment below). Counted separately from `reclaimed_durable` so a pass report
     /// can say "N re-emitted bodies reclaimed" instead of collapsing it into the ordinary path.
     pub reclaimed_reemitted: u64,
+    /// A delete ABORTED because the file on disk was not the bytes this pass verified — a
+    /// re-emission landed between the verify and the delete. Counted SEPARATELY from `failed`,
+    /// because a caught re-emission is the guard WORKING, while a `failed` entry is a genuine
+    /// problem (a store error, an fsync failure, an unreadable file). Collapsing the two would
+    /// make a pass that correctly refused to lose data indistinguishable from a broken pass.
+    pub delete_aborted_reemission: u64,
     pub bytes_freed: u64,
     pub failed: Vec<String>,
     pub stranded_ts: Vec<String>,
@@ -193,58 +195,73 @@ fn body_files(dir: &Path) -> Vec<BodyFile> {
     out
 }
 
-/// Hash a body file's CURRENT bytes and compare them against the bytes this pass VERIFIED.
+/// The outcome of the content gate on one file.
+enum ContentGate {
+    /// The file still holds exactly the bytes this pass verified — the delete may proceed.
+    Unchanged,
+    /// The file holds DIFFERENT bytes: a re-emission landed between the verify and the delete.
+    /// The delete must be aborted and the new bytes must stay on disk.
+    Reemitted(String),
+    /// The file could not be read. The delete must be aborted too — a file we cannot read is
+    /// not a file we can prove — but this is a DIFFERENT event from a re-emission and must not
+    /// be counted as one.
+    Unreadable(String),
+}
+
+/// Compare a body file's CURRENT bytes against the bytes this pass VERIFIED.
 ///
 /// WHY content and not metadata: the corpus is live and a body can be re-emitted under the same
 /// path with new bytes between the verify and the delete. That re-emission can preserve BOTH the
 /// size and the mtime (a `mv` back, a `cp -p`), so a size/mtime comparison CANNOT see the change
-/// — the metadata guard was bypassable exactly that way. The store's body id IS the sha256 of the
-/// raw bytes (`body_id_of`), and the verify joined the store's rows on exactly that digest, so the
-/// digest of the bytes now on disk is the only instrument that answers "is this still the file the
-/// store proved it can reproduce?".
+/// — the metadata guard was bypassable exactly that way.
 ///
-/// The file is hashed in 1 MiB chunks: ONE pass over the bytes, never a second full copy held in
-/// memory (the corpus is tens of GB and the pass already holds the verified `raw` in full).
-/// A read failure is an ABORT, never a delete — a file we cannot read is not a file we can prove.
-fn content_unchanged_since_read(p: &Path, verified: &str) -> Result<(), String> {
+/// WHY a BYTE COMPARISON and not a digest comparison: the pass already HOLDS the verified bytes
+/// in memory — `verified` is the exact `String` the verify was performed on, and it is the exact
+/// bytes the store ingested. Comparing the file against it needs no digest of the expected side,
+/// so it cannot drift from what was verified (a hex-rendering change, a truncation, a different
+/// hashing of the stored form — none of them apply to a plain byte equality), and it needs no
+/// second implementation of "lowercase hex" that could disagree with the store's own.
+///
+/// The file is read in 1 MiB chunks and compared against the in-memory bytes as it goes: the file
+/// is never held in memory a second time (the corpus is tens of GB and the pass already holds the
+/// verified `raw` in full). A read failure is an ABORT, never a delete — a file we cannot read is
+/// not a file we can prove.
+fn content_unchanged_since_read(p: &Path, verified: &str) -> ContentGate {
     let name = p
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| p.to_string_lossy().into_owned());
-    let mut f = fs::File::open(p)
-        .map_err(|e| format!("{name}: re-read before delete failed — kept ({e})"))?;
-    let mut h = Sha256::new();
+    let expected = verified.as_bytes();
+    let mut f = match fs::File::open(p) {
+        Ok(f) => f,
+        Err(e) => return ContentGate::Unreadable(format!("{name}: re-read before delete failed — kept ({e})")),
+    };
     let mut buf = vec![0u8; 1024 * 1024];
+    let mut offset = 0usize;
     loop {
-        let n = f
-            .read(&mut buf)
-            .map_err(|e| format!("{name}: re-read before delete failed — kept ({e})"))?;
+        let n = match f.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => return ContentGate::Unreadable(format!("{name}: re-read before delete failed — kept ({e})")),
+        };
         if n == 0 {
             break;
         }
-        h.update(&buf[..n]);
+        let end = offset + n;
+        if end > expected.len() || buf[..n] != expected[offset..end] {
+            return ContentGate::Reemitted(format!(
+                "{name}: delete ABORTED — content changed since the verify (the file on disk is not the bytes the store proved it can reproduce); the store holds the older bytes, the new bytes stay on disk"
+            ));
+        }
+        offset = end;
     }
-    let actual = hex_bytes(&h.finalize());
-    let expected = sha256_hex(verified);
-    if actual != expected {
-        return Err(format!(
-            "{name}: delete ABORTED — content changed since the verify (sha256 {expected} -> {actual}); the store holds the older bytes, the new bytes stay on disk"
+    if offset != expected.len() {
+        return ContentGate::Reemitted(format!(
+            "{name}: delete ABORTED — content changed since the verify (the file on disk is {offset} bytes, the verified bytes are {}); the store holds the older bytes, the new bytes stay on disk",
+            expected.len()
         ));
     }
-    Ok(())
+    ContentGate::Unchanged
 }
-
-/// Lowercase hex of a digest — the same rendering `sha256_hex` uses, so the two digests are
-/// comparable as strings.
-fn hex_bytes(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
-}
-
 fn fsync_path(p: &Path) -> std::io::Result<()> {
     let f = fs::File::open(p)?;
     match f.sync_all() {
@@ -488,14 +505,15 @@ pub fn ingest_pass_observed_with(
                                         // Gated on the CONTENT: the corpus is live and a re-emission must
                                         // not be deleted against the store's older bytes. A re-emission can
                                         // preserve the size AND the mtime (a `mv` back, a `cp -p`), so the
-                                        // guard compares the sha256 of the file's current bytes against the
-                                        // sha256 of the bytes this pass VERIFIED — content, never metadata.
+                                        // guard compares the file's CURRENT BYTES against the bytes this
+                                        // pass VERIFIED — content, never metadata. The three outcomes are
+                                        // kept apart: a re-emission is the guard WORKING (its own counter),
+                                        // an unreadable file is a genuine failure, and only the unchanged
+                                        // case deletes.
                                         Some(v) if v.ok => {
                                             if opts.delete_after {
-                                                if let Err(abort) = content_unchanged_since_read(&b.p, raw) {
-                                                    res.failed.push(abort);
-                                                } else {
-                                                    match fs::remove_file(&b.p) {
+                                                match content_unchanged_since_read(&b.p, raw) {
+                                                    ContentGate::Unchanged => match fs::remove_file(&b.p) {
                                                         Ok(()) => {
                                                             res.deleted += 1;
                                                             res.bytes_freed += b.size;
@@ -505,7 +523,12 @@ pub fn ingest_pass_observed_with(
                                                         }
                                                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                                                         Err(e) => res.failed.push(format!("{}: {e}", b.name)),
+                                                    },
+                                                    ContentGate::Reemitted(msg) => {
+                                                        res.delete_aborted_reemission += 1;
+                                                        res.failed.push(msg);
                                                     }
+                                                    ContentGate::Unreadable(msg) => res.failed.push(msg),
                                                 }
                                             }
                                         }
@@ -529,19 +552,26 @@ pub fn ingest_pass_observed_with(
 
                                                 // Gated on the CONTENT, exactly like the verified arm above: the
                                                 // re-emission can preserve the size AND the mtime (a `mv` back, a
-                                                // `cp -p`), so only the sha256 of the file's current bytes against
-                                                // the sha256 of the bytes this pass VERIFIED can see it.
-                                                if let Err(abort) = content_unchanged_since_read(&b.p, raw) {
-                                                    res.failed.push(abort);
-                                                } else if opts.delete_after {
-                                                    match fs::remove_file(&b.p) {
-                                                        Ok(()) => {
-                                                            res.deleted += 1;
-                                                            res.bytes_freed += b.size;
-                                                            res.reclaimed_reemitted += 1;
+                                                // `cp -p`), so only a comparison of the file's CURRENT BYTES
+                                                // against the bytes this pass VERIFIED can see it.
+                                                match content_unchanged_since_read(&b.p, raw) {
+                                                    ContentGate::Reemitted(msg) => {
+                                                        res.delete_aborted_reemission += 1;
+                                                        res.failed.push(msg);
+                                                    }
+                                                    ContentGate::Unreadable(msg) => res.failed.push(msg),
+                                                    ContentGate::Unchanged => {
+                                                        if opts.delete_after {
+                                                            match fs::remove_file(&b.p) {
+                                                                Ok(()) => {
+                                                                    res.deleted += 1;
+                                                                    res.bytes_freed += b.size;
+                                                                    res.reclaimed_reemitted += 1;
+                                                                }
+                                                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                                                Err(e) => res.failed.push(format!("{}: {e}", b.name)),
+                                                            }
                                                         }
-                                                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                                                        Err(e) => res.failed.push(format!("{}: {e}", b.name)),
                                                     }
                                                 }
                                                 continue;
@@ -704,6 +734,69 @@ mod tests {
         let (skip2, stranded2) = load_pass_state(&state);
         assert_eq!(skip2, skip, "skipNames must survive an unpark byte-for-byte");
         assert!(stranded2.contains("c.response.json") && !stranded2.contains("a.request.json"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_content_gate_sees_a_reemission_that_preserves_the_size_and_the_mtime() {
+        // THE `cp -p` CASE, tested on the gate itself. A re-emission can land between the verify
+        // and the delete carrying DIFFERENT bytes while preserving BOTH the size and the mtime
+        // (a `mv` back, a `cp -p`), so a size/mtime comparison cannot see it — the metadata guard
+        // this replaced was bypassable exactly that way. The gate compares the file's CURRENT
+        // BYTES against the bytes that were verified, and must report a re-emission.
+        let dir = std::env::temp_dir().join(format!("al-cgate-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("body.json");
+
+        let verified = "the bytes the store ingested and proved it can reproduce";
+        fs::write(&p, verified).unwrap();
+        // Capture the mtime, then re-emit DIFFERENT bytes of the SAME LENGTH with it restored.
+        let mtime = fs::metadata(&p).unwrap().modified().unwrap();
+        let reemitted = "the bytes that LANDED after the verify, the same length!";
+        assert_eq!(reemitted.len(), verified.len(), "the re-emission must preserve the LENGTH");
+        fs::write(&p, reemitted).unwrap();
+        let f = fs::OpenOptions::new().write(true).open(&p).unwrap();
+        f.set_times(fs::FileTimes::new().set_modified(mtime)).unwrap();
+        // The size AND the mtime are now identical to the verified file's — a metadata guard sees
+        // nothing; only the content differs.
+        let st = fs::metadata(&p).unwrap();
+        assert_eq!(st.len(), verified.len() as u64, "the size is preserved");
+        assert_eq!(st.modified().unwrap(), mtime, "the mtime is preserved");
+
+        match content_unchanged_since_read(&p, verified) {
+            ContentGate::Reemitted(msg) => {
+                assert!(msg.contains("body.json"), "the message names the file: {msg}");
+                assert!(msg.contains("content changed"), "the message says WHY: {msg}");
+            }
+            ContentGate::Unchanged => panic!("the gate must SEE a content change it must not delete"),
+            ContentGate::Unreadable(msg) => panic!("the file is readable: {msg}"),
+        }
+
+        // And the file is still there: the gate never deletes.
+        assert!(p.exists(), "the gate does not delete — the caller does, and only on Unchanged");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_content_gate_passes_unchanged_bytes_and_reports_an_unreadable_file_separately() {
+        let dir = std::env::temp_dir().join(format!("al-cgate2-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("body.json");
+        let verified = "unchanged bytes";
+        fs::write(&p, verified).unwrap();
+
+        assert!(
+            matches!(content_unchanged_since_read(&p, verified), ContentGate::Unchanged),
+            "identical bytes must pass the gate — a guard that aborts every delete would wedge the drain"
+        );
+
+        // A file that cannot be read is NOT a re-emission, and the two are counted apart: one is
+        // the guard working, the other is a genuine problem.
+        let missing = dir.join("gone.json");
+        match content_unchanged_since_read(&missing, verified) {
+            ContentGate::Unreadable(msg) => assert!(msg.contains("re-read before delete failed"), "{msg}"),
+            _ => panic!("a missing file must be Unreadable, not Unchanged and not Reemitted"),
+        }
         fs::remove_dir_all(&dir).ok();
     }
 }

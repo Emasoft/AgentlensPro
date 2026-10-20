@@ -120,7 +120,6 @@ fn row_ts_ms(store: &agentlens_store::Store, src_name: &str) -> i64 {
 
 #[test]
 fn ts_only_mismatch_on_a_reemitted_file_reclaims_not_parks_and_leaves_the_row_alone() {
-    // TRDD-6SPXOV0P option A: Claude Code re-emits the same name+bytes under a fresh mtime.
     // That must RECLAIM (delete + count), never park — parking here is the livelock the card
     // describes (re-ingest can never repair a stranded row, so the file sits forever).
     let (bodies, store_dir) = fixture("reemit");
@@ -159,6 +158,90 @@ fn ts_only_mismatch_on_a_reemitted_file_reclaims_not_parks_and_leaves_the_row_al
 }
 
 #[test]
+fn reemission_during_ingest_is_never_deleted_against_the_older_store_bytes() {
+    // The corpus is LIVE: a re-emission (same name, NEW bytes) can land between the ingest and
+    // the settle's delete. The pass must NEVER delete a file whose current bytes are not the
+    // bytes the store ingested and proved it can reproduce.
+    //
+    // WHERE THE RE-EMISSION IS CAUGHT DEPENDS ON WHEN IT LANDS, and this test pins the case the
+    // observer hook can reach. The hook fires right after the body is INGESTED — before the
+    // settle re-reads the file and re-verifies it against the store. So a re-emission with
+    // DIFFERENT bytes is caught by the VERIFY ("unknown body": the store has no row for the new
+    // bytes), which is a different, EARLIER guard than the delete gate. The delete gate's own
+    // window — the file changing between the verify and the unlink — is pinned by the unit tests
+    // in src/pass.rs (`the_content_gate_sees_a_reemission_that_preserves_the_size_and_the_mtime`),
+    // because the observer hook cannot reach that window.
+    //
+    // Either way the invariant is the same and is what this test asserts: the file is NOT
+    // deleted, and the bytes on disk afterwards are the NEW ones.
+    let (bodies, store_dir) = fixture("reemit-midpass");
+    let raw = body("midpass");
+    write_body(&bodies, "midpass.request.json", &raw, 60_000);
+
+    // The re-emission: DIFFERENT bytes, the SAME length, the SAME mtime. The same-length and
+    // same-mtime properties are the whole point — they are what a metadata guard cannot see.
+    // `body(tag)` embeds the tag in a fixed-width padding field, so replacing the tag with an
+    // equal-length one keeps the byte length identical.
+    let replacement = body("midpasS");
+    assert_eq!(replacement.len(), raw.len(), "the re-emission must preserve the LENGTH");
+    assert_ne!(replacement, raw, "the re-emission must carry DIFFERENT bytes");
+
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+
+    let p = bodies.join("midpass.request.json");
+    // The mtime the file carries NOW — the re-emission must restore it exactly.
+    let original_mtime = fs::metadata(&p).expect("stat").modified().expect("mtime");
+    let mut observed = {
+        let p = p.clone();
+        let replacement = replacement.clone();
+        move |name: &str, _text: &str| {
+            assert_eq!(name, "midpass.request.json");
+            // The `cp -p` shape: different bytes, same length, preserved mtime.
+            fs::write(&p, &replacement).expect("re-emit write");
+            let f = fs::OpenOptions::new().write(true).open(&p).expect("open");
+            f.set_times(fs::FileTimes::new().set_modified(original_mtime)).expect("restore mtime");
+        }
+    };
+    let r = agentlens_store::pass::ingest_pass_observed(
+        &mut store, &opts, &mut skip, &mut stranded, &mut fsynced, Some(&mut observed),
+    );
+    assert!(r.ingested == 1, "the original ingest happens: {:?}", r.failed);
+    assert!(p.exists(), "a re-emitted file must NOT be deleted: {:?}", r.failed);
+    assert_eq!(r.deleted, 0, "nothing was deleted: the gate aborted");
+    assert!(
+        r.failed.iter().any(|m| m.contains("midpass.request.json")),
+        "the failure must name the file: {:?}",
+        r.failed
+    );
+    assert_eq!(
+        fs::read_to_string(&p).unwrap(),
+        replacement,
+        "the NEW bytes survive for the next pass — the older ones were never deleted"
+    );
+}
+
+#[test]
+fn unchanged_bytes_are_still_deleted_so_the_content_guard_does_not_wedge_the_drain() {
+    // The CONVERSE of the guard, and the pin that matters most: a guard that aborted EVERY
+    // delete would also pass the re-emission test (the file would survive), while the drain
+    // silently stopped reclaiming anything. The corpus must still shrink.
+    let (bodies, store_dir) = fixture("unchanged-deletes");
+    write_body(&bodies, "a.request.json", &body("a"), 60_000);
+    write_body(&bodies, "b.response.json", &body("b"), 50_000);
+
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+
+    let r = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r.ingested, 2, "both bodies are ingested: {:?}", r.failed);
+    assert_eq!(r.deleted, 2, "UNCHANGED bytes are still deleted: {:?}", r.failed);
+    assert!(r.failed.is_empty(), "no abort when nothing changed: {:?}", r.failed);
+    assert!(!bodies.join("a.request.json").exists());
+    assert!(!bodies.join("b.response.json").exists());
+}
 fn legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero() {
     // TRDD-6SPXOV0P box 3: a name parked BEFORE the reclaim fix (persisted in `.pass-state.json`,
     // always also a skip name — 307/307 overlapped on the machine that surfaced this) must not
@@ -245,52 +328,3 @@ fn staging_settles_at_the_group_boundary_before_the_pass_budget_accumulates() {
     assert!(names.iter().all(|n| !bodies.join(n).exists()));
 }
 
-#[test]
-fn reemission_during_ingest_is_never_deleted_against_the_older_store_bytes() {
-    // The corpus is LIVE: a re-emission (same name, same bytes, fresh mtime) can land between
-    // enumeration and the settle's delete. The delete is gated on a fresh stat — if the file
-    // changed since enumeration (size or mtime), the delete must ABORT and the new bytes stay
-    // on disk for the next pass; deleting would lose them (the store only holds the older bytes
-    // and this pass verified THOSE). The observer hook fires between ingest and the settle, so
-    // it deterministically simulates the re-emission landing in that window.
-    let (bodies, store_dir) = fixture("reemit-midpass");
-    let raw = body("midpass");
-    write_body(&bodies, "midpass.request.json", &raw, 60_000);
-
-    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
-    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
-    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
-
-    let p = bodies.join("midpass.request.json");
-    let mut observed = {
-        let p = p.clone();
-        move |name: &str, text: &str| {
-            assert_eq!(name, "midpass.request.json");
-            // Re-emit: same bytes, mtime +24h — indistinguishable from the live-corpus case.
-            fs::write(&p, text).expect("re-emit write");
-            let future = std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 3600);
-            let f = fs::OpenOptions::new().write(true).open(&p).expect("open");
-            f.set_times(fs::FileTimes::new().set_modified(future)).expect("set future mtime");
-        }
-    };
-    let r = agentlens_store::pass::ingest_pass_observed(
-        &mut store, &opts, &mut skip, &mut stranded, &mut fsynced, Some(&mut observed),
-    );
-    assert!(r.ingested == 1, "the original ingest happens: {:?}", r.failed);
-    assert!(p.exists(), "a file re-emitted since enumeration must NOT be deleted: {:?}", r.failed);
-    assert!(
-        r.failed.iter().any(|m| m.contains("delete ABORTED") && m.contains("midpass.request.json")),
-        "the abort must name the file and the reason: {:?}",
-        r.failed
-    );
-    assert_eq!(fs::read_to_string(&p).unwrap(), raw, "the new bytes survive for the next pass");
-    assert_eq!(r.deleted, 0, "nothing was deleted: the gate aborted");
-
-    // Next pass: no observer. The name is already a skip name (pass 1 ingested it), so it goes
-    // through the durable gate: the verify re-proves the store reproduces the bytes, the fresh
-    // stat now matches enumeration (no one re-emitted it this pass), and it deletes cleanly.
-    let r2 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
-    assert!(!p.exists(), "the re-emitted file deletes on the next pass: {:?}", r2.failed);
-    assert!(r2.failed.is_empty(), "{:?}", r2.failed);
-    assert!(r2.ingested + r2.deleted + r2.reclaimed_reemitted >= 1, "accounted: {:?}", r2);
-}
