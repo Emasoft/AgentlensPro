@@ -177,27 +177,50 @@ run_pass() {
     #
     # ONLY THE EXIT TRAP, ON PURPOSE. A trap on INT/TERM would CHANGE THE SCRIPT'S
     # TERMINATION SEMANTICS: bash runs a signal handler AFTER the foreground command
-    # finishes and then CONTINUES, so a handler that only removed files would make the
-    # drain ignore a `kill` - verified: with a TERM trap installed, `kill -TERM` left the
-    # process alive until its sleep returned, and a handler that only cleaned up would
-    # leave it running indefinitely. The EXIT trap is the right instrument because bash
-    # RUNS IT WHEN THE SHELL EXITS, WHATEVER CAUSED THE EXIT - so SIGTERM still stops the
-    # drain (verified: the script exited on SIGTERM and the cleanup ran), and the cleanup
-    # is a side effect of the exit rather than a replacement for it.
+    # finishes and then CONTINUES, so a handler that only removed files would let the
+    # drain carry on into its next iteration instead of stopping. The EXIT trap is the
+    # right instrument because bash RUNS IT WHEN THE SHELL EXITS, WHATEVER CAUSED THE
+    # EXIT - so SIGTERM still stops the drain (verified: the script exited on SIGTERM and
+    # the cleanup ran), and the cleanup is a side effect of the exit rather than a
+    # replacement for it.
+    #
+    # THE TRAP IS RE-INSTALLED ON EVERY OVER-CEILING ITERATION, AND THAT IS DELIBERATE: it
+    # is global to the shell once set, so it persists for the rest of the script's life, and
+    # installing it here means every iteration that creates a temp file also has a trap that
+    # will clean it. Moving it out of this block would drop the cleanup for the FIRST
+    # iteration, which is the one most likely to be interrupted.
+    #
+    # NOTE THE SIGNAL'S LATENCY, WHICH IS NOT THE TRAP'S FAULT: bash defers a signal to the
+    # end of the foreground command, so `kill` takes effect when the in-flight `alstore
+    # pass` returns - up to ~30 minutes on this corpus - and the drain keeps ingesting and
+    # deleting until then. An untrapped script defers the same way, so the trap changed
+    # nothing about that.
     #
     # The cleanup covers CATCHABLE signals only. A SIGKILL, an OOM-kill or a power loss
     # leaves the debris behind: no trap can run there. It is 2 MB per interruption in a
     # gitignored directory.
     trap 'rm -f "$ERRLOG.trimmed" "$ERRLOG.trimmed.2"' EXIT
     local size start
+    # 'truncate_ok' is the block's own verdict: it stays 1 only if every step succeeded, and
+    # only then is the temp file moved over the live log. A failed step leaves the ORIGINAL
+    # log in place.
+    local truncate_ok=1
     size=$(wc -c < "$ERRLOG")
     start=$(( size - ERRLOG_MAX_BYTES ))
-    # If this 'tail' FAILS, the guard would replace the log with an EMPTY file and every
-    # diagnostic in it would be lost with no record that the truncation failed - the same
-    # class of failure as the content-test bug this block replaced (a rule that destroys
-    # records without saying so). So the failure is reported on stderr.
-    tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null \
-      || { echo "drain-raw-bodies: the error-log truncation FAILED - the log is left as it is" >&2; : > "$ERRLOG.trimmed"; }
+    # IF ANY STEP OF THIS TRUNCATION FAILS, THE ORIGINAL LOG IS LEFT UNTOUCHED AND THE mv
+    # IS SKIPPED. An earlier version of this block emptied the temp file on a 'tail'
+    # failure and then moved it into place - which REPLACED THE LIVE LOG WITH ZERO BYTES
+    # and lost every diagnostic in it. The failure was reported on stderr, but the log the
+    # operator would look in was the one that had been emptied. So the rule here is the
+    # opposite: a failed truncation leaves the log exactly as it was, and says so.
+    if ! tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null; then
+      echo "drain-raw-bodies: the error-log truncation FAILED (the tail could not read the log); the log is LEFT AS IT IS" >&2
+      rm -f "$ERRLOG.trimmed"
+      # NOT a 'return': this function's return value IS the pass's exit status, and
+      # returning here would skip the pass entirely and report a successful iteration that
+      # never ran. The truncation is skipped; the pass still runs.
+      truncate_ok=0
+    fi
     # THIS BLOCK RUNS BEFORE THE PASS, and that order is load-bearing for the bound: the
     # file's size after a pass is the ceiling PLUS what that pass wrote to stderr, so the
     # bound is a SAWTOOTH, not an invariant. Moving this block to the end of the pass
@@ -237,10 +260,20 @@ run_pass() {
       # that record, not the record. What is guaranteed is that no whole LINE is deleted by
       # the truncation. The retained suffix keeps the original's trailing-newline-or-not
       # property, because the cut only removes a PREFIX.
-      tail -n "+2" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null || : > "$ERRLOG.trimmed.2"
-      mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
+      # The same rule as the 'tail -c' above: on failure, the log is left as it is. A guard
+      # that produced an empty file here would be moved over the good one and then over the
+      # live log - the same destruction, one step later, and with no diagnostic at all.
+      if ! tail -n "+2" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null; then
+        echo "drain-raw-bodies: the error-log truncation FAILED (the fragment could not be stripped); the log is LEFT AS IT IS" >&2
+        rm -f "$ERRLOG.trimmed" "$ERRLOG.trimmed.2"
+        truncate_ok=0
+      else
+        mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
+      fi
     fi
-    mv "$ERRLOG.trimmed" "$ERRLOG"
+    if [ "$truncate_ok" -eq 1 ]; then
+      mv "$ERRLOG.trimmed" "$ERRLOG"
+    fi
   fi
   local summary
   local rest
