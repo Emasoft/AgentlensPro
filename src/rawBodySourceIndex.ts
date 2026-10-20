@@ -86,8 +86,28 @@ import {
  * says only what the code knows: the formats differ, this build does not convert, and if the
  * old log holds anything you need, keep a copy.
  */
-/** A source identity is a sha256 hex digest; a path never is. Used to detect a mismatched key. */
+/** A source identity is a sha256 hex digest. */
 const IDENTITY_PATTERN = /^[0-9a-f]{64}$/
+
+/**
+ * Whether a key looks like an IDENTITY rather than a path.
+ *
+ * The test is 64 hex characters AND nothing else that a path could be: no path separator and
+ * no extension. A bare 64-hex token cannot name a corpus file — every corpus body is a
+ * `.request.json` or a `.response.json` — so a token that is 64 hex chars with no separator
+ * and no dot is an identity and not a path.
+ *
+ * THE NARROWNESS MATTERS: the check must not fire on a LEGITIMATE path. A corpus file whose
+ * name happens to be 64 hex characters is real, and throwing on it would break a working
+ * consumer over a file name. So a path with a separator or an extension is always a path,
+ * however hex-like its last component is.
+ */
+function looksLikeIdentity(key: string): boolean {
+  if (!IDENTITY_PATTERN.test(key)) return false
+  if (key.includes('/') || key.includes(path.sep)) return false
+  if (key.includes('.')) return false
+  return true
+}
 
 export const SOURCE_INDEX_FORMAT_VERSION = 2
 
@@ -533,7 +553,7 @@ export function outstandingSources(
   // silently doing nothing.
   if (alreadyMigratedPaths) {
     for (const entry of alreadyMigratedPaths) {
-      if (IDENTITY_PATTERN.test(entry)) {
+      if (looksLikeIdentity(entry)) {
         throw new Error(
           `outstandingSources: alreadyMigratedPaths contains an IDENTITY ("${entry}"), not a path. ` +
           'This function is keyed by PATH; pass the paths of the sources you have already migrated. ' +

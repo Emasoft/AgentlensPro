@@ -626,6 +626,31 @@ suite('discovery — crash at every checkpoint boundary', () => {
     )
   })
 
+  test('a corpus path that happens to be 64 hex characters is still a PATH', () => {
+    // The mismatch check must not fire on a LEGITIMATE path. A corpus file whose name
+    // happens to be 64 lowercase hex characters is real, and throwing on it would break a
+    // working consumer over a file name. Every corpus body carries a `.request.json` or
+    // `.response.json` extension, so a key that is 64 hex chars with no separator and no
+    // extension cannot name one.
+    const hexName = 'a'.repeat(64)
+    const p = path.join(corpus, `${hexName}.request.json`)
+    fs.writeFileSync(p, body(100))
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    const records = loadSourceIndex(indexPath).records
+    assert.ok(records.some(r => r.path === p), 'the hex-named file was discovered')
+
+    // The full path is accepted as a key: no throw.
+    const out = outstandingSources(records, new Set([p]), new Set([p]))
+    assert.ok(!out.some(o => o.path === p), 'the hex-named path is treated as a path and excludes the source')
+
+    // And a bare 64-hex token IS an identity, and still throws.
+    assert.throws(
+      () => outstandingSources(records, new Set([p]), new Set([hexName])),
+      /alreadyMigratedPaths contains an IDENTITY/,
+      'a bare 64-hex token is an identity, not a path',
+    )
+  })
+
   test('a byte-identical source never claims a content change', () => {
     // 'content' means THE BYTES CHANGED, and a reconciliation stage reads it as a tampering
     // signal. A byte-identical source must never claim it.
