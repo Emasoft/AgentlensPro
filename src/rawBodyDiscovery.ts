@@ -63,7 +63,7 @@
 // becomes a comment.
 //
 // WHAT THIS MODULE ENFORCES, so you do not have to remember it:
-//   - The OUTSTANDING MIGRATION SET is `outstandingSources(records, corpusPaths, alreadyMigrated)`
+//   - The OUTSTANDING MIGRATION SET is `outstandingSources(records, corpusPaths, alreadyMigrated, logComplete)`
 //     (src/rawBodySourceIndex.ts). It applies all four conditions — still present in the
 //     corpus, latest reason is not 'gone', not refused, and a material class — so a consumer
 //     CANNOT forget one. Deriving it by hand from the class field alone is wrong: a 'gone'
@@ -332,6 +332,19 @@ export interface DiscoveryResult {
   /** The durable boundary at the end of the pass. */
   durableCount: number
   /**
+   * Whether this pass SCANNED THE WHOLE CORPUS.
+   *
+   * A pass that stopped early (maxFiles) leaves tombstones standing for bodies it never
+   * reached, and a tombstone is AUTHORITATIVE - it excludes the path from the outstanding
+   * set. So a body that is PRESENT and UNMIGRATED can be excluded because the pass did not
+   * visit it, and the outstanding set computed from such a log is NOT the outstanding set.
+   *
+   * The caller MUST NOT compute the outstanding set from an incomplete pass. This flag is
+   * how it knows: `complete: false` means the pass stopped early, and the log it wrote does
+   * not describe the corpus.
+   */
+  complete: boolean
+  /**
    * The tally of OBSERVATIONS by class, NOT of records, and NOT of material. It diverges
    * from the material list in four ways: a genuine no-op (unchanged observation, no record,
    * no material); a refinement (unchanged observation, record written, material emitted); a
@@ -402,7 +415,7 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   const counts: Record<SourceClass, number> = { new: 0, unchanged: 0, changed: 0, truncated: 0, replaced: 0 }
   const result: DiscoveryResult = {
     recordedThisPass: [], observedMaterial: [], refusals: [], scannedFiles: 0, vanished: 0, unreadable: 0,
-    unchanged: 0, durableCount: 0, counts, repairedTornBytes: 0,
+    unchanged: 0, durableCount: 0, counts, repairedTornBytes: 0, complete: true,
     corpusIndex: { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0 },
   }
 
@@ -475,8 +488,23 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   }
 
   try {
+    // Whether the pass consumed EVERY body file in the listing. A body file that was never
+    // visited leaves its tombstone standing, and a tombstone is authoritative - so a body
+    // that is PRESENT and UNMIGRATED would be excluded from the outstanding set because
+    // this pass did not look at it. The flag is set from the LISTING, not from whether the
+    // limit happened to be hit: a corpus with exactly as many bodies as the limit never
+    // trips the limit check and still ends the loop having visited everything.
+    const totalBodyFiles = names.filter(n => bodyFileKind(n) !== null).length
     for (const name of names) {
-      if (result.scannedFiles >= limit) break
+      if (result.scannedFiles >= limit) {
+        // THE PASS STOPPED EARLY. It did not visit every body, so any tombstone for a path
+        // it never reached still stands - and a tombstone is authoritative, so a body that
+        // is PRESENT and UNMIGRATED would be excluded from the outstanding set because this
+        // pass did not look at it. The result says so; the caller must not compute the
+        // outstanding set from it.
+        result.complete = false
+        break
+      }
       const kind = bodyFileKind(name)
       if (kind === null) continue
       const filePath = path.join(opts.corpusDir, name)
@@ -898,6 +926,12 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
         }
       }
     }
+    // THE PASS IS COMPLETE ONLY IF IT VISITED EVERY BODY FILE IN THE LISTING. Derived from
+    // the listing rather than from whether the limit was hit: a corpus with exactly as many
+    // bodies as the limit never trips the limit check, and it still visited everything - but
+    // a corpus with MORE bodies than the limit leaves some unvisited, and a body that was not
+    // visited keeps its tombstone.
+    if (result.scannedFiles < totalBodyFiles) result.complete = false
     writer.sync()
     result.repairedTornBytes = writer.repairedTornBytes
   } finally {

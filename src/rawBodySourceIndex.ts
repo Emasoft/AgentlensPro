@@ -613,8 +613,29 @@ export function latestByPath(records: SourceIndexRecord[]): Map<string, SourceIn
 export function outstandingSources(
   records: SourceIndexRecord[],
   corpusPaths: ReadonlySet<string>,
-  alreadyMigratedPaths?: ReadonlySet<string>,
+  alreadyMigratedPaths: ReadonlySet<string> | undefined,
+  logComplete: boolean,
 ): SourceIndexRecord[] {
+  // THE LOG MUST DESCRIBE THE WHOLE CORPUS, OR THIS FUNCTION CANNOT ANSWER.
+  //
+  // A 'gone' tombstone is AUTHORITATIVE: it excludes the path from the outstanding set. A
+  // tombstone survives only for a path the pass did NOT visit — and a pass that stopped
+  // early (maxFiles) visits only part of the corpus. So a body that is PRESENT and UNMIGRATED
+  // can be excluded because the pass never looked at it, and the set computed from such a log
+  // is not the outstanding set: it is a set with a hole in it, and the hole is exactly the
+  // bodies the caller most needs.
+  //
+  // The caller says whether its pass was complete. This is a REQUIRED argument rather than
+  // an optional one on purpose: a default of `true` would let a caller who forgot to think
+  // about it get a silently incomplete answer, and the whole point of this check is that the
+  // incomplete answer must never be returned quietly.
+  if (!logComplete) {
+    throw new SourceIndexError(0,
+      'outstandingSources: the log does not describe the whole corpus (the discovery pass stopped early), ' +
+      'so the outstanding set would be silently incomplete - a body that is present and unmigrated can be ' +
+      'excluded by a tombstone the pass never had the chance to supersede. Run the pass to completion, ' +
+      'or pass logComplete: false deliberately and handle the incomplete set yourself.')
+  }
   // A MISMATCHED KEY MUST BE LOUD, NOT SILENT. The caller might hand us a set of
   // IDENTITIES (the content digest) where the function compares PATHS — every comparison
   // then misses, every already-migrated source is offered AGAIN, and the migration runs
