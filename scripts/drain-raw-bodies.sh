@@ -247,13 +247,21 @@ run_pass() {
     # and every stage of this pipeline exits 0 on empty input, so 'set -euo pipefail' is safe.)
     # 'LC_ALL=C' is load-bearing: the error log can carry any bytes the pass's stderr carried,
     # so the byte must be read in a single-byte locale.
-    local first_line_is_whole=0
-    # 'boundary_unknown' is set when the byte before the cut could not be read, so the cut's
-    # position is not known. IT IS NOT A FRAGMENT: the fragment is NOT dropped in that case.
-    # The file is kept UNSTRIPPED, because stripping on a guess can delete a whole record
-    # and leaving one line unseparated deletes nothing. The strip below therefore runs only
-    # when the cut is KNOWN to be mid-line.
-    local boundary_unknown=0
+    # 'boundary' has THREE states, not two booleans that must agree: 'newline' (the cut is
+    # on a record boundary), 'midline' (the cut is inside a line), and 'unknown' (the byte
+    # before the cut could not be read, so the cut's position is NOT known).
+    #
+    # THREE STATES AND NOT TWO BOOLEANS, ON PURPOSE. A boolean that DEFAULTS to a fact is a
+    # trap: 'first_line_is_whole=0' reads as 'the cut is mid-line', which is a CLAIM about
+    # the cut, and a future edit that dropped the 'unknown' guard from the strip's
+    # condition would silently turn that default back into a fact. With one variable
+    # carrying an explicit 'unknown', the strip's condition can only be satisfied by a
+    # state that was actually observed.
+    #
+    # AND IN THE 'unknown' STATE THE FRAGMENT IS NOT DROPPED. The file is kept UNSTRIPPED,
+    # because stripping on a guess can delete a whole record and leaving one line
+    # unseparated deletes nothing.
+    local boundary=unknown
     if [ "$truncate_ok" -eq 1 ] && [ "$start" -gt 0 ] && [ -s "$ERRLOG.trimmed" ]; then
       local before
       # '|| true' is load-bearing: if $ERRLOG vanished between the -f test above and this
@@ -287,16 +295,18 @@ run_pass() {
         # mid-line cut's first line is 'fragment + record', which is indistinguishable
         # from a whole record by any property of that file.)
         echo "drain-raw-bodies: the error-log truncation could not read the boundary byte; the log keeps the cut file unstripped (its first line may be a fragment joined to the next record, which is not deleted)" >&2
-        boundary_unknown=1
+        boundary=unknown
       elif [ "$before" = "10" ]; then
         # 10 is the byte value of a newline.
-        first_line_is_whole=1
+        boundary=newline
+      else
+        boundary=midline
       fi
     fi
     # The strip runs ONLY when the cut is KNOWN to be mid-line. When the boundary is
     # unknown the file is kept unstripped, because stripping on a guess can delete a whole
     # record - and the cost of not stripping is one hybrid first line.
-    if [ "$truncate_ok" -eq 1 ] && [ "$boundary_unknown" -eq 0 ] && [ -s "$ERRLOG.trimmed" ] && [ "$first_line_is_whole" -eq 0 ]; then
+    if [ "$truncate_ok" -eq 1 ] && [ "$boundary" = midline ] && [ -s "$ERRLOG.trimmed" ]; then
       # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the line
       # whose head was cut away. It is a whole line but not the start of one, so it is dropped
       # and every line after it is kept. 'tail -n +2' drops exactly that first line.
@@ -321,7 +331,14 @@ run_pass() {
         # mid-line: the fragment has no trailing newline, so the next record's text
         # continues it). In the second case that record is no longer separately readable,
         # so the log's 'no whole LINE is deleted' property DOES NOT HOLD in this path - but
-        # no record is DELETED, only one is left unseparated. The damage does not COMPOUND
+        # THE LOSS THAT MATTERS IS THE BYTE CUT'S, NOT THE GUESS'S. The cut removes a
+        # PREFIX of whatever it lands in - and a LOGICAL RECORD can span several lines (the
+        # script writes one, for a multi-line stdout diversion), so a cut landing inside
+        # such a record DESTROYS THAT RECORD'S EARLIER LINES outright. The guess cannot do
+        # that: it can only additionally lose ONE whole single-line record, and it is
+        # chosen so that it does not. So the accurate statement is: the cut removes a
+        # prefix (which may be part of a multi-line record); the guess deletes no record.
+        # The damage does not COMPOUND
         # into a growing corrupted prefix, because each iteration's cut discards everything
         # before it - but the COUNT of unseparated records GROWS BY ONE PER FAILURE, so
         # 'does not compound' is a statement about the file's shape, not about the total
