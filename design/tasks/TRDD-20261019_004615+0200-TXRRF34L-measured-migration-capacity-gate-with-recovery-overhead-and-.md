@@ -4,7 +4,7 @@ title: Measured migration capacity gate with recovery overhead and 20 GiB reserv
 column: todo
 status: tasked
 created: 2026-10-19T00:46:15+0200
-updated: 2026-10-20T15:34:28+0200
+updated: 2026-10-20T18:59:03+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -24,38 +24,112 @@ eht: []
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-20
 
-**THE MODEL EXISTS; THE GATE DOES NOT.** The peak-space model this card required is measured —
-`PEAK_DISK(B) ≈ 2.93 * B` for the batch-load scenario, all six components reported separately
-(`reports_dev/20261020_peak-space-model.md`; the database and WAL components also in
-`reports_dev/20261020_native-duckdb-capacity-measurement.md`). Three things are still OPEN and a
-gate built without them would be built on an under-estimate:
+**THE ADMISSION FORMULA AND THE 20 GiB RESERVE ARITHMETIC NOW EXIST. THE GATE IS NOT YET
+BUILT, AND ONE INPUT IS STILL THE OWNER'S TO GIVE.** Both deliverables are measured
+(`reports_dev/20261020_admission-formula-and-reserve-arithmetic.md`). The headline: **on this
+machine the migration is NEITHER disk-constrained NOR RAM-constrained** — the whole remaining
+corpus fits on both gates with ~15× the 20 GiB reserve to spare.
 
-1. **The admission formula and the 20 GiB reserve arithmetic do not exist yet.** The peak-space
-   report explicitly leaves them out of scope.
-2. **The crash-vs-spill coexistence is UNMEASURED.** The batch-load peak is 2.93·B (WAL 1.00 +
-   db-at-checkpoint 1.00 + worst-case spill 0.93). The CRASH scenario's peak is 2.00·B of (WAL +
-   db), measured on a LOAD-ONLY workload with no concurrent query — where the WAL holds a
-   transaction never applied to the db file, so a recovery must REPLAY it, itself a write. The
-   model merges the two into one 2× term; that merge is a **MODELLING ASSUMPTION UNVERIFIED IN
-   THE PESSIMISTIC DIRECTION**, and 2.93·B must be treated as a **LOWER BOUND** for the crash
-   scenario, not a worst case.
-3. **The gate needs a MEMORY-LIMIT ASSUMPTION**, because the spill term is a function of the
-   memory limit, not a constant.
+**THE FORMULA, AS MEASURED:**
 
-**The destination is settled in favour of the current store's blob/part split**
-(`reports_dev/20261020_duckdb-file-vs-store-path.md`): a DuckDB DATABASE FILE is **5.7×–24.6×
-LARGER** on the same bytes, because DuckDB's own storage layer does not compress these payloads
-while its Parquet writer compresses the identical bytes at 5.1×–6.3× with ZSTD. That measurement
-covers the **RAW BODIES ONLY** — the typed DIGEST projection is a different dataset and is
-unmeasured. The 5.7× is a **FLOOR**: arm B was measured in a DuckDB file's best state (created,
-filled once, checkpointed, never churned), while a real migration appends over weeks with delete
-churn. The typed columns belong on the metadata table (measured cost of the metadata-only mirror:
-~0); the payload stays in the compressed fragments.
+```
+ADMIT(batch B)  iff   free_bytes − B/R  ≥  20 GiB            # the DISK gate
+
+                  AND open_cost(S) + batch_term(B) ≤ RAM_LIMIT  # the RAM gate
+
+R            = the storage ratio: 6.4 (the large stratum, measured on the store's own
+               path) .. 17.2 (the card's live-pass marginal ratio)
+S            = the store's current settled size
+open_cost(S) = SUB-LINEAR, measured: 0.371 GiB @ S=0.31, 0.570 @ 0.49, 1.415 @ 1.51,
+               2.915 @ 4.0, 3.574 @ 8.0, 5.778 @ 12.0 GiB of store
+batch_term   = ≈1.0 GiB, SATURATING (it does NOT grow with the batch beyond ~1 GiB)
+RAM_LIMIT    = 8 GiB (DEFAULT_MEMORY_LIMIT, lib.rs:44) — a DuckDB ADMISSION limit, not a
+               process or physical ceiling. THIS IS THE OWNER DECISION THAT IS STILL OPEN.
+```
+
+**THE RESERVE ARITHMETIC (live, 2026-10-20):** free 311.5 GiB; reserve 20 GiB; headroom
+291.5 GiB. The remaining corpus is 37.78 GiB raw, so its settled cost is 5.90 GiB at the 6.4×
+ratio (2.20 GiB at 17.2×) — free after the WHOLE corpus is 305.6 GiB, far above the reserve.
+The store's END state would be 10.02 GiB, whose open cost is an INTERPOLATION of the measured
+law (5.778 GiB measured at a 12 GiB store) and sits under the 8 GiB limit.
+
+**THREE FINDINGS THAT CHANGE WHAT THE CARD'S OTHER SECTIONS SAY. Read these before the Scope
+paragraph, which still carries the first one as a live figure.**
+
+1. **THE STORE IS FILELESS BY DESIGN, SO THE FILE-BACKED PEAK-SPACE MODEL DOES NOT PRICE THIS
+   SHAPE.** `lib.rs:159` is `Connection::open_in_memory()`, and `lib.rs:5` says why: "DuckDB
+   rewrites row-groups in place and a persistent db burned 300x the device writes". There is
+   no database file, no WAL and no checkpoint — VERIFIED on a fresh store dir, which produced
+   no `.duckdb` and no `.wal` file. The peak-space model's `D + 2B` / `D + 3B` disk terms
+   belong to a DuckDB DATABASE FILE, which the destination decision did NOT choose. In the
+   store's shape there is **no disk transient to reserve** (the batch's disk cost IS its
+   settled growth: the peak store size equalled the settled store size in every run, and the
+   spill was 0 bytes in all 13 runs), and the **RAM** term is the one a gate must check. The
+   file-backed model is still the right model for the TYPED tables if they are given their own
+   database file — which is a separate decision, recorded in the typed-schema card.
+2. **THE 17.2x RATIO IS A LIVE-PASS MEASUREMENT, NOT A MIGRATION RATIO — but the 6.4x is NOT
+   its floor, and the card must not treat it as one.** The 17.2× was measured on LIVE passes,
+   where the corpus re-presents content the store ALREADY holds: pass 119 ingested
+   2,147,268,980 raw bytes and grew the store by 8,814,244 bytes (a 243.6× observation, ONE
+   pass, not a law). The migration's BACKLOG is HISTORICAL content the store has not seen, so
+   it will not dedup against what is already stored — which is why the gate must plan on a
+   ratio that is NOT the live marginal. BUT the 6.4× is the large stratum's OBSERVED ratio on
+   a 40-file sample of the store's own path, and it is **not a no-dedup floor**: a 40-file
+   sample of never-before-seen historical content would still be measured on a store that
+   already holds that content's neighbours, and the sample is too small to bound the worst
+   case. THE HONEST FORM: **6.4× is a measured point on a 40-file sample and 17.2× is a
+   measured live-pass marginal; the ratio for a no-dedup bulk migration is NEITHER, and it is
+   the largest genuinely open input on this card.** A gate must therefore treat `R` as
+   UNMEASURED-AT-ITS-WORST-CASE and refuse a batch whose projected growth rests on a ratio
+   measured on a different shape or a sample of this size.
+3. **THE OPEN-COST LAW IS SUB-LINEAR, NOT A CONSTANT** (ratio 1.187 → 0.729 as the store grows
+   from 0.31 to 4.0 GiB, and 0.447 at 8 GiB), so a single multiplier over-reserves at small
+   scale and under-reserves at large scale. A linear extrapolation from one point (1.17×)
+   predicted the RAM limit would be crossed at a 10 GiB store; the extended measurement
+   REFUTED it — a 12 GiB store opens in 5.78 GiB. The migration's end state (≈10 GiB) is
+   inside the measured range, so its open cost is an **interpolation, not an extrapolation**.
+
+**STILL OPEN, and the card must still refuse on these:**
+
+- **A RATIO MEASURED ON A DIFFERENT SHAPE, OR A SAMPLE OF THIS SIZE** (see finding 2 above).
+  `R` must be re-measured as the corpus's mix changes; the gate must refuse a batch whose
+  projected growth is computed from a ratio measured on a different shape.
+- **AN UNMEASURED STORE SIZE.** `open_cost(S)` is measured up to 12 GiB of store; a store
+  larger than that is an extrapolation and must be refused until measured.
+- **A RAM LIMIT WHOSE MEANING IS UNDECIDED** (DuckDB's `SET memory_limit` vs the machine's
+  physical RAM vs an operational ceiling). This is an **owner decision**, and it is the one
+  input this card cannot supply.
+- **THE TYPED PROJECTION** (TRDD-TC8HW857): unmeasured, and it lands on `body_durable`, whose
+  size the open-cost law already covers — so it is a store-size effect, but its effect on the
+  RATIO is unknown.
+- **A CORPUS WHOSE SIZE IS QUOTED THREE WAYS.** The corpus is 37.78 GiB live and shrinking;
+  "45 GB" is a decimal-GB reading from 17:35 the same day, and "191.84 GiB" is a genuine GiB
+  reading of the PRE-DRAIN corpus (5.2× the current one). The gate must admit against the
+  size AT ADMISSION TIME, never a quoted one.
+- **THE TYPED-SCHEMA CARD'S OWN CONFLICT.** TRDD-TC8HW857's Scope says "Ingest this backlog
+  directly into DuckDB; never route it through the legacy Parquet store" while its 15:04
+  approval log says the payload belongs in the compressed fragments. THAT CARD MUST BE
+  AMENDED; this card does not reinterpret it, and the 6.4×/17.2× ratio question depends on
+  which reading wins.
+- **THE CRASH-VS-SPILL TERM IS NOT APPLICABLE IN THIS SHAPE** (no WAL, no spill) and becomes
+  live only if the destination changes to a DuckDB database file. It is measured for the
+  file-backed shape — see `reports_dev/20261020_peak-space-model.md` component 4 — and the
+  file-backed model it belongs to is superseded in that report by the measured `D + G + W`,
+  whose `G` tracks the BATCH (correlation +0.77 against the batch's raw bytes, −0.58 against
+  the accumulated live content) at a mean 2.02×B, with the backlog's own case still the
+  report's "most important remaining unmeasured scenario".
+
+**ONE MEASUREMENT THAT KILLED A PLAUSIBLE HYPOTHESIS, recorded because a gate built on it
+would have been wrong:** the 64 MB `.pass-state.json` (1,275,563 skip names) is **NOT** a RAM
+term of consequence. Removing it changed the open peak RSS by **−0.114 GiB** — i.e. the store
+opened *slightly higher* without it — so the earlier 2.915-vs-3.960 GiB disagreement was
+run-to-run variance, not a third driver.
 
 **This STATE block supersedes the body AND the approval log below**, which is append-only and
 therefore permanently contains superseded wording — including "the checkpoint and the crash
-recovery are the same 2.00x" and "a conservative choice", both retracted. Where the body, the
-Scope paragraph, and this block disagree, **this block wins**.
+recovery are the same 2.00x", "a conservative choice", and "the 17.2x ... is the floor the
+gate must plan against", all retracted. Where the body, the Scope paragraph, and this block
+disagree, **this block wins**.
 
 ## WHY
 The measured backlog is larger than currently free space, so migration must not start from raw-size arithmetic or optimistic compression assumptions; it needs a measured peak-space model that includes every concurrent copy and preserves a hard 20 GiB reserve.
