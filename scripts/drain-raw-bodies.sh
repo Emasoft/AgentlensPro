@@ -28,6 +28,11 @@
 #   --once   run a single pass and exit (for a manual, observable pass)
 #
 # Tools relied on: bash, the built `alstore` binary, and the standard file utilities.
+#
+# ONE INSTANCE AT A TIME. There is no PID lock: two concurrent instances would interleave the
+# pass counter, append to the same error log, and fight over the same temp files. The store's
+# own data-directory lock (rust-core/crates/agentlens-core/src/pid_lock.rs) is what protects
+# the DATA; nothing protects this script's bookkeeping.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -39,8 +44,12 @@ LOG="$REPO_ROOT/reports_dev/drain-loop.log"
 # JSON line per pass, and a failing pass's reason usually arrives on stderr.
 ERRLOG="$REPO_ROOT/reports_dev/drain-loop.err.log"
 # The error log is TRUNCATED when it grows past this, so a long-running drain cannot fill the
-# disk with diagnostics. The last 2000 lines are kept: the recent passes are the ones worth
-# reading, and the error log is a diagnostic aid, not the audit trail - that is $LOG.
+# disk with diagnostics. WHAT THIS IS NOT: a hard ceiling. The truncation runs at the TOP of a
+# pass, so the file's size after a pass is this ceiling PLUS whatever that pass wrote to stderr,
+# and a failing pass can write a lot. This is a SAWTOOTH that keeps the average bounded, not an
+# invariant - a reader watching the file mid-pass can see it above the ceiling.
+# The last records are kept: the recent passes are the ones worth reading, and the error log is
+# a diagnostic aid, not the audit trail - that is $LOG.
 ERRLOG_MAX_BYTES=2000000
 
 if [ ! -x "$BIN" ]; then
@@ -163,30 +172,42 @@ run_pass() {
     # and REJECTED: the error log holds records that do not start with 'pass=' - the pass's raw
     # stderr, and the continuation lines of a multi-line stdout diversion - so a content test
     # DELETED A VALID RECORD. A position test cannot be wrong about the log's format.
+    # The temp files live next to the log, so an interrupted truncation leaves debris in
+    # reports_dev/ (gitignored, but unbounded across interruptions). The trap removes them.
+    trap 'rm -f "$ERRLOG.trimmed" "$ERRLOG.trimmed.2"' EXIT INT TERM
     local size start
     size=$(wc -c < "$ERRLOG")
     start=$(( size - ERRLOG_MAX_BYTES ))
     tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null || : > "$ERRLOG.trimmed"
     # Did the cut land EXACTLY on a newline? The byte before the cut is the byte at index
-    # start-1 of the ORIGINAL file; 'head -c start | tail -c 1' reads exactly that byte.
+    # start-1 of the ORIGINAL file; 'head -c start | tail -c 1' emits bytes 0..start-1, so its
+    # last byte is exactly index start-1. (head -c emits what it has when the file is shorter,
+    # and every stage of this pipeline exits 0 on empty input, so 'set -euo pipefail' is safe.)
     # 'LC_ALL=C' is load-bearing: the error log can carry any bytes the pass's stderr carried,
     # so the byte must be read in a single-byte locale.
-    local starts_whole=0
+    local first_line_is_whole=0
     if [ "$start" -gt 0 ] && [ -s "$ERRLOG.trimmed" ]; then
       local before
       before=$(LC_ALL=C head -c "$start" "$ERRLOG" 2>/dev/null | tail -c 1 | od -An -tu1 | tr -d ' \n')
       # 10 is the byte value of a newline.
       if [ "$before" = "10" ]; then
-        starts_whole=1
+        first_line_is_whole=1
       fi
     fi
-    if [ -s "$ERRLOG.trimmed" ] && [ "$starts_whole" -eq 0 ]; then
-      # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the record
-      # whose head was cut away. It is a whole line but not a whole record, so it is dropped
+    if [ -s "$ERRLOG.trimmed" ] && [ "$first_line_is_whole" -eq 0 ]; then
+      # MID-LINE cut: the trimmed file's FIRST LINE is the fragment - the tail of the line
+      # whose head was cut away. It is a whole line but not the start of one, so it is dropped
       # and every line after it is kept. 'tail -n +2' drops exactly that first line.
       #
       # A trimmed file with NO newline at all is ONE line: a single fragment with no whole
-      # record in it. Dropping it would empty the log of everything, so it is left as it is.
+      # line in it. Dropping it would empty the log of everything, so it is left as it is.
+      #
+      # WHAT IS AND IS NOT PRESERVED, precisely: the retained content is always a CONTIGUOUS
+      # SUFFIX of the original and never contains a partial LINE. A LOGICAL RECORD that spans
+      # several lines (the script writes one, for a multi-line stdout diversion) can still
+      # lose its head when the cut lands inside it - the lines that survive are a suffix of
+      # that record, not the record. What is guaranteed is that no whole LINE is deleted by
+      # the truncation.
       tail -n "+2" "$ERRLOG.trimmed" > "$ERRLOG.trimmed.2" 2>/dev/null || : > "$ERRLOG.trimmed.2"
       mv "$ERRLOG.trimmed.2" "$ERRLOG.trimmed"
     fi
