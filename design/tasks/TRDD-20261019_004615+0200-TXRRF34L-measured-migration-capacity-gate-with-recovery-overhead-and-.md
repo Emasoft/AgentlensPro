@@ -4,7 +4,7 @@ title: Measured migration capacity gate with recovery overhead and 20 GiB reserv
 column: todo
 status: tasked
 created: 2026-10-19T00:46:15+0200
-updated: 2026-10-20T01:47:02+0200
+updated: 2026-10-20T04:12:24+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -38,6 +38,7 @@ MEASURED INPUTS (NOT A RESULT) 2026-10-20, live machine, real corpus and real st
 - [ ] The gate refuses a batch unless projected post-allocation free space remains at least 20 GiB.
 - [ ] The gate re-measures actual free space and current database/WAL state immediately before every admitted batch.
 - [ ] Prediction error is tested against held-out batches and the safety margin covers the observed worst case.
+- MEASUREMENT IN FLIGHT (2026-10-20): the NATIVE-DuckDB 'database' and 'WAL' components of this card's peak-space model are being measured against the real corpus - a native DuckDB table (VARCHAR and BLOB shapes, with and without forced compression) against the ZSTD-Parquet control the current store uses, over a deterministic sample of real body files in three size strata. The report lands at reports_dev/20261020_native-duckdb-capacity-measurement.md. THIS IS A COMPONENT MEASUREMENT, NOT THE MODEL: the peak-space model this card requires (database, WAL, checkpoint, temporary, reconstruction and recovery components reported separately) DOES NOT EXIST YET, and this measurement covers only the database and WAL components of the NATIVE path. It is recorded here so it is not an orphan number and so the next reader of this card learns a native-path measurement was taken.
 
 ## Failure and refusal conditions
 - Refuse migration when any overhead component is unmeasured, stale, or cannot be bounded.
