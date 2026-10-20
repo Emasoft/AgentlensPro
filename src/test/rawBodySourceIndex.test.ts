@@ -969,12 +969,27 @@ suite('index format — versioned, validated', () => {
       firstSeenMs: 1, lastSeenMs: 1, provenance: null, refusal: null, boundary: 0,
     }
     fs.writeFileSync(indexPath, JSON.stringify(rec) + '\n')
-    assert.throws(() => loadSourceIndex(indexPath), /unknown format version 1 \(this build reads version 2\)/)
+    assert.throws(() => loadSourceIndex(indexPath), /unknown format version 1 \(this build reads version 3\)/)
   })
 
-  test('the current format version is 2, and the file name carries it', () => {
-    assert.strictEqual(SOURCE_INDEX_FORMAT_VERSION, 2)
-    assert.strictEqual(sourceIndexFileName(), 'source-index.v2.jsonl')
+  test('the current format version is 3, and the file name carries it', () => {
+    assert.strictEqual(SOURCE_INDEX_FORMAT_VERSION, 3)
+    assert.strictEqual(sourceIndexFileName(), 'source-index.v3.jsonl')
+  })
+
+  test('a version-2 log is refused as a VERSION, because the reason set grew', () => {
+    // The reason set gained 'restored' in version 3, so a version-2 log and a version-3 log
+    // differ in the reasons a record may carry. The validator checks the version PER RECORD
+    // and the writer stamps the current version on every record, so without the bump an
+    // older build would PASS the version check and then fail MID-FILE on the reason — an
+    // unreadable log with no version signal. The bump makes the refusal explicit.
+    const rec = {
+      v: 2, id: sha256Hex('x'), path: '/p', kind: 'request', size: 1, mtimeMs: 1, ino: 1,
+      head: sha256Hex('h'), tail: sha256Hex('t'), digest: sha256Hex('d'), class: 'new',
+      firstSeenMs: 1, lastSeenMs: 1, provenance: null, refusal: null, reason: 'discovered',
+      boundary: 0,
+    }
+    assert.throws(() => validateSourceIndexRecord(rec, 1, 0), /unknown format version 2/)
   })
 
   test('a gone record carries no refusal, or one that names a real partner', () => {
@@ -1053,6 +1068,7 @@ suite('index format — versioned, validated', () => {
   test('the checkpoint file name carries the format version', () => {
     assert.strictEqual(sourceIndexFileName(1), 'source-index.v1.jsonl')
     assert.strictEqual(sourceIndexFileName(2), 'source-index.v2.jsonl')
+    assert.strictEqual(sourceIndexFileName(3), 'source-index.v3.jsonl')
   })
 })
 

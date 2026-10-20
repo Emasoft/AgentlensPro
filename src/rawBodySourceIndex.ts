@@ -137,7 +137,25 @@ function looksLikeIdentityShape(key: string): boolean {
   return true
 }
 
-export const SOURCE_INDEX_FORMAT_VERSION = 2
+/**
+ * The format version. A CONTRACT, and a contract that changes without a version bump is a
+ * contract that lies.
+ *
+ * VERSION 3 — the reason set gained 'restored'. A body that was reclaimed from the corpus
+ * and later came back supersedes its own 'gone' tombstone with a record whose reason is
+ * 'restored' (a reason of its own, because 'retracted' would claim a refusal was lifted and
+ * 'refined' would claim the identity moved, and in the byte-identical case neither is true).
+ *
+ * WHY THE BUMP MATTERS AND IS NOT OPTIONAL. The validator checks the version PER RECORD, and
+ * the writer stamps the current version on every record it writes. A log containing a
+ * 'restored' record is therefore readable by this build and NOT by a build that predates it.
+ * Without a bump, that older build would PASS the version check (the record claims the same
+ * version) and then fail MID-FILE on the reason — an unreadable and unappendable log with no
+ * version signal at all. That is exactly the failure the version-2 bump was made to prevent:
+ * a validator stricter than the format it claims to read, refusing a legitimate log. A
+ * version-2 log is now refused as an unknown version, with a message that says why.
+ */
+export const SOURCE_INDEX_FORMAT_VERSION = 3
 
 /** The file name of a version-N checkpoint inside the state dir. */
 export function sourceIndexFileName(version = SOURCE_INDEX_FORMAT_VERSION): string {

@@ -763,6 +763,11 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
           // alternatives are both false statements: 'retracted' claims a refusal was lifted
           // (none was) and 'refined' claims the identity moved (it did not — the bytes are
           // the same). A reader asking "is this body here?" needs the answer in the log.
+          // THE IDENTITY MAY STILL HAVE MOVED. A byte-identical body whose PROVENANCE has
+          // since acquired a row (Claude Code writes its own index.jsonl from another
+          // process) has a different id. 'restored' is still the more honest label than
+          // 'refined' - the path DID come back, and the id difference carries the
+          // refinement - so the reason is not a claim that nothing else changed.
           reason = 'restored'
         } else {
           reason = identityMoved ? 'refined' : 'retracted'
