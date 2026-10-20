@@ -92,12 +92,24 @@ export function sourceIndexPath(stateDir: string, version = SOURCE_INDEX_FORMAT_
  * the two are indistinguishable.
  *
  *   'discovered'   — the first observation of this path.
- *   'content'      — the bytes changed (changed / truncated / replaced).
+ *   'content'      — the BYTES changed (the class is 'changed' or 'truncated').
+ *   'replaced'     — a DIFFERENT FILE OBJECT now occupies this path. It has its own reason
+ *                     because a replacement may be BYTE-IDENTICAL — the class exists exactly
+ *                     to say "a different file object, possibly with the same bytes" — and
+ *                     calling that 'content' would make a byte-identical replacement
+ *                     indistinguishable from a byte change. 'content' is what a reconciliation
+ *                     stage reads as a tampering signal, so the two must not share it.
  *   'refined'      — the identity was refined (a provenance row appeared); the bytes did not.
  *   'refused'      — the source is contested; the record carries a refusal.
  *   'retracted'    — a refusal was lifted because the collision was resolved.
  */
-export type SourceRecordReason = 'discovered' | 'content' | 'refined' | 'refused' | 'retracted'
+export type SourceRecordReason =
+  | 'discovered'
+  | 'content'
+  | 'replaced'
+  | 'refined'
+  | 'refused'
+  | 'retracted'
 
 /** Why a source was refused instead of accepted. */
 export interface SourceRefusal {
@@ -277,9 +289,9 @@ export function validateSourceIndexRecord(
   const provenance = validateProvenance(value.provenance, line)
   const refusal = validateRefusal(value.refusal, line)
   const reason = value.reason
-  if (reason !== 'discovered' && reason !== 'content' && reason !== 'refined'
-      && reason !== 'refused' && reason !== 'retracted') {
-    throw new SourceIndexError(line, "field 'reason' must be one of discovered, content, refined, refused, retracted")
+  if (reason !== 'discovered' && reason !== 'content' && reason !== 'replaced'
+      && reason !== 'refined' && reason !== 'refused' && reason !== 'retracted') {
+    throw new SourceIndexError(line, "field 'reason' must be one of discovered, content, replaced, refined, refused, retracted")
   }
   if (reason === 'refused' && refusal === null) {
     throw new SourceIndexError(line, "field 'refusal' is required when reason is 'refused'")
@@ -289,15 +301,25 @@ export function validateSourceIndexRecord(
     // retraction would leave the contested claim standing.
     throw new SourceIndexError(line, "field 'refusal' must be null when reason is 'retracted'")
   }
-  if ((reason === 'discovered' || reason === 'content' || reason === 'refined') && refusal !== null) {
+  if ((reason === 'discovered' || reason === 'content' || reason === 'replaced'
+       || reason === 'refined') && refusal !== null) {
     throw new SourceIndexError(line, `field 'refusal' must be null when reason is '${reason}'`)
   }
   // 'content' means THE BYTES CHANGED. A byte-identical source must never claim it: a
   // reconciliation stage reads 'content' as a tampering signal, so a false one on the
   // artifact whose whole purpose is to make a 205GB retirement auditable is worse than no
   // signal at all. The class is the observable content state, so this is checkable.
-  if (reason === 'content' && cls !== 'changed' && cls !== 'truncated' && cls !== 'replaced') {
-    throw new SourceIndexError(line, `field 'reason' is 'content' but class is '${cls}' — only changed, truncated or replaced may claim a content change`)
+  if (reason === 'content' && cls !== 'changed' && cls !== 'truncated') {
+    throw new SourceIndexError(line, `field 'reason' is 'content' but class is '${cls}' — only changed or truncated may claim a content change`)
+  }
+  // A REPLACEMENT IS ITS OWN REASON. A 'replaced' file may be byte-identical, so calling it
+  // 'content' would claim the bytes changed when they did not — and 'content' is the tampering
+  // signal a reconciliation stage acts on.
+  if (reason === 'replaced' && cls !== 'replaced') {
+    throw new SourceIndexError(line, `field 'reason' is 'replaced' but class is '${cls}'`)
+  }
+  if (reason !== 'content' && reason !== 'replaced' && cls === 'replaced') {
+    throw new SourceIndexError(line, `field 'class' is 'replaced' but reason is '${reason}' — a replacement must carry reason 'replaced'`)
   }
   // THE MATERIAL-CLASS INVARIANT. A record's class is the last MATERIAL content state of the
   // source, so only a real content change may set it to 'changed'/'truncated'/'replaced', and
@@ -307,7 +329,7 @@ export function validateSourceIndexRecord(
   // carry-forward from regressing: without it, a record with reason 'refined' and class
   // 'unchanged' would load cleanly and be silently wrong — which is exactly the bug the
   // carry-forward was added to prevent.
-  if (reason !== 'content' && cls === 'unchanged') {
+  if (reason !== 'content' && reason !== 'replaced' && cls === 'unchanged') {
     throw new SourceIndexError(line, `field 'class' is 'unchanged' but reason is '${reason}' — 'unchanged' is an observation, never a persisted material class`)
   }
   return {

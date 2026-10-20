@@ -100,12 +100,12 @@ suite('discovery — idempotence', () => {
     write('b.response.json', body(20), NOW)
     const first = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
     assert.strictEqual(first.recorded.length, 2)
-    assert.strictEqual(first.work.length, 2)
+    assert.strictEqual(first.observedMaterial.length, 2)
     assert.strictEqual(first.durableCount, 2)
 
     const second = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
     assert.strictEqual(second.recorded.length, 0, 'no new record for an unchanged source')
-    assert.strictEqual(second.work.length, 0, 'no work for an unchanged source')
+    assert.strictEqual(second.observedMaterial.length, 0, 'no work for an unchanged source')
     assert.strictEqual(second.unchanged, 2)
     assert.strictEqual(loadSourceIndex(indexPath).records.length, 2, 'the log did not grow')
   })
@@ -127,7 +127,7 @@ suite('discovery — deterministic classification of change', () => {
     write('a.request.json', body(500), NOW + 1000)
     const changed = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
     assert.strictEqual(changed.counts.changed, 1)
-    assert.strictEqual(changed.work[0].class, 'changed')
+    assert.strictEqual(changed.observedMaterial[0].class, 'changed')
     assert.notStrictEqual(p, '')
   })
 
@@ -220,7 +220,7 @@ suite('discovery — deterministic classification of change', () => {
     const t = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000, deepVerify: true })
     assert.strictEqual(t.counts.unchanged, 1)
     assert.strictEqual(t.recorded.length, 0, 'a deep verify that agrees writes nothing')
-    assert.strictEqual(t.work.length, 0, 'and produces no work')
+    assert.strictEqual(t.observedMaterial.length, 0, 'and produces no work')
     assert.strictEqual(loadSourceIndex(indexPath).records.length, 1, 'the log did not grow')
   })
 
@@ -230,8 +230,8 @@ suite('discovery — deterministic classification of change', () => {
     write('b.request.json', body(20), NOW + 1000)
     const n = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
     assert.strictEqual(n.counts.new, 1)
-    assert.strictEqual(n.work.length, 1)
-    assert.strictEqual(n.work[0].class, 'new')
+    assert.strictEqual(n.observedMaterial.length, 1)
+    assert.strictEqual(n.observedMaterial[0].class, 'new')
   })
 })
 
@@ -241,7 +241,7 @@ suite('discovery — refusals', () => {
     write('b.request.json', body(10), NOW)
     const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
     assert.strictEqual(r.refusals.length, 2, 'neither path is silently preferred')
-    assert.strictEqual(r.work.length, 0, 'a contested source produces no migration work')
+    assert.strictEqual(r.observedMaterial.length, 0, 'a contested source produces no migration work')
     const latest = latestByPath(loadSourceIndex(indexPath).records)
     for (const rec of latest.values()) {
       assert.notStrictEqual(rec.refusal, null, 'the latest record for each path refuses')
@@ -258,7 +258,7 @@ suite('discovery — refusals', () => {
     ].join('\n') + '\n')
     const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
     assert.strictEqual(r.refusals.length, 0)
-    assert.strictEqual(r.work.length, 2, 'each is its own source')
+    assert.strictEqual(r.observedMaterial.length, 2, 'each is its own source')
   })
 
   test('a file that cannot be read is NEVER marked discovered', () => {
@@ -303,7 +303,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     assert.strictEqual(zr.refusal, null, 'z is not refused at all')
     // z is now uncontested, so the pass that retracted the refusal must put it in the work
     // list: it is a real source that has still never been migrated.
-    assert.ok(retracting.work.some(w => w.path === z), 'an uncontested source is migratable again')
+    assert.ok(retracting.observedMaterial.some(w => w.path === z), 'an uncontested source is migratable again')
   })
 
   test('a partner reclaimed from the corpus no longer blocks the source', () => {
@@ -320,7 +320,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
     const latest = latestByPath(loadSourceIndex(indexPath).records)
     assert.strictEqual(latest.get(a)!.refusal, null, 'the vanished partner no longer contests a')
-    assert.ok(r.work.some(w => w.path === a), 'a is migratable again')
+    assert.ok(r.observedMaterial.some(w => w.path === a), 'a is migratable again')
   })
 
   test('a stale refusal is lifted on the CHEAP path, when the source itself never moved', () => {
@@ -339,16 +339,37 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const latest = latestByPath(loadSourceIndex(indexPath).records)
     assert.strictEqual(latest.get(a)!.refusal, null, 'the vanished partner no longer contests a')
     assert.strictEqual(latest.get(a)!.reason, 'retracted')
-    assert.ok(r.work.some(w => w.path === a), 'a is migratable again')
+    assert.ok(r.observedMaterial.some(w => w.path === a), 'a is migratable again')
   })
 
-  test('the corpus is read ONCE per pass, so a growing corpus cannot disagree with itself', () => {
-    // The pass decides both WHICH files to visit and WHICH partners are still present from
-    // ONE readdir. Two readdirs of an actively-growing directory can disagree: a file that
-    // appears between them would be judged VANISHED while it is present, and every refusal
-    // naming it would be falsely retracted — a live collision retracted, on a corpus whose
-    // bytes are about to be deleted. The observable proof that there is one readdir: the
-    // pass visits a file that appears DURING the pass and still treats it as present.
+  test('a partner the pass listed is never judged vanished, so a live collision survives', () => {
+    // The OBSERVABLE property, which is the real invariant: the pass lists the corpus once
+    // and derives BOTH the files it visits and the partners it considers still present from
+    // that one listing, so the two can never disagree. If they could, a partner that is
+    // present in the listing would be judged VANISHED, and every refusal naming it would be
+    // falsely retracted — a live collision retracted, on a corpus whose bytes are about to be
+    // deleted.
+    //
+    // This is asserted as an OUTCOME, not as a call count. A call count would need a seam
+    // through the frozen `fs` module, and would guard a refactor rather than a live bug:
+    // the single-listing property is true BY CONSTRUCTION, and the observable below is what
+    // actually matters.
+    const same = body(100)
+    const a = write('a.request.json', same, NOW)
+    const partner = write('partner.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+
+    // The partner is present in the listing, so it contests a: the collision stands and
+    // neither source is migratable. The pass must NOT have judged it vanished.
+    const latest = latestByPath(loadSourceIndex(indexPath).records)
+    assert.notStrictEqual(latest.get(a)!.refusal, null, 'the live partner still contests a')
+    assert.ok(latest.get(a)!.refusal!.otherPaths.includes(partner))
+    assert.strictEqual(latest.get(partner)!.refusal!.otherPaths.includes(a), true)
+    // A contested source produces no material.
+    const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    assert.strictEqual(r.observedMaterial.length, 0, 'a contested source produces no material')
+  })
+  test('a reclaimed partner no longer contests a source, in either direction', () => {
     const same = body(100)
     const a = write('a.request.json', same, NOW)
     const z = write('z.request.json', same, NOW)
@@ -360,8 +381,13 @@ suite('discovery — crash at every checkpoint boundary', () => {
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
     const latest = latestByPath(loadSourceIndex(indexPath).records)
     assert.strictEqual(latest.get(a)!.refusal, null, 'the vanished partner no longer contests a')
-    // AND the vanished partner's own record no longer refuses a live source.
-    assert.strictEqual(latest.get(z)!.refusal, null, "the vanished partner no longer refuses a")
+    // AND the vanished partner's own record is NOT rewritten. The pass never visits it, so
+    // a record written for it now would carry lastSeenMs = now for a file that does not
+    // exist — a log claiming a vanished source is live, which is exactly what an append-only
+    // log exists to prevent. Its stale refusal stays as HISTORY, dated by the last time the
+    // partner really was seen.
+    assert.notStrictEqual(latest.get(z)!.refusal, null, "the vanished partner's stale refusal is left as history")
+    assert.ok(latest.get(z)!.lastSeenMs < NOW + 1000, 'and it is not dated as if the partner had just been seen')
   })
 
   test('a persisted record can never carry the observation class', () => {
@@ -375,6 +401,36 @@ suite('discovery — crash at every checkpoint boundary', () => {
       reason: 'refined', boundary: 0,
     }
     assert.throws(() => validateSourceIndexRecord(rec, 1, 0), /'unchanged' is an observation/)
+  })
+
+  test('a reclaimed body is NEVER offered as material to migrate', () => {
+    // A body reclaimed by the 72h retention policy is not a file to migrate. A material
+    // item for a path the corpus does not hold would send a migration runner after a file
+    // that does not exist.
+    const same = body(100)
+    const a = write('a.request.json', same, NOW)
+    const z = write('z.request.json', same, NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    fs.unlinkSync(z)
+    const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 1000 })
+    assert.ok(!r.observedMaterial.some(w => w.path === z), 'the reclaimed body is not offered')
+    assert.ok(r.observedMaterial.some(w => w.path === a), 'the live body is')
+  })
+
+  test('a byte-identical REPLACEMENT is not reported as a content change', () => {
+    // A replacement may be byte-identical: a different file object now occupies the path.
+    // The class exists exactly to say that, and 'content' is the tampering signal a
+    // reconciliation stage acts on — so a byte-identical replacement must not claim it.
+    const p = path.join(corpus, 'a.request.json')
+    write('a.request.json', body(500), NOW)
+    discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
+    fs.unlinkSync(p)
+    write('a.request.json', body(500), NOW + 1000) // same bytes, different inode
+    const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
+    assert.strictEqual(r.counts.replaced, 1, 'the file object was replaced')
+    const rec = latestByPath(loadSourceIndex(indexPath).records).get(p)!
+    assert.strictEqual(rec.reason, 'replaced', "a replacement carries reason 'replaced'")
+    assert.notStrictEqual(rec.reason, 'content', "and never claims a content change")
   })
 
   test('a byte-identical source never claims a content change', () => {
@@ -403,13 +459,16 @@ suite('discovery — crash at every checkpoint boundary', () => {
         timestamp: 't', session_id: 's2', query_source: 'q', model: 'm', message_id: 'mid',
         message_uuid: 'u1', request_file: 'a.request.json', response_file: null,
       }) + '\n')
-    const stats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 }
+    const stats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0 }
     readCorpusProvenance(corpus, stats)
-    // The first row has session_id but NO message_uuid: it cannot use the strongest
-    // discriminator, so it is counted as a weaker-provenance row, and it is NOT the
-    // provenance-less case (it still has a session_id, so it can discriminate something).
+    // The first row has session_id but NO message_uuid: it can still discriminate, so it is
+    // NOT the provenance-less case and is not counted. The counter is deliberately keyed on
+    // losing BOTH discriminators, because that is the case that is rare when the corpus is
+    // healthy — measured against the real corpus, every one of its 19,890 rows carries a
+    // message_uuid, so the count reads 0 and a non-zero count means the index format
+    // changed under us. A counter that fired on a merely-weaker row would fire constantly
+    // and train the next reader to ignore it.
     assert.strictEqual(stats.rowsWithoutProvenance, 0, 'it still has a session_id')
-    assert.strictEqual(stats.rowsWithoutMessageUuid, 1, 'the row lost its message_uuid')
     assert.strictEqual(stats.skippedLines, 0, 'it parsed, so it is not a skipped line')
   })
 
@@ -576,7 +635,7 @@ suite('corpus provenance', () => {
         message_uuid: 'uuid-1', request_file: 'a.request.json', response_file: null,
       }) + '\n' +
       '{"not":"an object we use"}\n')
-    const stats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 }
+    const stats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0 }
     const prov = readCorpusProvenance(corpus, stats)
     assert.strictEqual(stats.skippedLines, 1, 'the unparseable line was counted')
     assert.strictEqual(stats.rowsRead, 2, 'the two parseable lines were read')

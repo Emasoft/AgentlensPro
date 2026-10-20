@@ -48,27 +48,44 @@
 // collisions. For the full 800k-file corpus that is a few hundred MB — proportionate to an
 // operation over 205GB, and bounded by `maxFiles` for a batched run.
 //
-// THE CONSUMER CONTRACT — READ THIS BEFORE USING `work`.
+// THE PASS IS A SNAPSHOT PASS. The corpus is listed ONCE, at the start, and the pass is a
+// pure function of that listing plus the checkpoint — which is what makes it deterministic
+// under concurrent corpus growth: two passes over the same corpus and the same checkpoint
+// produce the same log. A file that APPEARS during the pass is invisible to it and is picked
+// up by the next pass; a file that DISAPPEARS during the pass is counted as `vanished` and
+// never marked discovered. Neither is an error, and neither loses a source.
 //
-// `work` is "what THIS PASS observed as material", NOT "what remains to be migrated". The two
-// are different, and confusing them is a silent data-loss bug:
+// THE CONSUMER CONTRACT — READ THIS BEFORE USING THE PASS RESULT.
 //
-//   - `work` is EMPTY on a pass over an unchanged corpus. That is the idempotence property
-//     the card demands, and it is correct. But it means an empty `work` list does NOT mean
-//     "there is nothing to migrate" — it means "nothing changed since the last pass".
+// `observedMaterial` is "what THIS PASS observed as material", NOT "what remains to be
+// migrated". The two are different, and confusing them is a silent data-loss bug. The field
+// is NAMED so it cannot be misread: an earlier version called it `work`, and the name WAS the
+// hazard — a migration runner iterating `work` on a repeat pass over an unchanged corpus
+// would see an EMPTY list and conclude there is nothing to migrate, silently, on 205GB of
+// data that was never migrated.
+//
+//   - `observedMaterial` is EMPTY on a pass over an unchanged corpus. That is the idempotence
+//     property the card demands, and it is correct. But an empty list does NOT mean "there
+//     is nothing to migrate" — it means "nothing CHANGED since the last pass".
 //   - The DURABLE LOG is the record of what has been discovered. A consumer that needs
 //     "outstanding sources" must read the log (the latest record per path) and compare it
 //     against its OWN record of what it has already migrated. The checkpoint deliberately
 //     carries NO 'migrated' flag: migration execution is a sibling card's job
 //     (TRDD-IFOQAQYV), and inventing a settled-marker here would let this card assert a
 //     migration it cannot verify.
+//   - A source is outstanding only if it is BOTH still present in the corpus AND unmigrated.
+//     The log alone cannot tell outstanding from RECLAIMED, because the log is append-only
+//     and never deletes a record: a body reclaimed by the 72h retention policy keeps its
+//     last record forever, carrying a material class that says "not yet migrated". A
+//     consumer MUST check the corpus for the path's presence.
 //   - A source whose latest record refuses is CONTESTED and must not be migrated blind; a
 //     source whose latest record carries a class of 'new'/'changed'/'truncated'/'replaced' has
 //     not been migrated yet. The class is the MATERIAL class — it survives an identity
 //     refinement, so a late-arriving provenance row does not make an unmigrated source look
 //     settled.
 //
-// So: consume the LOG for "outstanding", consume `work` for "what just moved".
+// So: consume the LOG for "outstanding", consume `observedMaterial` for "what just moved",
+// and check the CORPUS for whether a path still exists.
 import * as fs from 'fs'
 import * as path from 'path'
 import {
@@ -103,20 +120,22 @@ export interface CorpusIndexStats {
    * once (a mass re-identification) and the byte-identical sources that were distinguished
    * only by their provenance collapse into ONE identity (a mass collision, and a mass
    * refusal). Nothing else in the log would show why.
+   *
+   * IT IS RARE BY CONSTRUCTION, which is what makes it an alarm rather than a number. It
+   * counts rows that lost BOTH discriminators, not rows that lost one: a row with a
+   * session_id but no message_uuid still discriminates, so it is not counted here. Measured
+   * against the real corpus (19,890 rows in ~/.agentlens/otel-bodies/index.jsonl, every one
+   * carrying a message_uuid), the count is 0 — a healthy corpus reads 0, and a non-zero
+   * count means the index format changed under us.
+   *
+   * AN EARLIER VERSION ALSO COUNTED ROWS MISSING ONLY message_uuid. It was DROPPED: on a
+   * corpus where some writer variant omits message_uuid, that counter is permanently
+   * non-zero, and a permanently-firing alarm trains the next reader to ignore it. It was
+   * also an absolute count, so it could not show a CHANGE between passes — only the delta
+   * could, and the delta needs state this card does not have. The count that remains is
+   * the one that is rare when the corpus is healthy.
    */
   rowsWithoutProvenance: number
-  /**
-   * Rows that carry a session_id but NO message_uuid.
-   *
-   * These are the STRONGER schema-change signal, and they are counted SEPARATELY because
-   * the two failures are not the same. The identity's strongest discriminator is
-   * message_uuid; session_id + timestamp is only the fallback. So a row that lost
-   * message_uuid still produces a non-empty provenance KEY, and the key-based check cannot
-   * see it — but the identity it produces is a WEAKER one, which is a different identity from
-   * the one the source had before. Every such row is therefore an individual re-identification
-   * of its source, not a mass event, and a count of zero is the normal, healthy state.
-   */
-  rowsWithoutMessageUuid: number
 }
 
 /**
@@ -181,13 +200,8 @@ export function readCorpusProvenance(corpusDir: string, stats?: CorpusIndexStats
     // key falls back to session_id + timestamp, so a row that lost only message_uuid still
     // yields a non-empty key and a key-based check cannot see it — yet the identity it
     // produces is a weaker one, which is a DIFFERENT identity from the one the source had.
-    if (stats) {
-      if (provenance.messageUuid === null && provenance.sessionId === null) {
-        stats.rowsWithoutProvenance++
-      }
-      if (provenance.messageUuid === null) {
-        stats.rowsWithoutMessageUuid++
-      }
+    if (stats && provenance.messageUuid === null && provenance.sessionId === null) {
+      stats.rowsWithoutProvenance++
     }
     if (req) out.set(req, provenance)
     if (resp) out.set(resp, provenance)
@@ -220,8 +234,17 @@ export interface DiscoveredSource {
   refusal: { reason: 'identity-collision'; otherPaths: string[] } | null
 }
 
-/** One unit of work a later migration stage must do for this source. */
-export interface DiscoveredWork {
+/**
+ * One source THIS PASS observed as material.
+ *
+ * IT IS NOT A MIGRATION TODO LIST, and the name is chosen so a caller cannot read it as one.
+ * An earlier version called this `work`, and the name was the hazard: a migration runner
+ * iterating `work` on a repeat pass over an unchanged corpus would see an EMPTY list and
+ * conclude there is nothing to migrate — silently, on 205GB of data that was never migrated.
+ * The list is empty in that case for a correct reason (nothing CHANGED), which is the
+ * opposite of "nothing to do".
+ */
+export interface ObservedMaterial {
   path: string
   id: string
   kind: SourceKind
@@ -234,8 +257,13 @@ export interface DiscoveredWork {
 export interface DiscoveryResult {
   /** Sources this pass appended to the checkpoint. */
   recorded: DiscoveredSource[]
-  /** Sources that need migration work (a NEW/CHANGED/TRUNCATED/REPLACED source, not a refusal). */
-  work: DiscoveredWork[]
+  /**
+   * The sources THIS PASS observed as material — their bytes changed, their identity was
+   * refined, or their contestability moved. NOT the outstanding migration set: it is EMPTY on
+   * a pass over an unchanged corpus, and the outstanding set must be derived from the LOG
+   * plus the consumer's own record of what it has migrated. See the module header.
+   */
+  observedMaterial: ObservedMaterial[]
   /** Sources whose identity is contested — the latest record for each of these paths refuses. */
   refusals: DiscoveredSource[]
   /** How many body files were seen in the corpus dir. */
@@ -315,9 +343,9 @@ function sameRefusal(
 export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult {
   const counts: Record<SourceClass, number> = { new: 0, unchanged: 0, changed: 0, truncated: 0, replaced: 0 }
   const result: DiscoveryResult = {
-    recorded: [], work: [], refusals: [], scannedFiles: 0, vanished: 0, unreadable: 0,
+    recorded: [], observedMaterial: [], refusals: [], scannedFiles: 0, vanished: 0, unreadable: 0,
     unchanged: 0, durableCount: 0, counts, repairedTornBytes: 0,
-    corpusIndex: { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 },
+    corpusIndex: { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0 },
   }
 
   const loaded = loadSourceIndex(opts.indexPath)
@@ -361,7 +389,7 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
     if (bodyFileKind(n) !== null) presentPaths.add(path.join(opts.corpusDir, n))
   }
 
-  const corpusStats: CorpusIndexStats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0, rowsWithoutMessageUuid: 0 }
+  const corpusStats: CorpusIndexStats = { skippedLines: 0, rowsRead: 0, rowsWithoutProvenance: 0 }
   const provenance = readCorpusProvenance(opts.corpusDir, corpusStats)
   const writer = new SourceIndexWriter(opts.indexPath)
   // EAGER REPAIR: a torn tail left by a crash is discarded even if this pass appends
@@ -440,39 +468,18 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
             ? priorRecord.refusal.otherPaths.filter(p => !presentPaths.has(p))
             : []
           if (priorRecord.refusal !== null && stalePartners.length > 0) {
-            // THE VANISHED PARTNER'S OWN RECORD ALSO NAMES US, and it keeps that refusal for
-            // ever: the partner is gone from the corpus, so the pass never visits it and
-            // never re-derives its refusal. A log-only reader would see a path refusing a
-            // live source, and could conclude the live source is contested. Lifting the
-            // partner's refusal is cheap — the partner is named — and it keeps the log
-            // internally true.
-            for (const gone of stalePartners) {
-              const goneRecord = latest.get(gone)
-              if (!goneRecord || goneRecord.refusal === null) continue
-              if (!goneRecord.refusal.otherPaths.includes(priorRecord.path)) continue
-              const goneRemaining = goneRecord.refusal.otherPaths
-                .filter(p => p !== priorRecord.path && presentPaths.has(p))
-                .sort()
-              appendRecord({
-                id: goneRecord.id,
-                path: goneRecord.path,
-                kind: goneRecord.kind,
-                size: goneRecord.size,
-                mtimeMs: goneRecord.mtimeMs,
-                ino: goneRecord.ino,
-                head: goneRecord.head,
-                tail: goneRecord.tail,
-                digest: goneRecord.digest,
-                class: goneRecord.class,
-                firstSeenMs: goneRecord.firstSeenMs,
-                lastSeenMs: opts.nowMs,
-                provenance: goneRecord.provenance,
-                refusal: goneRemaining.length > 0
-                  ? { reason: 'identity-collision', otherPaths: goneRemaining }
-                  : null,
-                reason: goneRemaining.length > 0 ? 'refused' : 'retracted',
-              })
-            }
+            // THE VANISHED PARTNER'S OWN RECORD IS NOT CORRECTED, AND DELIBERATELY SO.
+            // `gone` is by construction NOT in the corpus: the pass never visits it, so a
+            // record written for it now would carry lastSeenMs = now for a file that does
+            // not exist — a log that claims a vanished source is live, current and
+            // migratable. That is precisely what an append-only log exists to prevent.
+            //
+            // The partner's stale refusal is left in the log as HISTORY. It is harmless:
+            // a consumer reads the LATEST record per path, and the partner's latest record
+            // is the one the pass wrote BEFORE it was reclaimed — a record that says "seen
+            // at <old time>", which a consumer can date. The partner is not in the corpus,
+            // so it is not outstanding work (see the work-list filter, which admits only
+            // paths the corpus still holds).
             const remaining = priorRecord.refusal.otherPaths
               .filter(p => presentPaths.has(p))
               .sort()
@@ -564,6 +571,12 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
       if (hasPrior) {
         if (cls === 'unchanged') {
           effectiveClass = priorRecord!.class
+        } else if (cls === 'replaced') {
+          // A REPLACEMENT IS NOT A CONTENT CHANGE. The file object at the path is a
+          // different one, which may hold byte-identical content. Calling that 'content'
+          // would claim the bytes changed when they did not — and 'content' is the tampering
+          // signal a reconciliation stage acts on.
+          reason = 'replaced'
         } else {
           reason = 'content'
         }
@@ -747,7 +760,11 @@ export function discoverRawBodySources(opts: DiscoveryOptions): DiscoveryResult 
   for (const p of [...touched].sort()) {
     const rec = latest.get(p)
     if (!rec || rec.refusal !== null) continue
-    result.work.push({
+    // ONLY A SOURCE THE CORPUS STILL HOLDS CAN BE WORK. A path that has been reclaimed
+    // (src/bodiesActivity.ts documents a ~72h reclaim) is not a file to migrate, and a work
+    // item for it would send a migration runner after a file that does not exist.
+    if (!presentPaths.has(rec.path)) continue
+    result.observedMaterial.push({
       path: rec.path, id: rec.id, kind: rec.kind, class: rec.class, size: rec.size, digest: rec.digest,
     })
   }
