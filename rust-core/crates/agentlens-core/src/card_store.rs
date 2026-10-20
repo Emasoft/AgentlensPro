@@ -130,7 +130,46 @@ const META_SCHEMA: &str = "CREATE TABLE meta (key VARCHAR PRIMARY KEY, value VAR
 const RESIDENT_SCAN_SQL: &str = "SELECT session_id, card FROM cards ORDER BY seq";
 
 /// The resident parsed layer: every card as a shared tree, in first-insert order (see `CardStore::parsed`).
-type ResidentCards = IndexMap<String, Arc<Value>>;
+type ResidentCards = IndexMap<String, ResidentCard>;
+
+/// TRDD-T0G38TZ4 — a resident card AND the byte length of the text that was stored for it.
+///
+/// WHY the length travels with the card: an upsert has to know how many bytes the card it
+/// REPLACES occupied in the table, and the only exact source for that is the stored text
+/// itself. Re-serialising the resident card to learn its length would serialise every card
+/// twice on every put — `put_arc` is the hottest write path in the process (every ingested
+/// card goes through it) and cards reach 2.3 MB — so the length is carried instead. It is
+/// carried IN the same map entry, never in a parallel map, so it cannot drift from the card
+/// it describes.
+struct ResidentCard {
+    /// The card, shared (copy-on-write: `Arc::make_mut` copies when a holder still points here).
+    card: Arc<Value>,
+    /// The byte length of the SERIALISED text the table holds for this card — the same number
+    /// DuckDB's `strlen(card)` reports for it.
+    stored_len: u64,
+}
+
+impl std::ops::Deref for ResidentCard {
+    type Target = Value;
+
+    /// WHY: the resident layer is read as a card everywhere (the summary rebuild, the tests'
+    /// `timeline_len` helper, the demotion's `Arc::make_mut`), and deref keeps every one of those
+    /// call sites unchanged while the entry carries the extra `stored_len` field.
+    fn deref(&self) -> &Value {
+        &self.card
+    }
+}
+
+/// TRDD-T0G38TZ4 — the resident layer AND the byte total of the text it was built from. The two
+/// are built together in `load_resident` and travel together into `CardStore`, so the tracked
+/// counter can never describe a corpus the resident layer does not hold.
+struct Resident {
+    /// Every card as a shared tree, in first-insert order (see `CardStore::parsed`).
+    cards: ResidentCards,
+    /// The total byte length of the SERIALISED text those cards came from — the same number the
+    /// old `SUM(strlen(card))` aggregate reported.
+    bytes: u64,
+}
 
 
 /// One keyset page of ROOT cards (TRDD-9VX3WTGU Phase C, Amendment 1).
@@ -233,10 +272,22 @@ pub struct CardStore {
     /// It lives HERE, not in `CoreState`, so it cannot drift from the table: every write path
     /// (`put`, `clear`, `demote_cold`) updates both inside the same method, including the callers
     /// that reach the store directly (tests call `st.cards.clear()`).
-    parsed: IndexMap<String, Arc<Value>>,
+    parsed: ResidentCards,
     /// Bumped by every `clear`; slots restart from 0 after one, so a consumer that remembers slot
     /// positions (the summary engine) can tell a restart from ordinary growth.
     epoch: u64,
+
+    /// TRDD-T0G38TZ4 — the corpus byte total, TRACKED on the write path instead of scanned.
+    /// WHY a counter: `corpus_bytes` used to run `SELECT count(*), SUM(strlen(card))` over the
+    /// whole corpus, and on a 42,908-row / ~84 MB corpus that full scan of the card TEXT column
+    /// ran out of memory inside the 256 MiB DuckDB pool — the live server logged "card corpus
+    /// UNAVAILABLE: Out of Memory Error" on every 30 s composition tick, under the state lock.
+    /// The counter is maintained on exactly the paths that change the stored text (`put_arc`,
+    /// `demote_cold`, `clear`, `discard_cards`, and the reopen rebuild in `load_resident`), so it
+    /// tracks the SERIALISED length of what is actually stored, and no statement scans the corpus.
+    /// A drift between this and the table would be a new silent failure, so the in-module test
+    /// `card_bytes_counter_matches_the_duckdb_aggregate` pins it against the aggregate itself.
+    card_bytes: u64,
     /// TRDD-KMF02UEX — counts `demote_cold`'s primary-key card fetches (one per demotion candidate).
     /// Exists only so a test can assert that the card text is read for exactly the cards being
     /// demoted, and never when no timeline card lies beyond the hot set.
@@ -311,14 +362,14 @@ impl CardStore {
         let wal = data_dir.join(format!("{CARD_DB_FILE}.wal"));
         remove_rebuild_leftovers(data_dir);
         let (reason, outcome) = match Self::try_reuse(&path, limits.read, limits.vacuum_rebuild_indexes) {
-            Ok((conn, parsed, next_seq)) => {
+            Ok((conn, resident, next_seq)) => {
                 eprintln!(
                     "{} alcore: card store — reusing {CARD_DB_FILE}: {} cards, ingest v{}, schema v{CARD_SCHEMA_VERSION}, restore complete, no clear in progress",
                     crate::log_ts(),
-                    parsed.len(),
+                    resident.cards.len(),
                     crate::log_reader::LOG_INGEST_VERSION
                 );
-                return Self::assemble(conn, parsed, next_seq, OpenOutcome::Reused);
+                return Self::assemble(conn, resident, next_seq, OpenOutcome::Reused);
             }
             Err(Refusal::NotEligible(reason)) => (reason.clone(), OpenOutcome::Rebuilt(reason)),
             Err(Refusal::OutOfMemory(reason)) => {
@@ -329,7 +380,7 @@ impl CardStore {
                     limits.rebuild
                 );
                 match Self::rewrite_in_place(data_dir, &path, &limits) {
-                    Ok((conn, parsed, next_seq, outcome)) => return Self::assemble(conn, parsed, next_seq, outcome),
+                    Ok((conn, resident, next_seq, outcome)) => return Self::assemble(conn, resident, next_seq, outcome),
                     Err(failure) => {
                         remove_rebuild_leftovers(data_dir);
                         eprintln!(
@@ -361,13 +412,13 @@ impl CardStore {
             crate::log_reader::LOG_INGEST_VERSION
         ))
         .expect("create the card store schema");
-        Self::assemble(conn, IndexMap::new(), 0, outcome)
+        Self::assemble(conn, Resident { cards: IndexMap::new(), bytes: 0 }, 0, outcome)
     }
 
     /// The one constructor: every outcome of `open` ends here.
     fn assemble(
         conn: Connection,
-        parsed: IndexMap<String, Arc<Value>>,
+        resident: Resident,
         next_seq: i64,
         outcome: OpenOutcome,
     ) -> CardStore {
@@ -376,7 +427,11 @@ impl CardStore {
             next_seq,
             full_scan_calls: std::sync::atomic::AtomicUsize::new(0),
             demote_card_fetches: std::sync::atomic::AtomicUsize::new(0),
-            parsed,
+            parsed: resident.cards,
+            // TRDD-T0G38TZ4: the tracked byte total starts at what the resident layer was built
+            // from. For a reused store that is the corpus's real size (measured row by row in
+            // `load_resident`); for a fresh one it is 0, because the table is empty.
+            card_bytes: resident.bytes,
             epoch: 0,
             outcome,
         }
@@ -408,7 +463,7 @@ impl CardStore {
         path: &Path,
         read_limit: &str,
         vacuum_rebuild_indexes: &str,
-    ) -> Result<(Connection, ResidentCards, i64), Refusal> {
+    ) -> Result<(Connection, Resident, i64), Refusal> {
         if !path.exists() {
             return Err(Refusal::NotEligible("no database file".to_owned()));
         }
@@ -417,14 +472,19 @@ impl CardStore {
         Self::configure(&conn, read_limit)
             .map_err(|e| Refusal::OutOfMemory(format!("cannot configure the connection at {read_limit}: {e}")))?;
         Self::check_meta(&conn)?;
-        let (parsed, next_seq) = Self::load_resident(&conn)?;
-        Ok((conn, parsed, next_seq))
+        let (resident, next_seq) = Self::load_resident(&conn)?;
+        Ok((conn, resident, next_seq))
     }
 
     /// Rebuild the resident parsed layer from the table: one parse per card, `seq` order, plus the
     /// next ordinal. The same shape `put_arc` leaves behind, so a reused store and a restored one
     /// serve the same summary.
-    fn load_resident(conn: &Connection) -> Result<(IndexMap<String, Arc<Value>>, i64), Refusal> {
+    ///
+    /// TRDD-T0G38TZ4 — the byte total is accumulated HERE, from the very text the rows hold, so a
+    /// reopened store's counter starts at the corpus's real size and never needs a scan to learn
+    /// it. `json.len()` is the byte length of the stored VARCHAR — the same number DuckDB's
+    /// `strlen(card)` reports for it (both count UTF-8 bytes, not characters).
+    fn load_resident(conn: &Connection) -> Result<(Resident, i64), Refusal> {
         let mut stmt = conn
             .prepare(RESIDENT_SCAN_SQL)
             .map_err(|e| scan_refusal(&e, "cannot prepare the resident-layer scan"))?;
@@ -432,17 +492,22 @@ impl CardStore {
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
             .map_err(|e| scan_refusal(&e, "the cards table is unreadable"))?;
         let mut parsed = IndexMap::new();
+        let mut bytes: u64 = 0;
         for r in rows {
             let (id, json) = r.map_err(|e| scan_refusal(&e, "a card row is unreadable"))?;
             let card = serde_json::from_str(&json)
                 .map_err(|e| Refusal::NotEligible(format!("card {id} is not valid JSON: {e}")))?;
-            parsed.insert(id, Arc::new(card));
+            // TRDD-T0G38TZ4: the stored length rides with the card, so a later upsert knows how
+            // many bytes this row occupies WITHOUT re-serialising the card to find out.
+            let stored_len = json.len() as u64;
+            bytes += stored_len;
+            parsed.insert(id, ResidentCard { card: Arc::new(card), stored_len });
         }
         drop(stmt);
         let next_seq: i64 = conn
             .query_row("SELECT COALESCE(MAX(seq), -1) + 1 FROM cards", [], |r| r.get(0))
             .map_err(|e| scan_refusal(&e, "cannot read the next card ordinal"))?;
-        Ok((parsed, next_seq))
+        Ok((Resident { cards: parsed, bytes }, next_seq))
     }
 
     /// The meta checks and the row count of the reuse gate (see `try_reuse`), shared with the rewrite,
@@ -530,7 +595,7 @@ impl CardStore {
         data_dir: &Path,
         path: &Path,
         limits: &OpenLimits<'_>,
-    ) -> Result<(Connection, ResidentCards, i64, OpenOutcome), String> {
+    ) -> Result<(Connection, Resident, i64, OpenOutcome), String> {
         let bytes_before = std::fs::metadata(path).map_err(|e| format!("stat {}: {e}", path.display()))?.len();
         let rows = Self::rewrite_compact(data_dir, path, limits.rebuild)?;
         if let Some(warning) = swap_in_rebuild(data_dir)? {
@@ -557,15 +622,17 @@ impl CardStore {
         rows: usize,
         bytes_before: u64,
         limits: &OpenLimits<'_>,
-    ) -> (Connection, ResidentCards, i64, OpenOutcome) {
+    ) -> (Connection, Resident, i64, OpenOutcome) {
         let bytes_after = std::fs::metadata(path)
             .unwrap_or_else(|e| panic!("stat the rewritten {}: {e}; the file is kept", path.display()))
             .len();
-        let (conn, parsed, next_seq, warning) =
+        // TRDD-T0G38TZ4: the resident layer and the tracked byte total come from the SAME
+        // `try_reuse` call, so the reopened store's counter describes the corpus it actually holds.
+        let (conn, resident, next_seq, warning) =
             match Self::try_reuse(path, limits.reopen, limits.vacuum_rebuild_indexes) {
-                Ok((conn, parsed, next_seq)) => (conn, parsed, next_seq, None),
+                Ok((conn, resident, next_seq)) => (conn, resident, next_seq, None),
                 Err(Refusal::OutOfMemory(reason)) => {
-                    let (conn, parsed, next_seq) =
+                    let (conn, resident, next_seq) =
                         Self::try_reuse(path, limits.rebuild, limits.vacuum_rebuild_indexes).unwrap_or_else(|refusal| {
                             panic!(
                                 "the rewritten {} does not load at the rebuild limit {}: {}; the file is kept",
@@ -575,7 +642,7 @@ impl CardStore {
                             )
                         });
                     let warning = format!("the fresh file does not load at the reopen limit {}: {reason}", limits.reopen);
-                    (conn, parsed, next_seq, Some(warning))
+                    (conn, resident, next_seq, Some(warning))
                 }
                 Err(Refusal::NotEligible(reason)) => panic!(
                     "the rewritten {} does not load at the reopen limit {}: {reason}; the file is kept",
@@ -596,7 +663,7 @@ impl CardStore {
             "{} alcore: card store — rewrote {CARD_DB_FILE} compactly: {rows} cards, {bytes_before} bytes before, {bytes_after} after; reusing it at memory limit {running}",
             crate::log_ts()
         );
-        (conn, parsed, next_seq, OpenOutcome::Rewritten { rows, bytes_before, bytes_after, warning })
+        (conn, resident, next_seq, OpenOutcome::Rewritten { rows, bytes_before, bytes_after, warning })
     }
 
 
@@ -639,6 +706,8 @@ impl CardStore {
             .expect("discard the stale card store");
         self.next_seq = 0;
         self.parsed.clear();
+        // TRDD-T0G38TZ4: the table is empty, so the tracked byte total is 0.
+        self.card_bytes = 0;
     }
 
     /// TRDD-ORGJ0E3G follow-up — how many times `persist_snapshot()` (the whole-store persist input)
@@ -698,6 +767,20 @@ impl CardStore {
         let parent = card.get("parentSessionId").and_then(Value::as_str).filter(|p| !p.is_empty()).map(str::to_owned);
         let source = card.get("source").and_then(Value::as_str).map(str::to_owned);
         let json = serde_json::to_string(&*card).expect("a session card is serializable");
+        // TRDD-T0G38TZ4 — the tracked byte total. An UPSERT, so the OLD card's bytes leave the
+        // total and the NEW card's bytes enter it.
+        //
+        // WHY the old length is the resident card's CARRIED length: the stored text IS
+        // `serde_json::to_string` of the resident card (this function wrote it, and `demote_cold`
+        // keeps the two in step), and `ResidentCard::stored_len` is that exact byte count. It is
+        // carried, NOT recomputed: re-serialising the resident card here would serialise every
+        // ingested card TWICE on the hottest write path (cards reach 2.3 MB).
+        //
+        // WHY the new length is `json.len()` and not the card's size before the persist-strip:
+        // `json` is what is ACTUALLY stored, and the counter must describe the table, not the
+        // input card.
+        let old_len: u64 = self.parsed.get(&id).map_or(0, |c| c.stored_len);
+        let new_len = json.len() as u64;
         // WHY the indexed columns are in DO UPDATE too: an upsert moves `last_active_ms` (and, in
         // principle, the parent), and the page query orders and filters on exactly those.
         //
@@ -726,7 +809,10 @@ impl CardStore {
         self.next_seq += 1;
         // `IndexMap::insert` on an existing key replaces the value and KEEPS the slot, like the
         // table keeps `seq`.
-        self.parsed.insert(id, card);
+        self.parsed.insert(id, ResidentCard { card, stored_len: new_len });
+        // TRDD-T0G38TZ4 — the tracked total follows the table: the old card's bytes leave, the
+        // new card's bytes enter. A first insert adds; an upsert replaces.
+        self.card_bytes = self.card_bytes + new_len - old_len;
     }
 
     pub fn len(&self) -> usize {
@@ -735,30 +821,27 @@ impl CardStore {
             .expect("count the session cards") as usize
     }
 
-    /// (row count, total JSON-text BYTES) over the corpus — one aggregate, on this store's own
-    /// connection. TRDD-2JOIAH2G's composition breakdown: the caller reports what the card corpus
-    /// IS so the mimalloc commit number can be interpreted against it.
+    /// (row count, total JSON-text BYTES) over the corpus. TRDD-2JOIAH2G's composition breakdown:
+    /// the caller reports what the card corpus IS so the mimalloc commit number can be interpreted
+    /// against it.
     ///
-    /// `strlen(card)`, NOT `octet_length`: this bundled DuckDB build (1.10505.0) rejects
-    /// `octet_length(VARCHAR)` at bind time, and the BLOB-cast workaround fails at runtime on
-    /// real corpus content — cards carry literal `\n` byte sequences (JSON string escapes
-    /// stored verbatim) and DuckDB's STRING→BLOB conversion refuses any non-printable byte
-    /// ("Invalid byte encountered in STRING -> BLOB conversion", measured live 2026-09-28).
-    /// `strlen` is DuckDB's byte-length function (6 on 'héllo' — UTF-8 aware, unlike
-    /// `length` which counts characters and undercounts multilingual session content);
-    /// it takes VARCHAR directly and cannot fail on any text value. Measured both ways
-    /// against escape-laden cards 2026-09-28 before this choice.
-    /// `COALESCE` because SUM over an empty table is NULL.
+    /// TRDD-T0G38TZ4 — NO DuckDB statement runs here any more. This used to be one aggregate,
+    /// `SELECT count(*), COALESCE(SUM(strlen(card)), 0)::BIGINT FROM cards`, and on a 42,908-row /
+    /// ~84 MB corpus that full scan of the card TEXT column ran out of memory inside the 256 MiB
+    /// pool (`MEMORY_LIMIT`): the live server logged "card corpus UNAVAILABLE: Out of Memory
+    /// Error" on every 30 s composition tick, under the state lock. The count and the byte total
+    /// are now TRACKED on the write path (`card_bytes`, see the field), so the metric is O(1) and
+    /// can never fail.
+    ///
+    /// The byte total is the SERIALISED length of what is ACTUALLY stored, which is the same
+    /// number the old aggregate reported: `strlen` is DuckDB's byte-length function (UTF-8
+    /// aware), and `serde_json::to_string` emits the same bytes the table holds.
     ///
     /// Returns `Result` (unlike `len`, which expects) because the caller is a recurring
     /// diagnostics tick with a print-an-unavailable-and-continue contract, not a fail-fast
-    /// request path.
+    /// request path. The shape is kept so the caller does not change; it is always `Ok` now.
     pub fn corpus_bytes(&self) -> agentlens_store::duckdb::Result<(usize, u64)> {
-        self.conn.query_row(
-            "SELECT count(*), COALESCE(SUM(strlen(card)), 0)::BIGINT FROM cards",
-            [],
-            |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as u64)),
-        )
+        Ok((self.parsed.len(), self.card_bytes))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -823,6 +906,8 @@ impl CardStore {
             .expect("clear the card store");
         self.next_seq = 0;
         self.parsed.clear();
+        // TRDD-T0G38TZ4: the table is empty, so the tracked byte total is 0.
+        self.card_bytes = 0;
         self.epoch += 1;
     }
 
@@ -916,6 +1001,10 @@ impl CardStore {
             persist_strip_map(obj);
             let stripped =
                 serde_json::to_string(&card).map_err(|e| format!("serialize the demoted card {id}: {e}"))?;
+            // TRDD-T0G38TZ4 — the tracked byte total follows the demotion. The OLD stored text is
+            // `json` (the row's own text, fetched above) and the NEW stored text is `stripped`, so
+            // the delta is exact and needs no re-serialisation of the resident card.
+            let bytes_delta = stripped.len() as i64 - json.len() as i64;
             update
                 .execute(agentlens_store::duckdb::params![stripped, id])
                 .map_err(|e| format!("store the demoted card {id}: {e}"))?;
@@ -927,11 +1016,19 @@ impl CardStore {
             // Always Some here: checked at the top of the loop (TRDD-MEPIRHI4); do not turn it
             // into an expect, which would panic under the state lock.
             if let Some(resident) = self.parsed.get_mut(&id) {
-                if let Some(obj) = Arc::make_mut(resident).as_object_mut() {
+                if let Some(obj) = Arc::make_mut(&mut resident.card).as_object_mut() {
                     crate::log_reader::strip_timeline_value(obj);
                     persist_strip_map(obj);
                 }
+                // TRDD-T0G38TZ4: the resident card now describes the STRIPPED text, so its
+                // carried length must follow — otherwise the next upsert of this card would
+                // subtract a length the table never had.
+                resident.stored_len = stripped.len() as u64;
             }
+            // TRDD-T0G38TZ4: the table holds `stripped` now, so the tracked total moves by the
+            // same delta. Applied AFTER the UPDATE committed, for the same reason the resident
+            // strip is: a failed UPDATE must leave the counter describing the table.
+            self.card_bytes = (self.card_bytes as i64 + bytes_delta) as u64;
             demoted += 1;
         }
         Ok(demoted)
@@ -941,7 +1038,7 @@ impl CardStore {
     /// refcount bump per card; no text copy, no parse (TRDD-9VX3WTGU Phase C). `cards()` /
     /// `cards_json()` stay for the cold-boot, CLI and parity paths that read the TABLE.
     pub fn parsed_cards(&self) -> Vec<Arc<Value>> {
-        self.parsed.values().cloned().collect()
+        self.parsed.values().map(|c| c.card.clone()).collect()
     }
 
     /// DA0GN1CS — the whole-store persist input: every card as its resident Arc, in first-insert
@@ -956,7 +1053,7 @@ impl CardStore {
         // builds compile it out, so it costs nothing there.
         debug_assert_eq!(self.parsed.len(), self.len(), "resident layer and table diverged");
         self.full_scan_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.parsed.values().cloned().collect()
+        self.parsed.values().map(|c| c.card.clone()).collect()
     }
 
     /// One keyset page of ROOT cards (`parent_session_id IS NULL`), newest activity first,
@@ -1841,6 +1938,72 @@ mod tests {
         drop(store);
         assert!(path.exists(), "the fresh file must survive a reopen failure");
         assert_eq!(canon(&path), before, "the fresh file must hold the whole corpus");
+    }
+
+    /// TRDD-T0G38TZ4 — the tracked byte total must equal what the table actually holds, on
+    /// every path that changes the stored text.
+    ///
+    /// WHY the aggregate is the oracle and not a hand-computed number: the old implementation
+    /// read exactly this aggregate (`SELECT count(*), COALESCE(SUM(strlen(card)), 0)::BIGINT
+    /// FROM cards`), so comparing against it pins the counter to the OLD behaviour — the
+    /// counter is a replacement for that scan, not a new definition of the corpus size. The
+    /// aggregate runs on the store's own connection, in the test only.
+    ///
+    /// The paths covered: a first insert, an UPSERT of an existing card (the old bytes must
+    /// leave the total), a demotion (the stored text changes from the full card to the
+    /// stripped card), a clear, and a REOPEN (the counter is rebuilt by `load_resident`).
+    /// A reopen is the path that cannot be checked any other way: it is where the counter is
+    /// derived from the table rather than from the write path.
+    #[test]
+    fn card_bytes_counter_matches_the_duckdb_aggregate() {
+        // The oracle: the aggregate the old implementation ran, read directly from the table.
+        let aggregate = |s: &CardStore| -> (usize, u64) {
+            s.conn
+                .query_row(
+                    "SELECT count(*), COALESCE(SUM(strlen(card)), 0)::BIGINT FROM cards",
+                    [],
+                    |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as u64)),
+                )
+                .expect("aggregate the card corpus")
+        };
+        let assert_matches = |s: &CardStore, when: &str| {
+            let expected = aggregate(s);
+            let actual = s.corpus_bytes().expect("the corpus bytes are always available");
+            assert_eq!(actual, expected, "the tracked counter must match the table, {when}");
+        };
+
+        let dir = data_dir("card-bytes");
+        let mut s = CardStore::open(&dir);
+        // Cards of DIFFERENT sizes, one with a timeline and one without: a timeline card is
+        // stored whole, a timeline-free one is persist-stripped at write time, so the two
+        // exercise different stored shapes.
+        s.put(&card("with-timeline", 3000.0, 4, 64));
+        s.put(&card("without-timeline", 2000.0, 0, 8));
+        s.put(&card("big", 1000.0, 12, 512));
+        assert_matches(&s, "after the puts");
+
+        // An UPSERT: the old card's bytes must leave the total and the new card's enter it.
+        s.put(&card("with-timeline", 4000.0, 8, 64));
+        assert_matches(&s, "after an upsert of an existing card");
+
+        // A demotion: the stored text changes from the full card to the stripped card. The hot
+        // set is 1, so every other timeline card falls out of it.
+        let demoted = s.demote_cold(1).expect("demote the cold cards");
+        assert!(demoted > 0, "the demotion must have demoted something, or the test proves nothing");
+        assert_matches(&s, "after a demotion");
+
+        // A REOPEN: the counter is rebuilt by `load_resident` from the table's own text.
+        s.mark_restore_complete();
+        drop(s);
+        let s = CardStore::open(&dir);
+        assert!(s.reused(), "the store must take the reuse path, or the rebuild is not exercised");
+        assert_matches(&s, "after a reopen");
+
+        // A clear: the table is empty, so both numbers are zero.
+        let mut s = s;
+        s.clear();
+        assert_matches(&s, "after a clear");
+        assert_eq!(s.corpus_bytes().expect("the corpus bytes are always available"), (0, 0));
     }
 
 }
