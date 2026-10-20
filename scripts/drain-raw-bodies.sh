@@ -38,6 +38,10 @@ LOG="$REPO_ROOT/reports_dev/drain-loop.log"
 # The pass stderr goes here, NOT into the summary line: the summary must stay one parseable
 # JSON line per pass, and a failing pass's reason usually arrives on stderr.
 ERRLOG="$REPO_ROOT/reports_dev/drain-loop.err.log"
+# The error log is TRUNCATED when it grows past this, so a long-running drain cannot fill the
+# disk with diagnostics. The last 2000 lines are kept: the recent passes are the ones worth
+# reading, and the error log is a diagnostic aid, not the audit trail - that is $LOG.
+ERRLOG_MAX_BYTES=2000000
 
 if [ ! -x "$BIN" ]; then
   echo "drain-raw-bodies: $BIN is missing or not executable." >&2
@@ -134,12 +138,28 @@ run_pass() {
   #
   # The pass's stderr also goes to the error log: a failing pass's reason usually arrives there,
   # and a log line with no reason is exactly the failure mode this file had to be repaired for.
+  # Bound the error log BEFORE it is written to, never after.
+  if [ -f "$ERRLOG" ] && [ "$(wc -c < "$ERRLOG")" -gt "$ERRLOG_MAX_BYTES" ]; then
+    # The last 2000 LINES would not bound the file: a run of output with no newline in it is
+    # ONE line of any length, so the line-based cut kept the whole file. The cut is by BYTES:
+    # the last ERRLOG_MAX_BYTES of the file, which bounds it whatever the line structure is.
+    tail -c "$ERRLOG_MAX_BYTES" "$ERRLOG" > "$ERRLOG.trimmed" 2>/dev/null || : > "$ERRLOG.trimmed"
+    mv "$ERRLOG.trimmed" "$ERRLOG"
+  fi
   local summary
   local rest
   summary="${out%%$'\n'*}"
   if [ "$out" != "$summary" ]; then
     rest="${out#*$'\n'}"
     printf 'pass=%s extra stdout lines:\n%s\n' "$PASS_N" "$rest" >> "$ERRLOG"
+  fi
+  # AN EMPTY SUMMARY IS ITS OWN RECORD, not a truncated one. A pass that printed nothing and a
+  # pass whose stdout was lost both yield an empty capture, and a log line that cannot be
+  # classified is exactly the defect the one-line-per-pass property exists to prevent - so the
+  # empty case is marked NO-SUMMARY rather than written as a bare trailing space.
+  if [ -z "$summary" ]; then
+    summary='NO-SUMMARY'
+    printf 'pass=%s the pass printed NOTHING on stdout; the record has no summary\n' "$PASS_N" >> "$ERRLOG"
   fi
   if [ "$status" -eq 0 ]; then
     printf 'pass=%s dur=%ss %s\n' "$PASS_N" "$(( $(date +%s) - start ))" "$summary" >> "$LOG"
