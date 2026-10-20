@@ -51,13 +51,13 @@ R            = the storage ratio, UNMEASURED AT ITS WORST CASE: 6.4 (the large s
 S'           = the store's size AFTER this batch is committed — the open cost is paid at the
                NEXT open, so the pre-batch S is the wrong number to check.
 open_cost(S) = SUB-LINEAR, measured: 0.37 GiB @ S=0.31, 1.42 @ 1.51, 2.81–3.43 @ 4.0, 3.57 @ 8.0, 5.78 @ 12.0 GiB of store. The last two ratios (0.447, then 0.481) are NOT monotone, so this is a BAND, not a curve.
-               3.57 @ 8.0, 5.78 @ 12.0 GiB of store. The last two ratios (0.447, then 0.481) are NOT monotone, so this is a BAND, not a curve.
+               (the open cost is SUB-LINEAR, so a single multiplier over-reserves at small scale and under-reserves at large scale)
 
-               3.57 @ 8.0, 5.78 @ 12.0 GiB of store. The last two ratios (0.447, then 0.481) are NOT monotone, so this is a BAND, not a curve.
-               are NOT monotone, so this is a BAND, not a curve.
+               (measured: 0.37 GiB @ S=0.31, 1.42 @ 1.51, 2.81–3.43 @ 4.0, 3.57 @ 8.0, 5.78 @ 12.0)
 batch_term   = ≈1.0 GiB, SATURATING (it does NOT grow with the batch beyond ~1 GiB)
 RAM_LIMIT    = 8 GiB (DEFAULT_MEMORY_LIMIT, lib.rs:44) — DuckDB bounds ONE INSTANCE's buffer
-               manager, so the machine-level question is how many instances run concurrently.
+               so the machine-level question is how many instances run concurrently.
+               (the machine has 64 GiB of physical RAM; OWNER DECISION PENDING)
 ```
 **THE RESERVE ARITHMETIC (live, 2026-10-20):** free 311.5 GiB; reserve 20 GiB; headroom
 291.5 GiB. The remaining corpus is 37.78 GiB raw, so its settled cost is 5.90 GiB at the
