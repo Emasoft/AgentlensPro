@@ -4,7 +4,7 @@ title: alcore crash-loops on the 2GB RSS hard cap with real-world data volume
 column: todo
 status: tasked
 created: 2026-09-26T08:14:31+0200
-updated: 2026-10-18T07:33:47+0200
+updated: 2026-10-20T22:17:25+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -39,3 +39,4 @@ MEASURED 2026-09-26T16:30+0200 (main session, post-clear): open question (c) ANS
 2026-10-18: INFERRED main startup holder — CardStore.parsed keeps every card (~51.5k) as serde_json Value trees for the process life (card_store.rs:236, load_resident at :427); sizes unmeasured.
 2026-10-18 qualifier: the isolated run survived only marginally — it peaked 38 MB under the cap and its footprint fell after a memory-pressure stage-3 cache shrink at 16 s; n=1.
 2026-10-18 qualifier: "every card for the process life" ignores the demotion path (demote_cold_timelines, card_store.rs:910); "the 3 October binary" rests on bin-native/darwin-arm64/alcore's file date, not on the running process's loaded image.
+2026-10-20 — HEAP ATTRIBUTION MEASURED (reports_dev/20261020_alcore-heap-attribution.md, 413 lines, 7,342 composition samples): the 2 GB is NOT one structure and NOT the live heap. Decomposition: mimalloc pages ABANDONED by dead threads ~1,015 MB (16,248 pages x 64 KiB; 'commit = live + aband*64KiB' fits with median residual +3.6% and lands exactly on the 2048 MB cap crossing) PLUS a live Rust heap of ~1,032 MB (mi live). The RSS guard's own doc comment ('the 2+ GiB the RSS guard kills over is LIVE memory, not freed-but-retained') is FALSIFIED by the mi live counter the same codebase emits: mi live is only ~48% of the commit at the median. Of the live heap: resident parsed card layer ~200-300 MB (COMPUTED, upper bound), summary+stripped caches ~0 MB INDEPENDENT (MEASURED: live median 931 MB with the cache present vs 930 MB absent, n=6449/893 — they are Arc views onto the card layer, not copies), window.spans ~2 MB, DuckDB ~354 MB resident but in the SYSTEM allocator (outside mimalloc's commit), and ~730 MB UNATTRIBUTED. The hottest allocator path is hook_events::drain_hook_spool (hook_events.rs:312) -> bucket_contains_line (hook_events.rs:386): one spooled event costs a 57 MB day-bucket read plus a full line-by-line scan, against 599 MB of hook-events buckets. mi purged grows at a median 287 MB/s. LIVE heap goes 110 MB at up 0s -> 1,468 MB at up 2s (the log scan + card restore), then swings 44 MB..2,449 MB with the SAME card count. NOT ESTABLISHED: the link between the churn and the abandoned pages (corr(free-in-page, abandoned) = 0.383, suggestive only) and the ~730 MB unattributed remainder.
