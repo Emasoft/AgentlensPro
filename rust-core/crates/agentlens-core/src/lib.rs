@@ -1333,6 +1333,7 @@ use std::panic::Location;
 /// Callers get the summary from `ui::summary_now` (off-lock; warm, stale, or the one cold-boot
 /// build) and take the lock only for what actually needs it.
 pub fn composition_project_map(summary: &Value) -> std::collections::HashMap<String, String> {
+    COMPOSITION_PROJECT_MAP_BUILDS.with(|c| c.set(c.get() + 1));
     let mut map = std::collections::HashMap::new();
     for s in summary.get("sessions").and_then(Value::as_array).unwrap_or(&Vec::new()) {
         let Some(id) = s.get("sessionId").and_then(Value::as_str) else { continue };
@@ -1345,6 +1346,26 @@ pub fn composition_project_map(summary: &Value) -> std::collections::HashMap<Str
         map.insert(id.to_owned(), project.to_owned());
     }
     map
+}
+
+thread_local! {
+    /// How many times `composition_project_map` has been called on THIS thread. The map is
+    /// O(sessions) to build, and the scope pass used to rebuild it once PER SESSION
+    /// (O(sessions²) probes per pass) — the live profile put 14,071 of 14,071 samples in
+    /// exactly that shape. The counter is the regression's proof: a scope pass over N
+    /// sessions must build the map ONCE.
+    ///
+    /// THREAD-LOCAL, not global: cargo runs the unit tests on parallel threads, and a global
+    /// counter would count OTHER tests' builds and make the assertion a race. The scope pass
+    /// runs on one task's thread end to end (the body parse is the only `spawn_blocking`), so
+    /// a thread-local count is exactly this pass's count.
+    static COMPOSITION_PROJECT_MAP_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The number of `composition_project_map` builds on the CALLING thread — the regression
+/// counter for the O(sessions²) scope pass.
+pub fn composition_project_map_builds() -> u64 {
+    COMPOSITION_PROJECT_MAP_BUILDS.with(|c| c.get())
 }
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::MutexGuard;

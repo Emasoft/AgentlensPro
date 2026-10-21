@@ -789,7 +789,12 @@ async fn read_body_keep_under(mut body: hyper::body::Incoming, max: usize) -> Re
 ///
 /// NOT PORTED: the TS `heavyGuard` admission deferral. It keeps concurrent heavy parses from
 /// blowing the V8 heap; this core has no V8 heap and the work is already off the executor.
-async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f64) -> Result<Value, String> {
+async fn composition_for(
+    state: &Arc<Mutex<CoreState>>,
+    session_id: &str,
+    now: f64,
+    projects: &std::collections::HashMap<String, String>,
+) -> Result<Value, String> {
     let cached = {
         let mut st = state.lock_timed();
         st.composition.get_cached(session_id)
@@ -802,10 +807,13 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
     // P4x.2c) makes every composition read `project: "unknown"` and every project-scoped query
     // match nothing — while still answering 200.
     //
-    // Read the summary OFF the lock (TRDD-UTFVMVT8): resolving it under the guard rebuilt the whole
-    // summary inline on a cache miss, and this guard held the state lock for seconds doing it.
-    let (_, summary) = summary_now(state, now);
-    let project = crate::composition_project_map(&summary).remove(session_id);
+    // The map is BUILT BY THE CALLER and passed in. Building it here was O(sessions) per
+    // session: `compositions_in_scope` calls this once per in-scope session, and each call
+    // rebuilt the whole `sessionId → project` map over the entire summary — O(sessions²) map
+    // probes per scope pass. The live profile put 14,071 of 14,071 samples in exactly that
+    // shape (`composition_project_map` → `IndexMap::get_index_of` → `_platform_memcmp`).
+    // The map is now built ONCE per pass and borrowed.
+    let project = projects.get(session_id).cloned();
     let refs = {
         let st = state.lock_timed();
         crate::context_composition_index::resolve_refs(&st.bodies, session_id)
@@ -857,7 +865,10 @@ pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: 
     };
     let mut comps = Vec::with_capacity(ids.len());
     for id in ids {
-        comps.push(composition_for(state, &id, now).await?);
+        // The SAME map, borrowed: the per-session rebuild of this map was the O(sessions²)
+        // shape the live profile sampled (14,071/14,071 frames in
+        // `composition_project_map` → `IndexMap::get_index_of` → `_platform_memcmp`).
+        comps.push(composition_for(state, &id, now, &projects).await?);
     }
     Ok((comps, coverage))
 }
@@ -3960,7 +3971,9 @@ async fn handle(
         // CoreState would stall every other request on the server.
         let session_id = percent_decode(&path["/api/composition-index/".len()..]);
         let now = crate::now_ms() as f64;
-        let comp = composition_for(&state, &session_id, now).await?;
+        let (_, comp_summary) = summary_now(&state, now);
+        let comp_projects = crate::composition_project_map(&comp_summary);
+        let comp = composition_for(&state, &session_id, now, &comp_projects).await?;
         let summary = crate::context_composition_index::session_composition_summary(&comp);
         json_response(StatusCode::OK, serde_json::json!({ "summary": summary }).to_string())
     } else if method == Method::GET && path.starts_with("/api/block-content/") {
@@ -4837,5 +4850,63 @@ mod shell_tests {
         assert_eq!(substitute_tokens("a=@@A@@;b=@@B@@", &[("@@A@@", "\"@@B@@\""), ("@@B@@", "INJECTED")]), "a=\"@@B@@\";b=INJECTED");
         assert_eq!(substitute_tokens("@@NOPE@@ @@P@@/a @@P@@/b", &[("@@P@@", "/lens")]), "@@NOPE@@ /lens/a /lens/b");
         assert_eq!(substitute_tokens("x=@@V@@", &[("@@V@@", "$& $1 $$")]), "x=$& $1 $$");
+    }
+}
+
+#[cfg(test)]
+mod composition_project_map_tests {
+    use std::sync::Arc;
+
+    use super::compositions_in_scope;
+    use crate::call_body_registry::{CallBodyPointer, CallBodyRegistry};
+    use crate::{composition_project_map_builds, CoreState};
+
+    /// A pointer with no body — the composition builder then has nothing to parse, so the
+    /// scope pass exercises the MAP path without needing body files on disk.
+    fn pointer() -> CallBodyPointer {
+        CallBodyPointer {
+            kind: "request",
+            body_ref: None,
+            inline_body: Some("{}".to_owned()),
+            request_id: None,
+            span_id: None,
+            model: None,
+            query_source: None,
+            request_body_id: None,
+            message_id: None,
+            message_uuid: None,
+            ts: 0,
+        }
+    }
+
+    /// TRDD-9VX3WTGU: a scope pass over N sessions must build the `sessionId → project` map
+    /// ONCE. The pre-fix shape rebuilt it once per session — O(sessions²) map probes per
+    /// pass — and the live profile put 14,071 of 14,071 samples in exactly that shape
+    /// (`composition_project_map` → `IndexMap::get_index_of` → `_platform_memcmp`).
+    ///
+    /// The counter is thread-local, and this test runs on a single-threaded tokio runtime, so
+    /// the delta is exactly this pass's own build count — no other test can contribute to it.
+    #[tokio::test]
+    async fn a_scope_pass_builds_the_project_map_once_not_once_per_session() {
+        const N: usize = 12;
+        let dir = std::env::temp_dir().join(format!("al-compscope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut st = CoreState::open(&dir);
+        let mut registry = CallBodyRegistry::new(64, 16);
+        for i in 0..N {
+            registry.record(&format!("sess-{i:04}"), pointer());
+        }
+        st.bodies = registry;
+        let state = Arc::new(std::sync::Mutex::new(st));
+
+        let before = composition_project_map_builds();
+        let _ = compositions_in_scope(&state, None, crate::now_ms() as f64).await;
+        let builds = composition_project_map_builds() - before;
+
+        assert!(
+            builds <= 1,
+            "a scope pass over {N} sessions must build the project map ONCE, not once per session: {builds} builds"
+        );
     }
 }

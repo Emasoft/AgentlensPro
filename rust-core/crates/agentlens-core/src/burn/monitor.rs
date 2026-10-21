@@ -230,15 +230,19 @@ pub fn to_ms(ts: f64) -> f64 {
 
 /// attributionOf — the dominant-cause bucket for one api_request timeline entry.
 fn attribution_of(e: &Value) -> String {
-    if s(e, "querySource") == Some("compact") || e.get("compactionTrigger").is_some_and(truthy) {
+    let query_source = s(e, "querySource");
+    if query_source == Some("compact") || e.get("compactionTrigger").is_some_and(truthy) {
         return "compaction".to_owned();
     }
+    // `querySource` is read ONCE and reused below: the TS reads the same key twice, but each
+    // read is a `serde_json::Map` hash probe + key memcmp, and this function runs once per
+    // consumption event on every burn tick.
     for (k, pre) in [("agentName", "agent:"), ("skillName", "skill:"), ("pluginName", "plugin:"), ("mcpServerName", "mcp:")] {
         if let Some(v) = s(e, k).filter(|v| !v.is_empty()) {
             return format!("{pre}{v}");
         }
     }
-    match s(e, "querySource").filter(|v| !v.is_empty()) {
+    match query_source.filter(|v| !v.is_empty()) {
         Some(qs) if qs != "repl_main_thread" => qs.to_owned(),
         _ => "main".to_owned(),
     }
@@ -247,6 +251,14 @@ fn attribution_of(e: &Value) -> String {
 fn api_request_events(card: &Value) -> Vec<Value> {
     let mut out = Vec::new();
     let empty = Vec::new();
+    // The card-level fields are CONSTANT for the whole timeline: hoisting their lookups out of
+    // the per-event loop turns three `serde_json::Map` key lookups per EVENT into three per
+    // CARD. On a corpus of long sessions that is the difference between O(events × 3) and
+    // O(cards × 3) hash+memcmp probes — the `IndexMap::get_index_of` → `_platform_memcmp`
+    // frames the live profile attributed to this function.
+    let card_session_id = s(card, "sessionId").unwrap_or("");
+    let card_workspace = s(card, "workspace");
+    let card_account_id = s(card, "accountId");
     for e in card.get("timeline").and_then(Value::as_array).unwrap_or(&empty) {
         if s(e, "type") != Some("api_request") {
             continue;
@@ -255,11 +267,11 @@ fn api_request_events(card: &Value) -> Vec<Value> {
         let (it, ot, cr, cc) = (f(e, "inputTokens"), f(e, "outputTokens"), f(e, "cacheReadTokens"), f(e, "cacheCreateTokens"));
         let mut m = Map::new();
         m.insert("ts".into(), num(ts));
-        m.insert("sessionId".into(), s(card, "sessionId").unwrap_or("").into());
-        if let Some(ws) = s(card, "workspace") {
+        m.insert("sessionId".into(), card_session_id.into());
+        if let Some(ws) = card_workspace {
             m.insert("workspace".into(), ws.into());
         }
-        if let Some(a) = s(card, "accountId") {
+        if let Some(a) = card_account_id {
             m.insert("accountUuid".into(), a.into());
         }
         m.insert("costUsd".into(), num(f(e, "costUsd")));
@@ -299,9 +311,16 @@ fn statusline_cost_usd(be: &Value, model: Option<&str>, now_ms: f64) -> (f64, bo
 pub fn gather_consumption_events(sessions: &[Value], statusline_events: &[Value], now: f64) -> Vec<Value> {
     let mut events: Vec<Value> = Vec::new();
     let mut api_sessions: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // The card INDEX is only read by the statusline branch below, and every production caller
+    // passes an EMPTY statusline list (the statusline store is unported — see the P4m note).
+    // Building it unconditionally cost one `IndexMap` insert per session card (a hash probe +
+    // a memcmp per card) on every burn tick, for a map nobody reads. Build it only when the
+    // statusline branch can actually reach it.
     let mut card_by: IndexMap<&str, &Value> = IndexMap::new();
-    for c in sessions {
-        card_by.insert(s(c, "sessionId").unwrap_or(""), c);
+    if !statusline_events.is_empty() {
+        for c in sessions {
+            card_by.insert(s(c, "sessionId").unwrap_or(""), c);
+        }
     }
     for card in sessions {
         let evs = api_request_events(card);
@@ -361,10 +380,11 @@ struct WinSum {
     b: [f64; 5],
 }
 
-fn window_sum(events: &[Value], now: f64, window_ms: f64) -> WinSum {
+fn window_sum(events: &[&Value], now: f64, window_ms: f64) -> WinSum {
     let from = now - window_ms;
     let mut w = WinSum { tokens: 0.0, cost: 0.0, count: 0.0, b: [0.0; 5] };
     for e in events {
+        let e = *e;
         let ts = f(e, "ts");
         if ts < from || ts > now {
             continue;
@@ -401,7 +421,7 @@ fn billable_weighted_tokens(b: &[f64; 5]) -> f64 {
 }
 
 /// rateWindow — rolling-window burn rate (per-minute normalization of the window's totals).
-pub fn rate_window(events: &[Value], now: f64, window_ms: f64) -> Value {
+pub fn rate_window(events: &[&Value], now: f64, window_ms: f64) -> Value {
     let w = window_sum(events, now, window_ms);
     let minutes = window_ms / ONE_MIN_MS;
     let mut m = Map::new();
@@ -419,10 +439,11 @@ pub fn rate_window(events: &[Value], now: f64, window_ms: f64) -> Value {
 // ── Burn series (spec 1) ──────────────────────────────────────────────────────────
 
 /// dominantCause — top attribution bucket (by tokens) in the window; first-seen wins ties.
-fn dominant_cause(events: &[Value], now: f64, window_ms: f64) -> Value {
+fn dominant_cause(events: &[&Value], now: f64, window_ms: f64) -> Value {
     let from = now - window_ms;
     let mut tally: IndexMap<&str, f64> = IndexMap::new();
     for e in events {
+        let e = *e;
         let ts = f(e, "ts");
         if ts < from || ts > now {
             continue;
@@ -449,7 +470,7 @@ pub fn compute_burn_series(events: &[Value], now: f64) -> Value {
     }
     let mut sessions: Vec<Value> = Vec::new();
     for (session_id, evs) in &by_session {
-        let owned: Vec<Value> = evs.iter().map(|e| (*e).clone()).collect();
+        let owned: Vec<&Value> = evs.clone();
         let five_min = rate_window(&owned, now, FIVE_MIN_MS);
         if f(&five_min, "events") == 0.0 {
             continue; // not active in the last 5 min
@@ -475,8 +496,9 @@ pub fn compute_burn_series(events: &[Value], now: f64) -> Value {
     let mut m = Map::new();
     m.insert("now".into(), num(now));
     let mut g = Map::new();
-    g.insert("oneMin".into(), rate_window(events, now, ONE_MIN_MS));
-    g.insert("fiveMin".into(), rate_window(events, now, FIVE_MIN_MS));
+    let all: Vec<&Value> = events.iter().collect();
+    g.insert("oneMin".into(), rate_window(&all, now, ONE_MIN_MS));
+    g.insert("fiveMin".into(), rate_window(&all, now, FIVE_MIN_MS));
     m.insert("global".into(), Value::Object(g));
     m.insert("sessions".into(), Value::Array(sessions));
     Value::Object(m)
@@ -486,7 +508,7 @@ pub fn compute_burn_series(events: &[Value], now: f64) -> Value {
 
 #[allow(clippy::too_many_arguments)]
 fn window_consumption(
-    events: &[Value],
+    events: &[&Value],
     now: f64,
     window_ms: f64,
     label: &str,
@@ -541,7 +563,7 @@ fn window_consumption(
 fn observed_capacity_for<'a>(
     config: &'a BurnConfig,
     account_uuid: Option<Option<&str>>,
-    events: &[Value],
+    events: &[&Value],
     now: f64,
     window_ms: f64,
 ) -> Option<&'a ObservedAccountCapacity> {
@@ -559,6 +581,7 @@ fn observed_capacity_for<'a>(
             let mut active: std::collections::HashSet<&str> = std::collections::HashSet::new();
             let from = now - window_ms;
             for e in events {
+                let e = *e;
                 let ts = f(e, "ts");
                 if ts < from || ts > now {
                     continue;
@@ -581,7 +604,7 @@ fn observed_capacity_for<'a>(
 }
 
 /// computeWindowBudget — rolling 5h + 7d consumption; observed capacities resolved PER WINDOW.
-pub fn compute_window_budget(events: &[Value], config: &BurnConfig, projection_tokens_per_min: f64, now: f64, account_uuid: Option<Option<&str>>) -> Value {
+pub fn compute_window_budget(events: &[&Value], config: &BurnConfig, projection_tokens_per_min: f64, now: f64, account_uuid: Option<Option<&str>>) -> Value {
     let obs5h = observed_capacity_for(config, account_uuid, events, now, FIVE_HOURS_MS);
     let obs7d = observed_capacity_for(config, account_uuid, events, now, SEVEN_DAYS_MS);
     let obs = obs5h.or(obs7d);
@@ -628,9 +651,9 @@ pub fn compute_window_budget(events: &[Value], config: &BurnConfig, projection_t
 /// computeAccountWindowBudgets — the same event stream split per OAuth account, each with its
 /// own budget + burn rate; unknown bucket pinned last, else heaviest 7d consumption first.
 pub fn compute_account_window_budgets(events: &[Value], config: &BurnConfig, now: f64) -> Value {
-    let mut by_account: IndexMap<Option<&str>, Vec<Value>> = IndexMap::new();
+    let mut by_account: IndexMap<Option<&str>, Vec<&Value>> = IndexMap::new();
     for e in events {
-        by_account.entry(s(e, "accountUuid")).or_default().push(e.clone());
+        by_account.entry(s(e, "accountUuid")).or_default().push(e);
     }
     let mut out: Vec<Value> = Vec::new();
     for (account_uuid, evs) in &by_account {
@@ -650,8 +673,9 @@ pub fn compute_account_window_budgets(events: &[Value], config: &BurnConfig, now
         if b["accountUuid"].is_null() {
             return std::cmp::Ordering::Less;
         }
-        let (ka, kb) = (f(&a["budget"]["sevenDay"], "consumedTokens"), f(&b["budget"]["sevenDay"], "consumedTokens"));
-        kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
+        f(&b["budget"]["sevenDay"], "consumedTokens")
+            .partial_cmp(&f(&a["budget"]["sevenDay"], "consumedTokens"))
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     Value::Array(out)
 }
@@ -876,7 +900,8 @@ fn card_ttl_regime(card: Option<&Value>, ttl_ctx: Option<&TtlContext>) -> TtlReg
 pub fn compute_burn_status(events: &[Value], sessions: &[Value], config: &BurnConfig, now: f64, ttl_ctx: Option<&TtlContext>) -> Value {
     let series = compute_burn_series(events, now);
     let projection = f(&series["global"]["fiveMin"], "tokensPerMin");
-    let budget = compute_window_budget(events, config, projection, now, None);
+    let borrowed: Vec<&Value> = events.iter().collect();
+    let budget = compute_window_budget(&borrowed, config, projection, now, None);
     let alerts = evaluate_burn_alerts(&series, &budget, config, sessions, events, now);
     let mut m = Map::new();
     m.insert("now".into(), num(now));
@@ -1000,7 +1025,7 @@ pub fn compute_session_status(
     let sl = card.get("statusline").filter(|v| !v.is_null() && v.is_object());
     let sid = s(card, "sessionId").unwrap_or("");
 
-    let sess_events: Vec<Value> = events.iter().filter(|e| s(e, "sessionId") == Some(sid)).cloned().collect();
+    let sess_events: Vec<&Value> = events.iter().filter(|e| s(e, "sessionId") == Some(sid)).collect();
     let tokens_per_min = f(&rate_window(&sess_events, now, FIVE_MIN_MS), "tokensPerMin");
 
     // Last-call cost: newest api_request WITH a costUsd key (a null value still counts as
@@ -1016,7 +1041,8 @@ pub fn compute_session_status(
     let total_tok = f(card, "inputTokens") + f(card, "outputTokens") + f(card, "cacheReadTokens") + f(card, "cacheCreateTokens");
 
     let series = compute_burn_series(events, now);
-    let budget = compute_window_budget(events, config, f(&series["global"]["fiveMin"], "tokensPerMin"), now, None);
+    let borrowed: Vec<&Value> = events.iter().collect();
+    let budget = compute_window_budget(&borrowed, config, f(&series["global"]["fiveMin"], "tokensPerMin"), now, None);
 
     // Comparison vs previous sessions in the SAME (non-empty) workspace, older than this one.
     let ws = s(card, "workspace").unwrap_or("");
