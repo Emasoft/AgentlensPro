@@ -102,12 +102,33 @@ fn main() {
         return;
     }
 
-    let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).max(4)).unwrap_or(4);
-    let mut store = agentlens_store::open_store(std::path::Path::new(store_dir), agentlens_store::DEFAULT_MEMORY_LIMIT, threads)
-        .unwrap_or_else(|e| {
-            eprintln!("alstore: cannot open store: {e}");
-            exit(1);
-        });
+
+    // TRDD-CQ4652DQ: the CLI DuckDB sizing is BOUNDED, not the old 8GB + available_parallelism().
+    // The in-process server path already made this change for the same reason (chores.rs,
+    // TRDD-768NEX6E: at 8GB + available_parallelism() the DuckDB scans of the pass became the
+    // dominant IO/CPU load of the machine). The CLI was left at the old sizing, and a live pass
+    // grew to 4.8 GB RSS — the janitor memory-guard logged it as the largest process on the box.
+    // The env override lets an operator raise the ceiling for a deliberate bulk backfill
+    // without a rebuild; an unusable value falls back to the bounded default WITH a message.
+    let sizing = agentlens_store::cli_sizing(&std::env::vars().collect());
+    for w in &sizing.warnings {
+        eprintln!("alstore: {w}");
+    }
+    // The sizing is printed so the next reader sees WHY the process is the size it is: a pass
+    // that grows to a gigabyte is then explicable instead of mysterious.
+    eprintln!(
+        "alstore: duckdb memory_limit={} threads={}",
+        sizing.memory_limit, sizing.threads
+    );
+    let mut store = agentlens_store::open_store(
+        std::path::Path::new(store_dir),
+        &sizing.memory_limit,
+        sizing.threads,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("alstore: cannot open store: {e}");
+        exit(1);
+    });
 
     match cmd.as_str() {
         "ingest" => {

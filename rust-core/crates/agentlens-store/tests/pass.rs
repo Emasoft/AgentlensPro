@@ -241,6 +241,7 @@ fn unchanged_bytes_are_still_deleted_so_the_content_guard_does_not_wedge_the_dra
     assert!(!bodies.join("a.request.json").exists());
     assert!(!bodies.join("b.response.json").exists());
 }
+#[test]
 fn legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero() {
     // TRDD-6SPXOV0P box 3: a name parked BEFORE the reclaim fix (persisted in `.pass-state.json`,
     // always also a skip name — 307/307 overlapped on the machine that surfaced this) must not

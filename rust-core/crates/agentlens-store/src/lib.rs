@@ -46,6 +46,115 @@ pub const DEFAULT_MEMORY_LIMIT: &str = "8GB";
 /// bodies pass) caps here: the process runs under a 2048 MB cap and DuckDB's allocator is invisible
 /// to mimalloc but counts in phys_footprint, so the per-connection limits must sum well below it.
 pub const SERVER_MEMORY_LIMIT: &str = "512MiB";
+
+/// The `alstore` CLI DuckDB memory ceiling (TRDD-CQ4652DQ) — the ceiling the OFFLINE bodies
+/// pass runs under. It is NOT the server 512MiB: the CLI is a standalone process with no
+/// 2048 MB server cap to fit under, but it is still BOUNDED. The CLI used to ask for
+/// DEFAULT_MEMORY_LIMIT (8GB) with available_parallelism() threads, and a live pass grew to
+/// 4.8 GB RSS on a 64 GB machine — the janitor memory-guard logged it as the largest process
+/// on the box with 99 MB of free memory. 1GiB holds the store own default per-pass budget
+/// (DEFAULT_MAX_BYTES_PER_PASS = 512 MiB of raw bodies) plus the DuckDB scan overhead, and
+/// cuts the ceiling by 8x. A deliberate bulk backfill raises it with
+/// AGENTLENS_DUCKDB_MEMORY_LIMIT; a value DuckDB cannot use falls back to this default with
+/// a message, never to 8GB and never to a panic.
+pub const CLI_MEMORY_LIMIT: &str = "1GiB";
+/// The CLI DuckDB thread count. Two, like the in-process server path (chores.rs, TRDD-768NEX6E):
+/// available_parallelism() is what made the pass the machine-dominant IO/CPU load in the
+/// measurement that card records. Bounded, and raisable with AGENTLENS_DUCKDB_THREADS.
+pub const CLI_THREADS: usize = 2;
+/// The env var an operator sets to raise the CLI ceiling for a deliberate bulk backfill.
+pub const DUCKDB_MEMORY_LIMIT_ENV: &str = "AGENTLENS_DUCKDB_MEMORY_LIMIT";
+/// The env var that overrides the CLI thread count.
+pub const DUCKDB_THREADS_ENV: &str = "AGENTLENS_DUCKDB_THREADS";
+
+/// The DuckDB sizing the CLI runs with, plus any fallback message the operator must see.
+pub struct Sizing {
+    /// The `memory_limit` string handed to DuckDB.
+    pub memory_limit: String,
+    /// The DuckDB thread count.
+    pub threads: usize,
+    /// One line per rejected override. Empty on a clean run.
+    pub warnings: Vec<String>,
+}
+
+/// Resolve the CLI DuckDB sizing from an environment MAP.
+///
+/// WHY A MAP AND NOT `std::env`: cargo runs the tests of one binary as parallel THREADS in one
+/// process, so a test that sets a real env var races every other test in the binary. The repo
+/// precedent is `agentlens_core::chores::hook_events_retention_days`, which takes a
+/// `&HashMap<String, String>` for the same reason.
+///
+/// A REJECTED override falls back to the bounded default and says so. It never falls back to
+/// the old 8GB (the defect) and never panics: the pass must run, loudly, at a size the operator
+/// can predict. An EMPTY value is an ABSENCE, not an error — the TS store treats it the same
+/// way (`src/store/db.ts` memoryLimit), so setting the var to "" must not be a new failure mode.
+pub fn cli_sizing(vars: &HashMap<String, String>) -> Sizing {
+    let mut warnings = Vec::new();
+    let memory_limit = match vars.get(DUCKDB_MEMORY_LIMIT_ENV).map(|s| s.trim()) {
+        None | Some("") => CLI_MEMORY_LIMIT.to_owned(),
+        Some(raw) => match memory_limit_rejection(raw) {
+            None => raw.to_owned(),
+            Some(why) => {
+                warnings.push(format!(
+                    "{DUCKDB_MEMORY_LIMIT_ENV}={raw} is not a usable DuckDB memory limit ({why}); using the default {CLI_MEMORY_LIMIT}"
+                ));
+                CLI_MEMORY_LIMIT.to_owned()
+            }
+        },
+    };
+    let threads = match vars.get(DUCKDB_THREADS_ENV).map(|s| s.trim()) {
+        None | Some("") => CLI_THREADS,
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(n) if (1..=64).contains(&n) => n,
+            _ => {
+                warnings.push(format!(
+                    "{DUCKDB_THREADS_ENV}={raw} is not a thread count between 1 and 64; using the default {CLI_THREADS}"
+                ));
+                CLI_THREADS
+            }
+        },
+    };
+    Sizing { memory_limit, threads, warnings }
+}
+
+/// Why a `memory_limit` string cannot be handed to DuckDB, or `None` when it can.
+///
+/// The value is only VALIDATED here, never converted: DuckDB owns the unit semantics, so the
+/// string that passes here is the string DuckDB receives. The check exists because an
+/// unparseable value used to reach DuckDB as a SQL literal and fail the whole store open —
+/// and because the value is interpolated into `SET memory_limit = ...` (open_store), so a
+/// value carrying a quote is rejected here rather than reaching the SQL at all.
+fn memory_limit_rejection(s: &str) -> Option<&'static str> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Some("it is empty");
+    }
+    let split = trimmed
+        .find(|c: char| c.to_digit(10).is_none() && c != '.')
+        .unwrap_or(trimmed.len());
+    let (num, unit) = trimmed.split_at(split);
+    if num.is_empty() {
+        return Some("it does not start with a number");
+    }
+    let value: f64 = match num.parse() {
+        Ok(v) => v,
+        Err(_) => return Some("its number does not parse"),
+    };
+    if !value.is_finite() || value <= 0.0 {
+        return Some("its value is not a positive number");
+    }
+    let unit = unit.trim();
+    if !unit.is_empty()
+        && !matches!(
+            unit.to_ascii_uppercase().as_str(),
+            "B" | "K" | "KB" | "M" | "MB" | "G" | "GB" | "T" | "TB" | "KIB" | "MIB" | "GIB" | "TIB"
+        )
+    {
+        return Some("its unit is not one of B, KB, MB, GB, TB, KiB, MiB, GiB, TiB");
+    }
+    None
+}
+
 /// Spill directory name under a store/statusline dir.
 pub const TMP_DIR: &str = "tmp";
 
