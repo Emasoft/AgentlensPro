@@ -7,11 +7,15 @@
 //! Append-only daily buckets ON PURPOSE: a per-event rewrite of a growing store is the exact
 //! pattern that destroyed 420GB of SSD in 4 hours — never reintroduce it here either.
 //!
-//! NOT PORTED (each has its own TS subsystem, deferred): the boot-time hook-spool drain + its
-//! byte-for-byte durability verification (TRDD-K3WDPR7M). The in-memory recent-events ring IS
-//! ported (P4r.5 — it feeds the burn gate), the statusline divert lands in the ported store
-//! (row 5) instead of dropping, and (P5) the StopFailure capacity auto-calibration now runs
-//! through `crate::burn_calibration` too — see the bottom of `ingest_hook_event`.
+//! PORTED: the boot-time hook-spool drain + its byte-for-byte durability verification
+//! (TRDD-K3WDPR7M). The verification is an OFFSET SEEK into the day bucket — it opens the
+//! bucket, seeks to the recorded byte offset, and reads exactly that many bytes. That seek is
+//! the CURRENT state; the whole-bucket scan it replaced (which re-read the entire 69 MB day
+//! bucket once per spooled event) was the PREVIOUS state and is gone. The in-memory
+//! recent-events ring IS ported (P4r.5 — it feeds the burn gate), the statusline divert lands in
+//! the ported store (row 5) instead of dropping, and (P5) the StopFailure capacity
+//! auto-calibration now runs through `crate::burn_calibration` too — see the bottom of
+//! `ingest_hook_event`.
 
 use std::path::{Path, PathBuf};
 
@@ -454,22 +458,41 @@ fn quarantine(file: &Path, rejected_dir: &Path, out: &mut SpoolDrain) {
 /// Returns false on ANY shortfall — bucket missing, short read, length mismatch, byte mismatch —
 /// so the caller KEEPS the source copy. It never panics.
 pub fn verify_appended_line(pos: &AppendPosition, expected_line: &str) -> bool {
+    verify_appended_line_bytes(pos, expected_line).0
+}
+
+/// The same verification, plus the number of bytes actually READ from the bucket.
+///
+/// The byte count is what makes the read volume of a drain MEASURABLE rather than asserted: a
+/// successful verification reads exactly `pos.length` bytes, whatever the size of the bucket, so
+/// a drain tick over N spooled events reads the SUM of the appended line lengths — not N times the
+/// day bucket. `bytes_read` is 0 when the check fails before any read happens (a length mismatch
+/// or a missing bucket), and the exact number of bytes actually read when the read came up short.
+pub fn verify_appended_line_bytes(pos: &AppendPosition, expected_line: &str) -> (bool, u64) {
     let expected = expected_line.as_bytes();
     // The recorded length must match the line we expect — a mismatch fails fast, before any read.
     if expected.len() as u64 != pos.length {
-        return false;
+        return (false, 0);
     }
-    let Ok(mut f) = std::fs::File::open(&pos.bucket_path) else { return false }; // bucket vanished — cannot prove durability
+    let Ok(mut f) = std::fs::File::open(&pos.bucket_path) else { return (false, 0) }; // bucket vanished — cannot prove durability
     use std::io::{Read, Seek, SeekFrom};
     if f.seek(SeekFrom::Start(pos.offset)).is_err() {
-        return false;
+        return (false, 0);
     }
     let mut buf = vec![0u8; pos.length as usize];
-    match f.read_exact(&mut buf) {
-        Ok(()) => buf == expected,
-        // Fewer bytes than expected — a truncated / short write.
-        Err(_) => false,
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match f.read(&mut buf[filled..]) {
+            Ok(0) => break, // EOF — the bucket is shorter than the recorded position says
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
     }
+    if filled != buf.len() {
+        return (false, filled as u64); // fewer bytes than expected — a truncated / short write
+    }
+    (buf == expected, pos.length)
 }
 
 /// server.ts RECENT_EVENTS_CAP — the in-memory ring the gate + buildGateState read.

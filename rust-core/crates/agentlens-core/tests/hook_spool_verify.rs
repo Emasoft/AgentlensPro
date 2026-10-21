@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use agentlens_core::hook_events::{append_hook_event, drain_hook_spool, verify_appended_line, AppendPosition};
+use agentlens_core::hook_events::{append_hook_event, drain_hook_spool, verify_appended_line, verify_appended_line_bytes, AppendPosition};
 use agentlens_core::{now_ms, CoreState};
 use serde_json::{json, Map, Value};
 
@@ -137,6 +137,67 @@ fn a_missing_bucket_does_not_verify() {
     assert!(!verify_appended_line(&a, &a_line), "a vanished bucket cannot prove durability");
 }
 
+
+/// The read volume of a verification is O(the appended line), NOT O(the day bucket).
+///
+/// This is the acceptance measurement: the previous implementation read the WHOLE bucket per
+/// spooled event. Here the bucket is padded with megabytes of unrelated data BEFORE the verified
+/// line, and the verification still reads exactly the appended line length — proving the read is a
+/// SEEK, not a scan, and that a drain tick reads the sum of the appended lengths rather than N
+/// times the day bucket.
+#[test]
+fn the_verification_reads_only_the_appended_line_not_the_whole_bucket() {
+    let dir = tmp("readvolume");
+    let ts = 1_787_000_000_000;
+    let (first, _first_line) = append(&dir, "SessionStart", "s1", ts);
+    // Pad the bucket with ~4 MB of unrelated bytes, so the bucket is far bigger than the line
+    // under test and the verified line sits at a HIGH offset.
+    let padding = "x".repeat(4096);
+    let mut padded = String::new();
+    for _ in 0..1024 {
+        padded.push_str(&padding);
+        padded.push('\n');
+    }
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&first.bucket_path).unwrap();
+        f.write_all(padded.as_bytes()).unwrap();
+    }
+    let (last, last_line) = append(&dir, "Stop", "s1", ts);
+    let bucket_len = std::fs::metadata(&last.bucket_path).unwrap().len();
+    assert!(bucket_len > 4_000_000, "the bucket is padded well past 4 MB: {bucket_len}");
+    assert!(last.offset > 4_000_000, "the verified line sits at a high offset: {}", last.offset);
+
+    let (ok, bytes_read) = verify_appended_line_bytes(&last, &last_line);
+    assert!(ok, "the line is still durable after the padding");
+    assert_eq!(bytes_read, last.length, "the verification read exactly the appended line length");
+    assert!(
+        bytes_read < bucket_len / 1000,
+        "the read volume must not scale with the bucket size (read {bytes_read} of a {bucket_len}-byte bucket)"
+    );
+}
+
+
+/// The concurrent-append property the old full-scan comment described STILL HOLDS.
+///
+/// The old comment said the whole bucket was scanned rather than "is the last line", because a
+/// concurrent append would make a last-line check spuriously fail and keep a spool file whose data
+/// IS durable. An offset SEEK removes that concern entirely: a day bucket is APPEND-ONLY, so a
+/// concurrent append can only ADD bytes at the end — it can never move or overwrite the bytes at a
+/// recorded offset. This test appends a line from "another writer" between the append and the
+/// verification, and the original line still verifies.
+#[test]
+fn a_concurrent_append_after_the_recorded_position_does_not_break_the_verification() {
+    let dir = tmp("concurrent");
+    let ts = 1_787_000_000_000;
+    let (a, a_line) = append(&dir, "SessionStart", "s1", ts);
+    // Another writer appends AFTER our recorded position — the exact scenario the old comment
+    // worried about.
+    let (b, b_line) = append(&dir, "Stop", "s1", ts);
+    assert!(b.offset >= a.offset + a.length, "the concurrent append lands after the recorded position");
+    assert!(verify_appended_line(&a, &a_line), "the earlier line still verifies after a concurrent append");
+    assert!(verify_appended_line(&b, &b_line), "the concurrent line verifies too");
+}
 /// The drain KEEPS the spool file when the durable copy cannot be proven.
 ///
 /// The day bucket is made a symlink to /dev/null: the append SUCCEEDS (a 200, so the ingest path
