@@ -2,7 +2,7 @@
 name: github-outbound-identity-and-mention-guards
 description: "check-identities is green but an address is public / agent pasted an account table into an issue / email leaked in a GitHub comment / redact a published comment / identity guard scans files not posts / a bare @handle paged a stranger on github / at-mention notified the wrong person / how to write a handle without pinging / mentions: search qualifier vs text search / @manager @janitor notified by mistake / deny-identity-leak-to-github.js PreToolUse hook / pasting get_account_status into a comment / is this hit a real address or a placeholder / bulk redaction sweep / searching for at-mentions returns thousands of hits / backtick the handle to make it inert"
 ocd: 2026-08-02
-lmd: 2026-10-14
+lmd: 2026-10-20
 metadata:
   node_type: memory
   type: project
@@ -19,6 +19,11 @@ An identity guard that scans FILES cannot see what an agent POSTS. On 2026-08-02
 ^ATOM-N20K-LDOD [desc:"A bare @handle in GitHub prose pages a real user; backtick it, and use mentions: to find real pages", keywords: at-mention_paged_a_stranger_on_github @manager_@janitor_notified_by_mistake how_to_write_a_handle_without_pinging mentions_search_qualifier_vs_text_search, type: reference, ocd: 2026-08-02, lmd: 2026-08-02]
 
 An `@name` written in GitHub prose PAGES the account with that handle, and the handles agents reach for are already taken by real people. On 2026-08-02 agents writing role names in issue bodies notified two strangers across 9 issues (confirmed with the authoritative `mentions:<user>` search qualifier — NOT with a text search for the handle, whose 932 hits were GitHub tokenising the word and matching every prose use of it). The fix is one character each side: wrapped in backticks the handle renders as code and notifies nobody. The outbound guard `scripts/deny-identity-leak-to-github.js` now denies a bare mention in any `gh` post, stripping fenced and inline code first so the backticked form still passes.
+
+
+## See also
+
+- [[memory-scope-leak-detector-false-positives]]
 
 ## Governed by
 

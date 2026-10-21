@@ -516,7 +516,7 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
 
-<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=b2b81262caa2 generated=2026-09-24T18:04:40+0200
+<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=f943de2ad1b9 generated=2026-10-14T15:50:45+0200
 ## Wikimem index (PROJECT scope) — recall by symptom, read on demand
 
 Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "<symptom>" .claude/project/memory`.
@@ -537,12 +537,30 @@ Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "
 **agentlenspro-identity** — what is this repo
 - [agentlenspro-identity](.claude/project/memory/agentlenspro-identity.md) — what is this repo
 
+**agentlenspro-ops-lessons-testing-and-process-hygiene** — background agent shows running but does nothing
+- [agentlenspro-ops-lessons-testing-and-process-hygiene](.claude/project/memory/agentlenspro-ops-lessons-testing-and-process-hygiene.md) — background agent shows running but does nothing
+  - [github-outbound-identity-and-mention-guards](.claude/project/memory/github-outbound-identity-and-mention-guards.md) — check-identities is green but an address is public
+  - [test-port-race-and-mocha-isolation](.claude/project/memory/test-port-race-and-mocha-isolation.md) — a free-port probe is flaky in CI but passes on rerun
+  - [test-flaky-and-ci-red-diagnosis](.claude/project/memory/test-flaky-and-ci-red-diagnosis.md) — a test is flaky under load but fails in isolation too
+  - [hook-message-bar-and-gate-emitters](.claude/project/memory/hook-message-bar-and-gate-emitters.md) — what may a hook say to a model
+  - [background-agent-and-cache-liveness](.claude/project/memory/background-agent-and-cache-liveness.md) — background agent shows running but does nothing
+  - [worktree-test-and-build-hazards](.claude/project/memory/worktree-test-and-build-hazards.md) — a rust parity test fails in one worktree and passes in another with no source change
+
 **agentlenspro-publish-pipeline** — how do I release
 - [agentlenspro-publish-pipeline](.claude/project/memory/agentlenspro-publish-pipeline.md) — how do I release
   - [dashboard-tree-render-topology](.claude/project/memory/dashboard-tree-render-topology.md) — where does the session timeline
 
 **always-on-ingestion-model** — how does no-loss ingestion work
 - [always-on-ingestion-model](.claude/project/memory/always-on-ingestion-model.md) — how does no-loss ingestion work
+
+**hook-events-pipeline** — how does AgentLens capture Claude Code lifecycle events
+- [hook-events-pipeline](.claude/project/memory/hook-events-pipeline.md) — how does AgentLens capture Claude Code lifecycle events
+  - [hook-burn-gate](.claude/project/memory/hook-burn-gate.md) — why does the burn gate deny an agent launch
+  - [hook-install-and-timeouts](.claude/project/memory/hook-install-and-timeouts.md) — how do I install or change hook registration
+  - [review-gate-per-turn-scan](.claude/project/memory/review-gate-per-turn-scan.md) — review gate demands a review for an old command
+  - [review-gate-credit-and-isolation](.claude/project/memory/review-gate-credit-and-isolation.md) — review fork in a worktree credited
+  - [review-gate-stop-hook-cap](.claude/project/memory/review-gate-stop-hook-cap.md) — goal paused hook blocked the turn 9 times
+  - [claude-code-transcript-turn-shapes](.claude/project/memory/claude-code-transcript-turn-shapes.md) — how do I find the start of a turn in a Claude Code transcript
 
 **otlp-ingest-topology** — which OTLP ingest path is actually live
 - [otlp-ingest-topology](.claude/project/memory/otlp-ingest-topology.md) — which OTLP ingest path is actually live
@@ -552,10 +570,8 @@ Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "
 - [agentlenspro-ops-lessons-concurrency-and-event-loop](.claude/project/memory/agentlenspro-ops-lessons-concurrency-and-event-loop.md) — server hangs at 100% cpu and every request times out or SIGTERM is ignored
 - [agentlenspro-ops-lessons-deploy-and-install](.claude/project/memory/agentlenspro-ops-lessons-deploy-and-install.md) — how to deploy agentlenspro on a machine
 - [agentlenspro-ops-lessons-store-durability-and-memory](.claude/project/memory/agentlenspro-ops-lessons-store-durability-and-memory.md) — a span segment over 512MB breaks setup or silently drops a day of results
-- [agentlenspro-ops-lessons-testing-and-process-hygiene](.claude/project/memory/agentlenspro-ops-lessons-testing-and-process-hygiene.md) — background agent shows running but does nothing
 - [ctxmap-exact-measurement-cost](.claude/project/memory/ctxmap-exact-measurement-cost.md) — ctxmap/ctxvis exact token measurement is slow
 - [dependency-typosquat-alerts-are-false-positives](.claude/project/memory/dependency-typosquat-alerts-are-false-positives.md) — janitor says preact is a typosquat of react
-- [hook-events-pipeline](.claude/project/memory/hook-events-pipeline.md) — how does AgentLens capture Claude Code lifecycle events
 - [loaded-plugin-version-detection](.claude/project/memory/loaded-plugin-version-detection.md) — which plugin version is a session actually running
 - [log-scan-performance](.claude/project/memory/log-scan-performance.md) — the boot scan of the jsonl corpus is slow
 - [memory-scope-leak-proposed](.claude/project/memory/memory-scope-leak-proposed.md)

@@ -4,7 +4,7 @@ title: the hook-spool drain re-reads the whole day-bucket per event and strands 
 column: todo
 status: tasked
 created: 2026-10-20T23:08:29+0200
-updated: 2026-10-20T23:09:01+0200
+updated: 2026-10-21T00:07:03+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -110,12 +110,12 @@ is only kept when durability is UNPROVEN. The read-back does not need to scan th
 
 ## Acceptance
 
-- [ ] A drain tick's total bytes read is measured and is O(bucket) per CALL, not per event.
-- [ ] The verification still catches a genuinely-absent record (a negative test: an event that was
+- [x] A drain tick's total bytes read is measured and is O(bucket) per CALL, not per event.
+- [x] The verification still catches a genuinely-absent record (a negative test: an event that was
       NOT appended is still detected as unproven and its spool file is KEPT).
-- [ ] The concurrent-append property the current comment describes still holds (a record appended by
+- [x] The concurrent-append property the current comment describes still holds (a record appended by
       another writer mid-drain is not spuriously reported as absent).
-- [ ] `cargo clippy --all-targets -D warnings` is clean.
+- [x] `cargo clippy --all-targets -D warnings` is clean.
 
 ## Notes
 
@@ -127,3 +127,12 @@ is only kept when durability is UNPROVEN. The read-back does not need to scan th
 ## Approval log
 
 - 2026-10-20T23:08:29+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Implementation notes
+
+Ported the TypeScript mechanism: ndjsonBuckets.AppendPosition (the byte offset of the line = the bucket size immediately BEFORE the append, and the line length INCLUDING its newline) + hookEventStore.verifyAppendedLine (open the bucket, SEEK to the offset, read EXACTLY that many bytes, compare byte-for-byte). The Rust side now records the position on every append (append_bucket_line / append_hook_event return it) and the drain verification seeks instead of re-reading and scanning the whole 69 MB day bucket once per spooled event.
+CHANGED: rust-core/crates/agentlens-core/src/hook_events.rs — new pub struct AppendPosition { bucket_path, offset, length }; append_bucket_line now returns AppendPosition (byte count = pos.length); append_hook_event returns (record, bytes, position, line); ingest_hook_event returns (status, body, Option<(AppendPosition, String)>) — the append proof, present ONLY on the append path; bucket_contains_line (whole-bucket read_to_string + line scan) REPLACED by verify_appended_line, which seeks to pos.offset and reads exactly pos.length bytes; the drain now uses the returned position.
+CHANGED: rust-core/crates/agentlens-core/src/lib.rs (the append_bucket_line call site — persist_dropped_log_event now accounts pos.length bytes, same value as before) and src/ui.rs (the ingest_hook_event call site — the new third return value is ignored there, behaviour identical). The module doc of hook_events.rs no longer claims the drain/verification is NOT PORTED.
+SAFETY (TRDD-K3WDPR7M): the verify-before-delete rule is UNCHANGED and was not weakened. The spool file is unlinked ONLY after verify_appended_line returns true; every failure (bucket missing, short read, length mismatch, byte mismatch) keeps the file and counts it as unverified, with the existing log wording kept. There is no fallback that deletes the file when verification is inconclusive.
+CONCURRENCY: the old comment (the whole bucket was scanned rather than checked as the last line, because a concurrent append would make a last-line check spuriously fail) is REPLACED by the reason the seek is safe: a day bucket is APPEND-ONLY, so a concurrent append can only ADD bytes at the end and can never move or overwrite the bytes at a recorded offset.
+ACCEPTANCE, each ticked box mapped to the test that verified it (rust-core/crates/agentlens-core/tests/hook_spool_verify.rs, 10 tests, all passing): box 1 (bytes read measured, not per-event-O(bucket)) — the_verification_reads_only_the_appended_line_not_the_whole_bucket pads the bucket past 4 MB and asserts the verification read exactly the appended line length; note the read volume is O(the appended line) per event, which is STRICTLY BETTER than the box's O(bucket)-per-CALL target. Box 2 (a genuinely-absent record is still detected and its spool file KEPT) — the_drain_keeps_the_spool_file_when_the_durable_copy_cannot_be_proven (the bucket is a symlink to /dev/null, so the append succeeds but the bytes are discarded) plus a_truncated_line_does_not_verify and same_length_but_different_bytes_do_not_verify. Box 3 (concurrent-append property holds) — a_concurrent_append_after_the_recorded_position_does_not_break_the_verification. Box 4 (clippy clean) — cargo clippy -p agentlens-core --all-targets -- -D warnings exits 0.
