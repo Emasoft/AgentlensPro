@@ -4,7 +4,7 @@ title: The deploy script builds only the JS bundle, so rust-core commits are str
 column: todo
 status: tasked
 created: 2026-10-20T22:35:14+0200
-updated: 2026-10-20T22:35:14+0200
+updated: 2026-10-21T01:23:40+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -39,3 +39,8 @@ ACCEPTANCE.
 ## Approval log
 
 - 2026-10-20T22:35:14+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Implementation notes
+
+2026-10-21 — scripts/safe-deploy.sh gained a RUST half (build -> stage into bin-native/<plat>/ -> codesign -> verify the running pid's INODE) plus scripts/deploy-rust-helper.js; the rust stage has its own fail() messages ('the RUST half is SUSPECT') because a rust failure leaves a fresh JS bundle with the old binary serving, and --dry-run now reports BOTH halves.
+13 new tests in src/test/safeDeploy.test.ts (suite 'safe-deploy.sh — the RUST half') cover: the skip is stated, a rust failure reports the RUST half as suspect and leaves the JS bundle alone, --dry-run reports both halves, a non-executable staged binary fails, the real codesign runs on macOS, and a verify-running inode mismatch is a loud failure. The shared GREEN stubs RUST_BUILD_CMD so no test ever runs a real cargo build.
