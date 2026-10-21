@@ -842,6 +842,17 @@ pub struct VerifyItem {
     pub ts_ms: Option<i64>,
 }
 
+/// The BORROWING form of `VerifyItem`. A caller that already holds the body content must NOT
+/// have to clone it to run the gate: the pass holds a whole settle group's content in Rust
+/// heap, and cloning it for the gate doubled that peak (the clone is what the pass memory
+/// blew up on). This struct carries the same three fields as references, so the gate
+/// behaviour is byte-identical — only the ownership differs.
+pub struct VerifyItemRef<'a> {
+    pub src_name: &'a str,
+    pub raw: &'a str,
+    pub ts_ms: Option<i64>,
+}
+
 /// The batched delete gate: bytes + row + ts for a whole batch in a handful of round trips.
 pub fn verify_bodies_in_store(store: &Store, items: &[VerifyItem]) -> Result<std::collections::HashMap<String, VerifyResult>, String> {
     verify_bodies_in_store_cached(store, items, &mut SpanCache::new())
@@ -855,16 +866,33 @@ pub fn verify_bodies_in_store_cached(
     items: &[VerifyItem],
     span_cache: &mut SpanCache,
 ) -> Result<std::collections::HashMap<String, VerifyResult>, String> {
+    // Borrow, never clone: the owned items already hold the content, so the refs cost nothing.
+    let refs: Vec<VerifyItemRef<'_>> = items
+        .iter()
+        .map(|it| VerifyItemRef { src_name: it.src_name.as_str(), raw: it.raw.as_str(), ts_ms: it.ts_ms })
+        .collect();
+    verify_bodies_in_store_cached_ref(store, &refs, span_cache)
+}
+
+/// The gate BORROWING implementation — the ONE copy of the logic, so the owned and the borrowed
+/// entry points can never disagree about a delete decision. Same proof, same order, same
+/// outcomes as the gate has always had: reconstruct-from-the-store first, then the
+/// (src_name, ts) row, and only a fully-ok result lets the caller delete a source file.
+pub fn verify_bodies_in_store_cached_ref(
+    store: &Store,
+    items: &[VerifyItemRef<'_>],
+    span_cache: &mut SpanCache,
+) -> Result<std::collections::HashMap<String, VerifyResult>, String> {
     let mut results = std::collections::HashMap::new();
     if items.is_empty() {
         return Ok(results);
     }
-    let with_ids: Vec<(&VerifyItem, String)> = items.iter().map(|it| (it, body_id_of(&it.raw))).collect();
+    let with_ids: Vec<(&VerifyItemRef<'_>, String)> = items.iter().map(|it| (it, body_id_of(it.raw))).collect();
 
     // ROW+TS — one VALUES-join query for the whole batch.
     let values = with_ids
         .iter()
-        .map(|(it, id)| format!("({}, {})", q(id), q(&it.src_name)))
+        .map(|(it, id)| format!("({}, {})", q(id), q(it.src_name)))
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
@@ -898,13 +926,13 @@ pub fn verify_bodies_in_store_cached(
         for (it, body_id) in chunk.iter() {
             match rebuilt.get(body_id).expect("reconstruct_chunk answers every id it was given") {
                 Err(e) => {
-                    results.insert(it.src_name.clone(), VerifyResult { ok: false, reason: Some(format!("{}: {e}", it.src_name)) });
+                    results.insert(it.src_name.to_string(), VerifyResult { ok: false, reason: Some(format!("{}: {e}", it.src_name)) });
                     continue;
                 }
                 Ok(back) => {
-                    if sha256_hex(back) != sha256_hex(&it.raw) {
+                    if sha256_hex(back) != sha256_hex(it.raw) {
                         results.insert(
-                            it.src_name.clone(),
+                            it.src_name.to_string(),
                             VerifyResult { ok: false, reason: Some(format!("{}: reconstruction != source bytes", it.src_name)) },
                         );
                         continue;
@@ -913,7 +941,7 @@ pub fn verify_bodies_in_store_cached(
             }
             let Some(&ts_ms) = row_map.get(&format!("{} {}", body_id, it.src_name)) else {
                 results.insert(
-                    it.src_name.clone(),
+                    it.src_name.to_string(),
                     VerifyResult {
                         ok: false,
                         reason: Some(format!("{}: no body row for this src_name (content may exist under another name)", it.src_name)),
@@ -924,13 +952,13 @@ pub fn verify_bodies_in_store_cached(
             if let Some(want) = it.ts_ms {
                 if (ts_ms - want).abs() > TS_TOLERANCE_MS {
                     results.insert(
-                        it.src_name.clone(),
+                        it.src_name.to_string(),
                         VerifyResult { ok: false, reason: Some(format!("{}: stored ts {ts_ms} != capture time {want}", it.src_name)) },
                     );
                     continue;
                 }
             }
-            results.insert(it.src_name.clone(), VerifyResult { ok: true, reason: None });
+            results.insert(it.src_name.to_string(), VerifyResult { ok: true, reason: None });
         }
     }
     Ok(results)

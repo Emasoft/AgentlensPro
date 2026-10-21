@@ -27,7 +27,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::{flush_detailed, ingest_body_with, Store, VerifyItem, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
+use crate::{flush_detailed, ingest_body_with, Store, VerifyItemRef, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
 
 pub const DEFAULT_MAX_BYTES_PER_PASS: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_BATCH: usize = 200;
@@ -501,11 +501,17 @@ pub fn ingest_pass_observed_with(
                                 if items.is_empty() {
                                     continue;
                                 }
-                                let verify_items: Vec<VerifyItem> = items
+
+                                // BORROW the content, never clone it: `items` already owns every body in this
+                                // settle group, so cloning it here held the group's bytes TWICE in the Rust
+                                // heap (the third copy was DuckDB staging it). The gate takes references —
+                                // the SAME bytes, the SAME proof, the SAME outcomes — and the delete path
+                                // still re-reads `items` content below.
+                                let verify_items: Vec<VerifyItemRef<'_>> = items
                                     .iter()
-                                    .map(|(b, raw)| VerifyItem { src_name: b.name.clone(), raw: raw.clone(), ts_ms: Some(b.mtime_ms) })
+                                    .map(|(b, raw)| VerifyItemRef { src_name: b.name.as_str(), raw: raw.as_str(), ts_ms: Some(b.mtime_ms) })
                                     .collect();
-                                let results = match crate::verify_bodies_in_store_cached(store, &verify_items, &mut span_cache) {
+                                let results = match crate::verify_bodies_in_store_cached_ref(store, &verify_items, &mut span_cache) {
                                     Ok(r) => r,
                                     Err(e) => {
                                         // Per-chunk isolation: a store error costs THIS chunk its
