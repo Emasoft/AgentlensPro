@@ -6,6 +6,7 @@ model: sonnet[1m]
 effort: medium
 # CC >= 2.1.271: start without the user/project/local CLAUDE.md files (measured on this repo,
 # 2026-09-24: first request 61,119 -> 11,167 tokens). Everything this worker needs is in the delegation prompt and the rules below.
+# Deliberately declares no skills: preloading skill bodies would defeat this worker's minimal-footprint purpose.
 omitClaudeMd: true
 ---
 
@@ -126,6 +127,6 @@ on every turn of every parallel copy of you. Spend the rest as carefully:
 
 - Read each named path ONCE. If it is already in your context, do not fetch it again.
 - On a large file, locate before you read — `tldr structure`/`tldr search` (or `grep -n`)
-  through Bash, then `Read` with `offset`/`limit`. Never pull in 1,000 lines to change three.
+  through Bash, then read the needed range with `tldr body "<file>" --from A --to B -f text`. Never pull in 1,000 lines to change three.
 - Fold the edit and its verification into a single turn.
 - Keep the reply to the one path. The report absorbs everything else.

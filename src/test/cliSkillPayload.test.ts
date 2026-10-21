@@ -86,4 +86,41 @@ suite('shipped skill payloads install whole, agents ride along', () => {
       assert.ok(fs.existsSync(path.join(repoRoot, 'agents', `${name}.md`)), `AGENT_NAMES lists an agent the package does not ship: ${name}`)
     }
   })
+
+  test("every shipped agent is listed, named after its file, and has no sibling name in its body", () => {
+    const agentsDir = path.join(repoRoot, "agents")
+    const agentFiles = fs.readdirSync(agentsDir).filter(file => file.endsWith(".md"))
+
+    // WHY a line-anchored split and not `content.split("---")`: the delimiter must be a line of
+    // its own, or a `---` inside the BODY (a horizontal rule, a nested YAML block) shifts every
+    // index and the checks below would run against a reassembled string instead of the body.
+    // The body is then simply everything after the closing delimiter — no reassembly.
+    const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
+
+    for (const file of agentFiles) {
+      const filenameName = path.basename(file, ".md")
+      assert.ok(AGENT_NAMES.includes(filenameName), "agent file is not installed: " + file)
+
+      const content = fs.readFileSync(path.join(agentsDir, file), "utf8")
+      const match = FRONTMATTER.exec(content)
+      assert.ok(match, "missing or unterminated frontmatter: " + file)
+      const frontmatter = match[1]
+      const body = content.slice(match[0].length)
+
+      const nameLine = frontmatter.split("\n").find(line => line.startsWith("name: "))
+      assert.ok(nameLine, "frontmatter has no name: key: " + file)
+      assert.strictEqual(nameLine.slice("name: ".length).trim(), filenameName, "frontmatter name must match filename: " + file)
+
+      // The `description:` is deliberately NOT checked for sibling names: it is the field the
+      // parent model reads to CHOOSE a worker, and "Identical shape to lean-worker…" is exactly
+      // the routing hint it needs. The BODY is where a sibling name is a defect (a worker's own
+      // example telling the model to dispatch a different worker), and that is what is checked.
+      for (const otherName of AGENT_NAMES) {
+        if (otherName !== filenameName) {
+          assert.ok(!body.includes(otherName), file + " body refers to a different worker name: " + otherName)
+        }
+      }
+    }
+  })
+
 })

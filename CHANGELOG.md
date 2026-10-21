@@ -8,6 +8,31 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`cheap-worker` and `fast-worker` — two more shipped worker agents, both on Haiku 5.5.**
+  `cheap-worker` is `haiku[1m]` at `xhigh` effort (maximum depth on the smallest, cheapest model);
+  `fast-worker` is the same shape at `medium` (the quickest model, shallower reasoning). Both take the
+  same `Bash, Read, Write, Edit, Grep` surface and preload the four binding CLIs (`tldr-code`,
+  `fastedit`, `jgrep`, `quicksilver`), so a worker reads with `tldr`, locates with `jgrep`, triages
+  with `qs.mjs` and writes with `fastedit`. Pick `cheap-worker` when the prompt already carries every
+  fact the task needs; pick `lean-worker` (Sonnet 5.5) when the task needs real judgement; pick
+  `fast-worker` when the task is mechanical and latency matters more than the last bit of depth. Both
+  install into `~/.claude/agents/` alongside the existing three.
+- **The shipped worker bodies now teach the four binding CLIs.** `lean-worker`, `cheap-worker` and
+  `fast-worker` read a named path with `tldr body "<file>" --from A --to B -f text` instead of pulling a
+  whole file into context, and write with `fastedit` rather than `Edit`/`Write`/`sed -i`/a heredoc —
+  `fastedit` validates every write and keeps a backup, and `fastedit diff <file>` then confirms that
+  exactly the intended change landed. `micro-worker` gets the same `tldr body` reading recipe while
+  keeping its zero-skill, no-CLAUDE.md footprint (measured 2026-09-24: first request 61,119 -> 11,167
+  tokens). `agentlens-tldr-worker` now states what its preloaded `ultimate-bug-scanner` skill is for:
+  the `ubs <changed-files> --fail-on-warning` gate (exit 0 = safe to commit) it runs over the file it
+  changed.
+- **A test pins the shipped-agent set.** Every file in `agents/` must be listed in `AGENT_NAMES` (so it
+  actually installs), its frontmatter `name:` must match its filename, and its body must not name a
+  sibling worker (a body that tells the model to dispatch a different worker is the defect this
+  catches). The `description:` is deliberately exempt from that last check — it is the field the parent
+  model reads to CHOOSE a worker, and "Identical shape to lean-worker…" is exactly the routing hint it
+  needs.
+
 - **Opt-in digest ingest path (off by default).** A second, typed ingestion path next to the existing
   stores, which stay the system of record. `alcore serve --ingest-manifest PATH --aldigest-bin PATH
   [--ingest-sources LIST]` makes `alcore` write each hook event, status-line sample, telemetry event and

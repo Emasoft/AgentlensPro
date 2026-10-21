@@ -820,7 +820,11 @@ export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'upd
  *  a worker by NAME; if the definition is not on the machine the spawn fails, so the agents ride
  *  along with the skills that dispatch them. */
 export const AGENT_NAMES: readonly string[] = [
-  'agentlens-tldr-worker', 'lean-worker', 'micro-worker',
+  'agentlens-tldr-worker',
+  'lean-worker',
+  'micro-worker',
+  'cheap-worker',
+  'fast-worker',
 ]
 
 /** (Re)install the shipped agent definitions at user scope, same discipline as the skills:
