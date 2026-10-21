@@ -126,6 +126,37 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **The burn tick and the scope pass stopped copying the whole corpus per session.** The live profile
+  put 14,071 of 14,071 samples in `composition_project_map` -> `IndexMap::get_index_of` ->
+  `_platform_memcmp`: the `sessionId -> project` map was rebuilt once per session, and the burn tick
+  deep-cloned the entire consumption-event corpus once per session, once more per account, and once
+  more per session status. The map is now built ONCE per scope pass, and the burn helpers borrow
+  (`&[&Value]`) instead of cloning. One burn-status pass over 40 sessions now allocates 385,015 B
+  against the old shape's 58,945,536 B — 153x less — and the scope-pass test is mutation-verified
+  (reinstating the per-session build fails it with 13 builds over 12 sessions). No client-visible
+  output changed: every string and every JSON shape is byte-identical, and the TS oracle parity test
+  still passes (TRDD-9VX3WTGU).
+- **The hook-spool drain's durability verification is an OFFSET SEEK, and the read volume is now
+  measured rather than asserted.** The Rust port had re-read the whole 69 MB day bucket and scanned
+  every line, once per spooled event; a drain tick over ~1,248 spooled events therefore read ~86 GB
+  and allocated ~86 GB of transient strings. It now seeks to the recorded byte offset and reads
+  exactly that many bytes. The verification also reports how many bytes it actually read, so the
+  read volume is a number the code produces instead of a claim about the code — a new test pads the
+  bucket past 4 MB and asserts the verification read exactly the appended line length. The
+  verify-before-delete rule is unchanged: the spool file is unlinked only after the verification
+  returns true, and every shortfall keeps it (TRDD-K3WDPR7M, TRDD-VIEFSSKZ).
+- **The store's CLI DuckDB sizing is bounded.** `alstore pass` sized its DuckDB from the machine's
+  resources, and one pass grew to 4.8 GB RSS. The CLI now sizes DuckDB to 1 GiB with 2 threads, and
+  an override is accepted only through `AGENTLENS_DUCKDB_MEMORY_LIMIT` /
+  `AGENTLENS_DUCKDB_THREADS` — a rejected override falls back to the bounded default with a message
+  on stderr, and stdout stays exactly one JSON line so the drain loop's parser is unaffected
+  (TRDD-CQ4652DQ).
+- **The deploy ships the Rust half.** `scripts/safe-deploy.sh` built only the JavaScript bundle, so a
+  deploy left 81 rust-core commits unshipped — the deployed `alcore` IS the server (the TypeScript
+  server was retired in 567fc5c2), so nothing in Rust reached the running binary. The script now
+  builds, stages, code-signs and verifies the Rust binary as well, and the verify compares the
+  running server's binary by INODE rather than by path. A Rust stage that fails says the Rust half
+  is SUSPECT instead of reporting a healthy deploy (TRDD-KRJNTSQH).
 - **Cache-risk causes are graded by the Claude Code version that ran them.** From 2.1.273 `/upgrade` and
   `/extra-usage` are no longer a cache risk and `/login`/`/logout` are `ambiguous`; from 2.1.267 plugin
   reload, plugin change and MCP toggle are `ambiguous`; from 2.1.260 an `/effort` change on Fable 5.1 is
