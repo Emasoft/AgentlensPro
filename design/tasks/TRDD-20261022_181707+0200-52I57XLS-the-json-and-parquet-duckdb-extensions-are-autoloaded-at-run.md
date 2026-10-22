@@ -4,7 +4,7 @@ title: The json and parquet DuckDB extensions are autoloaded at runtime instead 
 column: backburner
 status: tasked
 created: 2026-10-22T18:17:07+0200
-updated: 2026-10-22T18:17:17+0200
+updated: 2026-10-22T18:27:06+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,3 +28,4 @@ approval-datetime: 2026-10-22T18:17:07+0200
 rust-core builds the duckdb crate with features [bundled] only (agentlens-store/Cargo.toml:9, agentlens-digest/Cargo.toml:16); libduckdb-sys statically compiles only core_functions unless the json and parquet features are on, so both extensions are autoloaded from ~/.duckdb/extensions/v1.5.6 at runtime.
 A machine without those cached extensions (fresh install, offline) cannot read or write the store. design/specs/duckplan/SPEC-schema.md:56-58 already plans enabling the features, turning autoload off, and a startup self-test.
 Unverified: the release binary is stripped, so static linking was inferred from the build script gate, not observed.
+Acceptance: with an empty or overridden DuckDB extension directory and autoload disabled, the store opens, round-trips a body, and a startup self-test passes.
