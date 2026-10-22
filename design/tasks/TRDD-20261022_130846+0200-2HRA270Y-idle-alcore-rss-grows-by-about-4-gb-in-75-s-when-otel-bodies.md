@@ -23,7 +23,7 @@ eht: [12FGMAEP]
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-22
 
 - Cause identified (docs_dev/20261022-climb-stacks.md): open_store, run by bodies_pass every 60 s, is on the stack in every alcore-bg sample; load_pass_state and the bodies watcher were not observed active.
-- NEXT ACTION (as of 2026-10-22 19:40): steps 1, 2 and 4 of the Plan section are being implemented on branch fix/setup-agent-preflight; step 3 follows step 2; then an end-to-end run on a clone, then deploy ONLY after TRDD-12FGMAEP's whole-process backstop lands or an owner waiver is recorded on 12FGMAEP (step 4 removes the only whole-process memory guard).
+- NEXT ACTION (as of 2026-10-22 19:40): steps 1, 2 and 4 of the Plan section are being implemented on branch fix/setup-agent-preflight; step 3 follows step 2; then an end-to-end run on a clone, then deploy ONLY after TRDD-12FGMAEP's whole-process backstop lands or an owner waiver is recorded on 12FGMAEP (step 4 removes the only whole-process memory guard). Step 4 (committed) cannot end the crash loop alone: TRDD-2JOIAH2G records one canonical exit with mimalloc commit at 2.59 GB, which still breaches the commit-keyed cap; steps 1-3 are expected, not yet measured, to bring commit under 2 GB.
 - SUPERSEDED 2026-10-22: "Candidates left: load_pass_state, open_store, the bodies watcher." and "the reader responsible is not identified" — replaced by the cause line above.
 - SUPERSEDED 2026-10-22: the earlier Step 2 wording "dedup by anti-join at flush; no per-body probes" — replaced by option A in the Plan section.
 - Note: the measurement lines under "## Approval log" are left in place because that section is append-only; this block supersedes them where they differ.
