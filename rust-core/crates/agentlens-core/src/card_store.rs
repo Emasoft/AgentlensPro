@@ -1576,7 +1576,7 @@ mod tests {
     /// pool would happily keep the entire corpus resident and the card would have changed nothing
     /// it set out to change. Asserted here because `conn` is private.
     #[test]
-    fn the_connection_is_bounded_and_uses_two_threads() {
+    fn the_connection_is_bounded_and_uses_the_core_cap_threads() {
         let store = CardStore::open(&data_dir("settings"));
         let mem: String = store
             .conn
@@ -1585,7 +1585,11 @@ mod tests {
         assert!(mem.starts_with("256"), "the buffer pool must be capped at {MEMORY_LIMIT}, got {mem}");
         let threads: i64 =
             store.conn.query_row("SELECT current_setting('threads')", [], |r| r.get(0)).expect("read back threads");
-        assert_eq!(threads, 2);
+        assert_eq!(
+            threads,
+            crate::cores::duckdb_threads() as i64,
+            "card connections run at the core cap's DuckDB share (TRDD-YH822LDI)"
+        );
     }
 
     /// TRDD-USSG465Q — the card file opens with `vacuum_rebuild_indexes` at u64::MAX, both on the first open and on
