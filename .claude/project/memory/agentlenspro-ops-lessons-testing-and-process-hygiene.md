@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-testing-and-process-hygiene
 description: "background agent shows running but does nothing / a fork started acting like the orchestrator / does cache-expired or last-compact cost tokens / is a cache-liveness check free / a free-port probe is flaky in CI but passes on rerun / mocha does not isolate a single test file / a test is flaky under load but fails in isolation too / CI is red while local slices were green / a background pipeline shows no output for 20 minutes and looks hung / recurring maximum call stack size exceeded RangeError / an identity check is green but an address leaked into a github comment / a bare @handle paged a stranger on github / what may a hook say to a model / removed a hook advisory but it still fires / a baseline ruleset restore reverted an owner-approved bypass / a rust parity test fails in one worktree and passes in another with no source change / cargo says the library still returns the old type after the code changed / pnpm run compile-tests aborts with no TTY in a worktree / pnpm tries to reinstall dependencies in a worktree"
 ocd: 2026-07-11
-lmd: 2026-10-14
+lmd: 2026-10-21
 metadata:
   node_type: memory
   type: project
@@ -14,23 +14,32 @@ split-lineage: 266022327e5e4d3796245d2d1a921c06
 
 # AgentlensPro testing and process hygiene — overview
 
+^YRKGZLDY [desc: "Overview of the testing and process-hygiene hub: field lessons about what flakes, what lies, and what looks broken but is not when running tests and background work on AgentlensPro.", keywords: testing process hygiene overview flaky tests background work looks broken but is not field lessons hub AgentlensPro, lmd: 2026-10-21]
 Field lessons about running tests and background work on this repo: what flakes, what lies, what looks broken but is not. This page is the overview; the detail lives in the component pages listed under Applies to. Page-level lessons that no component owns stay below.
 
 ## Applies to
 
+^DFQ0LLSR [desc: "Outbound-post guard: a file-scanning identity check cannot see a gh comment, and a bare @handle pages a real account; detail on github-outbound-identity-and-mention-guards.", keywords: identity check green but address leaked github comment bare handle paged stranger outbound post guard file scanning cannot see gh, lmd: 2026-10-21]
 - [[github-outbound-identity-and-mention-guards]] — the outbound-post guard: why a file-scanning identity check cannot see a gh comment, and why a bare @handle pages a real account.
+^PH3MW3R5 [desc: "The freePort time-of-check-to-time-of-use race, its two mitigations, and why no mocha flag isolates one test file here; detail on test-port-race-and-mocha-isolation.", keywords: free port probe flaky CI passes on rerun freePort TOCTOU race mocha does not isolate single test file mitigations, lmd: 2026-10-21]
 - [[test-port-race-and-mocha-isolation]] — the freePort TOCTOU race and its two mitigations, and why no mocha flag isolates one test file here.
+^HP29MFDI [desc: "How to diagnose a flaky fixture, CI red while local is green, a hung-looking tail pipeline, and a recurring spread-into-call RangeError; detail on test-flaky-and-ci-red-diagnosis.", keywords: test flaky under load fails in isolation CI red local green slices background pipeline no output looks hung maximum call stack size exceeded RangeError spread, lmd: 2026-10-21]
 - [[test-flaky-and-ci-red-diagnosis]] — how to diagnose a flaky fixture, a CI-red/local-green change, a hung-looking tail pipeline, and a recurring spread-into-call RangeError.
+^4NL9SRW1 [desc: "The three-question bar every model-facing hook message must clear, and the twin PostToolUse/PreToolUse emitters of each gate code; detail on hook-message-bar-and-gate-emitters.", keywords: what may a hook say to model removed advisory but still fires twin PostToolUse PreToolUse emitters gate code three question bar, lmd: 2026-10-21]
 - [[hook-message-bar-and-gate-emitters]] — the three-question bar every model-facing hook message must clear, and the twin PostToolUse/PreToolUse emitters of each gate code.
+^P47KUXID [desc: "How to tell a blocked background agent from a dead one via transcript mtime, the fork identity anchor, and why every cache-liveness verdict is inferred; detail on background-agent-and-cache-liveness.", keywords: background agent shows running but does nothing fork acting like orchestrator cache-expired last-compact cost tokens cache liveness check free transcript mtime inferred, lmd: 2026-10-21]
 - [[background-agent-and-cache-liveness]] — how to tell a blocked background agent from a dead one (transcript mtime), the fork identity anchor, and why every cache-liveness verdict is inferred.
+^CYPKCMBK [desc: "What breaks in a fresh git worktree: shared CARGO_TARGET_DIR, symlinked node_modules with pnpm, and the unit suite run before node esbuild.js; detail on worktree-test-and-build-hazards.", keywords: rust parity test fails in one worktree passes another cargo old type after code changed pnpm compile-tests aborts no TTY reinstall dependencies, lmd: 2026-10-21]
 - [[worktree-test-and-build-hazards]] — what breaks in a fresh git worktree: shared CARGO_TARGET_DIR, symlinked node_modules with pnpm, and the unit suite before node esbuild.js.
 
 ## See also
 
+^WNVEVQE2 [desc: "Related page: memory-scope-leak-detector-false-positives, the lateral see-also for this hub.", keywords: memory scope leak detector false positives lateral see also related page flags PROJECT machine-private data, lmd: 2026-10-21]
 - [[memory-scope-leak-detector-false-positives]]
 
 ## Governed by
 
+^YFLZM5HU [desc: "This hub is governed by agentlenspro-ops-lessons, the operational-doctrine overview that this sub-page details.", keywords: governed by agentlenspro ops lessons operational doctrine overview sub-page parent aspect testing process hygiene hub, lmd: 2026-10-21]
 - [[agentlenspro-ops-lessons]] — the operational-doctrine overview this sub-page details.
 
 ## Notes and lessons learned
