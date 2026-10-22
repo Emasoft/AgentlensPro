@@ -620,6 +620,74 @@ pub(crate) fn strip_one_session(s: &Value) -> Value {
     Value::Object(c)
 }
 
+/// Byte-identical streaming twin of `strip_session_detail(summary).to_string()`.
+// WHY: the stripped summary is a second resident per-session Value tree (TRDD-091Z1FU0; step 3 removes it); both
+// of its readers immediately serialize it, so writing the stripped form straight from the summary
+// removes the tree without changing a byte. Every branch mirrors strip_session_detail /
+// strip_one_session; `preserve_order` keeps key positions, so the order below IS the contract.
+pub struct StrippedView<'a>(pub &'a Value);
+
+const EMPTY_TIMELINE: &[Value] = &[];
+
+impl serde::Serialize for StrippedView<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let Some(obj) = self.0.as_object() else { return self.0.serialize(ser) };
+        let mut m = ser.serialize_map(Some(obj.len()))?;
+        for (k, v) in obj {
+            if k == "sessions" {
+                if let Some(arr) = v.as_array() {
+                    m.serialize_entry(k, &StrippedSessions(arr))?;
+                    continue;
+                }
+            }
+            m.serialize_entry(k, v)?;
+        }
+        m.end()
+    }
+}
+
+struct StrippedSessions<'a>(&'a [Value]);
+
+impl serde::Serialize for StrippedSessions<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = ser.serialize_seq(Some(self.0.len()))?;
+        for s in self.0 {
+            seq.serialize_element(&StrippedSession(s))?;
+        }
+        seq.end()
+    }
+}
+
+struct StrippedSession<'a>(&'a Value);
+
+impl serde::Serialize for StrippedSession<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let Some(sobj) = self.0.as_object() else {
+            let mut m = ser.serialize_map(Some(1))?;
+            m.serialize_entry("timeline", EMPTY_TIMELINE)?;
+            return m.end();
+        };
+        let mut m = ser.serialize_map(None)?;
+        let mut saw_timeline = false;
+        for (k, v) in sobj {
+            match k.as_str() {
+                "timeline" => {
+                    m.serialize_entry(k, EMPTY_TIMELINE)?;
+                    saw_timeline = true;
+                }
+                "fileOps" | "generatedFiles" | "generatedFilesTruncated" => {}
+                _ => m.serialize_entry(k, v)?,
+            }
+        }
+        if !saw_timeline {
+            m.serialize_entry("timeline", EMPTY_TIMELINE)?;
+        }
+        m.end()
+    }
+}
 
 /// Default and ceiling for `GET /api/cards/page?limit=`.
 const CARDS_PAGE_DEFAULT_LIMIT: usize = 50;
@@ -1190,7 +1258,26 @@ impl futures_core::Stream for SseStream {
 /// server.ts safeJson — JSON inlined into a `<script>` must not be able to close that script,
 /// open a comment, or start a template expression.
 fn safe_json(v: &Value) -> String {
-    v.to_string().replace("</", "<\\/").replace("<!--", "<\\!--").replace("${", "\\${")
+    safe_json_text(v.to_string())
+}
+
+/// safe_json over already-serialized JSON text — the same three replacements, so the shell bytes
+/// are identical whether the JSON came from a Value or from StrippedView (TRDD-091Z1FU0).
+fn safe_json_text(s: String) -> String {
+    s.replace("</", "<\\/").replace("<!--", "<\\!--").replace("${", "\\${")
+}
+
+#[cfg(test)]
+mod safe_json_tests {
+    use super::*;
+
+    /// safe_json_text over the serialized JSON gives the same bytes as safe_json over the Value,
+    /// for each breakout sequence the three replacements neutralize.
+    #[test]
+    fn safe_json_text_matches_safe_json() {
+        let v = serde_json::json!({"a": "</script><!-- ${x} \u{2028}", "b": ["\u{0001}", "🚀"]});
+        assert_eq!(safe_json_text(v.to_string()), safe_json(&v));
+    }
 }
 
 /// src/shellTemplate.ts substituteTokens — ONE left-to-right scan. A chain of `replace` calls

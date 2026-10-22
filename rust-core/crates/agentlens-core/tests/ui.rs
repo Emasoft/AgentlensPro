@@ -2315,3 +2315,53 @@ fn strip_session_detail_pins_key_order_and_dropped_fields_byte_for_byte() {
     let out3 = agentlens_core::ui::strip_session_detail(&non_object_summary);
     assert_eq!(serde_json::to_string(&out3).unwrap(), r#"[1,2]"#);
 }
+
+/// `StrippedView` must serialize to exactly the bytes of `strip_session_detail(..).to_string()` over
+/// every shape the stripping branches distinguish: the key position of `timeline`, a missing
+/// `timeline`, all three dropped keys, non-object elements, a non-array `sessions`, strings that
+/// need escaping or neutralizing, number forms, nested values and empty containers. A drift in any
+/// branch would break the byte parity of `/api/summary`.
+#[test]
+fn stripped_view_matches_strip_session_detail_byte_for_byte() {
+    let inputs = [
+        serde_json::json!({
+            "outer1": "a",
+            "sessions": [
+                {
+                    "id": "s1",
+                    "timeline": [{"t": 1}],
+                    "fileOps": [{"op": "write"}],
+                    "cost": 1.5,
+                    "generatedFiles": ["f1"],
+                    "generatedFilesTruncated": false,
+                    "model": "opus"
+                },
+                {
+                    "id": "s2",
+                    "fileOps": [{"op": "read"}]
+                },
+                42
+            ],
+            "outer2": "b"
+        }),
+        serde_json::Value::Null,
+        serde_json::json!([1, {"sessions": []}]),
+        serde_json::json!({"sessions": 5}),
+        serde_json::json!({"sessions": [1, "x", null]}),
+        serde_json::json!({"sessions": [{"a": 1, "timeline": [{"t": 1}], "b": 2}]}),
+        serde_json::json!({"sessions": [{"a": 1}]}),
+        serde_json::json!({"sessions": [{"id": "s", "fileOps": [1], "generatedFiles": ["f"], "generatedFilesTruncated": true, "timeline": [{"t": 2}]}]}),
+        serde_json::json!({"sessions": [{"id": "</script><!-- ${x} \u{2028}\u{2029} \u{0001} 🚀 \"q\" \\"}]}),
+        serde_json::json!({"sessions": [{"n": [u64::MAX, i64::MIN, -0.0, 1e308, 5e-324, 0.1]}]}),
+        serde_json::json!({"sessions": [{"id": "n", "nested": {"a": [{"b": null}], "c": {}}}]}),
+        serde_json::json!({"sessions": []}),
+        serde_json::json!({}),
+    ];
+    for input in &inputs {
+        assert_eq!(
+            serde_json::to_string(&agentlens_core::ui::StrippedView(input)).unwrap(),
+            agentlens_core::ui::strip_session_detail(input).to_string(),
+            "input {input}"
+        );
+    }
+}

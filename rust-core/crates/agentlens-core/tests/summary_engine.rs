@@ -100,6 +100,7 @@ fn assert_equals_full(st: &mut CoreState, step: &str) -> Out {
     if let Some(s) = &got.stripped {
         assert_eq!(serde_json::to_string(&**s).unwrap(), serde_json::to_string(&strip_session_detail(&want_s)).unwrap(), "stripped bytes after {step}");
     }
+    assert_eq!(serde_json::to_string(&agentlens_core::ui::StrippedView(&want_s)).unwrap(), strip_session_detail(&want_s).to_string(), "StrippedView bytes after {step}");
     got
 }
 

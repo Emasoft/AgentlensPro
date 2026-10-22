@@ -37,6 +37,8 @@ notify = "8"
 # 0.18181818181818182 one ulp off, failing an exact-parity test against a correct port — every
 # TS-oracle comparison depends on fixture floats parsing to the exact double JS printed.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+# StrippedView serializes the stripped summary without a tree (TRDD-091Z1FU0)
+serde = "1"
 regex = "1"
 # The FAL fact store (forensics.db). Keep the VERSION identical to agentlens-logscan's declaration:
 # cargo unifies the workspace onto one build of rusqlite, so a version mismatch would compile a
