@@ -237,6 +237,28 @@ fn part_files(dir: &Path, sub: &str) -> Vec<PathBuf> {
     out
 }
 
+/// `part_files` for the sync listing: the same `.parquet` filter and sort, but every error is returned
+/// instead of an empty list. The one exception is a dir that does not exist (NotFound on open), an empty
+/// listing, because its parts are gone. Each entry is read with `?`, so an entry that fails mid-listing is
+/// an error and is never skipped. WHY NOT part_files: it maps every error to an empty list, and an empty
+/// listing makes every registered file look removed, so the sync would delete its dedup rows.
+fn part_files_strict(dir: &Path, sub: &str) -> std::io::Result<Vec<PathBuf>> {
+    let rd = match fs::read_dir(dir.join(sub)) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut out = Vec::new();
+    for entry in rd {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "parquet") {
+            out.push(path);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// Every Parquet part as a readable relation, or None when none exist (a bare glob over an
 /// empty dir is an ERROR in DuckDB, not an empty set).
 pub fn parquet_scan(dir: &Path, sub: &str) -> Option<String> {
@@ -749,19 +771,17 @@ pub fn sync_new_parts(store: &mut Store) -> duckdb::Result<SyncStats> {
 }
 
 /// The listing of one part dir, loaded into the TEMP table sync_listing so both anti-joins run in
-/// DuckDB (TRDD-2HRA270Y step 3, F4). WHY the readability check: part_files returns an EMPTY list when
-/// the dir cannot be read, and an empty listing would make every registered file look removed and
-/// delete its dedup rows. Only a missing dir (NotFound) is an empty listing: its files are gone, so their
-/// rows must go. Any other error (ENOTDIR, EACCES, EIO) is returned, so an unreadable dir never deletes rows.
+/// DuckDB (TRDD-2HRA270Y step 3, F4). An unreadable dir never deletes rows: part_files_strict returns
+/// every error (ENOTDIR, EACCES, EIO, or an entry that fails mid-listing), so the removal for that dir
+/// never runs. The one exception is a missing dir, an empty listing, because its files are gone and
+/// their rows must go. WHY ONE OBSERVATION: the dir is listed by a single read_dir, never by a readability
+/// probe followed by a second listing. Two reads can see two states: a dir that turns unreadable between
+/// them would give a short second listing, and every file missing from it would lose its dedup rows.
 fn load_sync_listing(con: &Connection, dir: &Path, sub: &str) -> duckdb::Result<()> {
-    match fs::read_dir(dir.join(sub)) {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(duckdb::Error::ToSqlConversionFailure(Box::new(e))),
-    }
+    let files = part_files_strict(dir, sub).map_err(|e| duckdb::Error::ToSqlConversionFailure(Box::new(e)))?;
     con.execute_batch("CREATE OR REPLACE TEMP TABLE sync_listing (path VARCHAR);")?;
     let mut app = con.appender("sync_listing")?;
-    for file in part_files(dir, sub).iter().filter_map(|p| p.to_str()) {
+    for file in files.iter().filter_map(|p| p.to_str()) {
         app.append_row(duckdb::params![file])?;
     }
     app.flush()
@@ -1536,5 +1556,24 @@ mod seed_blob_index_tests {
         let err = seed_blob_index(&con, 0, &[], std::slice::from_ref(&part)).expect_err("orphans must fail");
         assert!(err.to_string().contains("could not be matched to their part file"), "{err}");
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod part_files_strict_tests {
+    use super::*;
+
+    /// A regular file where the parts dir should be is an error, not an empty listing: part_files returns
+    /// nothing for it, and the sync would then delete every row of that dir. MUTATION CHECK: make
+    /// part_files_strict return Ok(part_files(dir, sub)) and this test fails.
+    #[test]
+    fn a_regular_file_in_place_of_the_dir_is_an_error_not_an_empty_listing() {
+        let root = std::env::temp_dir().join(format!("al-store-strict-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join(BLOBS_DIR), b"not a dir").expect("write blobs as a file");
+        let listed = part_files_strict(&root, BLOBS_DIR);
+        let _ = fs::remove_dir_all(&root);
+        assert!(listed.is_err(), "a regular file in place of the dir must be an error: {listed:?}");
     }
 }
