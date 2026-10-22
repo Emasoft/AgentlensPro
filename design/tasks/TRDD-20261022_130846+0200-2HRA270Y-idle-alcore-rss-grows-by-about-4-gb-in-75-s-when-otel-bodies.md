@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: dev
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-10-22T19:39:49+0200
+updated: 2026-10-22T19:58:04+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
