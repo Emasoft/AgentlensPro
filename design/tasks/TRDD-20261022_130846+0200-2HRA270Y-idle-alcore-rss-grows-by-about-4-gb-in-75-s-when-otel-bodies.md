@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: todo
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-10-22T13:22:29+0200
+updated: 2026-10-22T18:21:04+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -19,7 +19,7 @@ approval-datetime: 2026-10-22T13:08:46+0200
 
 # Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 
-Measured 2026-10-22 (docs_dev/20261022-bodies-discriminator.md, isolated clones, --no-log-scan, no ingest, one run per arm): RSS +4255 MB over 2-75 s with <data_dir>/otel-bodies present (21,495 files, 2.92 GB), +50 MB with it moved out. The burn bodies watcher retains only a few MB, so the reader responsible is not identified; code trace in progress (docs_dev/20261022-idle-bodies-reader.md). This is step 1 of the conversion order on TRDD-KBM09XHB and the largest single contributor to the TRDD-2JOIAH2G crash loop measured so far. Owner rule (KBM09XHB, 2026-10-22): body data is digested into DuckDB tables and read back as query answers; nothing corpus-sized resident in alcore's heap.
+Measured 2026-10-22 (docs_dev/20261022-bodies-discriminator.md, isolated clones, --no-log-scan, no ingest, one run per arm): RSS +4255 MB over 2-75 s with <data_dir>/otel-bodies present (21,495 files, 2.92 GB), +50 MB with it moved out. The burn bodies watcher retains only a few MB, superseded: see the stack-sample STATE line and the Plan 2026-10-22 section (docs_dev/20261022-idle-bodies-reader.md). This is step 1 of the conversion order on TRDD-KBM09XHB and the largest single contributor to the TRDD-2JOIAH2G crash loop measured so far. Owner rule (KBM09XHB, 2026-10-22): body data is digested into DuckDB tables and read back as query answers; nothing corpus-sized resident in alcore's heap.
 
 ## Approval log
 
@@ -30,4 +30,18 @@ Measured 2026-10-22 (docs_dev/20261022-bodies-discriminator.md, isolated clones,
 2026-10-22: all measurements are RSS (not phys_footprint, which the guard kills on), one run per arm; heap attribution waits for docs_dev/20261022-climb-stacks.md.
 File counts are per clone: 21,495 (discriminator clone), 21,820 (live count at MEASURE time), 21,948 (arm-C clone); files keep arriving live.
 Arm B (otel-bodies moved out) does NOT isolate the reader: with no staged bodies, bodies_pass returns at chores.rs:324 before open_store and before load_pass_state, so arm B removes the files, the store open, and the 75 MB load of store/.pass-state.json together.
-Arm C (every clone body future-dated, so the 10 s age gate admits none) still climbed to 5,576 MB. Confounds: staged bytes are non-zero so the pass still opens the store and parses the 75 MB .pass-state.json; future mtimes also make the bodies watcher see every file as fresh and make retention-by-age skip them. Candidates left: load_pass_state, open_store, the bodies watcher.
+Arm C (every clone body future-dated, so the 10 s age gate admits none) still climbed to 5,576 MB. Confounds: staged bytes are non-zero so the pass still opens the store and parses the 75 MB .pass-state.json; future mtimes also make the bodies watcher see every file as fresh and make retention-by-age skip them. Ranking from the stack samples below: open_store first; load_pass_state and the bodies watcher were not observed active.
+Stack samples (docs_dev/20261022-climb-stacks.md): open_store is on the stack in every alcore-bg sample (DuckDB parquet table scans plus String HashSet inserts); load_pass_state and the bodies watcher were not observed active in three 5 s windows. phys_footprint 3.8 GB vs RSS 4.76 GB at 31 s (one vmmap).
+Step 0 measured (docs_dev/20261022-step0-store-tables-measure.md): 3,866,224 blob shas; 1,520,728 body keys; known_blob about 420 MiB as VARCHAR, about 181 MiB as BLOB; body_durable about 860 MiB in DuckDB; DuckDB memory_limit does not bound process RSS (512 MB limit ended at 1,150 MiB RSS, spilling 721 MiB to temp; 1,536 MB limit ended at 2,497 MiB RSS, no spill).
+
+## Plan 2026-10-22 (owner-approved)
+
+Cause (stack samples, docs_dev/20261022-climb-stacks.md): every 60 s bodies_pass calls agentlens_store::open_store, which re-reads every Parquet part into a fresh in-memory DuckDB and copies every blob sha and body key into four Rust sets; .pass-state.json holds 1,488,247 skip names, 0 of which match the 22,111 files present.
+Constraint kept: no persistent .duckdb for the store (300x SSD writes, lib.rs:4-5); Parquet parts stay write-once; DuckDB stays fileless but is opened once per process.
+Step 0: measure known_blob/body_durable as DuckDB tables on a clone (rows, duckdb_memory, process RSS, spill) to size memory_limit.
+Step 1: prune skip/stranded names to files present; drop a name when its file is unlinked.
+Step 2: replace the four Rust sets with DuckDB tables part_file/known_blob plus body_durable; dedup by anti-join at flush; no per-body probes.
+Step 3: open the store once per process (lazy, first non-idle tick), shared by bodies_pass and export/purge via try_clone; each tick ingests only part files not yet in part_file, so parts written by alstore or scripts stay visible.
+Step 4: the 2 GB guard counts mimalloc committed bytes (alcore's own heap) per the owner's 2026-10-22 words; DuckDB bounded by its memory_limit plus spill. Separate commit, vetoable.
+Tension disclosed at approval: TRDD-LHCHVK9Z routes raw bodies away from the legacy Parquet path; steps 1-3 invest in that path because the crash loop is now and LHCHVK9Z's children are unlanded.
+Full plan text: ~/.claude/plans/elegant-churning-ripple.md (copied here in summary; this card is the durable record).
