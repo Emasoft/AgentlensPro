@@ -352,7 +352,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // CLI's sizing. Measured 2026-09-02: at that sizing the pass's DuckDB scans became the
     // machine's dominant IO/CPU load (stall samples: 10,694 DuckDB frames, all inside
     // `MultiFileFunction<Parquet>` waits). Match the server's other in-process DuckDB uses:
-    // threads = crate::cores::duckdb_threads() (TRDD-YH822LDI), memory_limit=SERVER_MEMORY_LIMIT.
+    // threads = crate::cores::duckdb_threads() (TRDD-YH822LDI), memory_limit=STORE_MEMORY_LIMIT.
     let threads = crate::cores::duckdb_threads();
     // Timed from the store open, not the tick: TRDD-768NEX6E's acceptance wants one pass's wall
     // time on the log line, and the open is where the per-pass parquet rebuild scans happen.
@@ -363,7 +363,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("bodies pass", &SKIPS) else {
         return;
     };
-    let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::SERVER_MEMORY_LIMIT, threads) {
+    // STORE_MEMORY_LIMIT, not SERVER_MEMORY_LIMIT: open_store builds ART indexes on known_blob/body_durable that cannot spill, and at 512MiB the sha probe runs out of memory (measured 2026-10-22, TRDD-2HRA270Y).
+    let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::STORE_MEMORY_LIMIT, threads) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{} alcore: bodies pass cannot open the store: {e}", crate::log_ts());
