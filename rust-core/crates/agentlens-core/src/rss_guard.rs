@@ -13,11 +13,13 @@
 //!    (mach `task_info` overwrites the commit-derived init, prim/unix/prim.c:766); mimalloc's OWN
 //!    counter is `current_commit` (decremented on decommit). The two are separated from non-Rust
 //!    growth (DuckDB, which allocates through its own C allocator, not through Rust's global one).
-//! 2. **Physical footprint** — on macOS this is what jetsam charges and what Activity Monitor
-//!    shows (`proc_pid_rusage` `ri_phys_footprint`); plain RSS includes resident-but-clean pages
-//!    the OS reclaims for free, so an RSS-keyed cap can kill a healthy process and indict pages
-//!    nobody needs to fix. Linux has no footprint equivalent, so RSS is the correct key there —
-//!    the diagnostic always states which counter the cap decision was keyed on.
+//! 2. **The cap decision is keyed on mimalloc's committed bytes** (`mi_commit_bytes`), not on
+//!    physical footprint or RSS. Owner directive 2026-10-22: "it cannot use more memory than 2gb.
+//!    but duckdb on the other hand can." Footprint and RSS both include DuckDB's system-malloc
+//!    allocations, so keying the cap on them charged alcore for memory it does not own. On breach
+//!    the log still records physical footprint (`proc_pid_rusage` `ri_phys_footprint`, what jetsam
+//!    charges) and RSS as evidence; RSS also counts resident-but-clean pages the OS reclaims free.
+//!    The breach label stays "RSS HARD CAP" so existing greps keep matching, although the decision is no longer RSS.
 
 use std::io::Write;
 use std::path::Path;
@@ -279,7 +281,7 @@ unsafe extern "C" fn live_bytes_heap_visitor(
 /// `heaps_lock` inside the C side for the heap list but page counts can shift under a
 /// concurrent free — the composition line is a diagnostic, a ±few-MB skew between `live` and
 /// `committed` sampled microseconds apart is acceptable, and the number is never used for a
-/// kill decision (the RSS guard keys on phys footprint, not this).
+/// kill decision (the hard cap keys on `mi_commit_bytes`, not this).
 pub fn mi_live_bytes() -> Option<u64> {
     let mut acc = LiveBytesAcc { live_bytes: 0, heaps_visited: 0 };
     let arg = &mut acc as *mut LiveBytesAcc as *mut std::ffi::c_void;
@@ -324,6 +326,26 @@ pub fn mimalloc_info() -> MimallocInfo {
         reset_total_bytes: stats.reset_total_bytes,
         purged_total_bytes: stats.purged_total_bytes,
     }
+}
+
+/// Mimalloc's committed bytes, read through `mi_process_info` alone: no JSON buffer, no parse, so it
+/// is cheap enough to read on every tick. It is the same counter `mimalloc_info` reports as
+/// `current_commit_bytes` and the diagnostic prints as "mimalloc commit".
+pub fn mi_commit_bytes() -> u64 {
+    let mut current_commit: usize = 0;
+    unsafe {
+        libmimalloc_sys::mi_process_info(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut current_commit,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+    }
+    current_commit as u64
 }
 
 /// macOS physical footprint (`proc_pid_rusage` `RUSAGE_INFO_V0`, `ri_phys_footprint`) — dirty +
@@ -374,17 +396,13 @@ pub fn phys_footprint_bytes() -> Option<u64> {
     None
 }
 
-/// The metric the cap decision is keyed on, and its name for the log — macOS uses physical
-/// footprint (falling back to RSS only if the footprint syscall itself failed); every other
+/// The footprint-or-RSS reading and its name, used only as evidence in the breach log. Neither the
+/// pressure ladder nor the hard-cap decision uses it: both key on `mi_commit_bytes`. macOS uses
+/// physical footprint (falling back to RSS only if the footprint syscall itself failed); every other
 /// platform uses RSS, because there is no footprint equivalent there.
 ///
-/// The fallback is a CLOSURE, not a value, and that is load-bearing rather than stylistic. The
-/// caller samples RSS once BEFORE running the soft valve (it has to — the valve's own decision
-/// needs that reading). Handing that same number here would key the hard cap on a pre-valve
-/// measurement, so on the RSS path the guard could not observe the one thing that makes it
-/// meaningful: that memory is STILL over the cap after the window was narrowed. A closure defers
-/// the read to breach-check time. On macOS it is never called at all, because the footprint
-/// syscall answers first — so the fresh read costs nothing on the platform that does not need it.
+/// The fallback is a CLOSURE, not a value, so that on macOS it is never called at all: the footprint
+/// syscall answers first, and the RSS read costs nothing on the platform that does not need it.
 pub fn primary_metric(fallback_rss: impl FnOnce() -> u64) -> (&'static str, u64) {
     match phys_footprint_bytes() {
         Some(fp) => ("phys_footprint", fp),
@@ -394,9 +412,9 @@ pub fn primary_metric(fallback_rss: impl FnOnce() -> u64) -> (&'static str, u64)
 
 
 /// Pressure-ladder stage fractions of the hard cap: (stage 1, stage 2, stage 3).
-/// macOS keys on phys_footprint. The non-macOS row is APPROXIMATE: RSS excludes the
-/// freed-but-resident pages mimalloc retains that phys_footprint counts, so those fractions are
-/// a starting point to tune in soak. No Windows binary ships (src/rustBinResolve.ts SHIPPED_TARGETS).
+/// The ladder keys on `mi_commit_bytes`, the same counter as the hard cap, so a stage can only fire on
+/// memory the cap charges. These fractions were tuned against footprint (macOS) or RSS (elsewhere), not
+/// commit, so they are to re-tune in soak. No Windows binary ships (src/rustBinResolve.ts SHIPPED_TARGETS).
 pub const fn pressure_fracs() -> (f64, f64, f64) {
     if cfg!(target_os = "macos") {
         (0.70, 0.80, 0.90)
@@ -459,7 +477,13 @@ pub fn write_diagnostic<W: std::io::Write>(
             None => write!(w, "unavailable"),
         }
     }
-    writeln!(w, "alcore: RSS HARD CAP — {metric_name} {} MB > cap {} MB, exiting", metric_bytes / 1024 / 1024, s.cap_bytes / 1024 / 1024)?;
+    writeln!(
+        w,
+        "alcore: RSS HARD CAP — mimalloc commit {} MB > cap {} MB, exiting (evidence: {metric_name} {} MB)",
+        mi.current_commit_bytes / 1024 / 1024,
+        s.cap_bytes / 1024 / 1024,
+        metric_bytes / 1024 / 1024,
+    )?;
     writeln!(
         w,
         "alcore: RSS HARD CAP — process RSS {} MB (macOS: whole-process resident; other OS: commit-derived), mimalloc commit {} MB (Rust allocator's committed pages), process peak {} MB, page faults {}",
@@ -527,27 +551,52 @@ fn write_log_file(log_path: &Path, metric_name: &str, metric_bytes: u64, mi: &Mi
     }
 }
 
-/// Check the primary metric against the hard cap and, on breach, write + print the diagnostic and
-/// exit(1). No-op under the cap. `fallback_rss` is called ONLY on the RSS path (non-macOS, or a
-/// failed footprint syscall) and is called HERE rather than by the caller, so the reading is taken
-/// after the soft valve has run — see `primary_metric`.
-///
-/// `flush_before_exit` runs ONLY on breach, right before the log is written — `exit()` skips
-/// destructors, so anything buffered (span-store appends not yet flushed to disk) would be lost
-/// silently at the exact moment this guard exists to prevent silent loss. It is a closure, not a
-/// call made here directly, because this module has no handle on the caller's writer/store.
+/// Check mimalloc's committed bytes against the hard cap and, on breach, write + print the
+/// diagnostic and exit(1). No-op at or under the cap. This is the production entry point: it reads
+/// `mi_commit_bytes`. See `check_and_enforce_with` for the logic and the reason it is not footprint.
 pub fn check_and_enforce(
     fallback_rss: impl FnOnce() -> u64,
     flush_before_exit: impl FnOnce(),
     log_path: &Path,
     snapshot: CulpritSnapshot,
 ) {
-    let (metric_name, metric_bytes) = primary_metric(fallback_rss);
-    if metric_bytes <= snapshot.cap_bytes {
+    check_and_enforce_with(mi_commit_bytes, fallback_rss, flush_before_exit, log_path, snapshot);
+}
+
+/// The hard-cap check with the commit reading injected. Production passes `mi_commit_bytes` (via
+/// `check_and_enforce`); the injection exists because test binaries do not run mimalloc as their
+/// global allocator, so their real commit reads ~0 and a breach can only be staged this way.
+///
+/// WHY the decision is mimalloc commit and not physical footprint or RSS — owner directive
+/// 2026-10-22, verbatim: "it cannot use more memory than 2gb. but duckdb on the other hand can."
+/// Footprint and RSS include DuckDB's C++ allocations, which go through the system malloc, not
+/// mimalloc. DuckDB is governed by its own memory_limit, which was measured not to bound process RSS
+/// (512 MB limit gave 1,150 MiB RSS, TRDD-2HRA270Y); the cap deliberately does not charge it. alcore's
+/// own heap is mimalloc (see `.claude/project/memory/vmmap-ioaccelerator-is-the-mimalloc-heap.md`), so
+/// commit is the number the cap is about. Footprint and RSS are still read on breach and logged, so the
+/// evidence stays complete.
+///
+/// `fallback_rss` is evidence only: it is called on breach, never on the decision path.
+/// `flush_before_exit` runs ONLY on breach, right before the log is written — `exit()` skips
+/// destructors, so anything buffered (span-store appends not yet flushed to disk) would be lost
+/// silently at the exact moment this guard exists to prevent silent loss. It is a closure, not a
+/// call made here directly, because this module has no handle on the caller's writer/store.
+pub fn check_and_enforce_with(
+    read_commit: impl FnOnce() -> u64,
+    fallback_rss: impl FnOnce() -> u64,
+    flush_before_exit: impl FnOnce(),
+    log_path: &Path,
+    snapshot: CulpritSnapshot,
+) {
+    let commit = read_commit();
+    if commit <= snapshot.cap_bytes {
         return;
     }
+    let (metric_name, metric_bytes) = primary_metric(fallback_rss);
     flush_before_exit();
-    let mi = mimalloc_info();
+    // The log must print the commit value that decided the breach, not a second read of the counter.
+    let mut mi = mimalloc_info();
+    mi.current_commit_bytes = commit;
     write_log_file(log_path, metric_name, metric_bytes, &mi, &snapshot);
     let mut stderr = std::io::stderr();
     let _ = write_diagnostic(&mut stderr, metric_name, metric_bytes, &mi, &snapshot);
@@ -629,20 +678,19 @@ mod tests {
     }
 
     /// Restores the coverage the fallback swap in the test above DROPPED, and settles an open
-    /// question rather than carrying it forward. That test now passes a real RSS reader as the
-    /// fallback, so on macOS a `None` from `phys_footprint_bytes` — the syscall failing, or
-    /// returning non-zero `rc` — makes it report a healthy RSS number and pass GREEN while the cap
-    /// has silently degraded to keying on RSS, which this module's own header documents as the
-    /// wrong key ("an RSS-keyed cap can kill a healthy process and indict pages nobody needs to
-    /// fix"). DO NOT DELETE THIS AS REDUNDANT: the delta test discards the metric name
-    /// (`let (_, before)`), so a `None` there sails through green on the fallback and nothing in it
-    /// objects. This is the only assertion in the file covering that case.
+    /// question rather than carrying it forward. That test passes a real RSS reader as the fallback,
+    /// so on macOS a `None` from `phys_footprint_bytes` — the syscall failing, or returning non-zero
+    /// `rc` — makes it report a healthy RSS number and pass GREEN while the breach log's evidence has
+    /// silently become RSS. Footprint is the number jetsam charges and the header documents RSS as the
+    /// wrong number to indict, so that substitution must fail loudly. DO NOT DELETE THIS AS REDUNDANT:
+    /// the delta test discards the metric name (`let (_, before)`), so a `None` there sails through green
+    /// on the fallback and nothing in it objects. This is the only assertion in the file covering that case.
     #[cfg(target_os = "macos")]
     #[test]
     fn phys_footprint_is_present_on_macos_not_silently_none() {
         phys_footprint_bytes().expect(
-            "proc_pid_rusage returned non-zero — phys_footprint_bytes is None, so the hard cap \
-             would silently key on RSS instead of the footprint macOS actually charges",
+            "proc_pid_rusage returned non-zero — phys_footprint_bytes is None, so the breach log's evidence \
+             would silently be RSS instead of the footprint macOS actually charges",
         );
     }
 
@@ -671,6 +719,44 @@ mod tests {
         assert!(!tmp.exists(), "no log should be written when under cap");
     }
 
+    /// THE DECISION READS MIMALLOC COMMIT, NOT THE FALLBACK. Commit is 3 GB, over the 2 GB cap, while
+    /// the fallback reads 1 GB, under it. A decision keyed on the fallback returns without flushing,
+    /// so the `should_panic` never fires and the test fails. Not gated by platform: the commit is
+    /// injected, so the decision is observed on every platform. (On macOS a fallback-keyed mutant
+    /// would read the real footprint, a few MB, and also miss the breach.)
+    #[test]
+    #[should_panic(expected = "BREACH")]
+    fn hard_cap_breaches_on_commit_even_when_the_fallback_is_under_cap() {
+        let log = std::env::temp_dir().join(format!("al-rss-guard-commit-breach-{}.log", std::process::id()));
+        check_and_enforce_with(
+            || 3 * 1024 * 1024 * 1024,
+            || 1024 * 1024 * 1024,
+            || panic!("BREACH"),
+            &log,
+            snap(2 * 1024 * 1024 * 1024),
+        );
+    }
+
+    /// THE OWNER'S CASE: commit 1 GB is under the 2 GB cap while RSS reads 4 GB — DuckDB's memory,
+    /// which the cap must not charge. A decision keyed on the fallback breaches here and the flush
+    /// closure panics. This discriminates only on the RSS path: on macOS a fallback-keyed mutant reads
+    /// the real footprint instead, which is under the cap, so this test passes there under the
+    /// mutation; `hard_cap_breaches_on_commit_even_when_the_fallback_is_under_cap` is the one that
+    /// catches it on macOS.
+    #[test]
+    fn owner_case_commit_under_cap_with_rss_over_cap_is_no_breach() {
+        let log = std::env::temp_dir().join(format!("al-rss-guard-duckdb-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&log);
+        check_and_enforce_with(
+            || 1024 * 1024 * 1024,
+            || 4 * 1024 * 1024 * 1024,
+            || panic!("commit is under the cap: the flush must not run"),
+            &log,
+            snap(2 * 1024 * 1024 * 1024),
+        );
+        assert!(!log.exists(), "an under-cap commit must not write a culprit log");
+    }
+
     #[test]
     fn default_cap_is_2048_mb() {
         std::env::remove_var("AGENTLENS_RSS_HARD_CAP_MB");
@@ -682,8 +768,11 @@ mod tests {
         // The measured incident this guard exists for: a tiny window (397 spans) at a 5.4 GB
         // footprint. The old cheap-counters-only log would have said "397 spans, 5.4 GB" and
         // named nothing — this asserts the split that actually attributes it.
-        let d = format_diagnostic("phys_footprint", 5_400 * 1024 * 1024, &mi(400 * 1024 * 1024), &snap(2048 * 1024 * 1024));
-        assert!(d.contains("phys_footprint 5400 MB > cap 2048 MB"));
+        let mut m = mi(400 * 1024 * 1024);
+        m.current_commit_bytes = 2_600 * 1024 * 1024; // the decision counter, over the 2048 MB cap
+        let d = format_diagnostic("phys_footprint", 5_400 * 1024 * 1024, &m, &snap(2048 * 1024 * 1024));
+        assert!(d.contains("mimalloc commit 2600 MB > cap 2048 MB"), "the decision counter must lead the breach line; got:\n{d}");
+        assert!(d.contains("evidence: phys_footprint 5400 MB"), "the footprint must still be logged as evidence; got:\n{d}");
         assert!(d.contains("process RSS 400 MB"), "current_rss must be labelled process RSS, not mimalloc heap; got:\n{d}");
         assert!(d.contains("mimalloc commit"), "the log must separate mimalloc's own commit counter from whole-process RSS; got:\n{d}");
         // The label must name its METHOD, not a suspect. Naming DuckDB here was measurably
@@ -693,9 +782,9 @@ mod tests {
         // mimalloc COMMIT, not process RSS: footprint − process-RSS is resident-clean (libs,
         // mapped files) and saturates to ~0 in real kills, while commit is the mimalloc-owned
         // counter (decremented on decommit), so footprint − commit bounds the non-mimalloc dirty
-        // share from below (5400 − 400 = 5000 MB here).
+        // share from below (5400 − 2600 = 2800 MB here).
         assert!(d.contains("non-mimalloc-dirty floor"));
-        assert!(d.contains("): 5000 MB"));
+        assert!(d.contains("): 2800 MB"));
         assert!(!d.contains("e.g. DuckDB"), "the diagnostic must not name a suspect it did not measure");
         assert!(d.contains("resident spans: 397"));
         for line in d.lines() {

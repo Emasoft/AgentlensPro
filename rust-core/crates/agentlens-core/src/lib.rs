@@ -802,13 +802,14 @@ impl CoreState {
         // Memory pressure FIRST: narrowing the window is what makes the following prune evict.
         // Order is load-bearing — halving after the prune would defer every cut by a full tick,
         // and the tick is 5s while a flood can add ~11k spans/s.
-        // WHY the ladder keys on `primary_metric` against fractions of the HARD cap: the old valve
-        // measured RSS against a 4096 MB budget while the kill used phys_footprint at 2048 MB, so
-        // it never fired before the kill. Actions run on an UPWARD edge only (not every tick).
+        // WHY the ladder keys on `mi_commit_bytes` against fractions of the HARD cap: the ladder and the
+        // cap must read the SAME counter. A footprint-keyed ladder sits at stage 3 forever once DuckDB's
+        // memory pushes footprint past the cap, because its actions only free Rust heap and so can never
+        // lower footprint. Actions run on an UPWARD edge only (not every tick).
         let mut narrowed = false;
         if pressure_ladder_enabled(std::env::var("AGENTLENS_PRESSURE_LADDER").ok().as_deref()) {
             let cap = rss_guard::rss_hard_cap_bytes();
-            let metric = rss_guard::primary_metric(crate::server_stats::rss_bytes).1;
+            let metric = rss_guard::mi_commit_bytes();
             let thresholds = rss_guard::pressure_thresholds(&self.data_dir, cap);
             let prev = self.pressure_stage;
             let new = pressure_stage(metric, thresholds, prev, cap);
@@ -841,14 +842,13 @@ impl CoreState {
                 }
             }
         }
-        // Hard ceiling, separate from and higher-severity than the soft valve above: if RSS is
-        // still over AGENTLENS_RSS_HARD_CAP_MB (default 2048) after the soft valve had its
-        // chance, the leak isn't in the summarization window this tick narrows — exit now with a
+        // Hard ceiling, separate from and higher-severity than the soft valve above: if mimalloc
+        // committed bytes are still over AGENTLENS_RSS_HARD_CAP_MB (default 2048) after the soft valve
+        // had its chance, the leak isn't in the summarization window this tick narrows — exit now with a
         // diagnostic rather than let the process grow toward an OOM kill with no evidence left.
-        // A CLOSURE, not `rss_now`. `rss_now` was sampled ABOVE, before the valve ran — the valve
-        // needs it, but the hard cap must not be keyed on a pre-valve reading, or on the RSS path
-        // it cannot see the only thing that makes the breach meaningful: still over AFTER the cut.
-        // On macOS this closure is never called; the footprint syscall answers first.
+        // `check_and_enforce` reads `mi_commit_bytes` at breach-check time, after the valve has run. Its
+        // fallback closure is evidence only, read on breach; on macOS the footprint syscall answers first,
+        // so it is never called there.
         // Snapshot fields are read into owned locals BEFORE the flush closure below, so the
         // closure's `&mut self.writer` capture (Rust 2021 disjoint field capture) never overlaps
         // an outstanding `&self.writer`/`&self.window`/`&self.cards` borrow from building the

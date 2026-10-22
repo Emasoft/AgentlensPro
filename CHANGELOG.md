@@ -66,6 +66,11 @@ All notable changes to AgentlensPro are documented here.
 
 ### Changed
 
+- **The RSS hard cap and the memory-pressure ladder now measure the mimalloc committed heap of alcore, not whole-process physical footprint.**
+  `AGENTLENS_RSS_HARD_CAP_MB` is charged only for mimalloc committed bytes, so DuckDB memory (system malloc, governed by the
+  DuckDB memory_limit setting) is no longer charged to the cap. The breach log line now leads with
+  `mimalloc commit N MB > cap M MB` and records footprint (RSS off macOS) as evidence.
+
 - **`UI_PORT` / `MCP_PORT` / `OTLP_PORT` values that are not plain decimal integers (for example `3e3`,
   `0x50`, `80.5`) are now rejected by the CLI**, as the server already rejected them, with a stderr
   warning, and fall back to the default port (TRDD-EGGERLEO). A leading `+` is still accepted, as by the server.
