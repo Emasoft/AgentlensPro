@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: dev
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-10-22T19:58:04+0200
+updated: 2026-10-22T20:45:38+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -23,7 +23,9 @@ eht: [12FGMAEP]
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-22
 
 - Cause identified (docs_dev/20261022-climb-stacks.md): open_store, run by bodies_pass every 60 s, is on the stack in every alcore-bg sample; load_pass_state and the bodies watcher were not observed active.
-- NEXT ACTION (as of 2026-10-22 19:57): step 4 is committed; steps 1 and 2 are being implemented on branch fix/setup-agent-preflight; step 3 follows step 2; then an end-to-end run on a clone. Deploy ONLY after TRDD-12FGMAEP's whole-process backstop lands or an owner waiver is recorded on 12FGMAEP (step 4 removes the only whole-process memory guard).
+- NEXT ACTION (as of 2026-10-22 20:45): steps 4, 1 and 2 are committed on branch fix/setup-agent-preflight (step 1 99d5c582; step 2 8c658bd1 plus review fixes 0964e060 and 83d4f46c). Next: step 3 (open the store once per process), then an end-to-end run on a clone. Deploy ONLY after TRDD-12FGMAEP's whole-process backstop lands or an owner waiver is recorded on 12FGMAEP (step 4 removes the only whole-process memory guard).
+- Step 3 must also: (a) assign part_file ids from a Rust-side counter seeded at open, not max(id)+1, once the connection is shared; (b) move core_cap_guard's bodies_pass_opens_its_store_with_the_store_memory_limit to wherever the bodies-pass store is opened; (c) add the per-tick coherence diff before removing the per-tick rebuild.
+- Open from the step-2 reviews, to settle on the clone run: per-body probe cost over a full pass of 1,300+ files (option A's assumption, unmeasured at pass scale); size of the two ART indexes and duckdb_memory() during a full pass at 1536MB with 2 threads; cost of blob_fetch_sql's extra count query. Known gaps: api_call rows have no flush anti-join (a misfiring ingest short-circuit writes a duplicate api_calls part, shown by mutant B in docs_dev/20261022-step2-review2-fixes.md); a flush that fails after earlier tables committed leaves those parts unfsynced until the next successful settle.
 - Step 4 alone does not end the crash loop: TRDD-2JOIAH2G records one canonical exit with mimalloc commit at 2.59 GB, which still breaches the commit-keyed cap; steps 1-3 are expected, not yet measured, to bring commit under 2 GB.
 - SUPERSEDED 2026-10-22: "Candidates left: load_pass_state, open_store, the bodies watcher." and "the reader responsible is not identified" — replaced by the cause line above.
 - SUPERSEDED 2026-10-22: the earlier Step 2 wording "dedup by anti-join at flush; no per-body probes" — replaced by option A in the Plan section.
