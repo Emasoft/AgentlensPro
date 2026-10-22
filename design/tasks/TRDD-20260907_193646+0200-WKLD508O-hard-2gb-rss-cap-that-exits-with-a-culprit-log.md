@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: human_review
 created: 2026-09-07T19:36:46+0200
-updated: 2026-10-22T02:58:13+0200
+updated: 2026-10-22T03:09:12+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG

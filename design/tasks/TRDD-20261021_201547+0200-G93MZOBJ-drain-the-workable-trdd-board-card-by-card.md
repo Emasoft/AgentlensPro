@@ -4,7 +4,7 @@ title: Drain the workable TRDD board card by card
 column: dev
 status: tasked
 created: 2026-10-21T20:15:47+0200
-updated: 2026-10-22T03:05:11+0200
+updated: 2026-10-22T03:09:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -50,3 +50,5 @@ NEXT ACTION: take the top card of the filtered queue that no worker holds.
 - Stop conditions, checked before each card: two consecutive FAILED cards; a review blocker the main agent cannot refute; the account window above 80% (`agentlenspro statusline-history project`).
 - Worker choice: cheap-worker (owner directive) for the staleness check and mechanical fixes. Escalate to lean-worker or smart-worker only when the fix needs judgement (concurrency, locks, durability, cross-file design); record the reason on the card.
 - Ownership check before taking a card: `git log --oneline -5 --all --grep <id>` for commits in the last 48h, the card's `updated:` within 48h, and ListAgents peer sessions whose title names the card or its subject. current-owner alone cannot tell sessions apart (every card says main-agent@agentlenspro). If another session is active on it, skip it.
+- Wall-clock deadline: pause after 4 hours of drain work in one session, or at the 5h-window reset, whichever comes first.
+- Window check: `agentlenspro statusline-history project` shows 5h%/7d% only while alcore is live and receiving status-line posts; on 2026-10-22 its newest sample was 12.8 h old because alcore was down, so its 0% was stale. Read the window from it only when the newest sample is under 10 minutes old; otherwise treat the window as unknown and run at most 2 cards before re-checking.

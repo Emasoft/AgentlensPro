@@ -4,7 +4,7 @@ title: alcore runs its request runtime and body archive uncapped so digestion ta
 column: dev
 status: tasked
 created: 2026-10-22T02:58:03+0200
-updated: 2026-10-22T03:07:17+0200
+updated: 2026-10-22T03:09:14+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -42,6 +42,7 @@ No open card owned a cap on total cores (triage report docs_dev/20261021-mem-cpu
 - One env knob; every pool size in agentlens-core derives from it; a grep shows no remaining pool sized from available_parallelism.
 - Invalid AGENTLENS_MAX_CORES exits with a clear message (unit-tested).
 - Live: alcore's CPU stays at or under ~200% (2 cores) in `ps` samples over a bodies pass.
+- Grep check: every DuckDB threads setting reachable from alcore (SET threads / a threads argument in rust-core/crates/agentlens-core/src and the agentlens-store calls alcore makes) takes crate::cores::duckdb_threads(); the alstore and aldigest CLI binaries are excluded.
 
 ## Approval log
 
