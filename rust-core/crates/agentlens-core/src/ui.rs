@@ -89,8 +89,8 @@ fn sse_frame(payload: &str) -> Bytes {
 /// `__psynch_mutexwait` — every poster queued behind the 4 s ticks rebuilding a whole-window
 /// summary while holding the mutex that `ingest_parsed` needs.
 ///
-/// Returns the data version the summary was built for, so a derived view (the stripped body)
-/// memoizes against the SAME version rather than whatever `data_version` reads afterwards.
+/// Returns the data version the summary was built for, so a derived view memoizes against the
+/// SAME version rather than whatever `data_version` reads afterwards.
 ///
 /// SINGLE-FLIGHT: at most one rebuild runs at a time. This gate was review F1 of `5e7f455`, was
 /// assigned to an agent that stalled before landing it, and its absence was measured on 2026-08-29
@@ -463,22 +463,6 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
     (inputs.version, st.store_summary(inputs.version, build))
 }
 
-/// `/api/summary`'s body and the shell's inlined copy: strip_session_detail over `summary_now`,
-/// memoized on the summary's OWN version and — like the summary — computed off the lock. The
-/// strip clones every card, so doing it under the lock was the same stall one layer down.
-pub fn stripped_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Arc<Value> {
-    let (version, summary) = summary_now(state, now_ms);
-    {
-        let mut st = state.lock_timed();
-        if let Some(cached) = st.stripped_cache.current(version) {
-            return cached;
-        }
-    }
-    let stripped = strip_session_detail(&summary);
-    let mut st = state.lock_timed();
-    st.stripped_cache.store_if_newer(version, stripped)
-}
-
 /// The request-path twin of the 4 s tick's off-lock compute (TRDD-O3ICDRLO): the burn status
 /// for a route, computed with the state lock RELEASED. Every route that used to call
 /// `CoreState::live_burn_status` under its guard goes through here instead.
@@ -621,10 +605,11 @@ pub(crate) fn strip_one_session(s: &Value) -> Value {
 }
 
 /// Byte-identical streaming twin of `strip_session_detail(summary).to_string()`.
-// WHY: the stripped summary is a second resident per-session Value tree (TRDD-091Z1FU0; step 3 removes it); both
-// of its readers immediately serialize it, so writing the stripped form straight from the summary
-// removes the tree without changing a byte. Every branch mirrors strip_session_detail /
-// strip_one_session; `preserve_order` keeps key positions, so the order below IS the contract.
+// WHY: the stripped summary used to be a second resident per-session Value tree (removed by
+// TRDD-091Z1FU0); both of its readers immediately serialize it, so writing the stripped form
+// straight from the summary removes the tree without changing a byte. Every branch mirrors
+// strip_session_detail / strip_one_session; `preserve_order` keeps key positions, so the order
+// below IS the contract.
 pub struct StrippedView<'a>(pub &'a Value);
 
 const EMPTY_TIMELINE: &[Value] = &[];
@@ -1301,7 +1286,6 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     // Read per request, like the TS: 28 KB, and a dev can edit the shell without a restart.
     let tmpl = std::fs::read_to_string(media_dir.join("index.html")).map_err(|e| format!("index.html: {e}"))?;
     let (_, summary) = summary_now(state, now);
-    let stripped = stripped_now(state, now);
     let (spans, build_id) = {
         let st = state.lock_timed();
         // The SAME build_id the update frames carry — the dashboard reloads on a mismatch, so a
@@ -1313,7 +1297,8 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     } else {
         crate::update_payload::compute_sidebar_payload(&summary, &spans, now)
     };
-    let (summary_json, sidebar_json) = (safe_json(&stripped), safe_json(&sidebar));
+    let summary_json = safe_json_text(serde_json::to_string(&StrippedView(&summary)).expect("stripped summary serializes: string keys only"));
+    let sidebar_json = safe_json(&sidebar);
     // The mount prefix is EMPTY here, deliberately, and not read from AGENTLENS_BASE_PATH: the
     // base-path STRIP in handle() is still on this module's deferred list, and a shell that emits
     // `/lens/dashboard.js` to a router that only knows `/dashboard.js` is a 200 page that can never
@@ -1519,7 +1504,9 @@ async fn handle(
     } else if path == "/events" {
         sse_response(&state, &hub, crate::now_ms() as f64)
     } else if method == Method::GET && path == "/api/summary" {
-        json_response(StatusCode::OK, stripped_now(&state, crate::now_ms() as f64).to_string())
+        let (_, summary) = summary_now(&state, crate::now_ms() as f64);
+        let body = serde_json::to_string(&StrippedView(&summary)).expect("stripped summary serializes: string keys only");
+        json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/server-stats" {
         let body = {
             let st = state.lock_timed();
@@ -1913,7 +1900,6 @@ async fn handle(
             let st = state.lock_timed();
             let s = st.log_scan;
             let (sh, sm) = st.summary_cache.stats();
-            let (th, tm) = st.stripped_cache.stats();
             let (readdirs, lhits, cached) = crate::generated_files::scratch_listing_stats();
             // NOT PORTED: the sidebar/analytics caches (those views are built inside the update
             // payload here, not as separate routes) — idle zeros.
@@ -1927,7 +1913,6 @@ async fn handle(
                 "summaryEngine": { "sharedCopies": crate::summary_engine::shared_copies() },
                 "derivedCaches": {
                     "summary": { "hits": sh, "misses": sm },
-                    "stripped": { "hits": th, "misses": tm },
                     "sidebar": { "hits": 0, "misses": 0 },
                     "analytics": { "hits": 0, "misses": 0 },
                 },
@@ -4545,7 +4530,7 @@ mod rebuild_admission_tests {
 
     /// The fix. With the gate held by someone else, a cache-missing reader is answered from the
     /// last good summary instead of queueing — promptly, and with the version that summary was
-    /// actually built for (never the current `data_version`, which is what keeps `stripped_cache`
+    /// actually built for (never the current `data_version`, which is what keeps a derived view
     /// keyed to inputs it really derives from).
     #[test]
     fn reader_does_not_block_behind_an_in_flight_rebuild() {
@@ -4753,7 +4738,7 @@ mod rebuild_admission_tests {
     /// the receiver is not part of the needle, so renaming `st` cannot hide an occurrence.
     #[test]
     fn mcp_handlers_never_rebuild_the_summary_under_the_lock() {
-        let rebuilders = ["build_session_summary", "build_stripped_summary", "live_burn_status", "session_summary"];
+        let rebuilders = ["build_session_summary", "live_burn_status", "session_summary"];
         let needles: Vec<String> = rebuilders.iter().map(|n| format!(".{n}(")).collect();
         let hits: Vec<String> = include_str!("ui.rs")
             .lines()
@@ -4776,8 +4761,8 @@ mod rebuild_admission_tests {
     /// above so `ui.rs` is checked against it too.
     #[test]
     fn no_new_core_state_method_wraps_a_summary_rebuild() {
-        // Known wrappers: `build_stripped_summary` and `live_burn_status`. (`session_summary` is a
-        // third rebuilder but reaches `summary_over` directly, and is already in the list above.)
+        // Known wrapper: `live_burn_status`. (`session_summary` is a rebuilder that reaches
+        // `summary_over` directly, and is already in the list above.)
         let needle = format!("self.build_{}(", "session_summary");
         let hits: Vec<String> = include_str!("lib.rs")
             .lines()
@@ -4786,7 +4771,7 @@ mod rebuild_admission_tests {
             .filter(|(_, l)| l.contains(needle.as_str()))
             .map(|(i, l)| format!("{}: {}", i + 1, l.trim()))
             .collect();
-        assert_eq!(hits.len(), 2, "a CoreState method that wraps a summary rebuild was added or removed; keep `rebuilders` in the test above in step with it:\n{hits:#?}");
+        assert_eq!(hits.len(), 1, "a CoreState method that wraps a summary rebuild was added or removed; keep `rebuilders` in the test above in step with it:\n{hits:#?}");
     }
 
     /// The third of the pair's blind spots, and the one that found site 21. The two tests above
@@ -4799,7 +4784,7 @@ mod rebuild_admission_tests {
     /// look at; silence is a debt nobody can see — and silence is what let site 20 through.
     #[test]
     fn no_other_file_rebuilds_the_summary_from_a_caller_holding_the_lock() {
-        let rebuilders = ["build_session_summary", "build_stripped_summary", "live_burn_status", "session_summary"];
+        let rebuilders = ["build_session_summary", "live_burn_status", "session_summary"];
         // BOTH spellings. Method-call form is what the code uses today; UFCS
         // (`CoreState::build_session_summary(&mut st, …)`) is the same call and would otherwise
         // walk straight past a needle that only knows the dot.

@@ -79,7 +79,6 @@ fn reference(st: &CoreState) -> (Value, Value) {
 struct Out {
     summary: Arc<Value>,
     attribution: Value,
-    stripped: Option<Arc<Value>>,
 }
 
 /// The real flow: snapshot (takes the caches' previous outputs), build, store.
@@ -87,9 +86,8 @@ fn rebuild(st: &mut CoreState) -> Out {
     let mut inputs = st.summary_snapshot();
     let build = CoreState::summary_from(&mut inputs, 0.0);
     let attribution = serde_json::to_value(&build.attribution).unwrap();
-    let stripped = build.stripped.clone();
     let summary = st.store_summary(inputs.version, build);
-    Out { summary, attribution, stripped }
+    Out { summary, attribution }
 }
 
 fn assert_equals_full(st: &mut CoreState, step: &str) -> Out {
@@ -97,9 +95,6 @@ fn assert_equals_full(st: &mut CoreState, step: &str) -> Out {
     let got = rebuild(st);
     assert_eq!(serde_json::to_string(&*got.summary).unwrap(), serde_json::to_string(&want_s).unwrap(), "summary bytes after {step}");
     assert_eq!(serde_json::to_string(&got.attribution).unwrap(), serde_json::to_string(&want_a).unwrap(), "attribution bytes after {step}");
-    if let Some(s) = &got.stripped {
-        assert_eq!(serde_json::to_string(&**s).unwrap(), serde_json::to_string(&strip_session_detail(&want_s)).unwrap(), "stripped bytes after {step}");
-    }
     assert_eq!(serde_json::to_string(&agentlens_core::ui::StrippedView(&want_s)).unwrap(), strip_session_detail(&want_s).to_string(), "StrippedView bytes after {step}");
     got
 }
@@ -138,8 +133,7 @@ fn random_card(r: &mut Lcg) -> Value {
 
 /// THE property: random interleavings of log puts, OTEL ingest, demotion, card clear, window prune
 /// and span clear — each followed by a rebuild — equal a full rebuild byte for byte, including the
-/// stripped twin and the attribution map, while a reader sometimes holds the previous Arc (the
-/// forced-copy path).
+/// attribution map, while a reader sometimes holds the previous Arc (the forced-copy path).
 #[test]
 fn random_interleavings_equal_a_full_rebuild_at_every_step() {
     let mut incremental = 0;
@@ -168,7 +162,6 @@ fn random_interleavings_equal_a_full_rebuild_at_every_step() {
                 incremental += st.summary_engine.incremental_passes.load(Ordering::Relaxed);
                 st.summary_engine = Arc::new(agentlens_core::summary_engine::SummaryEngine::default());
                 st.summary_cache.clear();
-                st.stripped_cache.clear();
                 let all = st.cards.cards();
                 st.cards.clear();
                 for c in all.into_iter().rev() {
@@ -437,4 +430,71 @@ fn concurrent_rebuilds_never_move_the_cache_backwards_and_the_end_state_is_exact
     }
     assert_eq!(regressions.load(Ordering::Relaxed), 0, "the summary cache moved backwards");
     assert_equals_full(&mut state.lock().unwrap(), "after the race");
+}
+
+
+/// Seed an engine with a patchable previous output (two incremental-capable passes), then return
+/// the full-pass count so a test can assert the NEXT pass fell back to a full rebuild.
+fn seeded(name: &str) -> CoreState {
+    let mut st = CoreState::open(&tmp(name));
+    for i in 0..4 {
+        st.put_log_session(card(&format!("e{i}"), "claude_code", &format!("2026-08-0{}T10:00:00.000Z", i + 1), None, 1, 1));
+    }
+    assert_equals_full(&mut st, "seed");
+    st.put_log_session(card("e9", "claude_code", "2026-08-09T10:00:00.000Z", None, 1, 1));
+    let before = st.summary_engine.incremental_passes.load(Ordering::Relaxed);
+    assert_equals_full(&mut st, "incremental seed pass");
+    assert!(st.summary_engine.incremental_passes.load(Ordering::Relaxed) > before, "the seed really patches in place");
+    st
+}
+
+/// TRDD-091Z1FU0: with the stripped twin gone, the summary pointer alone proves "previous output is
+/// ours". Clearing ONLY the summary cache (the pressure ladder's stage 2) must therefore force a full pass.
+#[test]
+fn clearing_only_the_summary_cache_forces_a_full_pass_that_matches() {
+    let mut st = seeded("only-summary-cleared");
+    st.summary_cache.clear();
+    st.put_log_session(card("e10", "claude_code", "2026-08-10T10:00:00.000Z", None, 1, 1));
+    let full_before = st.summary_engine.full_passes.load(Ordering::Relaxed);
+    assert_equals_full(&mut st, "summary cache cleared");
+    assert!(st.summary_engine.full_passes.load(Ordering::Relaxed) > full_before, "no previous output -> full rebuild");
+}
+
+#[test]
+fn force_full_forces_a_full_pass_that_matches() {
+    let mut st = seeded("force-full");
+    st.summary_engine.force_full.store(true, Ordering::Relaxed);
+    st.put_log_session(card("e10", "claude_code", "2026-08-10T10:00:00.000Z", None, 1, 1));
+    let full_before = st.summary_engine.full_passes.load(Ordering::Relaxed);
+    assert_equals_full(&mut st, "force_full");
+    assert!(st.summary_engine.full_passes.load(Ordering::Relaxed) > full_before, "force_full -> full rebuild");
+}
+
+#[test]
+fn a_card_epoch_clear_forces_a_full_pass_that_matches() {
+    let mut st = seeded("epoch-clear");
+    st.cards.clear();
+    st.put_log_session(card("fresh", "claude_code", "2026-09-01T10:00:00.000Z", None, 1, 1));
+    st.put_log_session(card("e0", "claude_code", "2026-08-01T10:00:00.000Z", None, 2, 1));
+    let full_before = st.summary_engine.full_passes.load(Ordering::Relaxed);
+    assert_equals_full(&mut st, "card epoch cleared");
+    assert!(st.summary_engine.full_passes.load(Ordering::Relaxed) > full_before, "a new card epoch -> full rebuild");
+}
+
+/// The review's top risk: a foreign value in `summary_cache` at the engine's own version, with the
+/// right number of sessions. Only the pointer-equality check rejects it; if the engine patched it,
+/// the tampered (untouched, hence retained) session would survive into the output.
+#[test]
+fn a_foreign_value_in_the_summary_cache_is_rejected_and_rebuilt_in_full() {
+    let mut st = seeded("foreign");
+    let (version, ours) = st.summary_cache.take_arc().expect("the engine's output is cached");
+    let mut foreign = (*ours).clone();
+    foreign["sessions"][0]["inputTokens"] = json!(987_654_321u64);
+    drop(ours);
+    st.summary_cache.store_arc_if_newer(version, Arc::new(foreign));
+    st.put_log_session(card("e10", "claude_code", "2026-08-10T10:00:00.000Z", None, 1, 1));
+    let full_before = st.summary_engine.full_passes.load(Ordering::Relaxed);
+    let got = assert_equals_full(&mut st, "foreign summary cache value");
+    assert!(st.summary_engine.full_passes.load(Ordering::Relaxed) > full_before, "an unrecognised previous output -> full rebuild");
+    assert!(!serde_json::to_string(&*got.summary).unwrap().contains("987654321"), "the foreign value never reached the output");
 }

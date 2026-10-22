@@ -254,10 +254,8 @@ pub struct CoreState {
     /// The sweeper's control channel (set by `start_sweeper`): /api/clear wipes the tail state
     /// and requests the full re-scan through it.
     pub sweeper: Option<log_reader::SweeperControl>,
-    /// server.ts summaryCache / strippedCache — the merged summary and its stripped form,
-    /// memoized by data_version (derived_cache.rs).
+    /// server.ts summaryCache — the merged summary, memoized by data_version (derived_cache.rs).
     pub summary_cache: derived_cache::VersionedCache<Value>,
-    pub stripped_cache: derived_cache::VersionedCache<Value>,
     /// The incremental summary rebuild (TRDD-9VX3WTGU Phase C part 2). `Arc` so the off-lock rebuild
     /// owns a handle without touching the state lock; `force_full` is set wherever the OTEL window
     /// changes wholesale (prune, pressure ladder, clear).
@@ -424,10 +422,7 @@ impl CoreState {
             accounts: Arc::new(self.accounts.snapshot()),
             // TRDD-9VX3WTGU Phase C part 2: the previous outputs LEAVE the caches here so the
             // engine can patch them in place (see `summary_engine`). `&mut self` is for this.
-            prev: summary_engine::Prev {
-                summary: self.summary_cache.take_arc(),
-                stripped: self.stripped_cache.take_arc(),
-            },
+            prev: summary_engine::Prev { summary: self.summary_cache.take_arc() },
             engine: self.summary_engine.clone(),
         }
     }
@@ -449,10 +444,6 @@ impl CoreState {
         let stored = self.summary_cache.store_arc_if_newer(version, build.summary);
         if will_store {
             self.otel_attribution = build.attribution;
-            // The stripped twin lands with the summary it was derived from, never alone.
-            if let Some(stripped) = build.stripped {
-                self.stripped_cache.store_arc_if_newer(version, stripped);
-            }
         }
         stored
     }
@@ -569,12 +560,6 @@ impl CoreState {
             *otel_attribution = attribution;
             summary
         })
-    }
-
-    /// buildStrippedSummary — `/api/summary`'s body, memoized the same way.
-    pub fn build_stripped_summary(&mut self, now_ms: f64) -> std::sync::Arc<Value> {
-        let summary = self.build_session_summary(now_ms);
-        self.stripped_cache.get(self.data_version, || ui::strip_session_detail(&summary))
     }
 
     /// gatherBurn (server.ts:1448) + computeBurnStatus in one step — shared by the 4s burn
@@ -719,7 +704,6 @@ impl CoreState {
             log_scan: log_reader::LogScanStats::default(),
             sweeper: None,
             summary_cache: derived_cache::VersionedCache::default(),
-            stripped_cache: derived_cache::VersionedCache::default(),
             summary_engine: Arc::new(summary_engine::SummaryEngine::default()),
             accounts: account_registry::AccountRegistry::default(),
             bodies: call_body_registry::CallBodyRegistry::default(),
@@ -830,9 +814,7 @@ impl CoreState {
             let new = pressure_stage(metric, thresholds, prev, cap);
             self.pressure_stage = new;
             if new > prev {
-                if new >= 1 {
-                    self.stripped_cache.clear();
-                }
+                // stage 1 freed the stripped twin, removed by TRDD-091Z1FU0; its new action is TRDD-VLJFJ9ZC
                 if new >= 2 {
                     self.summary_cache.clear();
                     self.latest_resident_blobs.clear();

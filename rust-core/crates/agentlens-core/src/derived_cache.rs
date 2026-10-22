@@ -106,10 +106,10 @@ impl<T> VersionedCache<T> {
     /// entirely (>20 s, zero bytes) while ingest stayed healthy at 0.3 ms.
     ///
     /// Returns the PAIR, not just the value: the caller must report the version the summary was
-    /// actually built for, never the current `data_version`. `stripped_cache` is keyed on the
-    /// version `summary_now` returns, so reporting a version the body does not match would key a
-    /// derived value to inputs it was not derived from. Returning the real pair keeps the two
-    /// caches coherent — both describe the same snapshot, merely an older one.
+    /// actually built for, never the current `data_version`. A derived view keyed on the
+    /// version `summary_now` returns would otherwise be keyed to inputs it was not derived from.
+    /// Returning the real pair keeps such a view coherent with the summary — it describes the same
+    /// snapshot, merely an older one.
     ///
     /// Counts a HIT: serving this is a reuse, which is exactly what the hit/miss ratio measures.
     pub fn cached_any(&mut self) -> Option<(u64, Arc<T>)> {
