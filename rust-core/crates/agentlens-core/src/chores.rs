@@ -391,6 +391,11 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let mut failed = 0u64;
     let mut any_over_cap = false;
 
+    // ONE prune per tick across ALL bodies dirs: the name sets are shared by every dir, so a per-dir prune
+    // would drop the other dirs names. Runs inside the pass lock (taken above) and after the load.
+    if let Some(line) = agentlens_store::pass::prune_pass_names(&scope.dirs, &mut skip, &mut stranded) {
+        eprintln!("{} alcore: bodies pass: {line}", crate::log_ts());
+    }
     for bodies_dir in &scope.dirs {
         // `ingest_pass` is THROTTLED BY DESIGN — it returns `throttled: true` when it stopped at
         // `max_bytes_per_pass` with work left. One call per tick is therefore not a drain: it is a

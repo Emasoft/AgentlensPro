@@ -3,9 +3,10 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use agentlens_store::pass::{ingest_pass, PassOptions};
+use agentlens_store::pass::{ingest_pass, prune_pass_names, PassOptions};
 
 fn fixture(tag: &str) -> (PathBuf, PathBuf) {
     let root = std::env::temp_dir().join(format!("al-pass-{}-{}", std::process::id(), tag));
@@ -29,6 +30,7 @@ fn write_body(dir: &std::path::Path, name: &str, raw: &str, age_ms: i64) {
     f.set_times(fs::FileTimes::new().set_modified(t)).expect("times");
 }
 
+/// Ingest, verify, delete; a second pass is a no-op.
 #[test]
 fn pass_ingests_verifies_then_deletes_and_a_second_pass_is_a_noop() {
     let (bodies, store_dir) = fixture("basic");
@@ -48,6 +50,7 @@ fn pass_ingests_verifies_then_deletes_and_a_second_pass_is_a_noop() {
     assert_eq!(r2.ingested + r2.deleted, 0, "an empty dir is a no-op pass");
 }
 
+/// The byte budget stops the pass and the pass says so.
 #[test]
 fn throttle_stops_the_pass_and_reports_it() {
     let (bodies, store_dir) = fixture("throttle");
@@ -63,6 +66,7 @@ fn throttle_stops_the_pass_and_reports_it() {
     assert!(bodies.join("b.request.json").exists(), "the un-ingested file stays");
 }
 
+/// An unproven body is kept and named, never deleted.
 #[test]
 fn unverifiable_bodies_are_kept_and_named_never_deleted() {
     let (bodies, store_dir) = fixture("keep");
@@ -82,6 +86,7 @@ fn unverifiable_bodies_are_kept_and_named_never_deleted() {
     assert!(!skip.contains("ghost.request.json"), "a non-ts failure drops the skip name so re-ingest can repair");
 }
 
+/// A stranded file moves off the spool with its bytes and mtime kept.
 #[test]
 fn stranded_names_relocate_off_the_spool_with_mtime_preserved() {
     let (bodies, store_dir) = fixture("stranded");
@@ -118,6 +123,7 @@ fn row_ts_ms(store: &agentlens_store::Store, src_name: &str) -> i64 {
     store.con.query_row(&sql, [], |r| r.get::<_, i64>(0)).expect("row must exist")
 }
 
+/// A re-emitted file with only a ts mismatch is reclaimed, not parked, and the row is left alone.
 #[test]
 fn ts_only_mismatch_on_a_reemitted_file_reclaims_not_parks_and_leaves_the_row_alone() {
     // That must RECLAIM (delete + count), never park — parking here is the livelock the card
@@ -157,6 +163,7 @@ fn ts_only_mismatch_on_a_reemitted_file_reclaims_not_parks_and_leaves_the_row_al
     assert_eq!(r3.ingested + r3.deleted + r3.reclaimed_reemitted, 0, "an empty dir is a no-op pass");
 }
 
+/// A re-emission landing mid-pass is never deleted against the older store bytes.
 #[test]
 fn reemission_during_ingest_is_never_deleted_against_the_older_store_bytes() {
     // The corpus is LIVE: a re-emission (same name, NEW bytes) can land between the ingest and
@@ -221,6 +228,7 @@ fn reemission_during_ingest_is_never_deleted_against_the_older_store_bytes() {
     );
 }
 
+/// Unchanged bytes are still deleted, so the content guard does not wedge the drain.
 #[test]
 fn unchanged_bytes_are_still_deleted_so_the_content_guard_does_not_wedge_the_drain() {
     // The CONVERSE of the guard, and the pin that matters most: a guard that aborted EVERY
@@ -241,6 +249,7 @@ fn unchanged_bytes_are_still_deleted_so_the_content_guard_does_not_wedge_the_dra
     assert!(!bodies.join("a.request.json").exists());
     assert!(!bodies.join("b.response.json").exists());
 }
+/// A legacy stranded name drains through the gate until the parked set reaches zero.
 #[test]
 fn legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero() {
     // TRDD-6SPXOV0P box 3: a name parked BEFORE the reclaim fix (persisted in `.pass-state.json`,
@@ -282,6 +291,7 @@ fn legacy_stranded_name_drains_through_the_gate_and_the_parked_set_reaches_zero(
     assert!(stranded.is_empty());
 }
 
+/// The pass lock is exclusive and is released when its holder dies.
 #[test]
 fn pass_lock_is_exclusive_and_dies_with_its_holder() {
     // One pass per store, machine-wide: a second acquire on the SAME store must refuse while the
@@ -298,6 +308,7 @@ fn pass_lock_is_exclusive_and_dies_with_its_holder() {
     agentlens_store::pass::acquire_pass_lock(&dir).expect("released lock is immediately reusable");
 }
 
+/// Staging settles at the group boundary before the pass budget accumulates.
 #[test]
 fn staging_settles_at_the_group_boundary_before_the_pass_budget_accumulates() {
     // TRDD-2JOIAH2G R2: the pass transient is bounded, not just the pass total. The batch settles
@@ -328,3 +339,179 @@ fn staging_settles_at_the_group_boundary_before_the_pass_budget_accumulates() {
     assert!(names.iter().all(|n| !bodies.join(n).exists()));
 }
 
+/// A deleted body leaves no skip name after the next prune.
+#[test]
+fn a_deleted_body_leaves_no_skip_name_after_the_next_prune() {
+    // TRDD-2HRA270Y: the pass does not drop a name when it deletes the file. The once-per-tick prune drops
+    // it on the next listing, because the file is no longer on the spool.
+    let (bodies, store_dir) = fixture("skip-prune-delete");
+    write_body(&bodies, "a.request.json", &body("a"), 60_000);
+    write_body(&bodies, "b.response.json", &body("b"), 50_000);
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+    let r = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r.deleted, 2, "both bodies verify and delete: {:?}", r.failed);
+    let line = prune_pass_names(std::slice::from_ref(&bodies), &mut skip, &mut stranded);
+    assert_eq!(line, None, "a clean listing reports nothing");
+    assert!(skip.is_empty(), "the names of the deleted files are dead and the prune drops them: {skip:?}");
+}
+
+/// Skip and stranded names for files no longer on the spool are pruned by prune_pass_names.
+#[test]
+fn skip_and_stranded_names_for_files_no_longer_on_the_spool_are_pruned() {
+    // TRDD-2HRA270Y: an empty but complete spool proves both persisted names dead.
+    let (bodies, _store_dir) = fixture("skip-prune-absent");
+    let mut skip: HashSet<String> = ["gone.request.json".to_owned()].into();
+    let mut stranded: HashSet<String> = ["gone.response.json".to_owned()].into();
+    let line = prune_pass_names(std::slice::from_ref(&bodies), &mut skip, &mut stranded);
+    assert_eq!(line, None, "an empty spool is a complete listing");
+    assert!(skip.is_empty(), "no file on disk, so the skip name is dead: {skip:?}");
+    assert!(stranded.is_empty(), "no file on disk, so the stranded name is dead: {stranded:?}");
+}
+
+/// A skip name for a file still on the spool is kept until that file is deleted.
+#[test]
+fn a_skip_name_for_a_file_still_on_the_spool_is_kept_until_that_file_is_deleted() {
+    // TRDD-2HRA270Y: the prune keeps a name whose file is on the spool, and drops it once the file is gone.
+    let (bodies, _store_dir) = fixture("skip-prune-live");
+    write_body(&bodies, "live.request.json", &body("live"), 60_000);
+    let dirs = std::slice::from_ref(&bodies);
+    let mut skip: HashSet<String> = ["live.request.json".to_owned()].into();
+    let mut stranded = HashSet::new();
+    assert_eq!(prune_pass_names(dirs, &mut skip, &mut stranded), None);
+    assert!(skip.contains("live.request.json"), "a file still on the spool keeps its skip name");
+
+    fs::remove_file(bodies.join("live.request.json")).expect("remove");
+    assert_eq!(prune_pass_names(dirs, &mut skip, &mut stranded), None);
+    assert!(skip.is_empty(), "once the file is gone the prune drops its name: {skip:?}");
+}
+
+/// Restores a directory mode when dropped, so a failing assertion cannot leave a test directory
+/// unreadable for the next run.
+struct RestoreMode(PathBuf, u32);
+
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(self.1));
+    }
+}
+
+/// An unreadable bodies dir fails the pass; the prune is skipped and nothing is pruned.
+#[test]
+fn an_unreadable_bodies_dir_fails_the_pass_and_the_prune_keeps_both_name_sets() {
+    // read_dir itself fails. The pass reports it and the prune refuses to run: an empty listing would make
+    // every persisted name look dead. Needs a non-root user, because root ignores the mode bits.
+    let (bodies, store_dir) = fixture("unreadable-dir");
+    write_body(&bodies, "a.request.json", &body("a"), 60_000);
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let mut skip: HashSet<String> = ["a.request.json".to_owned(), "gone.request.json".to_owned()].into();
+    let mut stranded: HashSet<String> = ["gone.response.json".to_owned()].into();
+    let mut fsynced = HashSet::new();
+    let _restore = RestoreMode(bodies.clone(), 0o755);
+    fs::set_permissions(&bodies, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+    let r = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert!(r.failed.iter().any(|m| m.contains("bodies dir unreadable")), "the pass reports it: {:?}", r.failed);
+    assert_eq!(r.ingested, 0, "nothing is read from an unreadable dir");
+    let line = prune_pass_names(std::slice::from_ref(&bodies), &mut skip, &mut stranded);
+    assert!(line.as_deref().is_some_and(|l| l.contains("prune skipped")), "the prune is skipped: {line:?}");
+    assert!(skip.contains("a.request.json") && skip.contains("gone.request.json"), "no skip name is pruned: {skip:?}");
+    assert!(stranded.contains("gone.response.json"), "no stranded name is pruned: {stranded:?}");
+}
+
+/// An entry that cannot be statted (ELOOP) counts as present: the prune runs, keeps its name, drops dead names.
+#[test]
+fn an_unstatable_entry_is_present_so_the_prune_runs_and_drops_only_dead_names() {
+    // TRDD-2HRA270Y: a self-referential symlink fails stat with ELOOP, not NotFound. Its name EXISTS, so it
+    // stays present: the prune still runs, keeps the name, and drops only the name with no entry at all.
+    let (bodies, store_dir) = fixture("unstatable-entry");
+    write_body(&bodies, "a.request.json", &body("a"), 60_000);
+    let loop_link = bodies.join("loop.request.json");
+    std::os::unix::fs::symlink(&loop_link, &loop_link).expect("self-referential symlink");
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let mut skip: HashSet<String> = ["loop.request.json".to_owned(), "gone.request.json".to_owned()].into();
+    let mut stranded: HashSet<String> = ["loop.request.json".to_owned()].into();
+    let mut fsynced = HashSet::new();
+    let r = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r.ingested, 1, "the readable file still ingests: {:?}", r.failed);
+    assert!(!r.failed.iter().any(|m| m.contains("loop.request.json")), "ingestion stays quiet about it: {:?}", r.failed);
+    let line = prune_pass_names(std::slice::from_ref(&bodies), &mut skip, &mut stranded);
+    assert!(
+        line.as_deref().is_some_and(|l| l.contains("prune ran") && l.contains("loop.request.json")),
+        "one summary line names it and says the prune ran: {line:?}"
+    );
+    assert!(skip.contains("loop.request.json"), "a present but unstatable name keeps its skip name: {skip:?}");
+    assert!(!skip.contains("gone.request.json"), "a dead name is dropped: {skip:?}");
+    assert!(stranded.contains("loop.request.json"), "a present but unstatable stranded name is kept: {stranded:?}");
+}
+
+
+/// Two dirs: a name live in either is kept; a name absent from both is dropped.
+#[test]
+fn prune_across_two_dirs_keeps_a_name_live_in_either_and_drops_one_absent_from_both() {
+    // TRDD-2HRA270Y: the name sets are shared by every bodies dir of a tick, so one prune over ALL the dirs
+    // keeps a name that is live in ANY of them and drops only a name that is absent from all of them.
+    let (dir_a, store_dir) = fixture("prune-two-a");
+    let dir_b = store_dir.parent().expect("fixture root").join("bodies-b");
+    fs::create_dir_all(&dir_b).expect("mkdir");
+    write_body(&dir_a, "a.request.json", &body("a"), 60_000);
+    write_body(&dir_b, "b.response.json", &body("b"), 60_000);
+    let mut skip: HashSet<String> =
+        ["a.request.json", "b.response.json", "gone.request.json"].into_iter().map(str::to_owned).collect();
+    let mut stranded: HashSet<String> = ["b.response.json".to_owned()].into();
+    let line = prune_pass_names(&[dir_a.clone(), dir_b.clone()], &mut skip, &mut stranded);
+    assert_eq!(line, None, "both listings are clean");
+    assert!(skip.contains("a.request.json") && skip.contains("b.response.json"), "a name live in either dir is kept: {skip:?}");
+    assert!(!skip.contains("gone.request.json"), "a name absent from both dirs is dropped: {skip:?}");
+    assert!(stranded.contains("b.response.json"), "a stranded name live in the second dir is kept: {stranded:?}");
+}
+
+/// A missing bodies dir is an incomplete listing: the prune is skipped and nothing is pruned.
+#[test]
+fn a_missing_bodies_dir_is_an_incomplete_listing_and_prunes_nothing() {
+    // TRDD-2HRA270Y: no dir the caller passes is optional at prune time (the scope builder hands over only the
+    // dirs it found). A dir that cannot be read, NotFound included, makes the listing incomplete: nothing is pruned.
+    let (bodies, store_dir) = fixture("missing-dir");
+    let missing = store_dir.parent().expect("fixture root").join("never-created");
+    let mut skip: HashSet<String> = ["gone.request.json".to_owned()].into();
+    let mut stranded: HashSet<String> = ["gone.response.json".to_owned()].into();
+    let line = prune_pass_names(&[bodies, missing], &mut skip, &mut stranded);
+    assert!(line.as_deref().is_some_and(|l| l.contains("prune skipped")), "the prune is skipped: {line:?}");
+    assert!(skip.contains("gone.request.json"), "no skip name is pruned: {skip:?}");
+    assert!(stranded.contains("gone.response.json"), "no stranded name is pruned: {stranded:?}");
+}
+
+/// A re-emitted body whose name was already dropped is reclaimed in the pass that sees it.
+#[test]
+fn a_reemitted_body_whose_name_was_dropped_is_reclaimed_in_the_pass_that_sees_it() {
+    // TRDD-2HRA270Y: the prune drops the name of a deleted file, so the re-emission arrives as a fresh body.
+    // Its ts-only mismatch must still reclaim it in that same pass, with no failed entry.
+    let (bodies, store_dir) = fixture("reemit-dropped-name");
+    let raw = body("dropped");
+    write_body(&bodies, "dropped.request.json", &raw, 60_000);
+    let mut store = agentlens_store::open_store(&store_dir, "1GB", 4).expect("open");
+    let opts = PassOptions { bodies_dir: bodies.clone(), ..Default::default() };
+    let (mut skip, mut stranded, mut fsynced) = (HashSet::new(), HashSet::new(), HashSet::new());
+    let r1 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert_eq!(r1.deleted, 1, "first pass: {:?}", r1.failed);
+    assert_eq!(prune_pass_names(std::slice::from_ref(&bodies), &mut skip, &mut stranded), None);
+    assert!(!skip.contains("dropped.request.json"), "the prune dropped the name of the deleted file");
+
+    let p = bodies.join("dropped.request.json");
+    fs::write(&p, &raw).expect("re-emit write");
+    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 3600);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&p)
+        .expect("open")
+        .set_times(fs::FileTimes::new().set_modified(future))
+        .expect("future mtime");
+
+    let r2 = ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+    assert!(!p.exists(), "reclaimed in the pass that sees it: {:?}", r2.failed);
+    assert!(r2.failed.is_empty(), "a benign re-emission is not a failure: {:?}", r2.failed);
+    assert_eq!(r2.reclaimed_reemitted, 1, "counted as a reclaim: {:?}", r2.failed);
+    assert_eq!(r2.deleted, 1);
+}

@@ -216,7 +216,12 @@ fn main() {
                 relocate_stranded_to: relocate_to.map(std::path::PathBuf::from),
                 ..Default::default()
             };
-            let res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+            // The state file belongs to the STORE, not to this bodies dir: alternating `alstore pass` runs on two
+            // dirs against one store would prune the other dir names. One dir per store is the supported use; no
+            // guard is added (a guard would need the state file to record which dir owns it). Runs inside _pass_lock.
+            let prune_line = agentlens_store::pass::prune_pass_names(std::slice::from_ref(&opts.bodies_dir), &mut skip, &mut stranded);
+            let mut res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+            res.failed.extend(prune_line);
             agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
             println!("{}", serde_json::to_string(&res).expect("serializable"));
         }

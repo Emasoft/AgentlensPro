@@ -172,17 +172,48 @@ struct BodyFile {
     size: u64,
 }
 
-fn body_files(dir: &Path) -> Vec<BodyFile> {
+/// One listing of a bodies dir. `files` are the body files readable this pass. `names` are EVERY body name
+/// present as a directory entry, including the ones that cannot be statted: a name that exists stays
+/// present for the prune even when it cannot be ingested. `unstatable` holds those names with their stat
+/// error. `unreadable_entries` are directory entries that could not be read at all (no name), so a file
+/// may be missing from the listing entirely.
+struct Listing {
+    files: Vec<BodyFile>,
+    names: Vec<String>,
+    unstatable: Vec<(String, String)>,
+    unreadable_entries: Vec<String>,
+}
+
+/// List the body files in `dir`. Err only when the directory itself cannot be read.
+fn body_files(dir: &Path) -> std::io::Result<Listing> {
     let mut out = Vec::new();
-    let Ok(rd) = fs::read_dir(dir) else { return out };
-    for entry in rd.flatten() {
+    let mut names = Vec::new();
+    let mut unstatable = Vec::new();
+    let mut unreadable_entries = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                unreadable_entries.push(e.to_string());
+                continue;
+            }
+        };
         let name = entry.file_name();
         let Some(name) = name.to_str().map(str::to_owned) else { continue };
         if !name.ends_with(".request.json") && !name.ends_with(".response.json") {
             continue;
         }
+        names.push(name.clone());
         let p = entry.path();
-        let Ok(st) = fs::metadata(&p) else { continue }; // raced with a writer — next pass
+        let st = match fs::metadata(&p) {
+            Ok(st) => st,
+            // Gone between the listing and the stat: not on the spool any more, nothing to ingest.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                unstatable.push((name, e.to_string()));
+                continue;
+            }
+        };
         let mtime_ms = st
             .modified()
             .ok()
@@ -192,7 +223,7 @@ fn body_files(dir: &Path) -> Vec<BodyFile> {
         out.push(BodyFile { p, name, mtime_ms, size: st.len() });
     }
     out.sort_by_key(|f| f.mtime_ms); // OLDEST FIRST — the true turn order, which is what dedups
-    out
+    Ok(Listing { files: out, names, unstatable, unreadable_entries })
 }
 
 /// The outcome of the content gate on one file.
@@ -409,9 +440,18 @@ pub fn ingest_pass_observed_with(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     let cutoff = if opts.max_age_ms > 0 { now_ms - opts.max_age_ms } else { i64::MAX };
+    // A listing problem is reported once per tick by prune_pass_names, never here: ingestion reads every
+    // file it can, and only a directory that cannot be read at all stops the pass.
+    let listing = match body_files(&opts.bodies_dir) {
+        Ok(listing) => listing,
+        Err(e) => {
+            res.failed.push(format!("bodies dir unreadable — pass skipped, state kept ({e})"));
+            return res;
+        }
+    };
     // The AGE gate is the ONLY list-level filter: a skip-named file must still reach the
     // verify+delete gate (excluding it here is what stranded 3,615 bodies on a full spool).
-    let all: Vec<BodyFile> = body_files(&opts.bodies_dir).into_iter().filter(|f| f.mtime_ms < cutoff).collect();
+    let all: Vec<BodyFile> = listing.files.into_iter().filter(|f| f.mtime_ms < cutoff).collect();
     if all.is_empty() {
         return res;
     }
@@ -558,21 +598,17 @@ pub fn ingest_pass_observed_with(
                                         }
                                         Some(v) => {
                                             let reason = v.reason.clone().unwrap_or_else(|| b.name.clone());
-                                            // TRDD-6SPXOV0P option A: a ts-only failure on a durable
-                                            // body is BENIGN, not a park case. `verify_bodies_in_store_cached`
-                                            // runs the sha256-reconstruction check and the row-existence
-                                            // check strictly BEFORE the ts check (each with its own
-                                            // `continue` on failure — lib.rs), so reaching "stored ts !=
-                                            // capture time" mathematically implies the store already
-                                            // reproduces this file bit-exact. The row is the truer value
-                                            // (it holds the ORIGINAL capture time); the file's mtime is the
-                                            // impostor — Claude Code re-emitted the same name+bytes at a
-                                            // new mtime. So: reclaim like an ok verify, leave the row
-                                            // alone, and do NOT park (parking here is what looped: the
-                                            // "repair rows from mtimes" remedy would overwrite the true
-                                            // capture time with the re-emit's mtime, then next pass parks
-                                            // it again forever).
-                                            if b.durable && reason.contains("stored ts ") && reason.contains("!= capture time") {
+                                            // TRDD-6SPXOV0P option A: a ts-only failure is BENIGN whether the body is durable or not, and is reclaimed
+                                            // like an ok verify. Why it is safe: verify_bodies_in_store_cached (its row lookup is keyed on body_id
+                                            // AND src_name, and its ts check comes after it) runs the sha256-reconstruction check and the row-existence check
+                                            // strictly BEFORE the ts check, each with its own continue on failure. So reaching "stored ts != capture time"
+                                            // implies the store reproduces this file bit-exact AND already holds a row for this same src_name: the
+                                            // failure is a re-emission of this name. A fresh ingest writes ts = mtime, so only a pre-existing row can
+                                            // mismatch. The row is the truer value (it holds the ORIGINAL capture time); the file mtime is the
+                                            // impostor (Claude Code re-emits the same name and bytes at a new mtime). So reclaim, leave the row alone,
+                                            // and do NOT park: parking here looped, because the "repair rows from mtimes" remedy would overwrite the
+                                            // true capture time with the re-emit mtime, and the next pass would park it again forever.
+                                            if reason.contains("stored ts ") && reason.contains("!= capture time") {
 
                                                 // Gated on the CONTENT, exactly like the verified arm above: the
                                                 // re-emission can preserve the size AND the mtime (a `mv` back, a
@@ -735,6 +771,57 @@ pub fn unpark_names(state_file: &Path, names: &[String]) -> (usize, usize, usize
     let removed = before - stranded.len();
     save_pass_state(state_file, &skip, &stranded);
     (names.len(), removed, stranded.len())
+}
+
+/// Prune the persisted name sets against EVERY bodies dir of a tick (TRDD-2HRA270Y). Call it ONCE per tick,
+/// inside the pass lock and after the state is loaded: the sets are shared by all the dirs, so a prune
+/// against one dir listing would drop the names of the other dirs. A name is dropped only when it is absent
+/// from the union of all the listings. Nothing is pruned unless every listing is complete: an unreadable
+/// dir (NotFound included: no dir in the list is optional) or an unreadable directory entry could hide a
+/// live name. A name that exists but cannot be statted is still present. Returns one summary line when any
+/// listing problem was met, None when the listings were clean.
+pub fn prune_pass_names(
+    dirs: &[PathBuf],
+    skip_names: &mut HashSet<String>,
+    stranded_names: &mut HashSet<String>,
+) -> Option<String> {
+    if dirs.is_empty() {
+        return Some("no bodies dir given; prune skipped".to_owned());
+    }
+    let mut present: HashSet<String> = HashSet::new();
+    let mut complete = true;
+    let mut problems = 0usize;
+    let mut sample: Option<String> = None;
+    for dir in dirs {
+        match body_files(dir) {
+            Ok(listing) => {
+                present.extend(listing.names);
+                for (name, err) in listing.unstatable {
+                    problems += 1;
+                    sample.get_or_insert_with(|| format!("{name}: {err}"));
+                }
+                for err in listing.unreadable_entries {
+                    complete = false;
+                    problems += 1;
+                    sample.get_or_insert_with(|| format!("an entry of {}: {err}", dir.display()));
+                }
+            }
+            Err(e) => {
+                complete = false;
+                problems += 1;
+                sample.get_or_insert_with(|| format!("{}: {e}", dir.display()));
+            }
+        }
+    }
+    if complete {
+        skip_names.retain(|n| present.contains(n));
+        stranded_names.retain(|n| present.contains(n));
+    }
+    if problems == 0 {
+        return None;
+    }
+    let outcome = if complete { "prune ran" } else { "prune skipped" };
+    Some(format!("listing problems: {problems} (e.g. {}); {outcome}", sample.unwrap_or_default()))
 }
 
 #[cfg(test)]
