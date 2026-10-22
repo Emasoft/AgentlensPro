@@ -285,12 +285,14 @@ pub fn bodies_export(data_dir: &Path, body: &[u8]) -> (u16, Value) {
     }
     let since = parsed.get("sinceMs").and_then(Value::as_f64).unwrap_or(0.0);
     let until = parsed.get("untilMs").and_then(Value::as_f64).unwrap_or(f64::INFINITY);
-    // The store half reads the bodies pass's shared store through its READER connection, so an
-    // export never waits on a running pass and never rebuilds a ~1 GB store per request
-    // (TRDD-2HRA270Y step 3). Only the bodies pass opens that store; until its first busy tick
-    // there is nothing to read, and a 503 says so before any file is written.
-    let Some(reader) = crate::chores::bodies_store_reader(&data_dir.join("store")) else {
-        return err(503, "bodies store not open yet".to_owned());
+    // The store half reads the shared bodies store through its READER connection, so an export never
+    // waits on a running pass and never rebuilds a ~1 GB store per request (TRDD-2HRA270Y step 3). The
+    // first export opens the store itself (F1): an idle server runs no bodies pass, and a store that only
+    // a pass opened would leave this route answering "not open" for the life of the process.
+    let handles = match crate::chores::bodies_store_open_or_get(&data_dir.join("store")) {
+        Ok(Some(h)) => h,
+        Ok(None) => return err(503, "bodies store is still held by a released instance; retry later".to_owned()),
+        Err(e) => return err(500, e),
     };
     let dest_p = Path::new(dest);
     let (a_files, a_bytes) = match extract_archive(&arch, dest_p, |e| e.mtime_ms >= since && e.mtime_ms <= until) {
@@ -299,7 +301,7 @@ pub fn bodies_export(data_dir: &Path, body: &[u8]) -> (u16, Value) {
     };
     // The store half (TRDD-K3WDPR7M): its failure NEVER fails the whole export — the archive
     // half already succeeded — but it is always named.
-    let store_half = match reader.lock() {
+    let store_half = match handles.reader.lock() {
         Ok(r) => export_bodies_from_store(r.as_store(), dest_p, since, until),
         Err(_) => {
             crate::chores::drop_poisoned_bodies_store("reader");
@@ -336,8 +338,12 @@ pub fn bodies_purge(data_dir: &Path) -> (u16, Value) {
     // then discards. Hence the WRITER, taken with try_lock (a running pass owns it: 409, retry
     // later; never wait), and a refusal while any staging row exists. Holding the writer for the
     // whole purge keeps a pass from staging rows mid-proof.
-    let Some(writer) = crate::chores::bodies_store_writer(&data_dir.join("store")) else {
-        return (503, json!({ "error": "bodies store not open yet" }));
+    // F1 (TRDD-2HRA270Y step 3): purge opens the shared store itself when it is not open. An idle server
+    // runs no bodies pass, so a store that only a pass opens would make every purge answer "not open".
+    let writer = match crate::chores::bodies_store_open_or_get(&data_dir.join("store")) {
+        Ok(Some(h)) => h.writer,
+        Ok(None) => return (503, json!({ "error": "bodies store is still held by a released instance; retry later" })),
+        Err(e) => return (500, json!({ "error": e })),
     };
     let store = match writer.try_lock() {
         Ok(g) => g,

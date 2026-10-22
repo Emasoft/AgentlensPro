@@ -367,12 +367,29 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     // BY NAME so parts from an older schema generation fill absent columns with NULL
     // (TRDD-219K7C1N: BY NAME, never positional). It is also the body-key dedup source that
     // replaced the old Rust `body_ids` / `bodies_named` sets.
-    con.execute_batch("CREATE TABLE body_durable AS SELECT * FROM body WHERE 1=0;")?;
+    // WHY file_id (TRDD-2HRA270Y step 3, F4): sync_new_parts removes the rows of a vanished part file by
+    // id, so every body row must name the file it came from. CAST NULL keeps the staging schema.
+    con.execute_batch("CREATE TABLE body_durable AS SELECT *, CAST(NULL AS INTEGER) AS file_id FROM body WHERE 1=0;")?;
     // From the SAME listing that registered the body parts above, never a second parquet_scan
     // listing (TRDD-2HRA270Y step 3, A3): a part landing between two listings would be loaded here
     // but unregistered, and sync_new_parts would then load its rows a second time.
-    if let Some(scan) = scan_of(&body_parts) {
-        con.execute_batch(&format!("INSERT INTO body_durable BY NAME SELECT * FROM {scan};"))?;
+    if !body_parts.is_empty() {
+        let list = body_parts.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+        // The id comes from the part_file row the listing registered (the same path invariant
+        // index_blob_shas relies on). EXCLUDE drops the filename column the join needs; BY NAME keeps
+        // the load tolerant of older schema generations.
+        con.execute_batch(&format!(
+            "INSERT INTO body_durable BY NAME
+             SELECT s.* EXCLUDE (filename), pf.id AS file_id
+             FROM read_parquet([{list}], union_by_name := true, filename := true) s
+             LEFT JOIN part_file pf ON pf.path = s.filename;"
+        ))?;
+        let orphans: i64 = con.query_row("SELECT count(*) FROM body_durable WHERE file_id IS NULL", [], |r| r.get(0))?;
+        if orphans > 0 {
+            return Err(duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!(
+                "{orphans} body rows could not be matched to their part file (parquet filename != listed path)"
+            )))));
+        }
     }
     // ART indexes, built AFTER the bulk load (one build, not millions of incremental inserts). They
     // make the per-body probes in ingest_body_with point lookups instead of full table scans.
@@ -417,34 +434,39 @@ fn seed_blob_index(con: &Connection, first_id: i32, listed: &[String], scanned: 
     if scanned.is_empty() {
         return Ok(());
     }
-    index_blob_shas(con, scanned)
+    index_blob_shas(con, scanned).map(|_| ())
 }
 
 /// Insert the shas of the blob parts `scanned` (already registered in part_file) into known_blob.
 /// A sha already in known_blob is skipped (anti-join): first-file-wins, the rule the open-time seed
 /// always had, extended across sync_new_parts calls so a sha a second writer re-wrote keeps one
 /// index row (readers tolerate two, see blob_fetch_sql, but one is the invariant we keep).
-fn index_blob_shas(con: &Connection, scanned: &[String]) -> duckdb::Result<()> {
+fn index_blob_shas(con: &Connection, scanned: &[String]) -> duckdb::Result<usize> {
     let list = scanned.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
     // ONE INSERT ... SELECT: the rows never round-trip through Rust. min(file id) keeps the old
     // first-file-wins rule (a sha lives in one part only; ingest dedups before writing).
     // LEFT JOIN + the check below, never a bare inner join: a scanned file with no matching
     // part_file row would otherwise silently drop its shas, and every one would be re-written
     // (GATE 2 broken with no error). Fail the open loudly instead.
-    con.execute_batch(&format!(
-        "INSERT INTO known_blob SELECT unhex(s.sha), min(pf.id)
-         FROM read_parquet([{list}], union_by_name := true, filename := true) s
-         LEFT JOIN part_file pf ON pf.path = s.filename
-         WHERE NOT EXISTS (SELECT 1 FROM known_blob k WHERE k.sha = unhex(s.sha))
-         GROUP BY s.sha;"
-    ))?;
+    // WHY execute and not execute_batch (TRDD-2HRA270Y step 3, F4): the returned row count is the
+    // new-blob stat sync_new_parts reports, so it must come from this statement itself.
+    let inserted = con.execute(
+        &format!(
+            "INSERT INTO known_blob SELECT unhex(s.sha), min(pf.id)
+             FROM read_parquet([{list}], union_by_name := true, filename := true) s
+             LEFT JOIN part_file pf ON pf.path = s.filename
+             WHERE NOT EXISTS (SELECT 1 FROM known_blob k WHERE k.sha = unhex(s.sha))
+             GROUP BY s.sha;"
+        ),
+        [],
+    )?;
     let orphans: i64 = con.query_row("SELECT count(*) FROM known_blob WHERE file_id IS NULL", [], |r| r.get(0))?;
     if orphans > 0 {
         return Err(duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!(
             "{orphans} blob shas could not be matched to their part file (parquet filename != listed path)"
         )))));
     }
-    Ok(())
+    Ok(inserted)
 }
 
 #[derive(Debug, Default)]
@@ -540,8 +562,10 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
             // has to scan the parquet corpus again (the third full-scan class of the 2026-08-18
             // 17-minute pass). Mirror BEFORE the staging DELETE so a read-back failure leaves the
             // staging rows in place and fails the flush loudly.
+            // WHY file_id (TRDD-2HRA270Y step 3, F4): the mirror row names the part file it came from, so
+            // sync_new_parts can remove it by id if that file later vanishes.
             "body" => format!(
-                "INSERT INTO body_durable BY NAME SELECT * FROM read_parquet([{}], union_by_name := true); ",
+                "INSERT INTO body_durable BY NAME SELECT *, {file_id} AS file_id FROM read_parquet([{}], union_by_name := true); ",
                 q(out_str)
             ),
             _ => String::new(),
@@ -624,11 +648,15 @@ pub fn flush_or_clear_leftovers(store: &mut Store) -> Result<Leftovers, String> 
     }
 }
 
-/// What one `sync_new_parts` call registered.
+/// What one `sync_new_parts` call registered and removed.
 #[derive(Debug, Default)]
 pub struct SyncStats {
     /// New files registered, per dir, in PART_DIRS order (blobs, parts, bodies, api_calls).
     pub new_files: [u64; 4],
+    /// Files that vanished from their dir after registration, per dir in PART_DIRS order. Their
+    /// part_file rows and the known_blob / body_durable rows they indexed are deleted in the same
+    /// call (TRDD-2HRA270Y step 3, F4).
+    pub removed_files: [u64; 4],
     /// Blob shas added to known_blob.
     pub new_blob_shas: u64,
     /// Rows added to body_durable.
@@ -645,54 +673,65 @@ impl SyncStats {
     }
 }
 
-/// Register the parts another writer added since open (or since the last call), and load their
-/// dedup facts: blob shas into known_blob, body rows into body_durable. parts/ and api_calls/ files
-/// are registered only (reads list those dirs directly through all_of).
+/// Register the parts another writer added since open (or since the last call), remove the parts
+/// that vanished, and load their dedup facts: blob shas into known_blob, body rows into body_durable.
+/// parts/ and api_calls/ files are registered only (reads list those dirs directly through all_of).
 ///
 /// WHY (TRDD-2HRA270Y step 3): the server now keeps ONE store open for the life of the process, and
 /// its dedup tables are built at open. Without this, a part written by `alstore pass` between two
-/// ticks stays invisible to ingest's probes forever and the next ingest writes its blobs again.
+/// ticks stays invisible to ingest probes forever and the next ingest writes its blobs again.
 /// Flush registers its own files, so a call right after a flush finds nothing.
 ///
-/// ONE TRANSACTION PER FILE: a file that fails to read (half-written by a writer still running) is
+/// WHY both anti-joins run in DuckDB (F4, owner rule: corpus state lives in tables, not Rust sets):
+/// the listing of each dir is loaded into the TEMP table sync_listing, and only the small result of
+/// the new-file anti-join is collected into a Vec. Removals run before registrations, so a sha that
+/// a rewritten file indexes again is not deleted by the removal of its old file.
+///
+/// ONE TRANSACTION PER NEW FILE: a file that fails to read (half-written by a writer still running) is
 /// rolled back, left unregistered, reported in `skipped`, and retried next call. A file is never
 /// registered without its facts loaded, or the next call would skip it for good.
 pub fn sync_new_parts(store: &mut Store) -> duckdb::Result<SyncStats> {
     let mut stats = SyncStats::default();
     for (slot, sub) in PART_DIRS.iter().enumerate() {
-        let known: HashSet<String> = {
-            let mut stmt = store.con.prepare("SELECT path FROM part_file WHERE dir = ?")?;
+        load_sync_listing(&store.con, &store.dir, sub)?;
+        stats.removed_files[slot] = remove_vanished_files(&store.con, sub)?;
+        let new_files: Vec<String> = {
+            let mut stmt = store.con.prepare(
+                "SELECT l.path FROM sync_listing l
+                 WHERE NOT EXISTS (SELECT 1 FROM part_file p WHERE p.dir = ? AND p.path = l.path)
+                 ORDER BY l.path",
+            )?;
             let rows = stmt.query_map([sub], |r| r.get::<_, String>(0))?;
             rows.collect::<Result<_, _>>()?
         };
-        for file in part_files(&store.dir, sub).iter().filter_map(|p| p.to_str()) {
-            if known.contains(file) {
-                continue;
-            }
+        for file in &new_files {
             let id = store.next_file_id;
             let one = [file.to_owned()];
             let scan = scan_of(&one).expect("one file");
-            let before = (count(store, "known_blob")?, count(store, "body_durable")?);
-            let loaded = (|| -> duckdb::Result<()> {
+            let loaded = (|| -> duckdb::Result<(usize, usize)> {
                 store.con.execute_batch("BEGIN TRANSACTION;")?;
                 store.con.execute_batch(&format!("INSERT INTO part_file VALUES ({id}, {}, {});", q(file), q(sub)))?;
-                match *sub {
-                    BLOBS_DIR => index_blob_shas(&store.con, &one)?,
-                    BODIES_DIR => store.con.execute_batch(&format!("INSERT INTO body_durable BY NAME SELECT * FROM {scan};"))?,
-                    // Registered only — but read once, so a file that cannot be read is never
+                // execute returns the rows each INSERT wrote, so the stats count what was added
+                // (TRDD-2HRA270Y step 3, F4) instead of a count(*) taken before and after.
+                let rows = match *sub {
+                    BLOBS_DIR => (index_blob_shas(&store.con, &one)?, 0),
+                    BODIES_DIR => (0, store.con.execute(&format!("INSERT INTO body_durable BY NAME SELECT *, {id} AS file_id FROM {scan};"), [])?),
+                    // Registered only, but read once, so a file that cannot be read is never
                     // registered (all_of would then fail every later query on it).
                     _ => {
                         store.con.query_row(&format!("SELECT count(*) FROM {scan}"), [], |r| r.get::<_, i64>(0))?;
+                        (0, 0)
                     }
-                }
-                store.con.execute_batch("COMMIT;")
+                };
+                store.con.execute_batch("COMMIT;")?;
+                Ok(rows)
             })();
             match loaded {
-                Ok(()) => {
+                Ok((blobs, bodies)) => {
                     store.next_file_id += 1;
                     stats.new_files[slot] += 1;
-                    stats.new_blob_shas += count(store, "known_blob")? - before.0;
-                    stats.new_body_rows += count(store, "body_durable")? - before.1;
+                    stats.new_blob_shas += blobs as u64;
+                    stats.new_body_rows += bodies as u64;
                 }
                 Err(e) => {
                     // A failed statement may already have aborted the transaction; a ROLLBACK error
@@ -704,6 +743,48 @@ pub fn sync_new_parts(store: &mut Store) -> duckdb::Result<SyncStats> {
         }
     }
     Ok(stats)
+}
+
+/// The listing of one part dir, loaded into the TEMP table sync_listing so both anti-joins run in
+/// DuckDB (TRDD-2HRA270Y step 3, F4). WHY the readability check: part_files returns an EMPTY list when
+/// the dir cannot be read, and an empty listing would make every registered file look removed and
+/// delete its dedup rows. An unreadable dir is an error, never an empty store.
+fn load_sync_listing(con: &Connection, dir: &Path, sub: &str) -> duckdb::Result<()> {
+    fs::read_dir(dir.join(sub)).map_err(|e| duckdb::Error::ToSqlConversionFailure(Box::new(e)))?;
+    con.execute_batch("CREATE OR REPLACE TEMP TABLE sync_listing (path VARCHAR);")?;
+    let mut app = con.appender("sync_listing")?;
+    for file in part_files(dir, sub).iter().filter_map(|p| p.to_str()) {
+        app.append_row(duckdb::params![file])?;
+    }
+    app.flush()
+}
+
+/// Delete every registered file of `sub` that is no longer listed, with the known_blob and
+/// body_durable rows it indexed, in one transaction. Returns the number of files removed.
+/// WHY (TRDD-2HRA270Y step 3, F4): the store is no longer rebuilt per tick, so a part deleted out of
+/// band would leave its shas in known_blob, and the probe would then report a blob as present that
+/// no longer exists, so a body would be written with a dangling blob reference.
+fn remove_vanished_files(con: &Connection, sub: &str) -> duckdb::Result<u64> {
+    let gone = format!(
+        "SELECT p.id FROM part_file p WHERE p.dir = {} AND NOT EXISTS (SELECT 1 FROM sync_listing l WHERE l.path = p.path)",
+        q(sub)
+    );
+    let n: i64 = con.query_row(&format!("SELECT count(*) FROM ({gone})"), [], |r| r.get(0))?;
+    if n == 0 {
+        return Ok(0);
+    }
+    let txn = format!(
+        "BEGIN TRANSACTION;
+         DELETE FROM known_blob WHERE file_id IN ({gone});
+         DELETE FROM body_durable WHERE file_id IN ({gone});
+         DELETE FROM part_file WHERE id IN ({gone});
+         COMMIT;"
+    );
+    if let Err(e) = con.execute_batch(&txn) {
+        let _ = con.execute_batch("ROLLBACK;");
+        return Err(e);
+    }
+    Ok(n as u64)
 }
 
 // ── bodyStore.ts ─────────────────────────────────────────────────────────────────

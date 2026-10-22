@@ -209,10 +209,10 @@ static FSYNCED_PARTS: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = Once
 
 /// The bodies store, opened ONCE per process and kept (TRDD-2HRA270Y step 3). open_store rebuilds
 /// the in-memory dedup tables (known_blob, part_file, body_durable, about 1 GB on the real store)
-/// from every parquet part, and the bodies pass used to pay that on every 60s tick. Now only the
-/// bodies pass opens it (lazily, after the idle exit, `.pass.lock` and the HEAVY slot) and each
-/// tick refreshes it with `sync_new_parts`. Export reads through the `reader` connection; purge
-/// borrows the writer with try_lock. Neither ever opens it.
+/// from every parquet part, and the bodies pass used to pay that on every 60s tick. Now the
+/// bodies pass (lazily, after the idle exit, `.pass.lock` and the HEAVY slot), export and purge (through
+/// `bodies_store_open_or_get`) open it on first use, and each tick refreshes it with `sync_new_parts`.
+/// Export reads through the `reader` connection; purge borrows the writer with try_lock.
 ///
 /// KEYED BY `store_dir`: a call for a different store dir drops the open store and reopens.
 /// Production has one data dir; the test binaries run tests in parallel threads with one data dir
@@ -229,6 +229,21 @@ struct SharedBodiesStore {
 
 static BODIES_STORE: Mutex<Option<SharedBodiesStore>> = Mutex::new(None);
 static BODIES_STORE_OPENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The handles a caller of the shared store gets: the writer (bodies pass, purge) and the reader
+/// (export). Both point at the one store the slot holds (TRDD-2HRA270Y step 3).
+#[derive(Clone)]
+pub struct BodiesStoreHandles {
+    pub writer: Arc<Mutex<agentlens_store::Store>>,
+    pub reader: Arc<Mutex<agentlens_store::StoreReader>>,
+}
+
+type RetiredStore = (std::sync::Weak<Mutex<agentlens_store::Store>>, std::sync::Weak<Mutex<agentlens_store::StoreReader>>);
+/// The weak handles of the store that drop_poisoned_bodies_store last released (TRDD-2HRA270Y step 3,
+/// F3). Releasing the slot does not free the database while a caller still holds a clone (export holds
+/// the reader, purge the writer), and a reader connection keeps the same in-memory DuckDB alive. A second
+/// open while either handle still upgrades would run two ~1 GB instances spilling into one store/tmp.
+static RETIRED_STORE: Mutex<Option<RetiredStore>> = Mutex::new(None);
 
 fn bodies_slot() -> std::sync::MutexGuard<'static, Option<SharedBodiesStore>> {
     // The slot only holds Arcs and is never held across store work, so a poison here carries no
@@ -261,7 +276,13 @@ pub fn drop_poisoned_bodies_store(which: &str) {
         "{} alcore: bodies store {which} mutex is POISONED — dropping the shared store; the next bodies pass reopens it (TRDD-2HRA270Y)",
         crate::log_ts()
     );
-    *bodies_slot() = None;
+    // WHY keep Weak handles (F3, TRDD-2HRA270Y step 3): an export or a purge may still hold a clone of
+    // the released store, and dropping the slot does not free the database while one exists. Recording
+    // the Weaks lets open_shared_bodies_writer refuse a second open until they are gone.
+    let released = bodies_slot().take();
+    if let Some(old) = released {
+        *RETIRED_STORE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Arc::downgrade(&old.writer), Arc::downgrade(&old.reader)));
+    }
 }
 
 /// The writer of the open bodies store for `store_dir`, or None when it is not open.
@@ -274,12 +295,33 @@ pub fn bodies_store_reader(store_dir: &Path) -> Option<Arc<Mutex<agentlens_store
     bodies_slot().as_ref().filter(|s| s.store_dir == store_dir).map(|s| s.reader.clone())
 }
 
-/// The writer for `store_dir`, opening the store when it is not open (or open for another dir).
-/// Called ONLY by bodies_pass, under `.pass.lock` and the HEAVY slot.
-fn open_shared_bodies_writer(store_dir: &Path, threads: usize) -> Result<Arc<Mutex<agentlens_store::Store>>, String> {
+/// The shared store handles for `store_dir`, opening the store when it is not open (TRDD-2HRA270Y step
+/// 3, F1). Export and purge call this: an idle server runs no bodies pass, and a store that only a pass
+/// opens would answer "not open" to both routes for the life of the process. None means a released
+/// instance is still referenced (F3), and the caller answers 503.
+pub fn bodies_store_open_or_get(store_dir: &Path) -> Result<Option<BodiesStoreHandles>, String> {
+    open_shared_bodies_writer(store_dir, crate::cores::duckdb_threads())
+}
+
+/// The handles of the shared store for `store_dir`, opening it when it is not open (or open for another
+/// dir). None means a released instance is still referenced (F3): the caller skips and retries later.
+/// The open itself is serialized by the slot mutex, which is held across it.
+fn open_shared_bodies_writer(store_dir: &Path, threads: usize) -> Result<Option<BodiesStoreHandles>, String> {
     let mut slot = bodies_slot();
     if let Some(s) = slot.as_ref().filter(|s| s.store_dir == store_dir) {
-        return Ok(s.writer.clone());
+        return Ok(Some(BodiesStoreHandles { writer: s.writer.clone(), reader: s.reader.clone() }));
+    }
+    // WHY (F3, TRDD-2HRA270Y step 3): a released instance must be gone before a new one opens. Its
+    // clones are released by the callers that still hold them, not by this function, so refuse while
+    // either one still upgrades; the next tick (or request) retries.
+    {
+        let mut retired = RETIRED_STORE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((writer, reader)) = retired.as_ref() {
+            if writer.upgrade().is_some() || reader.upgrade().is_some() {
+                return Ok(None);
+            }
+        }
+        *retired = None;
     }
     // Drop the other dir's store BEFORE opening, so two stores' tables are never resident at once.
     *slot = None;
@@ -288,15 +330,19 @@ fn open_shared_bodies_writer(store_dir: &Path, threads: usize) -> Result<Arc<Mut
     let reader = store.reader().map_err(|e| format!("cannot clone a reader connection: {e}"))?;
     BODIES_STORE_OPENS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let writer = Arc::new(Mutex::new(store));
-    *slot = Some(SharedBodiesStore { store_dir: store_dir.to_path_buf(), writer: writer.clone(), reader: Arc::new(Mutex::new(reader)) });
-    Ok(writer)
+    let reader = Arc::new(Mutex::new(reader));
+    *slot = Some(SharedBodiesStore { store_dir: store_dir.to_path_buf(), writer: writer.clone(), reader: reader.clone() });
+    Ok(Some(BodiesStoreHandles { writer, reader }))
 }
 
 /// Unreadable parts sync_new_parts already reported, so each is logged once, not every tick.
 static SYNC_SKIPS_LOGGED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
 /// The last "staging cleared" log line and when it was printed (one per distinct error or minute).
 static LEFTOVER_LOGGED: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
-
+/// Last time the "bodies store busy" and "still referenced by a released instance" lines were printed:
+/// each is rate-limited to one line a minute, because the bodies pass retries every tick (TRDD-2HRA270Y).
+static BUSY_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static REOPEN_REFUSED_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 /// The last bodies-pass reading (TRDD-HDUETCU7), held here and not in `CoreState`; `server_stats`
 /// reads it through `bodies_pass_stats()`. The type is `crate::BodiesPassStats`.
@@ -328,6 +374,67 @@ fn record_bodies_pass(now_ms: f64, deleted: u64, bytes_freed: u64) {
     s.reclaimed_since_boot += deleted;
     if deleted > 0 {
         s.last_non_zero_pass_at_ms = now_ms as i64;
+    }
+}
+
+/// Print `msg` unless the same kind of line was printed in the last minute (TRDD-2HRA270Y). The bodies
+/// pass retries every tick, so an unrepeated line per tick would flood server.log.
+fn log_at_most_once_a_minute(last: &Mutex<Option<std::time::Instant>>, msg: &str) {
+    let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(*last, Some(at) if at.elapsed() < Duration::from_secs(60)) {
+        return;
+    }
+    eprintln!("{} alcore: {msg}", crate::log_ts());
+    *last = Some(std::time::Instant::now());
+}
+
+/// Log what one sync_new_parts call found: each unreadable part once, and the count of part files that
+/// vanished whenever it is nonzero (TRDD-2HRA270Y step 3, F4).
+fn log_sync_outcome(sync: &agentlens_store::SyncStats) {
+    let mut logged = SYNC_SKIPS_LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    let logged = logged.get_or_insert_with(Default::default);
+    for (file, err) in &sync.skipped {
+        if logged.insert(file.clone()) {
+            eprintln!("{} alcore: bodies pass: cannot load new part {file}, retrying next tick: {err}", crate::log_ts());
+        }
+    }
+    let removed: u64 = sync.removed_files.iter().sum();
+    if removed > 0 {
+        eprintln!("{} alcore: bodies store: {removed} part file(s) vanished; their dedup rows were removed (TRDD-2HRA270Y)", crate::log_ts());
+    }
+}
+
+/// The idle tick share of the shared store (TRDD-2HRA270Y step 3, F5). It refreshes a store that is
+/// already open and NEVER opens one (chores_bodies_empty_dir_skips_store_open). Nothing here waits: the
+/// pass lock, the HEAVY slot and the writer are all try-taken, and a busy one skips the refresh until the
+/// next tick. Lock order is the same as bodies_pass: .pass.lock, HEAVY, the slot (briefly), the writer.
+fn sync_open_store_idle(store_dir: &Path) {
+    static SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let Some(writer) = bodies_store_writer(store_dir) else {
+        return;
+    };
+    let _lock = match agentlens_store::pass::acquire_pass_lock(store_dir) {
+        Ok(f) => f,
+        Err(agentlens_store::pass::PassLockErr::Busy) => return,
+        Err(agentlens_store::pass::PassLockErr::Io(e)) => {
+            eprintln!("{} alcore: idle bodies sync cannot take the store lock: {e}", crate::log_ts());
+            return;
+        }
+    };
+    let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("bodies sync", &SKIPS) else {
+        return;
+    };
+    let mut store = match writer.try_lock() {
+        Ok(g) => g,
+        Err(std::sync::TryLockError::WouldBlock) => return,
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            drop_poisoned_bodies_store("writer");
+            return;
+        }
+    };
+    match agentlens_store::sync_new_parts(&mut store) {
+        Ok(sync) => log_sync_outcome(&sync),
+        Err(e) => eprintln!("{} alcore: idle bodies sync cannot sync new store parts: {e}", crate::log_ts()),
     }
 }
 
@@ -432,15 +539,18 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // opening the store, so an idle minute costs a directory read instead of a DuckDB open for
     // nothing. `over_cap`/emergency-valve reasoning below still re-checks per dir once real work
     // exists — this is only the fast "nothing to do" exit.
+    let store_dir = data_dir.join("store");
     if scope.dirs.iter().all(|d| staged_body_bytes(d) == 0) {
+        // WHY (F5, TRDD-2HRA270Y step 3): an idle tick still refreshes a store that is already open, so
+        // a part another writer added reaches the dedup tables without waiting for a busy tick. It never
+        // opens the store (chores_bodies_empty_dir_skips_store_open pins that).
+        sync_open_store_idle(&store_dir);
         // TRDD-HDUETCU7: an idle tick is a completed, empty pass. The TS overwrote its last-pass
         // object every pass; without this a healthy idle server shows a stale `at` that reads as
         // a dead chore.
         record_bodies_pass(now_ms, 0, 0);
         return;
     }
-
-    let store_dir = data_dir.join("store");
 
     let max_gb = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_GB);
     let cap_bytes = (max_gb * 1024.0 * 1024.0 * 1024.0) as u64;
@@ -476,16 +586,30 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     };
     // The shared store (see SharedBodiesStore for the lock order): opened on the first busy tick,
     // kept after. An open error leaves it unopened and the next tick retries.
-    let writer = match open_shared_bodies_writer(&store_dir, threads) {
-        Ok(w) => w,
+    let handles = match open_shared_bodies_writer(&store_dir, threads) {
+        Ok(Some(h)) => h,
+        // WHY skip (F3, TRDD-2HRA270Y step 3): a released instance is still referenced, and a second
+        // store would be a second ~1 GB DuckDB spilling into the same store/tmp. Retry on a later tick.
+        Ok(None) => {
+            log_at_most_once_a_minute(&REOPEN_REFUSED_LOGGED, "bodies store still referenced by a released instance; pass skipped (TRDD-2HRA270Y)");
+            return;
+        }
         Err(e) => {
             eprintln!("{} alcore: bodies pass cannot open the store: {e}", crate::log_ts());
             return;
         }
     };
-    let mut store = match writer.lock() {
+    // WHY try_lock and not lock (F2, TRDD-2HRA270Y step 3): a purge holds the writer through a long
+    // verify, and blocking here would keep HEAVY taken for that whole time and stall every dashboard
+    // query. WouldBlock skips this tick: the staged bodies stay on disk and the next tick retries.
+    // The guards already taken (HEAVY, .pass.lock) release when this function returns.
+    let mut store = match handles.writer.try_lock() {
         Ok(g) => g,
-        Err(_) => {
+        Err(std::sync::TryLockError::WouldBlock) => {
+            log_at_most_once_a_minute(&BUSY_LOGGED, "bodies store busy (purge); pass skipped (TRDD-2HRA270Y)");
+            return;
+        }
+        Err(std::sync::TryLockError::Poisoned(_)) => {
             drop_poisoned_bodies_store("writer");
             return;
         }
@@ -494,15 +618,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // tick. Under `.pass.lock`, so no locked writer is mid-write; an unreadable file is skipped and
     // retried next tick, logged once.
     match agentlens_store::sync_new_parts(&mut store) {
-        Ok(sync) => {
-            let mut logged = SYNC_SKIPS_LOGGED.lock().unwrap_or_else(|e| e.into_inner());
-            let logged = logged.get_or_insert_with(Default::default);
-            for (file, err) in &sync.skipped {
-                if logged.insert(file.clone()) {
-                    eprintln!("{} alcore: bodies pass: cannot load new part {file}, retrying next tick: {err}", crate::log_ts());
-                }
-            }
-        }
+        Ok(sync) => log_sync_outcome(&sync),
         Err(e) => {
             eprintln!("{} alcore: bodies pass cannot sync new store parts: {e}", crate::log_ts());
             return;

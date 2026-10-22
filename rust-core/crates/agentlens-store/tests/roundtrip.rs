@@ -187,7 +187,7 @@ fn flush_anti_join_drops_already_durable_body_and_part_rows() {
     store
         .con
         .execute_batch(&format!(
-            "INSERT INTO body BY NAME SELECT * FROM body_durable;
+            "INSERT INTO body BY NAME SELECT * EXCLUDE (file_id) FROM body_durable;
              INSERT INTO part BY NAME SELECT * FROM {parts};"
         ))
         .expect("stage dupes");
@@ -260,7 +260,7 @@ fn restaged_durable_rows_and_a_duplicated_new_sha_write_one_blob_once() {
             "INSERT INTO blob (sha, n, data) VALUES ('{durable_sha}', 3, 'already-durable');
              INSERT INTO blob (sha, n, data) VALUES ('{new_sha}', 1, 'new'), ('{new_sha}', 1, 'new');
              INSERT INTO part (body_id, pos, kind, lit, sha, path, idx, n) VALUES ('{body_id}', 0, 'lit', 'dup', NULL, NULL, NULL, NULL);
-             INSERT INTO body BY NAME SELECT * FROM body_durable;"
+             INSERT INTO body BY NAME SELECT * EXCLUDE (file_id) FROM body_durable;"
         ))
         .expect("stage duplicates");
 

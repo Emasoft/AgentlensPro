@@ -1137,17 +1137,20 @@ fn bodies_export_and_purge_routes() {
     agentlens_store::flush_detailed(&mut store).unwrap();
     drop(store);
 
-    // TRDD-2HRA270Y step 3: export and purge never open the bodies store; only the bodies pass
-    // does, and until it has, both answer 503.
-    let req0 = serde_json::json!({ "destDir": std::env::temp_dir().join("al-bodies-export-unopened").to_string_lossy() }).to_string();
+    // TRDD-2HRA270Y F1: export opens the shared store itself, so an idle server (no bodies pass has run)
+    // still exports the store half. Purge is not called before the pass: it would open the store and
+    // then delete the July volume, which the rest of this test needs to see.
+    // Removed first: a leftover dest from an earlier run would already hold the store file, and the
+    // store half would then skip it (fromStore 0) for a reason unrelated to the store being opened.
+    let unopened = std::env::temp_dir().join("al-bodies-export-unopened");
+    let _ = std::fs::remove_dir_all(&unopened);
+    let req0 = serde_json::json!({ "destDir": unopened.to_string_lossy() }).to_string();
     let r = post(ui, "/api/bodies/export", &req0);
-    assert!(r.starts_with("HTTP/1.1 503"), "{r}");
-    let r = post(ui, "/api/bodies/purge", "");
-    assert!(r.starts_with("HTTP/1.1 503"), "{r}");
-    // Open it the production way: a bodies pass over a non-empty bodies dir. The file is fresh
-    // (under the 10s age cutoff), so the pass opens and syncs the store but ingests nothing, and
-    // the sync loads the parts flushed above by the separate Store. Retried because the pass
-    // skips its tick when another test holds the HEAVY slot.
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert!(body_of(&r).contains("\"fromStore\":1"), "{r}");
+    // A bodies pass over a non-empty bodies dir. The file is fresh (under the 10s age cutoff), so the
+    // pass ingests nothing; the store is already open (the export opened it), so the pass only syncs it.
+    // Retried because the pass skips its tick when another test holds the HEAVY slot.
     let bodies_dir = data_dir.join("otel-bodies");
     std::fs::create_dir_all(&bodies_dir).unwrap();
     std::fs::write(bodies_dir.join("eeee5555.request.json"), "{\"fresh\":true}").unwrap();
