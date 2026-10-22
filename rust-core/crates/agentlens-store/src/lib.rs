@@ -61,7 +61,7 @@ pub const STORE_MEMORY_LIMIT: &str = "1536MB";
 /// 2048 MB server cap to fit under, but it is still BOUNDED. The CLI used to ask for
 /// DEFAULT_MEMORY_LIMIT (8GB) with available_parallelism() threads, and a live pass grew to
 /// 4.8 GB RSS on a 64 GB machine — the janitor memory-guard logged it as the largest process
-/// on the box with 99 MB of free memory. 1GiB holds the store own default per-pass budget
+/// on the box with 99 MB of free memory. 1GiB holds the store's own default per-pass budget
 /// (DEFAULT_MAX_BYTES_PER_PASS = 512 MiB of raw bodies) plus the DuckDB scan overhead, and
 /// cuts the ceiling by 8x. A deliberate bulk backfill raises it with
 /// AGENTLENS_DUCKDB_MEMORY_LIMIT; a value DuckDB cannot use falls back to this default with
@@ -860,29 +860,30 @@ pub(crate) fn blob_fetch_sql(store: &Store, shas: &[String]) -> Result<String, S
         return Ok(full);
     }
     let bin = distinct.iter().map(|s| format!("unhex({})", q(s))).collect::<Vec<_>>().join(",");
-    // ONE query: the owning files of every indexed sha, and how many of the requested shas the
-    // index knows. WHY count(DISTINCT k.sha), not count(*): a duplicate known_blob row for one sha
-    // must not add to matched, or matched could reach distinct.len() while another requested sha is
-    // unindexed, and the full-corpus fallback below would be skipped.
+    // WHY matched is ONE count over the whole request, not a sum of per-file counts: a sha indexed
+    // under two part files appears in two file groups, so a per-group sum counts it twice. That sum
+    // can reach distinct.len() while another requested sha is unindexed, and then the full-corpus
+    // fallback below would be skipped. count(DISTINCT) over the request counts each indexed sha once.
     // One IN list on the BLOB key: executes as an ART index scan (see sha_probe_sql).
-    let sql = format!(
-        "SELECT pf.path, count(DISTINCT k.sha) FROM known_blob k JOIN part_file pf ON pf.id = k.file_id
-         WHERE k.sha IN ({bin}) GROUP BY pf.path ORDER BY pf.path"
+    let matched_sql = format!(
+        "SELECT count(DISTINCT k.sha) FROM known_blob k JOIN part_file pf ON pf.id = k.file_id
+         WHERE k.sha IN ({bin})"
     );
-    let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
-        .map_err(|e| e.to_string())?;
-    let mut files: Vec<String> = Vec::new();
-    let mut matched = 0i64;
-    for row in rows {
-        let (path, c) = row.map_err(|e| e.to_string())?;
-        files.push(path);
-        matched += c;
-    }
+    let matched: i64 = store.con.query_row(&matched_sql, [], |r| r.get(0)).map_err(|e| e.to_string())?;
     if matched < distinct.len() as i64 {
         return Ok(full);
     }
+    // The owning part files of the requested shas, one row per file.
+    let sql = format!(
+        "SELECT pf.path FROM known_blob k JOIN part_file pf ON pf.id = k.file_id
+         WHERE k.sha IN ({bin}) GROUP BY pf.path ORDER BY pf.path"
+    );
+    let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
+    let files = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
     let file_list = files.iter().map(|f| q(f)).collect::<Vec<_>>().join(",");
     Ok(format!("SELECT sha, data FROM read_parquet([{file_list}], union_by_name := true) WHERE sha IN ({list})"))
 }
@@ -1157,6 +1158,24 @@ mod blob_fetch_sql_tests {
         assert!(sql.contains("FROM (SELECT * FROM blob)"), "must fall back to all_of(blob): {sql}");
         assert!(!sql.contains("part-1.parquet"), "must not name the file-scoped index: {sql}");
         assert!(sql.contains(&sha("a")) && sql.contains(&unindexed), "must still ask for every sha: {sql}");
+
+        let _ = fs::remove_dir_all(&store.dir);
+    }
+
+    /// A sha indexed under two part files must count once toward the coverage check: the unindexed
+    /// sha requested beside it must still widen the query to the full corpus, not be skipped.
+    #[test]
+    fn a_sha_indexed_in_two_files_does_not_mask_an_unindexed_sha() {
+        let store = tmp_store("dupsha");
+        index(
+            &store,
+            &[(0, "/store/blobs/part-1.parquet"), (1, "/store/blobs/part-2.parquet")],
+            &[(sha("a"), 0), (sha("a"), 1)],
+        );
+
+        let unindexed = sha("9");
+        let sql = blob_fetch_sql(&store, &[sha("a"), unindexed.clone()]).expect("sql");
+        assert!(sql.contains("FROM (SELECT * FROM blob)"), "an unindexed sha must force the full-corpus fallback: {sql}");
 
         let _ = fs::remove_dir_all(&store.dir);
     }

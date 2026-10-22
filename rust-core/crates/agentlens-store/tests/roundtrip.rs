@@ -121,6 +121,30 @@ fn same_bytes_new_name_after_flush_adds_one_body_row_and_no_blobs() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// GATE 2 end to end through flush: the same bytes under the same name, re-ingested after a flush, must
+/// write nothing: no staged row, no new part file in any store dir, and an empty staging area.
+#[test]
+fn same_bytes_same_name_after_flush_writes_nothing() {
+    let dir = fixture_dir("gate2-same-name");
+    let raw = body("g2");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "g.request.json", &raw, ts).expect("ingest 1");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let files_before = store_parquet_counts(&dir);
+
+    let r = agentlens_store::ingest_body(&mut store, "g.request.json", &raw, ts).expect("ingest 2");
+    assert!(r.existed);
+    let flushed = agentlens_store::flush_detailed(&mut store).expect("flush 2");
+    assert_eq!(flushed.n, 0, "no new blob rows written");
+    assert!(flushed.part_paths.is_empty(), "no part file written: {:?}", flushed.part_paths);
+    assert_eq!(store_parquet_counts(&dir), files_before, "no store dir gained a part file");
+    for table in ["blob", "part", "body", "api_call"] {
+        assert_eq!(count(&store, table), 0, "staging {table} is empty");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The flush correctness net on its own: a blob row staged by hand (bypassing the ingest probe)
 /// whose sha is already durable must NOT be written again.
 #[test]
@@ -233,10 +257,10 @@ fn restaged_durable_rows_and_a_duplicated_new_sha_write_one_blob_once() {
     store
         .con
         .execute_batch(&format!(
-            "INSERT INTO blob VALUES ('{durable_sha}', 3, 'already-durable');
-             INSERT INTO blob VALUES ('{new_sha}', 1, 'new'), ('{new_sha}', 1, 'new');
-             INSERT INTO part VALUES ('{body_id}', 0, 'lit', 'dup', NULL, NULL, NULL, NULL);
-             INSERT INTO body SELECT * FROM body_durable;"
+            "INSERT INTO blob (sha, n, data) VALUES ('{durable_sha}', 3, 'already-durable');
+             INSERT INTO blob (sha, n, data) VALUES ('{new_sha}', 1, 'new'), ('{new_sha}', 1, 'new');
+             INSERT INTO part (body_id, pos, kind, lit, sha, path, idx, n) VALUES ('{body_id}', 0, 'lit', 'dup', NULL, NULL, NULL, NULL);
+             INSERT INTO body BY NAME SELECT * FROM body_durable;"
         ))
         .expect("stage duplicates");
 
@@ -284,7 +308,7 @@ fn a_failed_blob_index_update_removes_the_part_file_it_copied() {
     let new_sha = "a".repeat(64);
     store
         .con
-        .execute_batch(&format!("INSERT INTO blob VALUES ('{new_sha}', 1, 'staged');"))
+        .execute_batch(&format!("INSERT INTO blob (sha, n, data) VALUES ('{new_sha}', 1, 'staged');"))
         .expect("stage one new blob");
     let staged = count(&store, "blob");
     // The COPY of the blob table writes its part file, then the index insert hits the missing table.
@@ -303,6 +327,14 @@ fn parquet_files(dir: &std::path::Path, sub: &str) -> usize {
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "parquet"))
         .count()
+}
+
+/// Parquet part count in each store dir (blobs, bodies, parts, api_calls), in that order.
+fn store_parquet_counts(dir: &std::path::Path) -> Vec<usize> {
+    [agentlens_store::BLOBS_DIR, agentlens_store::BODIES_DIR, agentlens_store::PARTS_DIR, agentlens_store::API_CALLS_DIR]
+        .iter()
+        .map(|sub| parquet_files(dir, sub))
+        .collect()
 }
 
 fn count(store: &agentlens_store::Store, table: &str) -> i64 {

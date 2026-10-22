@@ -245,6 +245,7 @@ fn available_parallelism_is_reporting_only() {
 
 /// The bodies pass opens its store with STORE_MEMORY_LIMIT, never SERVER_MEMORY_LIMIT: the store ART
 /// indexes cannot spill, and at 512MiB the sha probe ran out of memory (TRDD-2HRA270Y).
+/// Step 3 (open the store once per process) must move this guard to wherever the bodies-pass store is opened.
 #[test]
 fn bodies_pass_opens_its_store_with_the_store_memory_limit() {
     let calls: Vec<_> = open_store_calls()
@@ -252,14 +253,20 @@ fn bodies_pass_opens_its_store_with_the_store_memory_limit() {
         .filter(|(file, _, _, _)| file.ends_with("src/chores.rs"))
         .collect();
     assert!(!calls.is_empty(), "no open_store call in chores.rs; the guard would be vacuous");
+    // The limit may be written qualified (agentlens_store::STORE_MEMORY_LIMIT) or as a bare name
+    // under a `use` import. Either passes; SERVER_MEMORY_LIMIT, or anything not ending in
+    // STORE_MEMORY_LIMIT, fails.
     let wrong: Vec<String> = calls
         .iter()
-        .filter(|(_, _, _, args)| args.get(1).map(String::as_str) != Some("agentlens_store::STORE_MEMORY_LIMIT"))
+        .filter(|(_, _, _, args)| {
+            let limit = args.get(1).map_or("", String::as_str);
+            !limit.ends_with("STORE_MEMORY_LIMIT") || limit.contains("SERVER_MEMORY_LIMIT")
+        })
         .map(|(file, line_no, line, _)| format!("{}:{line_no}: {line}", file.display()))
         .collect();
     assert!(
         wrong.is_empty(),
-        "the bodies pass must open its store with agentlens_store::STORE_MEMORY_LIMIT, not SERVER_MEMORY_LIMIT (TRDD-2HRA270Y):\n{}",
+        "the bodies pass must open its store with the store memory limit, not SERVER_MEMORY_LIMIT (TRDD-2HRA270Y):\n{}",
         wrong.join("\n")
     );
 }
