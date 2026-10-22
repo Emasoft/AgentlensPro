@@ -48,6 +48,7 @@ pub mod heartbeat_cost;
 pub mod session_burn_profile;
 pub mod cache_risk_commands;
 pub mod chores;
+pub mod cores;
 pub mod call_body_registry;
 pub mod card_store;
 pub mod collector_lifecycle;

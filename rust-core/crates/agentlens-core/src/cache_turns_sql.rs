@@ -50,8 +50,8 @@ fn open_duck(spill_root: &Path, vars: &HashMap<String, String>) -> Result<Connec
     let spill = agentlens_store::spill_sql(&spill_root.join(agentlens_store::TMP_DIR))
         .map_err(|e| format!("cache-turns spill dir: {e}"))?;
     con.execute_batch(&format!(
-        "SET memory_limit='{}'; SET threads=2; {spill} SET preserve_insertion_order=false;",
-        limit.replace('\'', "''")
+        "SET memory_limit='{}'; SET threads={}; {spill} SET preserve_insertion_order=false;",
+        limit.replace('\'', "''"), crate::cores::duckdb_threads()
     ))
     .map_err(|e| e.to_string())?;
     Ok(con)
@@ -632,7 +632,7 @@ mod cache_turns_sql_tests {
     /// Seed api_call parts through the REAL writer (ingest_body → flush_detailed).
     fn seed_store(data: &Path, bodies: &[(&str, String, i64)]) {
         let mut store = agentlens_store::open_store(
-            &data.join("store"), agentlens_store::DEFAULT_MEMORY_LIMIT, 4).unwrap();
+            &data.join("store"), agentlens_store::DEFAULT_MEMORY_LIMIT, crate::cores::duckdb_threads()).unwrap();
         for (name, raw, ts) in bodies {
             agentlens_store::ingest_body(&mut store, name, raw, *ts).unwrap();
         }

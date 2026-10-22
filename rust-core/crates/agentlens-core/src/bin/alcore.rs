@@ -351,13 +351,17 @@ fn main() {
         );
     }
 
+    // Read once here, before the rayon pool, so rayon and both tokio runtimes take the same cap.
+    let cores = agentlens_core::cores::max_cores();
+
     // TRDD-RVKQDLRD: the global rayon pool is used by the log scan (`cold_scan_chunked`). It is
     // deliberately NOT lowered to background QoS: rayon also runs the pre-bind boot sweep (and a
     // stale-version cold scan) that the listeners wait on, so starving it would delay startup.
-    // Only the thread count is pinned: 4 threads, a prior measurement found 4 faster than the ncpu
-    // default for the cold scan. Must be configured before the first `par_iter` (the pool is
-    // created lazily on first use); fail loudly if a pool already exists.
-    if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(4).build_global() {
+    // Only the thread count is pinned, to the core cap (TRDD-YH822LDI, user ruling "2 cores,
+    // strict"). An earlier measurement found 4 threads faster than the ncpu default for the cold
+    // scan; the cap takes precedence over that speed-up. Must be configured before the first
+    // `par_iter` (the pool is created lazily on first use); fail loudly if a pool already exists.
+    if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(cores).build_global() {
         eprintln!("{} alcore: rayon pool: {e}", agentlens_core::log_ts());
         exit(1);
     }
@@ -417,17 +421,26 @@ fn main() {
         }
     }
 
-    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
-        eprintln!("{} alcore: runtime: {e}", agentlens_core::log_ts());
-        exit(1);
-    });
+    // TRDD-YH822LDI: `Runtime::new()` ran one worker per core (14 here) and up to 512 blocking
+    // threads. Workers now follow the core cap. Blocking threads mostly wait rather than burn CPU,
+    // so the cap does not size them: a pool of 4 can starve the span and account flushes.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(cores)
+        .max_blocking_threads(64)
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| {
+            eprintln!("{} alcore: runtime: {e}", agentlens_core::log_ts());
+            exit(1);
+        });
     // TRDD-RVKQDLRD: a SECOND runtime for the chores, every thread (workers AND its blocking pool)
     // at background QoS. macOS QoS is per-thread and tokio reuses blocking threads across tasks,
     // so the only clean split from the request-serving runtime above is a separate runtime.
-    // Small on purpose (2 workers, 4 blocking): chores must not out-run the user's apps.
+    // Small on purpose (half the core cap for workers, the whole cap for blocking threads,
+    // TRDD-YH822LDI): chores must not out-run the apps the user is running.
     let bg_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
+        .worker_threads((cores / 2).max(1))
+        .max_blocking_threads(cores)
         .thread_name("alcore-bg")
         .on_thread_start(agentlens_core::bg_qos::set_background_qos)
         .enable_all()

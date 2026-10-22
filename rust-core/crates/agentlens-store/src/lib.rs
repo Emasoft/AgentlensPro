@@ -24,6 +24,7 @@ pub mod bodies_evidence;
 pub mod sections;
 pub mod transcript_sql;
 pub mod raw_facts;
+pub mod cores;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -972,7 +973,7 @@ mod blob_fetch_sql_tests {
     fn tmp_store(tag: &str) -> Store {
         let dir = std::env::temp_dir().join(format!("al-store-blobsql-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        open_store(&dir, "256MB", 2).expect("open")
+        open_store(&dir, "256MB", crate::cores::duckdb_threads()).expect("open")
     }
 
     /// TRDD-768NEX6E box 4: once shas are indexed, the verify fetch reads only their owning

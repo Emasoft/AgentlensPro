@@ -351,9 +351,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // CLI pass — `DEFAULT_MEMORY_LIMIT` ("8GB") + available_parallelism() is the `alstore pass`
     // CLI's sizing. Measured 2026-09-02: at that sizing the pass's DuckDB scans became the
     // machine's dominant IO/CPU load (stall samples: 10,694 DuckDB frames, all inside
-    // `MultiFileFunction<Parquet>` waits). Match the server's other two in-process DuckDB uses
-    // (statusline_store.rs, bodies_evidence.rs): threads=2, memory_limit=SERVER_MEMORY_LIMIT.
-    let threads = 2;
+    // `MultiFileFunction<Parquet>` waits). Match the server's other in-process DuckDB uses:
+    // threads = crate::cores::duckdb_threads() (TRDD-YH822LDI), memory_limit=SERVER_MEMORY_LIMIT.
+    let threads = crate::cores::duckdb_threads();
     // Timed from the store open, not the tick: TRDD-768NEX6E's acceptance wants one pass's wall
     // time on the log line, and the open is where the per-pass parquet rebuild scans happen.
     let started = std::time::Instant::now();

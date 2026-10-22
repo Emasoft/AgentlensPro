@@ -437,9 +437,10 @@ impl CardStore {
         }
     }
 
-    /// `threads=2` matches statusline_store's connection: these are point queries and a 32k-row
-    /// sort, not an analytical scan, and a per-connection thread pool sized to the machine would
-    /// be pure overhead in a process that already runs its own executor.
+    /// The thread count is `crate::cores::duckdb_threads()` (TRDD-YH822LDI), the same as the
+    /// statusline store connection: these are point queries and a 32k-row sort, not an analytical
+    /// scan, and a per-connection thread pool sized to the machine would be pure overhead in a
+    /// process that already runs its own executor.
     ///
     /// NOT `SET temp_directory=''` (which the Parquet stores use to make an over-limit query FAIL
     /// rather than spill): here a spill is the intended behaviour of a bounded buffer pool, and
@@ -448,7 +449,7 @@ impl CardStore {
     /// `limit` is the buffer pool's ceiling: [`MEMORY_LIMIT`] in production, [`REBUILD_MEMORY_LIMIT`]
     /// for the compacting rewrite, and a smaller value only in a test that needs an out-of-memory read.
     fn configure(conn: &Connection, limit: &str) -> agentlens_store::duckdb::Result<()> {
-        conn.execute_batch(&format!("SET memory_limit='{limit}'; SET threads=2;"))
+        conn.execute_batch(&format!("SET memory_limit='{limit}'; SET threads={};", crate::cores::duckdb_threads()))
     }
 
     /// The reuse attempt at `read_limit` (see `open`): the gate — the file opens, `configure`, then
@@ -1277,10 +1278,12 @@ fn swap_in_rebuild(data_dir: &Path) -> Result<Option<String>, String> {
 }
 
 /// TRDD-USSG465Q: the connection config of every open of the card file. It carries the option
-/// `vacuum_rebuild_indexes` (see `VACUUM_REBUILD_INDEXES`). A `Config` is consumed by `open_with_flags`, so
-/// each open builds its own.
+/// `vacuum_rebuild_indexes` (see `VACUUM_REBUILD_INDEXES`) and the thread count (TRDD-YH822LDI), so
+/// the cap applies from the open itself, before any statement runs. A `Config` is consumed by
+/// `open_with_flags`, so each open builds its own.
 fn card_db_config(value: &str) -> agentlens_store::duckdb::Result<agentlens_store::duckdb::Config> {
-    agentlens_store::duckdb::Config::default().with("vacuum_rebuild_indexes", value)
+    let threads = crate::cores::duckdb_threads().to_string();
+    agentlens_store::duckdb::Config::default().with("vacuum_rebuild_indexes", value)?.with("threads", &threads)
 }
 
 /// TRDD-USSG465Q: opens the card file with the option applied. It returns the open's own errors

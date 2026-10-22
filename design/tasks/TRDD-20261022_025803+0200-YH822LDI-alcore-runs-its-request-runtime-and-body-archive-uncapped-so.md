@@ -4,7 +4,7 @@ title: alcore runs its request runtime and body archive uncapped so digestion ta
 column: dev
 status: tasked
 created: 2026-10-22T02:58:03+0200
-updated: 2026-10-22T03:09:14+0200
+updated: 2026-10-22T04:05:34+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -26,7 +26,7 @@ USER, 2026-10-21, verbatim: "give priority to the TRDD involving the issue of me
 
 Implementation in progress per docs_dev/20261022-core-cap-spec.md, AMENDED 2026-10-22 after review: one knob AGENTLENS_MAX_CORES (default 2, 1-64, invalid exits). Derived: rayon pool n; request runtime workers n with blocking ceiling 64 (blocking threads mostly wait; a ceiling of 2n could starve the span/account flushes); background runtime workers max(n/2,1), blocking n; every alcore DuckDB connection's threads = duckdb_threads() = max(n/2,1) (DuckDB threads multiply with concurrent connections, so pool sizes alone do not bound CPU). A shutdown_flush test failure blocks the change. Boot-to-listen time is measured at n=2 and n=4. Code comments carry the placeholder TRDD-CORECAP, to be replaced by TRDD-YH822LDI before commit.
 
-NEXT: build, test, deploy together with WKLD508O, then measure CPU on the live collector.
+STATUS 2026-10-22: per-pool caps landed (commit carries this id). The knob lives in agentlens-store::cores, re-exported by agentlens-core, because agentlens-core depends on the store and not the reverse. transcript_sql.rs keeps threads = 1 (a memory bound; 1 is at or under any cap). Guard test tests/core_cap_guard.rs (5 tests, each rule shown to fail). NOT established: the process total. Per-pool caps sum above 2 (rayon n + request workers n + background max(n/2,1) + max(n/2,1) per DuckDB connection), request blocking threads (up to 64) are uncapped, and child processes (security, ps, lsof, claude --version, aldigest under --ingest-manifest) are outside the cap. Trade-offs accepted under the ruling: the boot scan runs on 2 rayon threads (was 4), and at the default the bodies pass, card compaction and archive export run DuckDB on 1 thread (were 2, 2 and 12); the background blocking pool is 2 (was 4). The request runtime is held at 2 workers per the ruling; blocking work on those workers is TRDD-60DMZD2N. Review recommended 4 workers until 60DMZD2N lands, rejected because it overrides the user's 2-core ruling. NEXT: build into bin-native, codesign, deploy with WKLD508O. The live gate is CPU at or under 200% in ps over a bodies pass AND a burst of dashboard and MCP requests, plus OTLP POST latency and exporter drops/retries, plus dashboard/MCP response time and boot-to-listen time; CPU alone cannot see a stall.
 
 ## Problem (verified 2026-10-21 by reading code)
 

@@ -245,8 +245,8 @@ fn open_duck(root: &Path, vars: &HashMap<String, String>) -> Result<Connection, 
         .unwrap_or(agentlens_store::SERVER_MEMORY_LIMIT);
     let spill = agentlens_store::spill_sql(&root.join(agentlens_store::TMP_DIR)).map_err(|e| format!("statusline spill dir: {e}"))?;
     con.execute_batch(&format!(
-        "SET memory_limit='{}'; SET threads=2; {spill} SET preserve_insertion_order=false;",
-        limit.replace('\'', "''")
+        "SET memory_limit='{}'; SET threads={}; {spill} SET preserve_insertion_order=false;",
+        limit.replace('\'', "''"), crate::cores::duckdb_threads()
     ))
     .map_err(|e| e.to_string())?;
     Ok(con)
