@@ -3,7 +3,7 @@ trdd-id: DKBGT7MQ
 title: Eight independent DuckDB instances each carry their own buffer-pool limit and they sum to 19.25 GB against a 2 GB process cap
 column: todo
 created: 2026-09-08T10:02:32+0200
-updated: 2026-09-08T23:11:14+0200
+updated: 2026-10-22T02:58:13+0200
 current-owner: main
 task-type: bugfix
 parent-trdd: 7YPQWKPG
@@ -221,3 +221,7 @@ must be established, not assumed.
 - 2026-09-08T22:42:39+0200 — OWNER RULING (USER, Tier 3): the DuckDB memory limit is 2 GB — one
   budget equal to the process cap, DuckDB as the only memory. Recorded by main from the user's
   message "256mb limit? duckdb memory limit should be 2Gb".
+
+## Owner decisions
+
+2026-10-21 — USER chose, verbatim option: "One shared instance at ~1.5 GB (Recommended)" — every DuckDB site shares one process-wide instance whose memory_limit is the 2 GB cap minus a measured Rust floor (about 0.5 GB), so the process total stays inside 2 GB. This settles the STATE's open question (cap versus budget plus Rust floor): budget plus floor.

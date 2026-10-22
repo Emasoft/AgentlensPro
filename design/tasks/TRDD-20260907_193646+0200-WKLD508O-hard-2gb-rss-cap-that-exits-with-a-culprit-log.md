@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: human_review
 created: 2026-09-07T19:36:46+0200
-updated: 2026-10-16T11:13:17+0200
+updated: 2026-10-22T02:58:13+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -775,3 +775,7 @@ Isolated full-size runs (own DATA_DIR, real read-only HOME, distinct ports; repo
 ## Approval log
 
 - 2026-10-16T11:13:17+0200 — column → human_review by main-agent@agentlenspro. fix on main; the deploy needs the owner; row 6
+
+## Owner decisions
+
+2026-10-21 — USER chose, verbatim option: "Deploy it (Recommended)" — rebuild alcore from HEAD with the ad-hoc codesign, restart, and watch the culprit log. Deploy is bundled with the core-cap change.
