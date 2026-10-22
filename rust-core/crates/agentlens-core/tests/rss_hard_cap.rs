@@ -348,13 +348,18 @@ fn real_alcore_binary_breaches_a_1mb_cap_on_mimalloc_commit() {
     assert_eq!(status.code(), Some(1), "alcore must exit 1 on breach; stderr:\n{stderr}");
     assert!(!stderr.contains("panicked"), "exit 1 came from a panic, not the guard; stderr:\n{stderr}");
     let log = std::fs::read_to_string(data.join("rss-hard-cap.log")).expect("the breach must write the culprit log");
-    // The log prints whole MB, so commit and evidence can print equal: the bound is non-strict on purpose.
     let (commit_mb, evidence, evidence_mb) =
         parse_breach_evidence(&log).unwrap_or_else(|| panic!("the culprit log must carry the breach line; got:\n{log}"));
     assert!(commit_mb > 0, "mimalloc commit must be positive on a real breach; got:\n{log}");
+    // THE BOUND IS VALID ONLY AT STARTUP. This test breaches a 1 MB cap within seconds of launch. Late in a
+    // long run, mimalloc commit can exceed footprint for a CORRECT reader, because committed-but-untouched and
+    // reset-purged pages count in commit but not in footprint. Do not reuse this bound on a late sample.
+    // The margin (the larger of 4 MB and a quarter of the evidence) keeps the 58-vs-12 MB wrong-slot mutant
+    // failing without riding the 12 = 12 MB equality that a fresh run measured.
+    let bound = evidence_mb + std::cmp::max(4, evidence_mb / 4);
     assert!(
-        commit_mb <= evidence_mb,
-        "mimalloc commit ({commit_mb} MB) must not exceed the {evidence} evidence ({evidence_mb} MB); got:\n{log}"
+        commit_mb <= bound,
+        "mimalloc commit ({commit_mb} MB) must not exceed the {evidence} evidence ({evidence_mb} MB) by more than its margin (bound {bound} MB = evidence + max(4 MB, evidence / 4)); got:\n{log}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }
