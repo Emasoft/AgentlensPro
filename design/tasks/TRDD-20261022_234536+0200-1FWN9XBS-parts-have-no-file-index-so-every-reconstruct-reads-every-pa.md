@@ -4,7 +4,7 @@ title: Parts have no file index so every reconstruct reads every parts file and 
 column: todo
 status: tasked
 created: 2026-10-22T23:45:36+0200
-updated: 2026-10-23T00:54:50+0200
+updated: 2026-10-23T00:55:50+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix

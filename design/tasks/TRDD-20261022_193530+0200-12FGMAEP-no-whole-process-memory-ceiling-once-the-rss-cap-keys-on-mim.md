@@ -4,7 +4,7 @@ title: No whole-process memory ceiling once the RSS cap keys on mimalloc commit
 column: todo
 status: tasked
 created: 2026-10-22T19:35:30+0200
-updated: 2026-10-23T00:02:48+0200
+updated: 2026-10-23T00:55:46+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -21,7 +21,7 @@ unblock-when: [decision:owner gives the whole-process backstop value or records 
 
 # No whole-process memory ceiling once the RSS cap keys on mimalloc commit
 
-Step 4 of TRDD-2HRA270Y moves the hard cap from phys_footprint to mimalloc committed bytes (owner 2026-10-22, DuckDB may exceed 2 GB). DuckDB allocates through system malloc and was measured overrunning its own memory_limit (512MB limit gave 1150 MiB RSS; 1536MB gave 2497 MiB). With the cap on commit, a DuckDB runaway grows until jetsam kills the process and leaves no culprit log. Needed: a footprint backstop well above 2 GB that writes the same culprit log (or a logged warning threshold). The threshold value is the owner's call; record it here when given. Review finding from the step-4 adversarial review, 2026-10-22. 2026-10-22 clone run 1 (docs_dev/20261022-clone-run-report.md): the 2-second RSS sampler peaked at 4701 MB before it stopped at 900 s, while the composition lines show process RSS up to 5362 MB at uptime 1419 s and mimalloc commit peaking at 1873 MB; about 3.5 GB of process RSS sat outside mimalloc commit at that line, and the report does not measure which region holds it. This is deploy-gating: the step-4 guard counts only mimalloc and would not have stopped it.
+Step 4 of TRDD-2HRA270Y moves the hard cap from phys_footprint to mimalloc committed bytes (owner 2026-10-22, DuckDB may exceed 2 GB). DuckDB allocates through system malloc and was measured overrunning its own memory_limit (512MB limit gave 1150 MiB RSS; 1536MB gave 2497 MiB). With the cap on commit, a DuckDB runaway grows until jetsam kills the process and leaves no culprit log. Needed: a footprint backstop well above 2 GB that writes the same culprit log (or a logged warning threshold). The threshold value is the owner's call; record it here when given. Review finding from the step-4 adversarial review, 2026-10-22. 2026-10-22 clone run 1 (docs_dev/20261022-clone-run-report.md): the 2-second RSS sampler peaked at 4701 MB before it stopped at 900 s, while the composition lines show process RSS up to 5362 MB at uptime 1419 s and mimalloc commit peaking at 1873 MB; about 3.5 GB of process RSS sat outside mimalloc commit at that line, and the report does not measure which region holds it. This is deploy-gating: the step-4 guard counts only mimalloc and would not have stopped it. The run's DuckDB memory_limit is not recorded in the report, so the 512/1536 MB overrun ratios above do not apply to this figure.
 
 ## Approval log
 
