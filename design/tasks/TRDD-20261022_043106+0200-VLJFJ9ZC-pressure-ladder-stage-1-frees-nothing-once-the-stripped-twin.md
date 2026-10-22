@@ -1,10 +1,10 @@
 ---
 trdd-id: VLJFJ9ZC
 title: Pressure ladder stage 1 frees nothing once the stripped twin is gone
-column: blocked
+column: todo
 status: tasked
 created: 2026-10-22T04:31:06+0200
-updated: 2026-10-22T04:31:30+0200
+updated: 2026-10-22T06:20:32+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -15,8 +15,8 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T04:31:06+0200
-blocked-by: [091Z1FU0]
-pre-block-column: todo
+blocked-by: []
+pre-block-column: 
 ---
 
 # Pressure ladder stage 1 frees nothing once the stripped twin is gone
@@ -27,3 +27,4 @@ rust-core/crates/agentlens-core/src/lib.rs:833-835: pressure-ladder stage 1 only
 
 - 2026-10-22T04:31:06+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-22T04:31:30+0200 — column → blocked by main-agent@agentlenspro. waits on 091Z1FU0
+- 2026-10-22T06:20:32+0200 — column → todo by main-agent@agentlenspro. blocker 091Z1FU0 complete Cleared blocked-by (--clear-blocker override).
