@@ -4,7 +4,7 @@ title: Pressure ladder stage 1 frees nothing once the stripped twin is gone
 column: todo
 status: tasked
 created: 2026-10-22T04:31:06+0200
-updated: 2026-10-22T06:20:32+0200
+updated: 2026-10-22T06:27:38+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor

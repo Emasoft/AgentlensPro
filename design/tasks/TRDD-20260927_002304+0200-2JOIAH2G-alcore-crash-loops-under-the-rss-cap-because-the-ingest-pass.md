@@ -4,7 +4,7 @@ title: alcore crash-loops under the RSS cap because the ingest pass and boot chu
 column: dev
 status: tasked
 created: 2026-09-27T00:23:04+0200
-updated: 2026-10-22T06:23:38+0200
+updated: 2026-10-22T06:30:47+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -261,5 +261,8 @@ Root mechanism of the forced summary copies split out as TRDD-REKYAXKP.
 
 ## Deploy 04988cef (2026-10-22)
 
-06:12: 04988cef deployed (stripped twin removed). Deployed pid 26189 exited with no logged cause at about 24 s; hook-revived pid 27810 hit the guard at 21.6 s (footprint 2840 MB, RSS 3747 MB, mimalloc commit 2078 MB, 56,835 card rows, 732,808 spans in 28 segments); later revives exited at 16.9 s and 105.4 s. The 0-15 s boot ramp remains the first breach. Lead under measurement: the resident parsed card layer that CardStore::open builds at boot (every card as a serde_json tree), report docs_dev/20261022-card-resident-measure.md (pending). The silent exit of 26189 is carded separately (see new card).
+06:12: 04988cef deployed (stripped twin removed). Deployed pid 26189's last logged line was at about 24 s uptime; its exit time and cause are unrecorded; hook-revived pid 27810 hit the guard at 21.6 s (footprint 2840 MB, RSS 3747 MB, mimalloc commit 2078 MB, 56,835 card rows, 732,808 spans in 28 segments); later revives exited at 16.9 s and 105.4 s. The 0-15 s boot ramp remains the first breach. Lead under measurement: the resident parsed card layer that CardStore::open builds at boot (every card as a serde_json tree), report docs_dev/20261022-card-resident-measure.md (pending). The silent exit of 26189 is carded separately (see new card).
 Silent exit carded as TRDD-RNXE06LE.
+Update to the 2026-10-22 04:20 newest line: the stripped twin (TRDD-091Z1FU0) is removed and deployed and did NOT stop the kills; the 105.4 s exit is outside the 0-15 s ramp and may be a second mechanism (the earlier 66-96 s lead), not yet examined.
+Measured (docs_dev/20261022-card-resident-measure.md, isolated clone, 2 runs): CardStore::open adds 1000-1013 MB for 56,839 cards (103 MB as JSON text). Footprint split: 573 MB IOAccelerator, which is the mimalloc (Rust) heap per memory note vmmap-ioaccelerator-is-the-mimalloc-heap, i.e. the resident card Value trees (about 5.5x the text); 426 MB Malloc Small/Large, the C/C++ side, i.e. DuckDB's card-store connection. Do not quote 9.7x as Value overhead.
+Removing the card layer alone does NOT get boot under the cap: with log scan off, alcore RSS is 1475 MB at 5 s, 2234 at 15 s, 3595 at 20 s, 5482 at 45 s (one 742 MB drop at 34.8 s, a build-then-free shape). 3595 minus 1000 is still over 2048. The 15-45 s growth (+3.2 GB, three times the card layer) is unattributed; the summary build is the inferred owner; attribution run in progress (docs_dev/20261022-post-boot-attribution.md). Fix sequence stays DKBGT7MQ (one shared DuckDB instance) then KBM09XHB (no resident card layer, no resident summary tree), under plan card 9VX3WTGU.

@@ -4,7 +4,7 @@ title: alcore stays within the 2048 MB cap — phased memory redesign
 column: todo
 status: tasked
 created: 2026-09-29T20:20:37+0200
-updated: 2026-10-21T02:35:07+0200
+updated: 2026-10-22T12:59:35+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -237,3 +237,8 @@ CORRECTED 2026-10-21, THE PREVIOUS LINE ON THIS POINT WAS WRONG AND IS RETRACTED
 ## Fourth cause — the alstore sidecar runs DuckDB at an 8GB limit
 
 MEASURED 2026-10-20, and it is the LARGEST single memory holder on the machine. rust-core/crates/agentlens-store/src/bin/alstore.rs:105-106 opens the store with agentlens_store::DEFAULT_MEMORY_LIMIT = '8GB' (agentlens-store/src/lib.rs:44) and threads = available_parallelism()-2, floored at 4. The RUNNING alstore pass process holds 4,806,536 KB RSS (4.8 GB) and its pid CHANGED mid-session (78007 -> 79875) with the replacement at the same 4.8 GB and 2:30 uptime — the process is being RESTARTED and re-growing to the same size, i.e. it is crash-looping, not merely large. It is processing a live firehose: ~/.agentlens/otel-bodies holds ~71,000 raw body files / 27 GB, growing at ~94 files / 26 MB per 30 s. THE IN-PROCESS SERVER PATH ALREADY FIXED THIS (chores.rs:351, TRDD-768NEX6E): the same pass inside alcore runs at threads=2 + SERVER_MEMORY_LIMIT ('512MiB', agentlens-store/src/lib.rs:48) precisely BECAUSE at 8GB + available_parallelism its DuckDB scans became the machine's dominant IO/CPU load (10,694 DuckDB frames in stall samples, all inside MultiFileFunction<Parquet> waits). The CLI pass was left at the old sizing. So the fix the server already made is the fix the CLI needs — this is the owner's directive made concrete: DuckDB is the only memory, and nothing may hold memory beyond the strict data an answer needs. WHAT IS NOT ESTABLISHED: WHY the alstore process is being restarted. It is being restarted — the pid change is observed — but the cause (the RSS guard, a panic, an OOM, or the TypeScript supervisor in src/rustStorePass.ts) is not yet named. The store's own files are digested and deleted correctly: .pass-state.json holds 1,344,034 skipNames with ZERO overlap against the 71,599 files on disk, so 1.34M bodies were already ingested and their sources deleted; the 71,599 survivors are all NEW, none is a leak. THE DELETE IS WORKING — the 27 GB on disk is a live BACKLOG, not undigested data.
+
+## Owner directive 2026-10-22
+
+OWNER DIRECTIVE, verbatim (2026-10-22): "optimize the code so it stays under 2gb . it must only allocate the answers from duckdb and one or 2 paginations of data for the dashboard anyway. all memory usage is done by duckdb queries. it cannot use more memory than 2gb. but duckdb on the other hand can. luckily is optimized and it never use much memory."
+Recorded in full with the measured gap on TRDD-KBM09XHB.

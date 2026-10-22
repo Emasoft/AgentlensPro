@@ -1,9 +1,9 @@
 ---
 trdd-id: KBM09XHB
 title: Nothing is stored in RAM — every answer is a short or paginated DuckDB result, discarded immediately
-column: todo
+column: dev
 created: 2026-09-07T19:26:54+0200
-updated: 2026-10-18T07:32:01+0200
+updated: 2026-10-22T13:05:17+0200
 current-owner: main
 task-type: refactor
 parent-trdd: 7YPQWKPG
@@ -17,6 +17,10 @@ implementation-commits: []
 project-id: agentlenspro
 scope: project
 labels: [rust, memory, alcore, duckdb]
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-10-22T13:05:17+0200
+status: tasked
 ---
 
 # Nothing is stored in RAM — every answer is a short or paginated DuckDB result
@@ -133,3 +137,16 @@ figure read promptly after restart measures a process that has not done anything
 ## Findings (2026-10-18)
 
 2026-10-18: measured relevance to the RSS crash loop — the ~1.8-2.0 GB startup baseline is present with no body files, and CardStore.parsed (card_store.rs:236) holding every card in RAM is the INFERRED main holder. Evidence: reports/rss-crash-loop/20261018_070119+0200-isolated-empty-bodies-run.md
+
+## Owner directive 2026-10-22
+
+OWNER DIRECTIVE, verbatim (2026-10-22): "optimize the code so it stays under 2gb . it must only allocate the answers from duckdb and one or 2 paginations of data for the dashboard anyway. all memory usage is done by duckdb queries. it cannot use more memory than 2gb. but duckdb on the other hand can. luckily is optimized and it never use much memory."
+Reading of it (main agent, to confirm with the owner where it changes behaviour): the 2 GB cap binds alcore's own heap (Rust/mimalloc allocations), not DuckDB's buffer pools; alcore holds only query answers and at most one or two dashboard pages at a time. Consequence: the RSS guard, which today measures whole-process phys_footprint (DuckDB included), measures the wrong quantity under this directive.
+Measured 2026-10-22 against this target (isolated clones): resident card layer 573 MB of Rust heap at boot (docs_dev/20261022-card-resident-measure.md); on an idle server with log scan off, Rust heap reaches 3.4 GB live / 4.1 GB committed by 60 s with no ingest and one summary build (docs_dev/20261022-post-boot-attribution.md); that idle growth is the largest single item and is being attributed (bodies watcher discriminator, docs_dev/20261022-bodies-discriminator.md).
+OWNER DIRECTIVE, verbatim (2026-10-22, second message): "i told you a million times to make every function an sql function, and every piece of memory a duckdb table. never allocate anything, just print the answer from duckdb. the whole server mus6t be a thin layer wrapper over duckdb. it has all the power you need."
+Governing rule from this point (supersedes any narrower reading above): every computation that today walks resident Rust structures (cards, summary, sessions, burn, timelines) becomes an SQL query over DuckDB tables; every piece of state alcore keeps becomes a DuckDB table; alcore's Rust heap holds only the bytes of the answer being written to the socket, plus at most one or two dashboard pages. Resident trees are defects, not caches.
+Conversion order (each step one commit, measured on an isolated clone against the 2 GB alcore-heap target before the next): (1) the idle post-boot growth (3.4 GB live by 60 s, owner under measurement: docs_dev/20261022-bodies-discriminator.md); (2) the resident card layer (573 MB): cards stay rows, every reader becomes a query; (3) the resident summary tree: /api/summary and the dashboard read paginated SQL; (4) the remaining resident structures, inventoried from the 60 s composition line; (5) the RSS guard measures alcore's own heap, not DuckDB's pools.
+
+## Approval log
+
+- 2026-10-22T13:05:17+0200 — column → dev by main-agent@agentlenspro. owner directive 2026-10-22: thin layer over DuckDB; conversion started
