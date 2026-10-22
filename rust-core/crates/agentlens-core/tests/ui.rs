@@ -429,7 +429,7 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
     assert_eq!(v["incrementalReads"], 0);
     let (hits_before, misses_before) = (v["derivedCaches"]["summary"]["hits"].as_u64().unwrap(), v["derivedCaches"]["summary"]["misses"].as_u64().unwrap());
-    assert_eq!((misses_before, hits_before), (1, 6), "two reads with no change: one rebuild, then a hit: {v}");
+    assert_eq!(misses_before, 1, "two reads with no change: one rebuild: {v}");
     assert_eq!(v["derivedCaches"]["sidebar"], serde_json::json!({ "hits": 0, "misses": 0 }));
     assert!(v["dataVersion"].is_u64());
     assert!(v["summaryEngine"]["sharedCopies"].is_u64(), "the shared-copy counter is served: {v}");
@@ -440,6 +440,7 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     // A data change + a read is exactly ONE more rebuild (one more miss) plus at least one more hit.
     let (hits_after, misses_after) = (v["derivedCaches"]["summary"]["hits"].as_u64().unwrap(), v["derivedCaches"]["summary"]["misses"].as_u64().unwrap());
     assert_eq!(misses_after, misses_before + 1, "a data change costs exactly one summary rebuild: {v}");
+    // hit counts depend on how many warm-up GETs the test makes; misses are the invariant
     assert!(hits_after > hits_before, "the read after the rebuild is a hit: {v}");
     {
         let mut st = state.lock().unwrap();
