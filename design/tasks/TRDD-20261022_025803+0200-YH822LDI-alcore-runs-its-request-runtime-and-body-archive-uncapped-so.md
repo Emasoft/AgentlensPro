@@ -4,7 +4,7 @@ title: alcore runs its request runtime and body archive uncapped so digestion ta
 column: blocked
 status: tasked
 created: 2026-10-22T02:58:03+0200
-updated: 2026-10-22T04:17:00+0200
+updated: 2026-10-22T04:18:18+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -18,6 +18,7 @@ approval-datetime: 2026-10-22T02:58:03+0200
 project-id: agentlenspro
 blocked-by: [2JOIAH2G]
 pre-block-column: dev
+eht: [60DMZD2N]
 ---
 
 # alcore runs its request runtime and body archive uncapped so digestion takes every core
@@ -53,4 +54,4 @@ No open card owned a cap on total cores (triage report docs_dev/20261021-mem-cpu
 
 ## Deploy log
 
-2026-10-22 04:14 — commit 44bc67e1 built, copied to bin-native/darwin-arm64/alcore (previous kept as alcore.pre-corecap-20261022), ad-hoc codesigned, no-arg run exits 64 (runs, not 137). Live gate NOT measurable: the canonical collector crash-loops on the 2 GB RSS guard (1,910 exits in rss-hard-cap.log, count from the probe report; the last five guard exits were at 8.9-17.9 s uptime with footprint 2.2-2.6 GB and mimalloc 1.9-2.6 GB; the last three boots in server.log were 03:05, 03:36 and 04:08, two intervals of about 31 min consistent with the 30-min revive backoff cap; pairing a boot with an exit is inferred, the guard log has no timestamps). The deployed binary carries this commit's AGENTLENS_MAX_CORES message (strings check). bin-native/ is gitignored, so alcore.pre-corecap-20261022 is the only rollback copy and the A/B control. Isolated probe on a clone reproduced it at 13 s (docs_dev/20261022-corecap-isolated-probe.md). Blocked on TRDD-2JOIAH2G (boot heap).
+2026-10-22 04:14 — commit 44bc67e1 built, copied to bin-native/darwin-arm64/alcore (previous kept as alcore.pre-corecap-20261022), ad-hoc codesigned, no-arg run exits 64 (runs, not 137). Live gate NOT measurable: the canonical collector crash-loops on the 2 GB RSS guard (1,910 exits in rss-hard-cap.log, count from the probe report; the last five canonical guard exits were at 8.9-17.9 s uptime, the three footprints seen 2.35-2.61 GB, one mimalloc commit seen 2.59 GB; the isolated clone run exited at 2162 MB footprint and 1937 MB mimalloc; the last three boots in server.log were 03:05, 03:36 and 04:08, two intervals of about 31 min consistent with the 30-min revive backoff cap (reviveBackoffGate per the 2JOIAH2G card, not re-read this session); pairing a boot with an exit is inferred, the guard log has no timestamps). The deployed binary carries this commit's AGENTLENS_MAX_CORES message (strings check). bin-native/ is gitignored, so alcore.pre-corecap-20261022 is the only rollback copy and the A/B control. Isolated probe on a clone reproduced it at 13 s (docs_dev/20261022-corecap-isolated-probe.md). Blocked on TRDD-2JOIAH2G (boot heap).

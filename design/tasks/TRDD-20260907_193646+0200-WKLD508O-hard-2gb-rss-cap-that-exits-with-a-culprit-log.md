@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: human_review
 created: 2026-09-07T19:36:46+0200
-updated: 2026-10-22T03:09:12+0200
+updated: 2026-10-22T04:18:18+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -779,3 +779,4 @@ Isolated full-size runs (own DATA_DIR, real read-only HOME, distinct ports; repo
 ## Owner decisions
 
 2026-10-21 — USER chose, verbatim option: "Deploy it (Recommended)" — rebuild alcore from HEAD with the ad-hoc codesign, restart, and watch the culprit log. Main agent's plan note (not part of the user's decision): the deploy is bundled with the core-cap change.
+2026-10-22 04:14 — executed: commit 44bc67e1 (which carries the guard) deployed to bin-native with codesign (see TRDD-YH822LDI Deploy log). The guard fires as specified: the canonical collector exits at 8.9-17.9 s uptime with the culprit block in ~/.agentlens/rss-hard-cap.log (footprint 2.35-2.61 GB). Making the collector stay under 2 GB is TRDD-2JOIAH2G.
