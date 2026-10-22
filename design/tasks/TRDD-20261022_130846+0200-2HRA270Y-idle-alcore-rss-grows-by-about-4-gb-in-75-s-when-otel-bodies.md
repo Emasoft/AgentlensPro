@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: dev
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-10-22T18:25:43+0200
+updated: 2026-10-22T19:37:45+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -32,6 +32,7 @@ Measured 2026-10-22 (docs_dev/20261022-bodies-discriminator.md, isolated clones,
 ## Approval log
 
 - 2026-10-22T13:08:46+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-10-22: deploy gate added. Do not deploy step 4 (cap on mimalloc commit) to the live collector without TRDD-12FGMAEP's whole-process backstop or an explicit owner waiver recorded on 12FGMAEP. Step-4 checks recorded for reviewers: mimalloc dependency has no override feature (Cargo.toml lines 88-92), mi_process_info 6th argument is current_commit in libmimalloc-sys 0.1.49 extended.rs:359-368. package.json version bump plus CHANGELOG are due in the same PR (env var meaning changed).
 
 ## STATE
 

@@ -1,10 +1,10 @@
 ---
 trdd-id: 12FGMAEP
 title: No whole-process memory ceiling once the RSS cap keys on mimalloc commit
-column: backburner
+column: todo
 status: tasked
 created: 2026-10-22T19:35:30+0200
-updated: 2026-10-22T19:35:30+0200
+updated: 2026-10-22T19:37:45+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T19:35:30+0200
+parent-trdd: 2HRA270Y
 ---
 
 # No whole-process memory ceiling once the RSS cap keys on mimalloc commit
@@ -24,3 +25,4 @@ Step 4 of TRDD-2HRA270Y moves the hard cap from phys_footprint to mimalloc commi
 ## Approval log
 
 - 2026-10-22T19:35:30+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-10-22 review-2 notes: the RSS figures above are whole-process RSS (the 512MB figure was a Python host running DuckDB), not an isolated DuckDB measurement; the jetsam-with-no-log outcome is inferred, not observed. The session summary records an earlier owner answer on a 6 GB cap question; its text was not located in the transcript, so find it before choosing the backstop value. Moved to todo: this gates the 2HRA270Y deploy.
