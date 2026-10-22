@@ -258,7 +258,10 @@ pub fn all_of(store: &Store, table: &str) -> String {
     if table == "body" {
         // The bodies corpus lives in the native `body_durable` mirror (open-time load +
         // flush's read-back appends), so its full view never touches parquet — see open_store.
-        return "(SELECT * FROM body_durable UNION ALL BY NAME SELECT * FROM body)".to_owned();
+        // WHY EXCLUDE (file_id) (TRDD-2HRA270Y step 3, F4 round 2): body_durable carries the internal file_id
+        // column that sync_new_parts uses to delete a vanished bodies part's rows. Readers of all_of(body) must
+        // see the same columns as before that column existed, so it is excluded here.
+        return "(SELECT * EXCLUDE (file_id) FROM body_durable UNION ALL BY NAME SELECT * FROM body)".to_owned();
     }
     let sub = match table {
         "blob" => BLOBS_DIR,
@@ -748,9 +751,14 @@ pub fn sync_new_parts(store: &mut Store) -> duckdb::Result<SyncStats> {
 /// The listing of one part dir, loaded into the TEMP table sync_listing so both anti-joins run in
 /// DuckDB (TRDD-2HRA270Y step 3, F4). WHY the readability check: part_files returns an EMPTY list when
 /// the dir cannot be read, and an empty listing would make every registered file look removed and
-/// delete its dedup rows. An unreadable dir is an error, never an empty store.
+/// delete its dedup rows. Only a missing dir (NotFound) is an empty listing: its files are gone, so their
+/// rows must go. Any other error (ENOTDIR, EACCES, EIO) is returned, so an unreadable dir never deletes rows.
 fn load_sync_listing(con: &Connection, dir: &Path, sub: &str) -> duckdb::Result<()> {
-    fs::read_dir(dir.join(sub)).map_err(|e| duckdb::Error::ToSqlConversionFailure(Box::new(e)))?;
+    match fs::read_dir(dir.join(sub)) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(duckdb::Error::ToSqlConversionFailure(Box::new(e))),
+    }
     con.execute_batch("CREATE OR REPLACE TEMP TABLE sync_listing (path VARCHAR);")?;
     let mut app = con.appender("sync_listing")?;
     for file in part_files(dir, sub).iter().filter_map(|p| p.to_str()) {
