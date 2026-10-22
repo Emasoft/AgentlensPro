@@ -50,10 +50,10 @@ pub const SERVER_MEMORY_LIMIT: &str = "512MiB";
 
 /// The bodies-store connection ceiling (owner choice, TRDD-DKBGT7MQ: one store instance is about
 /// 1.5 GB). The store keeps its dedup index as DuckDB tables (`known_blob`, `body_durable`) instead
-/// of Rust sets; measured on the real store at ~181 MiB (known_blob, sha as BLOB) + ~860 MiB
-/// (body_durable), which SERVER_MEMORY_LIMIT can only hold by spilling. The server caller
-/// (agentlens-core chores.rs bodies pass) passes it to open_store; SERVER_MEMORY_LIMIT stays for
-/// every other connection.
+/// of Rust sets. The store holds known_blob (~181 MiB) and body_durable (~860 MiB) on the real store,
+/// plus their ART indexes, which cannot spill; at 512MiB the sha probe ran out of memory (measured
+/// 2026-10-22, TRDD-2HRA270Y). The server caller (agentlens-core chores.rs bodies pass) passes it to
+/// open_store; SERVER_MEMORY_LIMIT stays for every other connection.
 pub const STORE_MEMORY_LIMIT: &str = "1536MB";
 
 /// The `alstore` CLI DuckDB memory ceiling (TRDD-CQ4652DQ) — the ceiling the OFFLINE bodies
@@ -221,14 +221,11 @@ pub fn parquet_scan(dir: &Path, sub: &str) -> Option<String> {
     Some(format!("read_parquet([{list}], union_by_name := true)"))
 }
 
-/// Same as `parquet_scan` but with `filename := true` — each row carries the source part file
-/// path in a `filename` column. Used only to build the sha→owning-file index at open time;
-/// everywhere else reads via the plain `parquet_scan`/`all_of` forms.
 /// Durable parts + staging as one relation — `UNION ALL BY NAME` (see module doc).
 pub fn all_of(store: &Store, table: &str) -> String {
     if table == "body" {
         // The bodies corpus lives in the native `body_durable` mirror (open-time load +
-        // flush read-back appends), so its full view never touches parquet — see open_store.
+        // flush's read-back appends), so its full view never touches parquet — see open_store.
         return "(SELECT * FROM body_durable UNION ALL BY NAME SELECT * FROM body)".to_owned();
     }
     let sub = match table {
@@ -318,9 +315,9 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     let blob_parts: Vec<String> = part_files(dir, BLOBS_DIR).iter().filter_map(|p| p.to_str()).map(str::to_owned).collect();
     seed_blob_index(&con, &blob_parts, &blob_parts)?;
     // `body_durable` — a native mirror of the bodies parquet corpus, loaded ONCE here and kept
-    // current by flush read-back append. Body rows are small metadata, so this is the cheap
-    // trade that lets all_of("body") skip the parquet corpus on every later query (a full-scan
-    // class of the 2026-08-18 17-minute pass). Cloned from the staging schema, then loaded
+    // current by flush's read-back append. It is about 860 MiB on the real store (measured), so
+    // this is a memory cost, paid to let all_of("body") skip the parquet corpus on every later query
+    // (a full-scan class of the 2026-08-18 17-minute pass). Cloned from the staging schema, then loaded
     // BY NAME so parts from an older schema generation fill absent columns with NULL
     // (TRDD-219K7C1N: BY NAME, never positional). It is also the body-key dedup source that
     // replaced the old Rust `body_ids` / `bodies_named` sets.
@@ -336,7 +333,6 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     )?;
     Ok(Store { con, dir: dir.to_path_buf(), next_part: 0 })
 }
-
 
 /// Fill `part_file` from `listed` and `known_blob` from a `filename := true` scan of `scanned`.
 /// open_store passes the SAME list twice; the two parameters exist only so a unit test can drive
@@ -400,7 +396,7 @@ fn count(store: &Store, table: &str) -> duckdb::Result<u64> {
 /// own COPY. The part filter reads `body_durable`, which the body mirror appends to — so parts
 /// must be written BEFORE bodies. If a later COPY fails, the earlier tables are already durable
 /// and cleared, and a retry re-filters only what is still staged; with the opposite order a body
-/// mirrored before a failed part COPY would make the retry drop that body parts forever.
+/// mirrored before a failed part COPY would make the retry drop that body's parts forever.
 pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
     let staged_blobs = count(store, "blob").map_err(|e| e.to_string())?;
     let bodies = count(store, "body").map_err(|e| e.to_string())?;
@@ -460,7 +456,7 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
             ),
             // The body table is additionally MIRRORED into the native `body_durable` by READING BACK
             // the parquet just written — the read-back is the encoding proof (the flushed part
-            // parses to rows), durability stays the fsync barrier job, and all_of("body") never
+            // parses to rows), durability stays the fsync barrier's job, and all_of("body") never
             // has to scan the parquet corpus again (the third full-scan class of the 2026-08-18
             // 17-minute pass). Mirror BEFORE the staging DELETE so a read-back failure leaves the
             // staging rows in place and fails the flush loudly.
@@ -480,7 +476,7 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
         // rows (or the reverse), and the retry wrote a duplicate part. The COPY stays OUTSIDE: if
         // the transaction rolls back, staging and the index are exactly as before, the retry
         // re-filters from scratch, and the part file just written is indexed by nothing — so it
-        // is removed here (it is this flush own output, regenerable from the intact staging), or
+        // is removed here (it is this flush's own output, regenerable from the intact staging), or
         // a reopen would load it and the retry would write the same rows a second time.
         let txn = format!("BEGIN TRANSACTION; {after}DELETE FROM {table}; DROP TABLE flush_new; COMMIT;");
         if let Err(e) = store.con.execute_batch(&txn) {
@@ -683,7 +679,7 @@ pub fn ingest_body_with(
         return Err(format!("refusing to store {src_name}: it does not reconstruct byte-identically"));
     }
 
-    // ONE probe for ALL of this body span shas (replaces the Rust `known` set): known_blob via its
+    // ONE probe for ALL of this body's span shas (replaces the Rust `known` set): known_blob via its
     // ART index plus the staging blob table. Never one query per span. `seen` dedups within this
     // body only, so it is body-sized, not corpus-sized.
     let present = shas_present(store, &sec.blob_order)?;
@@ -741,7 +737,6 @@ pub fn ingest_body_with(
 
     Ok(IngestResult { body_id, raw_bytes, new_blobs, new_bytes, existed: false })
 }
-
 
 /// Whether `body_id` has any row (durable or staged), and whether it has one under `src_name`.
 /// One query: an ART point lookup on `body_durable(body_id)` UNION ALL a scan of the staging
@@ -848,7 +843,6 @@ pub fn reconstruct_body(store: &Store, body_id: &str) -> Result<String, String> 
 pub type SpanCache = std::collections::HashMap<String, String>;
 
 /// Builds the SQL for the verify gate's blob fetch, scoped to just the parquet part files that
-/// Builds the SQL for the verify gate blob fetch, scoped to just the parquet part files that
 /// own the requested shas (`known_blob JOIN part_file`, which replaced the Rust `blob_files` map —
 /// measured heap, see Store) instead of the whole blob corpus. The bytes still come from the same
 /// durable parquet file(s) on disk — only the file SET shrinks — so the delete-gate proof (a
@@ -867,10 +861,12 @@ pub(crate) fn blob_fetch_sql(store: &Store, shas: &[String]) -> Result<String, S
     }
     let bin = distinct.iter().map(|s| format!("unhex({})", q(s))).collect::<Vec<_>>().join(",");
     // ONE query: the owning files of every indexed sha, and how many of the requested shas the
-    // index knows (a sha has exactly one known_blob row, so the sum is the matched-sha count).
+    // index knows. WHY count(DISTINCT k.sha), not count(*): a duplicate known_blob row for one sha
+    // must not add to matched, or matched could reach distinct.len() while another requested sha is
+    // unindexed, and the full-corpus fallback below would be skipped.
     // One IN list on the BLOB key: executes as an ART index scan (see sha_probe_sql).
     let sql = format!(
-        "SELECT pf.path, count(*) FROM known_blob k JOIN part_file pf ON pf.id = k.file_id
+        "SELECT pf.path, count(DISTINCT k.sha) FROM known_blob k JOIN part_file pf ON pf.id = k.file_id
          WHERE k.sha IN ({bin}) GROUP BY pf.path ORDER BY pf.path"
     );
     let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
@@ -1139,8 +1135,8 @@ mod blob_fetch_sql_tests {
         );
 
         let sql = blob_fetch_sql(&store, &[sha("a"), sha("c")]).expect("sql");
-        assert!(sql.contains("part-1.parquet"), "must scan sha-a owning file: {sql}");
-        assert!(sql.contains("part-2.parquet"), "must scan sha-c owning file: {sql}");
+        assert!(sql.contains("part-1.parquet"), "must scan sha-a's owning file: {sql}");
+        assert!(sql.contains("part-2.parquet"), "must scan sha-c's owning file: {sql}");
         assert!(!sql.contains("all_of") && !sql.contains(" body "), "scoped query, not the all-parts scan: {sql}");
 
         let _ = fs::remove_dir_all(&store.dir);

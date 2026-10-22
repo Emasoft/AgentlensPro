@@ -70,7 +70,17 @@ fn flagged_lines(flag: impl Fn(&Path, &str) -> bool) -> Vec<String> {
 /// Comment lines are blanked first. A string literal with an unbalanced parenthesis would confuse
 /// the reader; no such literal exists in these sources.
 fn flagged_open_store_calls() -> Vec<String> {
-    let mut hits = Vec::new();
+    open_store_calls()
+        .into_iter()
+        .filter(|(_, _, _, args)| args.last().is_some_and(|last| last.bytes().all(|b| b.is_ascii_digit())))
+        .map(|(file, line_no, line, _)| format!("{}:{line_no}: {line}", file.display()))
+        .collect()
+}
+
+/// Every `open_store(` call in the scanned sources, as `(file, line number, trimmed line, arguments)`.
+/// The arguments come from `call_arguments`, trimmed, with empty pieces dropped.
+fn open_store_calls() -> Vec<(PathBuf, usize, String, Vec<String>)> {
+    let mut calls = Vec::new();
     for file in scanned_files() {
         let text = fs::read_to_string(&file).unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
         let blanked: Vec<&str> = text
@@ -86,19 +96,17 @@ fn flagged_open_store_calls() -> Vec<String> {
             if preceded_by_ident {
                 continue;
             }
-            let args: Vec<&str> = call_arguments(&code[at + call.len()..])
+            let args: Vec<String> = call_arguments(&code[at + call.len()..])
                 .into_iter()
-                .map(str::trim)
+                .map(|arg| arg.trim().to_owned())
                 .filter(|arg| !arg.is_empty())
                 .collect();
-            if args.last().is_some_and(|last| last.bytes().all(|b| b.is_ascii_digit())) {
-                let line_no = code[..at].matches("\n").count() + 1;
-                let line = code.lines().nth(line_no - 1).unwrap_or("");
-                hits.push(format!("{}:{}: {}", file.display(), line_no, line.trim()));
-            }
+            let line_no = code[..at].matches("\n").count() + 1;
+            let line = code.lines().nth(line_no - 1).unwrap_or("").trim().to_owned();
+            calls.push((file.clone(), line_no, line, args));
         }
     }
-    hits
+    calls
 }
 
 /// The arguments of a call whose opening parenthesis comes just before `rest`: the top-level pieces
@@ -232,5 +240,26 @@ fn available_parallelism_is_reporting_only() {
         hits.is_empty(),
         "available_parallelism() sizes a pool; size it from crate::cores::max_cores() instead:\n{}",
         hits.join("\n")
+    );
+}
+
+/// The bodies pass opens its store with STORE_MEMORY_LIMIT, never SERVER_MEMORY_LIMIT: the store ART
+/// indexes cannot spill, and at 512MiB the sha probe ran out of memory (TRDD-2HRA270Y).
+#[test]
+fn bodies_pass_opens_its_store_with_the_store_memory_limit() {
+    let calls: Vec<_> = open_store_calls()
+        .into_iter()
+        .filter(|(file, _, _, _)| file.ends_with("src/chores.rs"))
+        .collect();
+    assert!(!calls.is_empty(), "no open_store call in chores.rs; the guard would be vacuous");
+    let wrong: Vec<String> = calls
+        .iter()
+        .filter(|(_, _, _, args)| args.get(1).map(String::as_str) != Some("agentlens_store::STORE_MEMORY_LIMIT"))
+        .map(|(file, line_no, line, _)| format!("{}:{line_no}: {line}", file.display()))
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "the bodies pass must open its store with agentlens_store::STORE_MEMORY_LIMIT, not SERVER_MEMORY_LIMIT (TRDD-2HRA270Y):\n{}",
+        wrong.join("\n")
     );
 }

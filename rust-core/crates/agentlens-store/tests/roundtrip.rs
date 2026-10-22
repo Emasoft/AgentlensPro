@@ -212,6 +212,91 @@ fn a_failed_post_copy_update_rolls_back_and_the_retry_writes_one_part() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The flush anti-join net, end to end: a blob whose sha is already durable, a part row and a body
+/// row for an already-durable body, and two identical NEW blob rows in one batch. Only the one new
+/// sha may reach a part file, and only once.
+#[test]
+fn restaged_durable_rows_and_a_duplicated_new_sha_write_one_blob_once() {
+    let dir = fixture_dir("antijoin-mixed");
+    let raw = body("mix");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "mix.request.json", &raw, ts).expect("ingest");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let known_before = count(&store, "known_blob");
+    let durable_sha: String = store
+        .con
+        .query_row("SELECT lower(hex(sha)) FROM known_blob LIMIT 1", [], |r| r.get(0))
+        .expect("a durable sha");
+    let body_id = agentlens_store::body_id_of(&raw);
+    let new_sha = "f".repeat(64);
+    store
+        .con
+        .execute_batch(&format!(
+            "INSERT INTO blob VALUES ('{durable_sha}', 3, 'already-durable');
+             INSERT INTO blob VALUES ('{new_sha}', 1, 'new'), ('{new_sha}', 1, 'new');
+             INSERT INTO part VALUES ('{body_id}', 0, 'lit', 'dup', NULL, NULL, NULL, NULL);
+             INSERT INTO body SELECT * FROM body_durable;"
+        ))
+        .expect("stage duplicates");
+
+    let flushed = agentlens_store::flush_detailed(&mut store).expect("flush 2");
+    assert_eq!(flushed.n, 1, "only the new sha is written");
+    assert_eq!(flushed.part_paths.len(), 1, "the durable part and body duplicates write no file");
+    let new_part = &flushed.part_paths[0];
+    assert!(new_part.starts_with(dir.join(agentlens_store::BLOBS_DIR)), "the one file is a blob part: {}", new_part.display());
+    let (rows, distinct): (i64, i64) = store
+        .con
+        .query_row(
+            &format!("SELECT count(*), count(DISTINCT sha) FROM read_parquet('{}')", new_part.display()),
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("read the new part");
+    assert_eq!((rows, distinct), (1, 1), "the new part holds the one new sha exactly once");
+    let (known_rows, known_distinct): (i64, i64) = store
+        .con
+        .query_row("SELECT count(*), count(DISTINCT sha) FROM known_blob", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("known_blob");
+    assert_eq!(known_rows, known_distinct, "known_blob has no duplicate sha");
+    assert_eq!(known_rows, known_before + 1, "known_blob gains exactly the one new sha");
+    assert_eq!(parquet_files(&dir, agentlens_store::PARTS_DIR), 1, "no new part-table file");
+    assert_eq!(parquet_files(&dir, agentlens_store::BODIES_DIR), 1, "no new body file");
+    for table in ["blob", "part", "body", "api_call"] {
+        assert_eq!(count(&store, table), 0, "staging {table} is cleared");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A post-COPY transaction that fails must take the part file it just wrote with it: no index names
+/// that file, so a reopen would not load it, but a retry would write the same rows again as a second
+/// file. The staged blob must survive intact.
+#[test]
+fn a_failed_blob_index_update_removes_the_part_file_it_copied() {
+    let dir = fixture_dir("cleanup");
+    let raw = body("cl");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "cl.request.json", &raw, ts).expect("ingest");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let files_before = parquet_files(&dir, agentlens_store::BLOBS_DIR);
+    assert_eq!(files_before, 1, "baseline: one blob part from flush 1");
+    let new_sha = "a".repeat(64);
+    store
+        .con
+        .execute_batch(&format!("INSERT INTO blob VALUES ('{new_sha}', 1, 'staged');"))
+        .expect("stage one new blob");
+    let staged = count(&store, "blob");
+    // The COPY of the blob table writes its part file, then the index insert hits the missing table.
+    store.con.execute_batch("DROP TABLE part_file;").expect("trap");
+    let err = agentlens_store::flush_detailed(&mut store).expect_err("the index update must fail");
+    assert!(err.contains("rolled back after COPY"), "{err}");
+    assert!(!err.contains("ROLLBACK failed"), "{err}");
+    assert_eq!(parquet_files(&dir, agentlens_store::BLOBS_DIR), files_before, "the part file the COPY wrote is removed");
+    assert_eq!(count(&store, "blob"), staged, "staging is intact");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 fn parquet_files(dir: &std::path::Path, sub: &str) -> usize {
     fs::read_dir(dir.join(sub))
         .expect("read_dir")
