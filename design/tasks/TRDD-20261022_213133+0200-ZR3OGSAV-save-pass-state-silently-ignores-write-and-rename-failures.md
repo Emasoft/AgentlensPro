@@ -4,7 +4,7 @@ title: save_pass_state silently ignores write and rename failures
 column: todo
 status: tasked
 created: 2026-10-22T21:31:33+0200
-updated: 2026-10-22T21:31:33+0200
+updated: 2026-10-22T21:35:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -19,7 +19,7 @@ approval-datetime: 2026-10-22T21:31:33+0200
 
 # save_pass_state silently ignores write and rename failures
 
-pass.rs save_pass_state (rust-core/crates/agentlens-store/src/pass.rs:101-111) discards both the fs::write error and the fs::rename result. A full disk or a permission error leaves the previous .pass-state.json in place with no log line, so skip and stranded names the pass just changed (including the TRDD-2HRA270Y step-1 pruning) are silently lost and the next pass acts on stale state. Fix: return a Result, and log it at both call sites (alcore bodies_pass and alstore pass), keeping the temp-and-rename atomicity. A stale .json.tmp left after a failed rename must also be removed or reported. Found while reviewing TRDD-2HRA270Y step 3 (docs_dev/20261022-step3-predesign.md). Test: point the state path at a read-only directory, run save, and assert the error is returned or logged.
+pass.rs save_pass_state (rust-core/crates/agentlens-store/src/pass.rs:101-111) discards both the fs::write error and the fs::rename result. A full disk or a permission error leaves the previous .pass-state.json in place with no log line. Skip names are recomputed from the directory listing at every pass start (TRDD-2HRA270Y step 1), so a lost prune heals on the next good save; what is lost for real is a stranded name or a skip name added at ingest. A lost skip name means one extra re-read, which dedup makes a no-op. A lost stranded name means a parked file is gated again. The triggers (full disk, permissions) are hypothetical: no incident has been observed. Fix: return a Result, and surface it at every caller (measured: chores.rs:651, server_stats.rs:735, alstore.rs:228, pass.rs:772 and pass.rs:838), logged every time or rate-limited, never swallowed. State whether a failed save should stop that pass's deletions. Keep the temp-and-rename atomicity. A stale .json.tmp left after a failed rename must also be removed or reported. Found while reviewing TRDD-2HRA270Y step 3 (docs_dev/20261022-step3-predesign.md). Tests inject each failure separately, without relying on a read-only directory, which is unreliable on macOS and under root. For the write branch, use a state path whose parent is a regular file (ENOTDIR). For the rename branch, make the target an existing non-empty directory, so the write succeeds and the rename fails.
 
 ## Approval log
 
