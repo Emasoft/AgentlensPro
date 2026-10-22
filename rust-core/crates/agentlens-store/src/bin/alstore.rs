@@ -69,7 +69,10 @@ fn main() {
     // a locked-out tick exits in milliseconds instead of paying the parts-scan open first.
     // Exit 75 = EX_TEMPFAIL: the TS wrapper treats it as "skip this tick", the cross-process
     // twin of its own bodiesPassRunning guard — every other failure stays loud.
-    let _pass_lock = if cmd == "pass" || cmd == "unpark" {
+    // `ingest` too (TRDD-2HRA270Y step 3, A4): it writes store parts, and alcore now keeps one store
+    // open across ticks and syncs other writers' parts only under this lock — an unlocked ingest
+    // could leave a half-written part for that sync to trip over.
+    let _pass_lock = if cmd == "pass" || cmd == "unpark" || cmd == "ingest" {
         match agentlens_store::pass::acquire_pass_lock(std::path::Path::new(store_dir)) {
             Ok(f) => Some(f),
             Err(agentlens_store::pass::PassLockErr::Busy) => {

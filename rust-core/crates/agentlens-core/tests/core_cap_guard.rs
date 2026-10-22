@@ -270,3 +270,17 @@ fn bodies_pass_opens_its_store_with_the_store_memory_limit() {
         wrong.join("\n")
     );
 }
+
+
+/// TRDD-2HRA270Y step 3 (A10): the bodies export and purge routes read the shared store the bodies
+/// pass opened, so body_archive.rs must not open a store of its own (a second ~1 GB store per
+/// request is what step 3 removed).
+#[test]
+fn body_archive_opens_no_store() {
+    let calls: Vec<String> = open_store_calls()
+        .into_iter()
+        .filter(|(file, _, _, _)| file.ends_with("src/body_archive.rs"))
+        .map(|(file, line_no, line, _)| format!("{}:{line_no}: {line}", file.display()))
+        .collect();
+    assert!(calls.is_empty(), "body_archive.rs must not call open_store (TRDD-2HRA270Y):\n{}", calls.join("\n"));
+}

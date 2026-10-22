@@ -207,6 +207,96 @@ const DRAIN_MAX_PASSES: usize = 16;
 /// below can read it; nothing else needs to reach it from outside `bodies_pass`.
 static FSYNCED_PARTS: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
 
+/// The bodies store, opened ONCE per process and kept (TRDD-2HRA270Y step 3). open_store rebuilds
+/// the in-memory dedup tables (known_blob, part_file, body_durable, about 1 GB on the real store)
+/// from every parquet part, and the bodies pass used to pay that on every 60s tick. Now only the
+/// bodies pass opens it (lazily, after the idle exit, `.pass.lock` and the HEAVY slot) and each
+/// tick refreshes it with `sync_new_parts`. Export reads through the `reader` connection; purge
+/// borrows the writer with try_lock. Neither ever opens it.
+///
+/// KEYED BY `store_dir`: a call for a different store dir drops the open store and reopens.
+/// Production has one data dir; the test binaries run tests in parallel threads with one data dir
+/// each, and serving one test's dedup tables to another would be wrong.
+///
+/// LOCK ORDER: `.pass.lock`, then HEAVY, then the slot (briefly), then the writer mutex, then
+/// FSYNCED_PARTS. Export holds only the reader mutex and nothing waits for the writer while holding
+/// the reader. Purge only try_locks the writer, so it can never deadlock with a pass.
+struct SharedBodiesStore {
+    store_dir: PathBuf,
+    writer: Arc<Mutex<agentlens_store::Store>>,
+    reader: Arc<Mutex<agentlens_store::StoreReader>>,
+}
+
+static BODIES_STORE: Mutex<Option<SharedBodiesStore>> = Mutex::new(None);
+static BODIES_STORE_OPENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn bodies_slot() -> std::sync::MutexGuard<'static, Option<SharedBodiesStore>> {
+    // The slot only holds Arcs and is never held across store work, so a poison here carries no
+    // half-done state; the store mutexes have their own poison handling (drop_poisoned_bodies_store).
+    BODIES_STORE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Test-only: how many times this process has opened the shared bodies store.
+pub fn bodies_store_opens_for_test() -> u64 {
+    BODIES_STORE_OPENS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Test-only: poison the writer mutex of the open store for `store_dir` (a thread panics while
+/// holding it), to drive the poison path. No-op when that store is not open.
+pub fn poison_bodies_store_writer_for_test(store_dir: &Path) {
+    if let Some(w) = bodies_store_writer(store_dir) {
+        let _ = std::thread::spawn(move || {
+            let _g = w.lock();
+            panic!("poisoning the bodies store writer for a test");
+        })
+        .join();
+    }
+}
+
+/// A poisoned writer or reader mutex means a thread panicked mid-operation, so the store's tables
+/// may be half-updated. Drop the shared store and let the next bodies pass reopen it from the
+/// parquet parts, the only durable truth (TRDD-2HRA270Y step 3, A6).
+pub fn drop_poisoned_bodies_store(which: &str) {
+    eprintln!(
+        "{} alcore: bodies store {which} mutex is POISONED — dropping the shared store; the next bodies pass reopens it (TRDD-2HRA270Y)",
+        crate::log_ts()
+    );
+    *bodies_slot() = None;
+}
+
+/// The writer of the open bodies store for `store_dir`, or None when it is not open.
+pub fn bodies_store_writer(store_dir: &Path) -> Option<Arc<Mutex<agentlens_store::Store>>> {
+    bodies_slot().as_ref().filter(|s| s.store_dir == store_dir).map(|s| s.writer.clone())
+}
+
+/// The reader of the open bodies store for `store_dir`, or None when it is not open.
+pub fn bodies_store_reader(store_dir: &Path) -> Option<Arc<Mutex<agentlens_store::StoreReader>>> {
+    bodies_slot().as_ref().filter(|s| s.store_dir == store_dir).map(|s| s.reader.clone())
+}
+
+/// The writer for `store_dir`, opening the store when it is not open (or open for another dir).
+/// Called ONLY by bodies_pass, under `.pass.lock` and the HEAVY slot.
+fn open_shared_bodies_writer(store_dir: &Path, threads: usize) -> Result<Arc<Mutex<agentlens_store::Store>>, String> {
+    let mut slot = bodies_slot();
+    if let Some(s) = slot.as_ref().filter(|s| s.store_dir == store_dir) {
+        return Ok(s.writer.clone());
+    }
+    // Drop the other dir's store BEFORE opening, so two stores' tables are never resident at once.
+    *slot = None;
+    // STORE_MEMORY_LIMIT, not SERVER_MEMORY_LIMIT: open_store builds ART indexes on known_blob/body_durable that cannot spill, and at 512MiB the sha probe runs out of memory (measured 2026-10-22, TRDD-2HRA270Y).
+    let store = agentlens_store::open_store(store_dir, agentlens_store::STORE_MEMORY_LIMIT, threads).map_err(|e| e.to_string())?;
+    let reader = store.reader().map_err(|e| format!("cannot clone a reader connection: {e}"))?;
+    BODIES_STORE_OPENS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let writer = Arc::new(Mutex::new(store));
+    *slot = Some(SharedBodiesStore { store_dir: store_dir.to_path_buf(), writer: writer.clone(), reader: Arc::new(Mutex::new(reader)) });
+    Ok(writer)
+}
+
+/// Unreadable parts sync_new_parts already reported, so each is logged once, not every tick.
+static SYNC_SKIPS_LOGGED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+/// The last "staging cleared" log line and when it was printed (one per distinct error or minute).
+static LEFTOVER_LOGGED: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
 
 /// The last bodies-pass reading (TRDD-HDUETCU7), held here and not in `CoreState`; `server_stats`
 /// reads it through `bodies_pass_stats()`. The type is `crate::BodiesPassStats`.
@@ -261,8 +351,28 @@ const SPILL_DIRS: [&str; 3] = ["store/tmp", "statusline/tmp", "tmp/session-summa
 /// older than `max_age`. Returns the count removed. Missing dirs are fine. DuckDB spill files from
 /// a killed process are never cleaned by DuckDB itself, so without this a crash loop fills the disk.
 pub fn clean_spill_dirs(data_dir: &Path, max_age: Option<Duration>) -> usize {
+    clean_spill_dirs_except(data_dir, max_age, &[])
+}
+
+/// The periodic (age-based) spill cleanup. Skips `store/tmp` while the shared bodies store is open
+/// for this data dir (TRDD-2HRA270Y step 3): that DuckDB now lives for the whole process and keeps
+/// its spill blocks there, so an mtime rule cannot tell a dead file from a live one. Boot cleanup
+/// (clean_spill_dirs with None) still empties it, and max_temp_directory_size bounds it meanwhile.
+pub fn clean_spill_dirs_periodic(data_dir: &Path) -> usize {
+    let skip: &[&str] = if bodies_store_writer(&data_dir.join("store")).is_some() { &["store/tmp"] } else { &[] };
+    clean_spill_dirs_except(data_dir, Some(SPILL_MAX_AGE), skip)
+}
+
+/// Total bytes of the files directly in `dir` (0 when missing).
+fn dir_file_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len()).sum())
+        .unwrap_or(0)
+}
+
+fn clean_spill_dirs_except(data_dir: &Path, max_age: Option<Duration>, skip: &[&str]) -> usize {
     let mut removed = 0;
-    for sub in SPILL_DIRS {
+    for sub in SPILL_DIRS.into_iter().filter(|s| !skip.contains(s)) {
         let Ok(rd) = std::fs::read_dir(data_dir.join(sub)) else { continue };
         for e in rd.flatten() {
             let Ok(meta) = e.metadata() else { continue };
@@ -355,7 +465,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // threads = crate::cores::duckdb_threads() (TRDD-YH822LDI), memory_limit=STORE_MEMORY_LIMIT.
     let threads = crate::cores::duckdb_threads();
     // Timed from the store open, not the tick: TRDD-768NEX6E's acceptance wants one pass's wall
-    // time on the log line, and the open is where the per-pass parquet rebuild scans happen.
+    // time on the log line. Since TRDD-2HRA270Y step 3 the store is opened once per process, so
+    // only the first busy tick includes the parquet rebuild; later ticks time the sync and the pass.
     let started = std::time::Instant::now();
     // Same heavy-DuckDB slot as transcript/seismic queries (budget: card 256MB + ONE transient 1GB);
     // busy => skip this tick, the next one retries. Declared before `store` so it drops after it.
@@ -363,14 +474,40 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("bodies pass", &SKIPS) else {
         return;
     };
-    // STORE_MEMORY_LIMIT, not SERVER_MEMORY_LIMIT: open_store builds ART indexes on known_blob/body_durable that cannot spill, and at 512MiB the sha probe runs out of memory (measured 2026-10-22, TRDD-2HRA270Y).
-    let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::STORE_MEMORY_LIMIT, threads) {
-        Ok(s) => s,
+    // The shared store (see SharedBodiesStore for the lock order): opened on the first busy tick,
+    // kept after. An open error leaves it unopened and the next tick retries.
+    let writer = match open_shared_bodies_writer(&store_dir, threads) {
+        Ok(w) => w,
         Err(e) => {
             eprintln!("{} alcore: bodies pass cannot open the store: {e}", crate::log_ts());
             return;
         }
     };
+    let mut store = match writer.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            drop_poisoned_bodies_store("writer");
+            return;
+        }
+    };
+    // Refresh the dedup tables with parts another writer (alstore pass/ingest) added since the last
+    // tick. Under `.pass.lock`, so no locked writer is mid-write; an unreadable file is skipped and
+    // retried next tick, logged once.
+    match agentlens_store::sync_new_parts(&mut store) {
+        Ok(sync) => {
+            let mut logged = SYNC_SKIPS_LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+            let logged = logged.get_or_insert_with(Default::default);
+            for (file, err) in &sync.skipped {
+                if logged.insert(file.clone()) {
+                    eprintln!("{} alcore: bodies pass: cannot load new part {file}, retrying next tick: {err}", crate::log_ts());
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("{} alcore: bodies pass cannot sync new store parts: {e}", crate::log_ts());
+            return;
+        }
+    }
     let state_file = store_dir.join(agentlens_store::pass::PASS_STATE_FILE);
     let (mut skip, mut stranded) = agentlens_store::pass::load_pass_state(&state_file);
     // B-1 (advisor verdict): parquet parts are immutable once written (`agentlens_store::lib.rs`
@@ -383,6 +520,25 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // again" behavior.
     let fsynced_lock = FSYNCED_PARTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
     let mut fsynced = fsynced_lock.lock().unwrap_or_else(|e| e.into_inner());
+    // Staging rows a previous tick's failed flush left behind: flush them, or clear them when that
+    // fails again (the sources are still on disk and re-ingest). Staging never grows across ticks.
+    // Runs while FSYNCED_PARTS is held; the parts it writes are fsynced by the settle barrier
+    // (pass.rs sweeps all four part dirs) before any source is deleted.
+    match agentlens_store::flush_or_clear_leftovers(&mut store) {
+        Ok(agentlens_store::Leftovers::Cleared(e)) => {
+            let mut last = LEFTOVER_LOGGED.lock().unwrap_or_else(|p| p.into_inner());
+            let repeat = last.as_ref().is_some_and(|(prev, at)| *prev == e && at.elapsed() < Duration::from_secs(60));
+            if !repeat {
+                eprintln!("{} alcore: bodies pass: staging cleared after a failed flush (sources stay on disk and re-ingest): {e}", crate::log_ts());
+                *last = Some((e, std::time::Instant::now()));
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("{} alcore: bodies pass cannot flush or clear leftover staging: {e}", crate::log_ts());
+            return;
+        }
+    }
     let max_bytes_per_pass = ingest_max_bytes_per_pass(&std::env::vars().collect());
 
     let mut ingested = 0u64;
@@ -493,6 +649,10 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         }
     }
     agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
+    // Release in reverse lock order (FSYNCED_PARTS, writer, then `.pass.lock`); the store itself
+    // stays open in the slot for the next tick.
+    drop(fsynced);
+    drop(store);
     drop(lock);
     // TRDD-HDUETCU7: publish the real counts (the locals used to reach only the log line below).
     record_bodies_pass(now_ms, deleted, bytes_freed);
@@ -502,7 +662,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // PARKED gauge reads the state file, which the drain empties BEFORE the gate decides.
     if ingested > 0 || deleted > 0 || failed > 0 {
         println!(
-            "{} alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s) in {} ms{}",
+            "{} alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s) in {} ms, store spill {:.1}MB{}",
             crate::log_ts(),
             ingested,
             deleted,
@@ -511,6 +671,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             bytes_freed as f64 / 1_048_576.0,
             scope.dirs.len(),
             started.elapsed().as_millis(),
+            // TRDD-2HRA270Y step 3 (A7): the long-lived store keeps its spill files, so their size
+            // is reported where an operator already looks.
+            dir_file_bytes(&store_dir.join(agentlens_store::TMP_DIR)) as f64 / 1_048_576.0,
             if any_over_cap { " (OVER CAP — drained at age 0)" } else { "" }
         );
     }
@@ -1042,9 +1205,10 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         loop {
             tick.tick().await;
             let dd = dd.clone();
-            // Unlinking a spill file a live query still holds is safe on macOS/Linux (the open fd keeps
-            // the data until close) and no Windows binary ships, so this age sweep cannot break a query.
-            let _ = tokio::task::spawn_blocking(move || clean_spill_dirs(&dd, Some(SPILL_MAX_AGE))).await;
+            // Skips store/tmp while the long-lived bodies store is open (TRDD-2HRA270Y step 3): its
+            // DuckDB keeps spill blocks there for the life of the process, and an age rule cannot
+            // tell those from a dead process's leftovers. The other dirs keep the age sweep.
+            let _ = tokio::task::spawn_blocking(move || clean_spill_dirs_periodic(&dd)).await;
         }
     });
     // Boot passes, in the TS's order.

@@ -130,14 +130,6 @@ pub fn extract_archive(
     Ok((files, bytes))
 }
 
-fn open_body_store(data_dir: &Path) -> Result<agentlens_store::Store, String> {
-    // TRDD-YH822LDI: this was the machine core count minus 2, floored at 4 (12 threads on a
-    // 14-core machine). Now the DuckDB thread count per connection, so an export stays within the cap.
-    let threads = crate::cores::duckdb_threads();
-    // Export-only and short-lived: 1GB (was 8GB DEFAULT_MEMORY_LIMIT); spills to <store>/tmp past it.
-    agentlens_store::open_store(&data_dir.join("store"), "1GB", threads).map_err(|e| e.to_string())
-}
-
 /// exportBodiesFromStore — the store half of the export (TRDD-K3WDPR7M): once ingestPass
 /// reclaims a source file, the content-addressed store is the ONLY place that body exists;
 /// without this an export window would return only what the legacy .wad holds and the caller
@@ -293,6 +285,13 @@ pub fn bodies_export(data_dir: &Path, body: &[u8]) -> (u16, Value) {
     }
     let since = parsed.get("sinceMs").and_then(Value::as_f64).unwrap_or(0.0);
     let until = parsed.get("untilMs").and_then(Value::as_f64).unwrap_or(f64::INFINITY);
+    // The store half reads the bodies pass's shared store through its READER connection, so an
+    // export never waits on a running pass and never rebuilds a ~1 GB store per request
+    // (TRDD-2HRA270Y step 3). Only the bodies pass opens that store; until its first busy tick
+    // there is nothing to read, and a 503 says so before any file is written.
+    let Some(reader) = crate::chores::bodies_store_reader(&data_dir.join("store")) else {
+        return err(503, "bodies store not open yet".to_owned());
+    };
     let dest_p = Path::new(dest);
     let (a_files, a_bytes) = match extract_archive(&arch, dest_p, |e| e.mtime_ms >= since && e.mtime_ms <= until) {
         Ok(r) => r,
@@ -300,8 +299,14 @@ pub fn bodies_export(data_dir: &Path, body: &[u8]) -> (u16, Value) {
     };
     // The store half (TRDD-K3WDPR7M): its failure NEVER fails the whole export — the archive
     // half already succeeded — but it is always named.
-    let (s_files, s_bytes, failed) = match open_body_store(data_dir).and_then(|store| export_bodies_from_store(&store, dest_p, since, until))
-    {
+    let store_half = match reader.lock() {
+        Ok(r) => export_bodies_from_store(r.as_store(), dest_p, since, until),
+        Err(_) => {
+            crate::chores::drop_poisoned_bodies_store("reader");
+            Err("bodies store reader mutex poisoned".to_owned())
+        }
+    };
+    let (s_files, s_bytes, failed) = match store_half {
         Ok(r) => r,
         Err(e) => (0, 0, vec![format!("store export failed: {e}")]),
     };
@@ -325,10 +330,28 @@ pub fn bodies_export(data_dir: &Path, body: &[u8]) -> (u16, Value) {
 /// after every lump is proven in the store; a volume that fails stays on disk with its
 /// failures named (first 5 sampled). The `.idx` sidecars are ALWAYS kept.
 pub fn bodies_purge(data_dir: &Path) -> (u16, Value) {
-    let store = match open_body_store(data_dir) {
-        Ok(s) => s,
-        Err(e) => return (500, json!({ "error": e })),
+    // The delete gate must prove each lump from DURABLE parquet only (TRDD-2HRA270Y step 3, A1).
+    // The shared store's staging tables hold rows a pass ingested but has not flushed, and all_of
+    // unions them, so proving through the reader could bless a volume from RAM that a failed flush
+    // then discards. Hence the WRITER, taken with try_lock (a running pass owns it: 409, retry
+    // later; never wait), and a refusal while any staging row exists. Holding the writer for the
+    // whole purge keeps a pass from staging rows mid-proof.
+    let Some(writer) = crate::chores::bodies_store_writer(&data_dir.join("store")) else {
+        return (503, json!({ "error": "bodies store not open yet" }));
     };
+    let store = match writer.try_lock() {
+        Ok(g) => g,
+        Err(std::sync::TryLockError::WouldBlock) => return (409, json!({ "error": "bodies pass in progress" })),
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            crate::chores::drop_poisoned_bodies_store("writer");
+            return (500, json!({ "error": "bodies store writer mutex poisoned; it reopens on the next bodies pass" }));
+        }
+    };
+    match agentlens_store::staged_rows(&store) {
+        Ok(0) => {}
+        Ok(n) => return (409, json!({ "error": format!("bodies store holds {n} unflushed staged row(s); retry after the next bodies pass") })),
+        Err(e) => return (500, json!({ "error": e.to_string() })),
+    }
     let arch = archive_dir(data_dir);
     let mut names: Vec<String> = std::fs::read_dir(&arch)
         .map(|rd| rd.flatten().filter_map(|e| e.file_name().to_str().map(str::to_owned)).filter(|n| is_volume_name(n)).collect())

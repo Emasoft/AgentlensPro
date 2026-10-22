@@ -63,7 +63,8 @@ function liveStoreWriters(): string[] {
     // pidfile/argv from before the cutover).
     // \b before out/ — without it "checkout/cli/…" is a substring hit, and this gate fail-closed
     // over a stranger's path is the exact false positive the anchoring exists to prevent.
-    return /standalone\/server\.js|(standalone\/cli\.js|\bout\/(test\/)?cli\/[^ ]+\.js|agentlenspro)\s+server\s+start\b.*--supervise|alcore\s+serve|alstore\s+(pass|unpark)/.test(line)
+    // alstore ingest writes store parts too (TRDD-2HRA270Y step 3, A4), so it blocks a repair like pass/unpark.
+    return /standalone\/server\.js|(standalone\/cli\.js|\bout\/(test\/)?cli\/[^ ]+\.js|agentlenspro)\s+server\s+start\b.*--supervise|alcore\s+serve|alstore\s+(pass|unpark|ingest)/.test(line)
   }).map((l) => l.trim())
 }
 

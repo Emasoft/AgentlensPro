@@ -1137,6 +1137,28 @@ fn bodies_export_and_purge_routes() {
     agentlens_store::flush_detailed(&mut store).unwrap();
     drop(store);
 
+    // TRDD-2HRA270Y step 3: export and purge never open the bodies store; only the bodies pass
+    // does, and until it has, both answer 503.
+    let req0 = serde_json::json!({ "destDir": std::env::temp_dir().join("al-bodies-export-unopened").to_string_lossy() }).to_string();
+    let r = post(ui, "/api/bodies/export", &req0);
+    assert!(r.starts_with("HTTP/1.1 503"), "{r}");
+    let r = post(ui, "/api/bodies/purge", "");
+    assert!(r.starts_with("HTTP/1.1 503"), "{r}");
+    // Open it the production way: a bodies pass over a non-empty bodies dir. The file is fresh
+    // (under the 10s age cutoff), so the pass opens and syncs the store but ingests nothing, and
+    // the sync loads the parts flushed above by the separate Store. Retried because the pass
+    // skips its tick when another test holds the HEAVY slot.
+    let bodies_dir = data_dir.join("otel-bodies");
+    std::fs::create_dir_all(&bodies_dir).unwrap();
+    std::fs::write(bodies_dir.join("eeee5555.request.json"), "{\"fresh\":true}").unwrap();
+    for _ in 0..20 {
+        agentlens_core::chores::bodies_pass(&state, agentlens_core::now_ms() as f64);
+        if agentlens_core::chores::bodies_store_reader(&data_dir.join("store")).is_some() {
+            break;
+        }
+    }
+    assert!(agentlens_core::chores::bodies_store_reader(&data_dir.join("store")).is_some(), "the bodies pass must open the shared store");
+
     // Export guards: missing / relative destDir, and a destDir inside the archive.
     let r = post(ui, "/api/bodies/export", r#"{"sinceMs":0}"#);
     assert!(r.starts_with("HTTP/1.1 400"), "{r}");
