@@ -4,7 +4,7 @@ title: Parts have no file index so every reconstruct reads every parts file and 
 column: todo
 status: tasked
 created: 2026-10-22T23:45:36+0200
-updated: 2026-10-23T00:55:50+0200
+updated: 2026-10-23T01:39:47+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,8 @@ Mechanism (docs_dev/20261023-reconstruct-body-sql.md §2, file:line in rust-core
 ## Approval log
 
 - 2026-10-22T23:45:36+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Measured 2026-10-23
+
+known_part(body_id BLOB, file_id INTEGER) seeded at open, threads=2, memory_limit 1536MB, on the clone: 63.1 MiB alone, 175 MiB transient peak during the seed, 1115.5 MiB total with known_blob and body_durable plus their ART indexes (about 349 MiB under the 1536 MB limit, which is about 1465 MiB; about 232 MiB with an ART index on known_part); seed 27-72 s warm, once per process (cold not measured); 1,508,499 rows, every body in exactly one parts file (a corpus fact, not an invariant: known_part stays a multimap and the seed keeps DISTINCT); bodies per parts file: median, p99 and max 200, minimum not measured, mean about 150 (1,508,499 over 10,048 files); scoped reads 1 file in about 1 ms (with an ART index; see qualifiers); the only all_of(part) sites are lib.rs:1113 (per body) and lib.rs:1222 (per settle group). Decision: build the known_part table; rejected the part_file_id column on body_durable (+9.7 MiB) because it still needs the same open-time scan and changes the bodies Parquet schema. Change 1 will make open_store log seed seconds and rows so the clone re-run records the cold figure (docs_dev/20261023-known-part-measure.md).
+Qualifiers: measured in a Python DuckDB process (threads=2, memory_limit 1536MB), not inside alcore; seed 27-72 s warm only, cold unmeasured, the spread's cause (machine load) is INFERRED; the ~1 ms scoped lookups ran with an ART index on known_part that the design does not build (the 0.001 s one-file parquet read does not depend on it); the +9.7 MiB for the rejected column excludes the open-time scan it still needs; body_durable measured 402 MiB against the lib.rs comment's about 860 MiB; the measuring process reached 1831-1948 MB RSS with all three tables, a deploy-gating input for TRDD-12FGMAEP.
