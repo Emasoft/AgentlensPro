@@ -4,7 +4,7 @@ title: No whole-process memory ceiling once the RSS cap keys on mimalloc commit
 column: todo
 status: tasked
 created: 2026-10-22T19:35:30+0200
-updated: 2026-10-22T19:38:53+0200
+updated: 2026-10-22T19:39:50+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T19:35:30+0200
 parent-trdd: 
+unblock-when: [decision:owner gives the whole-process backstop value or records a waiver]
 ---
 
 # No whole-process memory ceiling once the RSS cap keys on mimalloc commit
