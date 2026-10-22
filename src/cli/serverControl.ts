@@ -250,7 +250,7 @@ function hookSpoolDirPath(): string { return path.join(dataDir(), 'hook-spool') 
 export const DEFAULT_MAX_OLD_SPACE_MB = 6144
 
 // TRDD-2JOIAH2G R1: alcore's mimalloc retains freed pages, so the heap plateaus (~3 GB) above the
-// 2048 MB phys_footprint the RSS guard kills on. Spawn env is the ONLY reliable injection point:
+// 2048 MB hard cap the guard kills on (mimalloc commit, since 2026-10-22). Spawn env is the ONLY reliable injection point:
 // mimalloc reads options at its first allocation, which can run before main, so a
 // std::env::set_var inside Rust main races and can be a no-op. Env name per the VENDORED allocator
 // (libmimalloc-sys 0.1.49, no "v2" feature => mimalloc v3): the option is `mimalloc_purge_delay`
