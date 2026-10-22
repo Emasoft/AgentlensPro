@@ -1,10 +1,10 @@
 ---
 trdd-id: 2JOIAH2G
 title: alcore crash-loops under the RSS cap because the ingest pass and boot churn transiently spike the heap and mimalloc never returns the pages
-column: todo
+column: dev
 status: tasked
 created: 2026-09-27T00:23:04+0200
-updated: 2026-10-18T12:57:54+0200
+updated: 2026-10-22T04:17:00+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
