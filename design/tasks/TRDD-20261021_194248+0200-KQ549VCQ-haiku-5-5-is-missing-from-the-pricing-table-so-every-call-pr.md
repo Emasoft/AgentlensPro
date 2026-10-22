@@ -4,7 +4,7 @@ title: Haiku 5.5 is missing from the pricing table so every call prices at zero
 column: todo
 status: tasked
 created: 2026-10-21T19:42:48+0200
-updated: 2026-10-21T19:42:48+0200
+updated: 2026-10-21T20:15:19+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-21T19:42:48+0200
+project-id: agentlenspro
 ---
 
 # Haiku 5.5 is missing from the pricing table so every call prices at zero
@@ -41,3 +42,9 @@ A unit test prices a `claude-haiku-5-5[1m]` call below and above 100,000 tokens 
 ## Approval log
 
 - 2026-10-21T19:42:48+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Evidence
+
+Verified 2026-10-21 by reading src/shared/pricing.ts: RATES has only claude-haiku-3-5 and claude-haiku-4-5 for Haiku, neither a prefix of claude-haiku-5-5, so lookupRates (line 259) returns null and calcTokenCostUsd returns 0 (the `if (!rates) return 0` line); callers that check lookupRates for null report the call as unpriced instead.
+Open question: a probe transcript recorded requestedModel=claude-haiku-5-5[1m] but message.model as a proxy id; check which id the session log and OTEL actually carry for a cheap-worker call before declaring the fix done.
+Rates source: the Claude API pricing page (https://www.anthropic.com/pricing), re-fetch and confirm each figure when implementing.
