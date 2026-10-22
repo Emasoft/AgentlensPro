@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: dev
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-10-22T19:37:45+0200
+updated: 2026-10-22T19:38:53+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T13:08:46+0200
+eht: [12FGMAEP, JZU3Z4EE]
 ---
 
 # Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
@@ -22,7 +23,7 @@ approval-datetime: 2026-10-22T13:08:46+0200
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-22
 
 - Cause identified (docs_dev/20261022-climb-stacks.md): open_store, run by bodies_pass every 60 s, is on the stack in every alcore-bg sample; load_pass_state and the bodies watcher were not observed active.
-- NEXT ACTION (as of 2026-10-22 18:40): steps 1, 2 and 4 of the Plan section are being implemented on branch fix/setup-agent-preflight; step 3 follows step 2; then an end-to-end run on a clone, then deploy.
+- NEXT ACTION (as of 2026-10-22 18:40): steps 1, 2 and 4 of the Plan section are being implemented on branch fix/setup-agent-preflight; step 3 follows step 2; then an end-to-end run on a clone, then deploy ONLY after TRDD-12FGMAEP's whole-process backstop lands or an owner waiver is recorded on 12FGMAEP (step 4 removes the only whole-process memory guard).
 - SUPERSEDED 2026-10-22: "Candidates left: load_pass_state, open_store, the bodies watcher." and "the reader responsible is not identified" — replaced by the cause line above.
 - SUPERSEDED 2026-10-22: the earlier Step 2 wording "dedup by anti-join at flush; no per-body probes" — replaced by option A in the Plan section.
 - Note: the measurement lines under "## Approval log" are left in place because that section is append-only; this block supersedes them where they differ.

@@ -4,7 +4,7 @@ title: Re-tune pressure ladder fractions and update specs after the cap moved to
 column: backburner
 status: tasked
 created: 2026-10-22T19:35:30+0200
-updated: 2026-10-22T19:37:45+0200
+updated: 2026-10-22T19:38:53+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T19:35:30+0200
-parent-trdd: 2HRA270Y
+parent-trdd: 
 ---
 
 # Re-tune pressure ladder fractions and update specs after the cap moved to mimalloc commit
