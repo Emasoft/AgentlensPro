@@ -778,4 +778,4 @@ Isolated full-size runs (own DATA_DIR, real read-only HOME, distinct ports; repo
 
 ## Owner decisions
 
-2026-10-21 — USER chose, verbatim option: "Deploy it (Recommended)" — rebuild alcore from HEAD with the ad-hoc codesign, restart, and watch the culprit log. Deploy is bundled with the core-cap change.
+2026-10-21 — USER chose, verbatim option: "Deploy it (Recommended)" — rebuild alcore from HEAD with the ad-hoc codesign, restart, and watch the culprit log. Main agent's plan note (not part of the user's decision): the deploy is bundled with the core-cap change.

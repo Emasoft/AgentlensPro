@@ -4,7 +4,7 @@ title: alcore runs its request runtime and body archive uncapped so digestion ta
 column: dev
 status: tasked
 created: 2026-10-22T02:58:03+0200
-updated: 2026-10-22T02:58:07+0200
+updated: 2026-10-22T03:07:17+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,7 +24,7 @@ project-id: agentlenspro
 
 USER, 2026-10-21, verbatim: "give priority to the TRDD involving the issue of memory exhaustion and cpu core usage at 100%, because clearly those agentlenspro processes digesting the logs and the row bodies are still inefficient, slow and not capped in terms of cores." Decision, verbatim answer to "How many cores may alcore use in total?": "2 cores, strict".
 
-Implementation in progress per docs_dev/20261022-core-cap-spec.md: one knob AGENTLENS_MAX_CORES (default 2, 1-64, invalid exits), from which the rayon pool, the request runtime (workers n, blocking 2n), the background runtime (workers n/2 min 1, blocking n) and the body-archive DuckDB threads all derive.
+Implementation in progress per docs_dev/20261022-core-cap-spec.md, AMENDED 2026-10-22 after review: one knob AGENTLENS_MAX_CORES (default 2, 1-64, invalid exits). Derived: rayon pool n; request runtime workers n with blocking ceiling 64 (blocking threads mostly wait; a ceiling of 2n could starve the span/account flushes); background runtime workers max(n/2,1), blocking n; every alcore DuckDB connection's threads = duckdb_threads() = max(n/2,1) (DuckDB threads multiply with concurrent connections, so pool sizes alone do not bound CPU). A shutdown_flush test failure blocks the change. Boot-to-listen time is measured at n=2 and n=4. Code comments carry the placeholder TRDD-CORECAP, to be replaced by TRDD-YH822LDI before commit.
 
 NEXT: build, test, deploy together with WKLD508O, then measure CPU on the live collector.
 
@@ -35,6 +35,7 @@ NEXT: build, test, deploy together with WKLD508O, then measure CPU on the live c
 - rayon global pool pinned to 4, background runtime 2 workers + 4 blocking.
 
 No open card owned a cap on total cores (triage report docs_dev/20261021-mem-cpu-triage.md, section 4). Nearest: RVKQDLRD (QoS, not a cap), HFV4AIT7 (the opposite goal).
+- About a dozen DuckDB sites each set threads=1 or 2 per connection (triage report section 2.1); with several concurrent connections they alone exceed 2 cores, so they are in scope.
 
 ## Acceptance
 

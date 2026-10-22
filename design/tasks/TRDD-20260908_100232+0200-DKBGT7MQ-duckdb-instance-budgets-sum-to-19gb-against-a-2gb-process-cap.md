@@ -224,4 +224,4 @@ must be established, not assumed.
 
 ## Owner decisions
 
-2026-10-21 — USER chose, verbatim option: "One shared instance at ~1.5 GB (Recommended)" — every DuckDB site shares one process-wide instance whose memory_limit is the 2 GB cap minus a measured Rust floor (about 0.5 GB), so the process total stays inside 2 GB. This settles the STATE's open question (cap versus budget plus Rust floor): budget plus floor.
+2026-10-21 — USER chose, verbatim option: "One shared instance at ~1.5 GB (Recommended)" — every DuckDB site shares one process-wide instance whose memory_limit is the 2 GB cap minus a measured Rust floor (about 0.5 GB), so the process total stays inside 2 GB. Main agent's note (inference, not the user's words): this settles the STATE's open question (cap versus budget plus Rust floor) as budget plus floor.

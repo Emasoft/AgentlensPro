@@ -46,7 +46,7 @@ NEXT ACTION: take the top card of the filtered queue that no worker holds.
 ## Batch limits
 
 - Measured cost 2026-10-21: one worker 120k-195k subagent tokens, one REVIEW fork ~300-400k; plan on ~0.5M tokens per card.
-- Cap: at most 10 cards per session, then stop and report to the user. Wall-clock: stop at the session's 5h window when the account window is above 80%.
+- Pacing: at most 10 cards per session, then PAUSE; the next session resumes from the Log without waiting for the user (the scope stays every workable card). Stop entirely only on a stop condition below.
 - Stop conditions, checked before each card: two consecutive FAILED cards; a review blocker the main agent cannot refute; the account window above 80% (`agentlenspro statusline-history project`).
 - Worker choice: cheap-worker (owner directive) for the staleness check and mechanical fixes. Escalate to lean-worker or smart-worker only when the fix needs judgement (concurrency, locks, durability, cross-file design); record the reason on the card.
-- Ownership check before taking a card: its current-owner, and `git log --oneline -5 --all --grep <id>` for commits from another session in the last 48h. If another session is active on it, skip it.
+- Ownership check before taking a card: `git log --oneline -5 --all --grep <id>` for commits in the last 48h, the card's `updated:` within 48h, and ListAgents peer sessions whose title names the card or its subject. current-owner alone cannot tell sessions apart (every card says main-agent@agentlenspro). If another session is active on it, skip it.
