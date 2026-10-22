@@ -1,17 +1,17 @@
 ---
 trdd-id: KBM09XHB
 title: Nothing is stored in RAM — every answer is a short or paginated DuckDB result, discarded immediately
-column: dev
+column: blocked
 created: 2026-09-07T19:26:54+0200
-updated: 2026-10-22T13:05:17+0200
+updated: 2026-10-22T13:22:17+0200
 current-owner: main
 task-type: refactor
 parent-trdd: 7YPQWKPG
 min-approval-requirement: none
 priority: high
 severity: high
-blocked-by: []
-npt: [WKLD508O, DKBGT7MQ]
+blocked-by: [2HRA270Y]
+npt: [WKLD508O, DKBGT7MQ, 2HRA270Y]
 eht: []
 implementation-commits: []
 project-id: agentlenspro
@@ -21,6 +21,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T13:05:17+0200
 status: tasked
+pre-block-column: dev
 ---
 
 # Nothing is stored in RAM — every answer is a short or paginated DuckDB result
@@ -150,3 +151,13 @@ Conversion order (each step one commit, measured on an isolated clone against th
 ## Approval log
 
 - 2026-10-22T13:05:17+0200 — column → dev by main-agent@agentlenspro. owner directive 2026-10-22: thin layer over DuckDB; conversion started
+- 2026-10-22T13:22:17+0200 — column → blocked by main-agent@agentlenspro. open NPT 2HRA270Y (idle RSS climb) must finish before the conversion continues
+
+## STATE refresh 2026-10-22
+
+This section supersedes the 2026-09-08 STATE block above where they disagree: the card is in dev, conversion started under the owner directives of 2026-10-22.
+NPT WKLD508O (the 2 GB hard cap): deployed and enforcing since before 2026-10-22; the WKLD508O card itself is in human_review, and what the cap measures is still open (step 5 below).
+NPT DKBGT7MQ (one shared DuckDB instance at about 1.5 GB, owner choice): kept as step 0 of the conversion order. The 2026-10-22 directive lets DuckDB exceed 2 GB, which weakens its original reason, but per-instance limits summing to 19.25 GB permitted (the DKBGT7MQ card title) still matter for the machine; not retired without the owner.
+Step 1 (idle growth) is carded as TRDD-2HRA270Y; it is an NPT of this card's remaining steps.
+Step 5 (guard measures alcore's own heap, not DuckDB) is PENDING owner confirmation: asked in chat 2026-10-22, not yet answered.
+'Resident trees are defects, not caches' in the governing-rule line is the main agent's reading, not the owner's words.
