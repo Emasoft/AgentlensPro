@@ -11,10 +11,12 @@ All notable changes to AgentlensPro are documented here.
 - **`cheap-worker` and `fast-worker` — two more shipped worker agents, both on Haiku 5.5.**
   `cheap-worker` is `haiku[1m]` at `xhigh` effort (maximum depth on the smallest, cheapest model);
   `fast-worker` is the same shape at `medium` (the quickest model, shallower reasoning). Both take the
-  same `Bash, Read, Write, Edit, Grep` surface and preload the four binding CLIs (`tldr-code`,
-  `fastedit`, `jgrep`, `quicksilver`), so a worker reads with `tldr`, locates with `jgrep`, triages
-  with `qs.mjs` and writes with `fastedit`. Pick `cheap-worker` when the prompt already carries every
-  fact the task needs; pick `lean-worker` (Sonnet 5.5) when the task needs real judgement; pick
+  same `Bash, Read, Write, Edit, Grep` surface, and their bodies teach the four binding CLIs — a worker
+  reads with `tldr`, locates with `jgrep`, triages with `qs.mjs` when quicksilver is installed, writes
+  with `fastedit`, and reports (then falls back to the built-in tools) when a CLI is missing.
+  Nothing is preloaded: the skills are not shipped, so the recipes live in the bodies. Pick
+  `cheap-worker` when the prompt already carries every fact the task needs; pick `lean-worker`
+  (Sonnet 5.5) when the task needs real judgement; pick
   `fast-worker` when the task is mechanical and latency matters more than the last bit of depth. Both
   install into `~/.claude/agents/` alongside the existing three.
 - **The shipped worker bodies now teach the four binding CLIs.** `lean-worker`, `cheap-worker` and
@@ -23,9 +25,7 @@ All notable changes to AgentlensPro are documented here.
   `fastedit` validates every write and keeps a backup, and `fastedit diff <file>` then confirms that
   exactly the intended change landed. `micro-worker` gets the same `tldr body` reading recipe while
   keeping its zero-skill, no-CLAUDE.md footprint (measured 2026-09-24: first request 61,119 -> 11,167
-  tokens). `agentlens-tldr-worker` now states what its preloaded `ultimate-bug-scanner` skill is for:
-  the `ubs <changed-files> --fail-on-warning` gate (exit 0 = safe to commit) it runs over the file it
-  changed.
+  tokens).
 - **A test pins the shipped-agent set.** Every file in `agents/` must be listed in `AGENT_NAMES` (so it
   actually installs), its frontmatter `name:` must match its filename, and its body must not name a
   sibling worker (a body that tells the model to dispatch a different worker is the defect this

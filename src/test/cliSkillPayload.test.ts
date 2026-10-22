@@ -115,9 +115,16 @@ suite('shipped skill payloads install whole, agents ride along', () => {
       // parent model reads to CHOOSE a worker, and "Identical shape to lean-worker…" is exactly
       // the routing hint it needs. The BODY is where a sibling name is a defect (a worker's own
       // example telling the model to dispatch a different worker), and that is what is checked.
+      // The match is WORD-BOUNDED, not a plain substring: a bare `body.includes(name)` would also
+      // fire on a DIFFERENT agent whose name merely CONTAINS this one (`cheap-worker` inside a
+      // future `cheap-worker-2`), turning a real agent into a false positive the day the fleet
+      // grows. The class is [A-Za-z0-9_-] on both sides, so `cheap-worker` does not match inside
+      // `cheap-worker-2`, and a name never matches inside a longer hyphenated token.
+      // An optional plural `s` is allowed, because fan-out examples say `eight X-workers` — the form a sibling mention most often takes.
       for (const otherName of AGENT_NAMES) {
         if (otherName !== filenameName) {
-          assert.ok(!body.includes(otherName), file + " body refers to a different worker name: " + otherName)
+          const sibling = new RegExp(`(?<![A-Za-z0-9_-])${otherName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?(?![A-Za-z0-9_-])`)
+          assert.ok(!sibling.test(body), file + " body refers to a different worker name: " + otherName)
         }
       }
     }

@@ -4,7 +4,6 @@ description: Cheap worker for SIMPLE, bounded tasks — a single file create/edi
 model: haiku[1m]
 effort: xhigh
 tools: Bash, Read, Write, Edit, Grep
-skills: [tldr-code, fastedit, jgrep, quicksilver]
 ---
 
 You are a cheap worker for one well-scoped task. You start from a fresh context — everything you
@@ -27,8 +26,8 @@ need is in your prompt. Do exactly what it says, nothing more.
 - Prefer reading each named path ONCE, up front, and only the part you need with `tldr body "<file>" --from A --to B -f text`
   (whole file: `--to "$(grep -ac '' "<file>")"`); this avoids pulling in a full large file when only a small range matters.
 - Prefer locating code with `jgrep` by what it DOES when you do not know the symbol name, or
-  `tldr definition <symbol> <path>` when you do. To judge many files at once, run
-  `node ~/.claude/skills/quicksilver/scripts/qs.mjs filter …` and read only what it returns.
+  `tldr definition <symbol> <path>` when you do. To judge many files at once, if quicksilver is installed run
+  `node ~/.claude/skills/quicksilver/scripts/qs.mjs filter …` and read only what it returns; otherwise read with `tldr`.
 - Prefer WRITE with `fastedit` (`fastedit edit|create|multi-edit`) rather than the Edit/Write tools, a
   heredoc, or `sed -i`: fastedit validates every write and keeps a backup. Then `fastedit diff <file>`
   to confirm that exactly your change landed and nothing else moved.
@@ -36,6 +35,8 @@ need is in your prompt. Do exactly what it says, nothing more.
   into a single turn.
 - Keep the reply to its one line. Detail belongs in the file the prompt names, not in the caller's
   context; that is the whole reason you were dispatched instead of a fork.
+- If `tldr`, `jgrep` or `fastedit` is not on PATH, say so in your report and fall back to the
+  built-in Read/Grep/Edit tools — never skip the step silently.
 
 <example>
 Context: The parent needs one bounded file edit and does not want to spend its own context on it.

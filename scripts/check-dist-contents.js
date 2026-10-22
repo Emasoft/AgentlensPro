@@ -15,6 +15,9 @@
 // artifact rather than on the intent.
 'use strict'
 const { execFileSync } = require('child_process')
+const path = require('path')
+const Module = require('module')
+const esbuild = require('esbuild')
 
 // Anything matching these must NEVER appear in the tarball. Kept as shapes, not a list of
 // today's directories, so a newly added source tree is caught too.
@@ -37,6 +40,22 @@ const FORBIDDEN = [
   { re: /^standalone\/server\.js$/, why: 'the TypeScript backend — alcore is the only server that ships' },
 ]
 
+// Read AGENT_NAMES from the TypeScript source — the ONE list the CLI installs from. Bundled in
+// memory with esbuild (the same technique scripts/export-pricing.js uses for pricing.ts) so
+// this check can never drift from a second hand-maintained copy of the names.
+function readAgentNames() {
+  const src = path.join(__dirname, '..', 'src', 'cli', 'hookInstall.ts')
+  const out = esbuild.buildSync({
+    entryPoints: [src], bundle: true, write: false, platform: 'node', format: 'cjs',
+    external: ['@duckdb/node-api', 'duckdb', 'sql.js', '@modelcontextprotocol/sdk'],
+  })
+  const m = new Module(src, module)
+  m.filename = src
+  m.paths = Module._nodeModulePaths(path.dirname(src))
+  m._compile(out.outputFiles[0].text, src)
+  return m.exports.AGENT_NAMES
+}
+
 function main() {
   const out = execFileSync('npm', ['pack', '--dry-run', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
   const files = JSON.parse(out)[0].files.map((f) => f.path)
@@ -52,6 +71,22 @@ function main() {
     console.error('check-dist-contents: FAIL — the distribution package must carry compiled artifacts only.\n')
     for (const b of bad) console.error(`  ${b}`)
     console.error(`\n${bad.length} forbidden entr${bad.length === 1 ? 'y' : 'ies'}. Fix package.json "files", do not widen this check.`)
+    process.exit(1)
+  }
+
+  // The agent set must MATCH the CLI's own list, against the ACTUAL tarball. `installAgents`
+  // iterates AGENT_NAMES and THROWS when a file is missing, so a tarball that ships fewer agents
+  // than the CLI promises makes `agentlenspro setup` fail on the user's machine with "is the
+  // package intact?". AGENT_NAMES is read from the TypeScript source (the ONE list) by bundling
+  // it in memory with esbuild — the same technique scripts/export-pricing.js uses for pricing.ts,
+  // so there is no second copy of the list to drift.
+  const agentNames = readAgentNames()
+  const shippedAgents = files.filter((p) => p.startsWith('agents/')).map((p) => p.replace(/^agents\//, '').replace(/\.md$/, ''))
+  const missingAgents = agentNames.filter((n) => !shippedAgents.includes(n))
+  if (missingAgents.length) {
+    console.error('check-dist-contents: FAIL — the tarball ships fewer agents than the CLI installs.\n')
+    for (const n of missingAgents) console.error(`  agents/${n}.md  — listed in AGENT_NAMES but not in the tarball`)
+    console.error(`\n${missingAgents.length} agent(s) missing from the package. Every name in AGENT_NAMES must have its agents/<name>.md shipped.`)
     process.exit(1)
   }
 

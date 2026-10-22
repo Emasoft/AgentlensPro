@@ -4,13 +4,6 @@ description: Token-calibrated worker for ONE bounded code change inside a scan-a
 tools: Bash, Read, Edit
 model: sonnet[1m]
 effort: low
-skills: [ultimate-bug-scanner]
-# WHY this skill: the scan-and-fix worker's quality gate is a static-analysis pass over the file
-# it changed, and `ultimate-bug-scanner` is that pass. The skill's golden rule is a shell
-# command — `ubs <changed-files> --fail-on-warning`, exit 0 = safe to commit — and `ubs` is a
-# standalone CLI binary on PATH, not a hook and not a Python entry point. This worker's
-# `tools:` already grants Bash, so it can run the gate directly. If `ubs` is missing from PATH
-# in the dispatched environment, say so in the report instead of skipping the gate silently.
 # Keeps CLAUDE.md (unlike the minimal-footprint worker): it edits code in whatever project it is dispatched into,
 # and that project's own conventions (tests, safety, style) must reach it.
 ---
