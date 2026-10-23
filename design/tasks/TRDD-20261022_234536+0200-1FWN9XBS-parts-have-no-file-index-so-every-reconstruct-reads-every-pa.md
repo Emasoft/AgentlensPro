@@ -4,7 +4,7 @@ title: Parts have no file index so every reconstruct reads every parts file and 
 column: dev
 status: tasked
 created: 2026-10-22T23:45:36+0200
-updated: 2026-10-23T03:48:55+0200
+updated: 2026-10-23T04:18:43+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -40,3 +40,7 @@ Review additions (2026-10-23, review items 1 to 5 and A to C): the part_fetch_sq
 Correction to commit 685bf1fe's message (2026-10-23): fallbacks are logged once per fallback call (one [info] line each, not rate-limited), not once overall; a fallback-heavy run can flood the log. And all_of(part) as the next hot spot was a plan prediction, not confirmed by a clone-run stack sample.
 Correction to the line above (2026-10-23, supersedes its second sentence): the export/verify path IS stack-sampled as hot. Narrowed export: request thread 100% in reconstruct_body, 71-72% ZSTD (docs_dev/20261022-narrowed-export-measure.md). Clone run 1: first pass still in reconstruct_chunk at 900 s. Not measured: whether statement A (all_of(part)) or statement B (the blob read) carries the cost; fix-order (a) is still pending. The fallback-logging correction stands.
 2026-10-23 regression: the 02bdc3b8 build (code identical to 685bf1fe; later commits are card-only) appears unable to open the clone store; both narrowed exports on the clone returned HTTP 500 on the DuckDB spill cap (TRDD-R36S0PS9). The Gates line above covered small test fixtures only. No clone re-run and no deploy until R36S0PS9 is fixed.
+
+## Unblocked 2026-10-23
+
+TRDD-R36S0PS9 fixed in 2405b7b3 (seed SQL: DISTINCT before the join, no NOT EXISTS); store open on the clone succeeds again. Next: the 50-body narrowed export re-measure as the Change 2 baseline (docs_dev/20261023-r36-export-remeasure-report.md, running).
