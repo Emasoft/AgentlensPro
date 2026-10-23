@@ -4,7 +4,7 @@ title: alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and
 column: dev
 status: tasked
 created: 2026-10-23T04:39:08+0200
-updated: 2026-10-23T07:24:07+0200
+updated: 2026-10-23T07:43:43+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -46,6 +46,7 @@ Differential runs are done (below); the next step is in STATE NEXT ACTION.
 ## Approval log
 
 - 2026-10-23T04:39:08+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-23 USER (verbatim): "Option 2: change what boot runs, a lighter first summary to cut the commit and fragmentation. Commit the instrument + Run C2 checkpoint first." Checkpoint committed as 25082eda. Option 1 (defer the boot summary) was not chosen. Next: design the lighter first summary.
 
 ## Differential 2026-10-23
 
