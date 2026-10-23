@@ -404,7 +404,8 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
         if sub == PARTS_DIR {
             // WHY (TRDD-1FWN9XBS): the parts bodies are indexed here, from the SAME listing that registered the
             // files, so part_fetch_sql can scope a reconstruct from the first query. The seed reads every parts
-            // file once, which is why it is timed and logged.
+            // file once (a DISTINCT over the raw (body, file) pairs, no NOT EXISTS: TRDD-R36S0PS9),
+            // which is why it is timed and logged.
             let started = std::time::Instant::now();
             let rows = index_part_bodies(&con, &files)?;
             eprintln!("[info] known_part seeded: {rows} rows from {} parts files in {:.1}s", files.len(), started.elapsed().as_secs_f64());
@@ -537,12 +538,17 @@ fn index_part_bodies(con: &Connection, scanned: &[String]) -> duckdb::Result<usi
         return Ok(0);
     }
     let list = scanned.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+    // WHY (TRDD-R36S0PS9): the parts corpus is ~438.8M rows for only ~1.5M distinct (body_id, file) pairs
+    // (docs_dev/20261023-seed-spill-measure-report.md), so DISTINCT must run on the raw pair BEFORE the join,
+    // and there is NO correlated NOT EXISTS: that anti-join ran per parts row and exhausted the 4GB spill cap
+    // on the real store. Safe without it: called at open (known_part empty) and by sync_new_parts for newly
+    // listed files only, each with a fresh file id in one transaction; a duplicate pair would be harmless
+    // anyway, because part_fetch_sql checks coverage with count(DISTINCT) and groups owning files by path.
     let inserted = con.execute(
         &format!(
-            "INSERT INTO known_part SELECT DISTINCT unhex(s.body_id), pf.id
-             FROM read_parquet([{list}], union_by_name := true, filename := true) s
-             LEFT JOIN part_file pf ON pf.path = s.filename
-             WHERE NOT EXISTS (SELECT 1 FROM known_part k WHERE k.body_id = unhex(s.body_id) AND k.file_id = pf.id);"
+            "INSERT INTO known_part SELECT unhex(s.body_id), pf.id
+             FROM (SELECT DISTINCT body_id, filename FROM read_parquet([{list}], union_by_name := true, filename := true)) s
+             LEFT JOIN part_file pf ON pf.path = s.filename;"
         ),
         [],
     )?;
@@ -1705,5 +1711,67 @@ mod part_files_strict_tests {
         let listed = part_files_strict(&root, BLOBS_DIR);
         let _ = fs::remove_dir_all(&root);
         assert!(listed.is_err(), "a regular file in place of the dir must be an error: {listed:?}");
+    }
+}
+
+#[cfg(test)]
+mod index_part_bodies_spill_tests {
+    use super::*;
+
+    const FILES: usize = 4;
+    const ROWS_PER_FILE: usize = 1_250_000;
+    const BODIES: usize = 1000;
+
+    /// Removes its directory on drop, so a panic in any `expect` in the test still cleans up.
+    struct RemoveOnDrop(std::path::PathBuf);
+
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// TRDD-R36S0PS9 regression: seeding known_part from a parts corpus with many rows per body must not
+    /// exhaust the spill cap. open_store hard-codes a 4GB cap, so this drives index_part_bodies on a bare
+    /// connection with a tiny cap. MUTATION CHECK: restore the pre-fix SQL (DISTINCT outside the join plus a
+    /// per-row NOT EXISTS) and this test fails with a temp-directory-size error. The pass margin depends on
+    /// DuckDB's aggregate memory behaviour at 64MB / 1 thread, so if a DuckDB upgrade makes it fail, diagnose
+    /// the seed SQL's memory before deleting or loosening the test.
+    #[test]
+    fn seeding_many_rows_per_body_stays_within_a_tiny_spill_cap() {
+        let root = std::env::temp_dir().join(format!("al-store-spill-{}", std::process::id()));
+        let _guard = RemoveOnDrop(root.clone());
+        let _ = fs::remove_dir_all(&root);
+        let tmp = root.join("tmp");
+        fs::create_dir_all(&tmp).expect("create tmp");
+        let con = Connection::open_in_memory().expect("con");
+        con.execute_batch(&format!(
+            "SET threads=1; SET memory_limit='64MB'; SET max_temp_directory_size='32MB'; SET temp_directory={};
+             CREATE TABLE part_file (id INTEGER, path VARCHAR, dir VARCHAR);
+             CREATE TABLE known_part (body_id BLOB, file_id INTEGER);",
+            q(tmp.to_str().expect("utf8"))
+        ))
+        .expect("setup");
+        let mut files = Vec::new();
+        for f in 0..FILES {
+            let path = root.join(format!("parts-{f}.parquet")).to_str().expect("utf8").to_owned();
+            con.execute_batch(&format!(
+                "COPY (SELECT md5((i % {BODIES})::VARCHAR) || md5((i % {BODIES})::VARCHAR) AS body_id, i AS pos
+                       FROM range({ROWS_PER_FILE}) t(i)) TO {} (FORMAT parquet);
+                 INSERT INTO part_file VALUES ({f}, {}, 'parts');",
+                q(&path),
+                q(&path)
+            ))
+            .expect("write parts file");
+            files.push(path);
+        }
+        let inserted = index_part_bodies(&con, &files).expect("seed must not exhaust the spill cap");
+        let (rows, orphans): (i64, i64) = con
+            .query_row("SELECT count(*), count(*) FILTER (WHERE file_id IS NULL) FROM known_part", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("count");
+        assert_eq!(inserted as i64, (FILES * BODIES) as i64, "one row per distinct (body, file) pair");
+        assert_eq!(rows, (FILES * BODIES) as i64);
+        // belt-and-braces, index_part_bodies already returns Err on any NULL file_id.
+        assert_eq!(orphans, 0);
     }
 }

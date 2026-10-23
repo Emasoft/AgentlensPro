@@ -4,7 +4,7 @@ title: No whole-process memory ceiling once the RSS cap keys on mimalloc commit
 column: todo
 status: tasked
 created: 2026-10-22T19:35:30+0200
-updated: 2026-10-23T00:55:46+0200
+updated: 2026-10-23T04:15:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -27,3 +27,7 @@ Step 4 of TRDD-2HRA270Y moves the hard cap from phys_footprint to mimalloc commi
 
 - 2026-10-22T19:35:30+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 2026-10-22 review-2 notes: the RSS figures above are whole-process RSS (the 512MB figure was a Python host running DuckDB), not an isolated DuckDB measurement; the jetsam-with-no-log outcome is inferred, not observed. The session summary records an earlier owner answer on a 6 GB cap question; the search for it is incomplete (this session's transcript and the cards were grepped; the only 6 GB cap hits are archived 2026-08 cards 34B9JAZK and QK3L5QAS, a different context), so find it before choosing the backstop value. Moved to todo: this gates the 2HRA270Y deploy.
+
+## Open question 2026-10-23
+
+alstore open on the clone store peaks at 2.94 GB (2944614400 bytes) whole-process max RSS with DuckDB memory_limit 1536MB (R36S0PS9 gate): ~1.3 GB sits above DuckDB's configured limit during open (ART indexes, DuckDB allocations outside its accounting, or the Rust heap). mimalloc commit not measured; measure it before judging the 2 GB rule.
