@@ -4,7 +4,7 @@ title: No whole-process memory ceiling once the RSS cap keys on mimalloc commit
 column: todo
 status: tasked
 created: 2026-10-22T19:35:30+0200
-updated: 2026-10-23T04:26:22+0200
+updated: 2026-10-23T04:39:39+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -33,3 +33,4 @@ Step 4 of TRDD-2HRA270Y moves the hard cap from phys_footprint to mimalloc commi
 alstore open on the clone store peaks at 2.94 GB (2944614400 bytes) whole-process max RSS with DuckDB memory_limit 1536MB (R36S0PS9 gate): ~1.3 GB sits above DuckDB's configured limit during open (ART indexes, DuckDB allocations outside its accounting, or the Rust heap). mimalloc commit not measured; measure it before judging the 2 GB rule.
 Production-cap clone run 2026-10-23 (cap unset = 2048 MB, ladder on by default; docs_dev/20261023-prodcap-run-report.md): server SURVIVED open + cold/warm 50-body exports + 120 s idle, exit=0 on SIGTERM. Peak RSS 4,613,376 KB (4.6 GB), constant through idle. Only mimalloc commit figures are the 60 s composition lines: 655 MB (up 0 s), 1964 MB (up 60 s), 1964 MB (up 120 s); the guard reads the commit every ~5 s tick and exits only above 2048 MB, so the intermediate peak is unmeasured (survival shows it never crossed). Pressure ladder reached stage 3 (metric 2051407872 B, ~96 MB under the cap), shrinking the summarization window to 6 h. phys_footprint 2100 MB at idle (peak 3132 MB) vs RSS 4.6 GB.
 alcore's seed took 15.0 s vs 8.7-10 s in alstore; a cold first request pays ~30 s of open; with open-once-per-process that is paid once per start.
+The production-cap run says deploy is BLOCKED, not merely thin: the heap reached 2.05 GB with log scan off and bodies parked, both of which production has on. See TRDD-735Q3JF4.
