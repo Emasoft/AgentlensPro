@@ -4,7 +4,7 @@ title: alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and
 column: dev
 status: tasked
 created: 2026-10-23T04:39:08+0200
-updated: 2026-10-23T07:52:06+0200
+updated: 2026-10-23T07:53:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix

@@ -4,7 +4,7 @@ title: core_cap_guard fails on a literal SET threads=1 in the R36S0PS9 seed path
 column: todo
 status: tasked
 created: 2026-10-23T07:52:13+0200
-updated: 2026-10-23T07:52:13+0200
+updated: 2026-10-23T07:53:13+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
