@@ -191,6 +191,11 @@ pub struct Store {
     // (TRDD-2HRA270Y step 3): a long-lived store registers files from flush AND from
     // sync_new_parts, and a counter owned by the one `&mut Store` cannot hand out the same id twice.
     next_file_id: i32,
+    // WHY counters (TRDD-1FWN9XBS): a full-corpus fallback in part_fetch_sql / blob_fetch_sql is the
+    // cost the known_part / known_blob index exists to remove, so each one is counted here (and logged).
+    // Atomic, not a plain counter, because the read functions take `&Store`.
+    pub part_fetch_fallbacks: std::sync::atomic::AtomicU64,
+    pub blob_fetch_fallbacks: std::sync::atomic::AtomicU64,
 }
 
 /// The four part directories, in the order open_store lists them. part_file records which of them
@@ -216,7 +221,16 @@ impl Store {
     /// that must judge DURABLE rows only (the purge delete gate) has to use the writer instead and
     /// check staged_rows first.
     pub fn reader(&self) -> duckdb::Result<StoreReader> {
-        Ok(StoreReader(Store { con: self.con.try_clone()?, dir: self.dir.clone(), next_part: 0, next_file_id: 0 }))
+        // WHY own counters: the reader is a second handle, so its fallbacks count here, not on the writer's
+        // Store (each is also logged, so the cost stays visible from either handle).
+        Ok(StoreReader(Store {
+            con: self.con.try_clone()?,
+            dir: self.dir.clone(),
+            next_part: 0,
+            next_file_id: 0,
+            part_fetch_fallbacks: Default::default(),
+            blob_fetch_fallbacks: Default::default(),
+        }))
     }
 }
 
@@ -368,7 +382,11 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     // shas. Hex VARCHAR stays everywhere else, so the parquet schema is unchanged.
     con.execute_batch(
         "CREATE TABLE part_file (id INTEGER, path VARCHAR, dir VARCHAR);
-         CREATE TABLE known_blob (sha BLOB, file_id INTEGER);",
+         CREATE TABLE known_blob (sha BLOB, file_id INTEGER);
+         -- TRDD-1FWN9XBS: one row per (body, parts file). NO unique constraint and NO index: a body CAN sit in
+         -- two parts files after an out-of-band delete and re-ingest, so the measured 1:1 body-to-file ratio
+         -- is a corpus fact, not an invariant the schema may rely on.
+         CREATE TABLE known_part (body_id BLOB, file_id INTEGER);",
     )?;
     // ONE directory listing per part dir feeds both part_file and the scans below. Two listings
     // raced: a part landing between them was scanned but had no part_file row, and the orphan
@@ -383,6 +401,14 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     let mut next_file_id = blob_parts.len() as i32;
     for (sub, files) in [(PARTS_DIR, listed(PARTS_DIR)), (BODIES_DIR, body_parts.clone()), (API_CALLS_DIR, listed(API_CALLS_DIR))] {
         register_part_files(&con, next_file_id, sub, &files)?;
+        if sub == PARTS_DIR {
+            // WHY (TRDD-1FWN9XBS): the parts bodies are indexed here, from the SAME listing that registered the
+            // files, so part_fetch_sql can scope a reconstruct from the first query. The seed reads every parts
+            // file once, which is why it is timed and logged.
+            let started = std::time::Instant::now();
+            let rows = index_part_bodies(&con, &files)?;
+            eprintln!("[info] known_part seeded: {rows} rows from {} parts files in {:.1}s", files.len(), started.elapsed().as_secs_f64());
+        }
         next_file_id += files.len() as i32;
     }
     // `body_durable` — a native mirror of the bodies parquet corpus, loaded ONCE here and kept
@@ -422,7 +448,14 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
         "CREATE INDEX known_blob_sha ON known_blob (sha);
          CREATE INDEX body_durable_id ON body_durable (body_id);",
     )?;
-    Ok(Store { con, dir: dir.to_path_buf(), next_part: 0, next_file_id })
+    Ok(Store {
+        con,
+        dir: dir.to_path_buf(),
+        next_part: 0,
+        next_file_id,
+        part_fetch_fallbacks: Default::default(),
+        blob_fetch_fallbacks: Default::default(),
+    })
 }
 
 /// `read_parquet` over exactly `files`, or None when there are none.
@@ -489,6 +522,34 @@ fn index_blob_shas(con: &Connection, scanned: &[String]) -> duckdb::Result<usize
     if orphans > 0 {
         return Err(duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!(
             "{orphans} blob shas could not be matched to their part file (parquet filename != listed path)"
+        )))));
+    }
+    Ok(inserted)
+}
+
+/// Insert the bodies of the parts files `scanned` (already registered in part_file) into known_part, one
+/// row per (body, file). WHY (TRDD-1FWN9XBS): part_fetch_sql names only the files that hold a body; without
+/// this index every reconstruct would read every parts file. Same LEFT JOIN and orphan check as
+/// index_blob_shas, for the same reason: a file with no part_file row must fail loudly, not index NULL files.
+fn index_part_bodies(con: &Connection, scanned: &[String]) -> duckdb::Result<usize> {
+    // WHY the guard: read_parquet([]) is a DuckDB error, and a fresh store has no parts files at open.
+    if scanned.is_empty() {
+        return Ok(0);
+    }
+    let list = scanned.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+    let inserted = con.execute(
+        &format!(
+            "INSERT INTO known_part SELECT DISTINCT unhex(s.body_id), pf.id
+             FROM read_parquet([{list}], union_by_name := true, filename := true) s
+             LEFT JOIN part_file pf ON pf.path = s.filename
+             WHERE NOT EXISTS (SELECT 1 FROM known_part k WHERE k.body_id = unhex(s.body_id) AND k.file_id = pf.id);"
+        ),
+        [],
+    )?;
+    let orphans: i64 = con.query_row("SELECT count(*) FROM known_part WHERE file_id IS NULL", [], |r| r.get(0))?;
+    if orphans > 0 {
+        return Err(duckdb::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!(
+            "{orphans} part bodies could not be matched to their part file (parquet filename != listed path)"
         )))));
     }
     Ok(inserted)
@@ -581,6 +642,10 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
             // Index the new part file's shas in SQL (the old Rust `blob_files` / `known` updates),
             // from the batch just written — never from ingest RAM.
             "blob" => format!("INSERT INTO known_blob SELECT unhex(sha), {file_id} FROM flush_new; "),
+            // WHY (TRDD-1FWN9XBS): the index of a flushed parts file is written in the same transaction as its
+            // part_file row, so part_fetch_sql never names a file for a body the index does not know. DISTINCT:
+            // a body has one row per part position, and the index holds one row per (body, file).
+            "part" => format!("INSERT INTO known_part SELECT DISTINCT unhex(body_id), {file_id} FROM flush_new; "),
             // The body table is additionally MIRRORED into the native `body_durable` by READING BACK
             // the parquet just written — the read-back is the encoding proof (the flushed part
             // parses to rows), durability stays the fsync barrier's job, and all_of("body") never
@@ -741,6 +806,13 @@ pub fn sync_new_parts(store: &mut Store) -> duckdb::Result<SyncStats> {
                 let rows = match *sub {
                     BLOBS_DIR => (index_blob_shas(&store.con, &one)?, 0),
                     BODIES_DIR => (0, store.con.execute(&format!("INSERT INTO body_durable BY NAME SELECT *, {id} AS file_id FROM {scan};"), [])?),
+                    // WHY (TRDD-1FWN9XBS): the bodies of a parts file join known_part in the same transaction as its
+                    // part_file row, or part_fetch_sql would fall back to a full scan for them. The INSERT reads the
+                    // file, so an unreadable file still fails here, rolls back and is retried, as before.
+                    PARTS_DIR => {
+                        index_part_bodies(&store.con, &one)?;
+                        (0, 0)
+                    }
                     // Registered only, but read once, so a file that cannot be read is never
                     // registered (all_of would then fail every later query on it).
                     _ => {
@@ -805,6 +877,9 @@ fn remove_vanished_files(con: &Connection, sub: &str) -> duckdb::Result<u64> {
         "BEGIN TRANSACTION;
          DELETE FROM known_blob WHERE file_id IN ({gone});
          DELETE FROM body_durable WHERE file_id IN ({gone});
+         -- TRDD-1FWN9XBS: a vanished parts file must also leave known_part, or part_fetch_sql would name a
+         -- file that no longer exists and the reconstruct read would fail on it.
+         DELETE FROM known_part WHERE file_id IN ({gone});
          DELETE FROM part_file WHERE id IN ({gone});
          COMMIT;"
     );
@@ -1105,14 +1180,13 @@ pub fn sha_probe_sql(shas: &[String]) -> String {
     format!("SELECT lower(hex(sha)) AS sha FROM known_blob WHERE sha IN ({bin}) UNION SELECT sha FROM blob WHERE sha IN ({hex})")
 }
 
-/// reconstructBody: reads ONLY this body's parts + their blobs; the sha256 gate is end-to-end
+/// reconstructBody: reads ONLY this body's parts + their blobs, through known_part/known_blob (falling back
+/// to a full scan when an id is unindexed); the sha256 gate is end-to-end
 /// (body_id IS the hash of the original bytes).
 pub fn reconstruct_body(store: &Store, body_id: &str) -> Result<String, String> {
-    let sql = format!(
-        "SELECT pos, kind, lit, sha FROM {} WHERE body_id = {} ORDER BY pos",
-        all_of(store, "part"),
-        q(body_id)
-    );
+    // WHY (TRDD-1FWN9XBS): part_fetch_sql reads only the parts files that own this body, not every
+    // parts file. The ORDER BY is appended to its bare SELECT, which carries none.
+    let sql = format!("{} ORDER BY pos", part_fetch_sql(store, &[body_id], "pos, kind, lit, sha")?);
     let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
     let rows: Vec<(String, Option<String>, Option<String>)> = stmt
         .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?)))
@@ -1128,8 +1202,8 @@ pub fn reconstruct_body(store: &Store, body_id: &str) -> Result<String, String> 
     };
     let mut spans = std::collections::HashMap::new();
     if !shas.is_empty() {
-        let list = shas.iter().map(|s| q(s)).collect::<Vec<_>>().join(",");
-        let sql = format!("SELECT sha, data FROM {} WHERE sha IN ({list})", all_of(store, "blob"));
+        // WHY (TRDD-1FWN9XBS): blob_fetch_sql scopes this read to the parts files that own the shas.
+        let sql = blob_fetch_sql(store, &shas)?;
         let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
         let got = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
@@ -1194,6 +1268,10 @@ pub(crate) fn blob_fetch_sql(store: &Store, shas: &[String]) -> Result<String, S
     );
     let matched: i64 = store.con.query_row(&matched_sql, [], |r| r.get(0)).map_err(|e| e.to_string())?;
     if matched < distinct.len() as i64 {
+        // WHY counted and logged (TRDD-1FWN9XBS): a full-corpus read on the verify gate is the cost this
+        // index exists to remove, so every fallback must be visible rather than silent.
+        store.blob_fetch_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("[info] blob_fetch_sql: {} of {} shas are not indexed, reading the full blob corpus", distinct.len() as i64 - matched, distinct.len());
         return Ok(full);
     }
     // The owning part files of the requested shas, one row per file.
@@ -1211,16 +1289,68 @@ pub(crate) fn blob_fetch_sql(store: &Store, shas: &[String]) -> Result<String, S
     Ok(format!("SELECT sha, data FROM read_parquet([{file_list}], union_by_name := true) WHERE sha IN ({list})"))
 }
 
+/// The SQL for the reconstruct gate's part fetch, scoped to the parts files that own the requested
+/// bodies (`known_part JOIN part_file`) instead of every parts file (`all_of("part")`, 10,048 files on
+/// the real store). `cols` is the projection; the caller appends its own ORDER BY, because the SQL
+/// returned here carries none.
+///
+/// WHY the scoped read is complete (TRDD-1FWN9XBS): ALL parts rows of one body are written by ONE flush into
+/// ONE parts file. Ingest stages a whole body in one call (ingest_body_with appends every part row of the body
+/// in one appender batch), and flush writes every staged row of the table to one file, indexing that file in
+/// the same transaction. So the owning-files lookup names every file that holds a body's rows. A body whose rows
+/// sit in a file the index does not name would be read short, and the sha gate refuses the short bytes. The
+/// same gate refuses a copy of a body's rows in two indexed files, which is read twice (TRDD-23TSWT9M).
+///
+/// Falls back to the full `all_of("part")` scan when ANY requested body is missing from the index
+/// (e.g. its parts are still in RAM staging). WHY ANY and not per body: a missing body widens the whole
+/// query instead of being dropped, so no requested body is ever reconstructed from a partial read.
+#[doc(hidden)]
+pub fn part_fetch_sql(store: &Store, body_ids: &[&str], cols: &str) -> Result<String, String> {
+    let list = body_ids.iter().map(|s| q(s)).collect::<Vec<_>>().join(",");
+    let full = format!("SELECT {cols} FROM {} WHERE body_id IN ({list})", all_of(store, "part"));
+    let distinct: HashSet<&str> = body_ids.iter().copied().collect();
+    if distinct.is_empty() {
+        return Ok(full);
+    }
+    let bin = distinct.iter().map(|s| format!("unhex({})", q(s))).collect::<Vec<_>>().join(",");
+    // WHY matched is ONE count over the whole request, not a sum of per-file counts: a body indexed under
+    // two part files appears in two file groups, so a per-group sum counts it twice and can reach the
+    // request size while another requested body is unindexed (the same trap blob_fetch_sql guards).
+    let matched_sql = format!(
+        "SELECT count(DISTINCT k.body_id) FROM known_part k JOIN part_file pf ON pf.id = k.file_id
+         WHERE k.body_id IN ({bin})"
+    );
+    let matched: i64 = store.con.query_row(&matched_sql, [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    if matched < distinct.len() as i64 {
+        // WHY counted and logged (TRDD-1FWN9XBS): the same visibility rule as blob_fetch_sql.
+        store.part_fetch_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("[info] part_fetch_sql: {} of {} bodies are not indexed, reading the full parts corpus", distinct.len() as i64 - matched, distinct.len());
+        return Ok(full);
+    }
+    // The owning part files of the requested bodies, one row per file.
+    let sql = format!(
+        "SELECT pf.path FROM known_part k JOIN part_file pf ON pf.id = k.file_id
+         WHERE k.body_id IN ({bin}) GROUP BY pf.path ORDER BY pf.path"
+    );
+    let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
+    let files = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+    let file_list = files.iter().map(|f| q(f)).collect::<Vec<_>>().join(",");
+    Ok(format!("SELECT {cols} FROM read_parquet([{file_list}], union_by_name := true) WHERE body_id IN ({list})"))
+}
+
 fn reconstruct_chunk(
     store: &Store,
     ids: &[&String],
     span_cache: &mut SpanCache,
 ) -> Result<std::collections::HashMap<String, Result<String, String>>, String> {
-    let list = ids.iter().map(|s| q(s)).collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT body_id, kind, lit, sha FROM {} WHERE body_id IN ({list}) ORDER BY body_id, pos",
-        all_of(store, "part")
-    );
+    // WHY (TRDD-1FWN9XBS): part_fetch_sql returns a bare SELECT, so the ORDER BY the reassembly needs is
+    // appended to its text here, unchanged in effect from the old inline `ORDER BY body_id, pos`.
+    let body_ids: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+    let sql = format!("{} ORDER BY body_id, pos", part_fetch_sql(store, &body_ids, "body_id, kind, lit, sha")?);
     let mut stmt = store.con.prepare(&sql).map_err(|e| e.to_string())?;
     let rows: Vec<(String, String, Option<String>, Option<String>)> = stmt
         .query_map([], |r| {

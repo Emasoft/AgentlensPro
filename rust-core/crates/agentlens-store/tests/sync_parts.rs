@@ -167,7 +167,15 @@ fn an_unreadable_part_is_skipped_until_it_becomes_readable() {
     assert_eq!(registered(&store), 0, "an unreadable file must never be registered");
 
     std::fs::remove_file(&part).unwrap();
-    store.con.execute_batch(&format!("COPY (SELECT 1 AS x) TO '{}' (FORMAT PARQUET);", part.display())).unwrap();
+    // WHY (TRDD-1FWN9XBS): registration reads only body_id (index_part_bodies), so body_id is the one column it
+    // requires. The fixture writes all eight columns of the part table (lib.rs CREATE TABLE part) with a 64-hex sha,
+    // so it is a real parts file, not a stub. A file without body_id is skipped, never registered.
+    let body_id = "ab".repeat(32);
+    let sha = "cd".repeat(32);
+    store.con.execute_batch(&format!(
+        "COPY (SELECT '{body_id}'::VARCHAR AS body_id, 0::INTEGER AS pos, 'lit'::VARCHAR AS kind, 'x'::VARCHAR AS lit, '{sha}'::VARCHAR AS sha, 'p.txt'::VARCHAR AS path, 0::INTEGER AS idx, 1::INTEGER AS n) TO '{}' (FORMAT PARQUET);",
+        part.display()
+    )).unwrap();
     let stats = sync_new_parts(&mut store).expect("sync again");
     assert_eq!(stats.new_files[1], 1, "{stats:?}");
     assert!(stats.skipped.is_empty(), "{stats:?}");
