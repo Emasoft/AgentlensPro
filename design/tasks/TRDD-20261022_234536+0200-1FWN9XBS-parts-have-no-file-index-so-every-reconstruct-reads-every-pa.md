@@ -4,7 +4,7 @@ title: Parts have no file index so every reconstruct reads every parts file and 
 column: dev
 status: tasked
 created: 2026-10-22T23:45:36+0200
-updated: 2026-10-23T03:45:30+0200
+updated: 2026-10-23T03:48:55+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T23:45:36+0200
+npt: [R36S0PS9]
 ---
 
 # Parts have no file index so every reconstruct reads every parts file and the export rebuilds bodies one at a time
