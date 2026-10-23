@@ -240,6 +240,13 @@ static READER_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// a tokio worker thread would stall every other task on that worker, which is the same class of
 /// bug as holding a lock across a syscall.
 pub async fn run_summary_rebuild(state: Arc<Mutex<CoreState>>) {
+    // WHY: a test instrument for the TRDD-735Q3JF4 boot-heap differential, not a production switch. It stops only the
+    // background rebuilder (REBUILDER_ACTIVE stays false). summary_now still builds synchronously for other callers, e.g.
+    // run_burn_tick (ui.rs:4298), so with this gate on the summary cache is still filled (run C: 43811 sessions). Default on.
+    if std::env::var("AGENTLENS_SUMMARY_REBUILD").is_ok_and(|v| v.trim().eq_ignore_ascii_case("off")) {
+        println!("{} alcore: summary rebuilder disabled by AGENTLENS_SUMMARY_REBUILD=off", crate::log_ts());
+        return;
+    }
     REBUILDER_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(25));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
