@@ -4,7 +4,7 @@ title: known_part seed in open_store exhausts the 4 GB DuckDB spill cap on the r
 column: testing
 status: tasked
 created: 2026-10-23T03:42:13+0200
-updated: 2026-10-23T04:18:43+0200
+updated: 2026-10-23T04:26:21+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,3 +37,4 @@ Both reports are done; results in the Fix section below.
 - Fix: INSERT INTO known_part SELECT unhex(s.body_id), pf.id FROM (SELECT DISTINCT body_id, filename FROM read_parquet(...)) s LEFT JOIN part_file pf ON pf.path = s.filename; no NOT EXISTS. Regression test: index_part_bodies_spill_tests::seeding_many_rows_per_body_stays_within_a_tiny_spill_cap (4 files x 1.25M rows, 1000 bodies, 32MB spill cap; mutation-verified: the old SQL fails it with a max_temp_directory_size error).
 - Real-store gate re-run (alstore, 1536MB, 2 threads, cloned store, valid-hex absent id of 64 zeros): opens OK, 'known_part seeded: 1508499 rows from 10048 parts files in 10.0s', peak tmp 0 KB, wall 23.95s, max RSS (whole-process alstore, includes DuckDB at its 1536MB limit) 2944614400 bytes, exit 2 (stderr 'alstore: unknown body 0000000000000000000000000000000000000000000000000000000000000000').
 - Cost note: every open now scans all ~438.8M parts rows (8.7-10.0s across the two alstore gates); at DuckDB's limit the later open steps run at 1455-1465 MiB with no spill (Python measure, pre-existing, recorded for TRDD-12FGMAEP).
+alcore open verified 2026-10-23 (clone, export re-measure): seed 1508499 rows from 10048 files in 15.0s, export 50/50 byte-exact, no spill. (Re-run with production cap: seed 12.4s, 50/50 byte-exact, no spill.)

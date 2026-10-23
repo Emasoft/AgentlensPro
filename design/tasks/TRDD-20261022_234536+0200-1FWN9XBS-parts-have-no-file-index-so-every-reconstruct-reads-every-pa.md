@@ -4,7 +4,7 @@ title: Parts have no file index so every reconstruct reads every parts file and 
 column: dev
 status: tasked
 created: 2026-10-22T23:45:36+0200
-updated: 2026-10-23T04:18:43+0200
+updated: 2026-10-23T04:26:30+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -44,3 +44,9 @@ Correction to the line above (2026-10-23, supersedes its second sentence): the e
 ## Unblocked 2026-10-23
 
 TRDD-R36S0PS9 fixed in 2405b7b3 (seed SQL: DISTINCT before the join, no NOT EXISTS); store open on the clone succeeds again. Next: the 50-body narrowed export re-measure as the Change 2 baseline (docs_dev/20261023-r36-export-remeasure-report.md, running).
+
+## Change 1 outcome 2026-10-23
+
+Measured on the clone (docs_dev/20261023-r36-export-remeasure-report.md): pre-Change-1 25.1 s/body cold and 9.6 s/body warm; now 35.9 s cold total, of which ~30.6 s is store open; ~107 ms/file thereafter; warm 0.089 s/body; 50/50 byte-exact; 0 fallback lines.
+ZSTD is no longer dominant in the one 5 s cold sample, whose top work frames are directory listing/sort in agentlens_store - a lead, not evidence.
+Change 2 (batched export) is re-scoped: it was designed for seconds per body; decide after measuring where the ~90 ms goes and the largest real export size.
