@@ -4,7 +4,7 @@ title: Parts have no file index so every reconstruct reads every parts file and 
 column: dev
 status: tasked
 created: 2026-10-22T23:45:36+0200
-updated: 2026-10-23T03:25:03+0200
+updated: 2026-10-23T03:33:38+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -36,3 +36,4 @@ known_part index, flush/sync/vanish maintenance, part_fetch_sql for statements A
 Rulings: a parquet without body_id in parts/ is skipped and retried by sync and fails open_store, the same contract as blobs and bodies (sync_parts fixture made parts-shaped; open-time failure pinned by a test).
 Remaining full-parts reader: agentlens-store/src/bodies_evidence.rs:252 and :298 (parquet_scan over PARTS_DIR per chunk; takes store_dir, not &Store). The earlier sweep grepped read_parquet only and missed the parquet_scan helper. Follow-up: TRDD-N4ZXDCA8.
 Review additions (2026-10-23, review items 1 to 5 and A to C): the part_fetch_sql doc now states the one-flush-one-file invariant; tests/known_part.rs gains a_flush_writes_every_staged_row_of_a_body_to_one_file, verify_of_two_flushed_bodies_passes_with_no_part_fallback, a_second_writers_parts_file_is_indexed_by_sync_and_reconstructs_without_fallback, reconstruct_body_refuses_a_malformed_id (returns Err unknown body not-hex, no panic), a_vanished_bodies_file_makes_a_re_ingest_write_the_parts_again and a_vanished_parts_file_leaves_its_body_unknown_and_a_re_ingest_writes_nothing; an_unflushed_body_falls_back_to_the_full_scan_and_is_counted now asserts no read_parquet and counter 1; the sync_parts fixture is parts-shaped with a 64-hex sha. Mutation checks, each undone byte-for-byte: flush keeps only even-pos rows (test 1 fails), flush known_part insert removed (verify test fails), sync index call removed (second-writer test fails). Item 6: open_shared_bodies_writer clears the slot before open_store (chores.rs:327) and returns the open error before the slot is set (chores.rs:329 and :334), so a failed open leaves the slot empty and the next non-idle tick retries it (chores.rs:589, error logged at :598); no existing test covers an open error.
+Correction to commit 685bf1fe's message (2026-10-23): fallbacks are logged once per fallback call (one [info] line each, not rate-limited), not once overall; a fallback-heavy run can flood the log. And all_of(part) as the next hot spot was a plan prediction, not confirmed by a clone-run stack sample.
