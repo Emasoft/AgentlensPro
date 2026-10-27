@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: blocked
 created: 2026-09-02T22:05:41+0200
-updated: 2026-10-16T17:07:34+0200
+updated: 2026-10-27T13:41:58+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -275,6 +275,7 @@ no-climb non-regression is verified here. Report:
   action (repo has no design/requirements/PRRD.md).
 - 2026-10-16T11:13:16+0200 — column → human_review by main-agent@agentlenspro. owner ruling: supersede by 9VX3WTGU or reword; row 2
 - 2026-10-16T11:16:42+0200 — column → blocked by main-agent@agentlenspro. its NPTs 7RM5YW2T and FSMISF5K are unfinished (lint ORDER-NPT-VIOLATED); the owner ruling on supersede-by-9VX3WTGU or reword is also pending (triage row 2)
+- OWNER 2026-10-24 (verbatim, recorded on TRDD-735Q3JF4, copied here 2026-10-27): "the functionalities and the diagnostic power must remain the same, but everything should be done via duckdb sql and sql functions. this is the idea, of course you have to evaluate case by case if there are potential issues and if certain functionalities needs a little more code and allocation in addition to the sql of duckdb. but you must plan and execute this with the clear aim to make duckdb able to ingest and structure/breakdown the raw data and all the otel logs in a way that statistical analysis is fast and smart functions will diagnose any problem and find the root cause of any cost peak or cache break."
 
 ## Notes and lessons learned
 
