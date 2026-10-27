@@ -1,10 +1,10 @@
 ---
 trdd-id: NZ9Z9ALO
 title: alcore ignores the AgentlensPro off switch when started directly
-column: todo
+column: ai_review
 status: tasked
 created: 2026-10-27T18:58:56+0100
-updated: 2026-10-27T19:03:00+0100
+updated: 2026-10-27T19:58:01+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-27T18:58:56+0100
+implementation-commits: [97752fb1, dc3f4da0]
 ---
 
 # alcore ignores the AgentlensPro off switch when started directly
@@ -24,3 +25,12 @@ Premise verified 2026-10-27. The CLI honours the AgentlensPro off switch: src/cl
 ## Approval log
 
 - 2026-10-27T18:58:56+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-27T19:58:01+0100 — column → ai_review. fix committed 97752fb1 + dc3f4da0, reviewed; full suites not yet run
+
+## Fix 2026-10-27
+
+- Fixed in 97752fb1: alcore main refuses to boot with exit 78 (EX_CONFIG) when <data_dir>/DISABLED exists, checked before any file, lock, key or listener; ported from the retired TS server gate (standalone/server.ts before 567fc5c2, lines 107-119). This also makes the supervisor's terminal-exit path (serverControl.ts isTerminalExit) work again under DISABLED. Design question answered: refuse, not read-only, matching the old server.
+- Test rust-core/crates/agentlens-core/tests/disabled_refuses_boot.rs: exit exactly 78, stderr names the flag, no pidfile, spans dir or embed-key created. Mutations: gate disabled fails it by the 10 s timeout; gate moved below the pid lock claim fails it on 'no pid lock may be taken before the gate'. dc3f4da0 adds a Drop guard so the temp dir is removed on every exit path. clippy -D warnings clean; exit_on_panic passes.
+- Known gaps, deliberate: (1) the AGENTLENS_DISABLED=1 environment variable is not read, like the old server, because --force-install-telemetry overrides the env half only in-process and its children inherit the variable (src/cli/killSwitch.ts:118-122); (2) new boots only: a running server is stopped by `agentlenspro disable` (disableCli.ts stopServer), not by this gate; (3) the LaunchAgent runs the TS supervisor, which already refuses under DISABLED, so launchd is unaffected.
+- Consequence for clone harnesses: a copy of the live data dir carries DISABLED (and DISABLED-KEEP-STATUSLINE), so any run with a binary at or after 97752fb1 must remove them from its own copy; scripts_dev/735q3jf4-repeat/run.sh now does, and aborts if alcore is not alive after readiness.
+- Not run after the fix: the full cargo test -p agentlens-core suite and the TS unit suite; no CI job was checked for a fixture data dir holding DISABLED.
