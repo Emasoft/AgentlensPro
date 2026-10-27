@@ -24,6 +24,14 @@ fn free_ports() -> [u16; 3] {
 fn alcore_refuses_to_boot_while_the_disabled_flag_is_present() {
     let base = std::env::temp_dir().join(format!("al-disabled-refuses-boot-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
+    // Drop guard: the temp dir is removed on every exit path (timeout panic, failed assert), not only success.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(base.clone());
     let data_dir = base.join("data");
     let media_dir = base.join("media");
     let home = base.join("home");
@@ -75,5 +83,4 @@ fn alcore_refuses_to_boot_while_the_disabled_flag_is_present() {
     assert!(!agentlens_core::pid_lock::pidfile_path(&data_dir).exists(), "no pid lock may be taken before the gate");
     assert!(!data_dir.join("spans").exists(), "no span dir may be created before the gate");
     assert!(!data_dir.join("embed-key").exists(), "no embed key may be created before the gate");
-    let _ = std::fs::remove_dir_all(&base);
 }
