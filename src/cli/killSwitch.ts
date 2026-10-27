@@ -39,6 +39,28 @@ export function killSwitchPath(dir: string = dataDir()): string {
   return path.join(dir, 'DISABLED')
 }
 
+/** Marker beside the kill-switch flag: while BOTH exist, status-line capture still appends to disk
+ *  (statuslineCapture.ts) — every other surface stays off.
+ *  WHY: owner request 2026-10-27, verbatim: "stop everything except the statusline data collection, so the
+ *  agentlenspro cli can still answer the basic questions about the session". */
+export function keepStatuslinePath(dir: string = dataDir()): string {
+  return path.join(dir, 'DISABLED-KEEP-STATUSLINE')
+}
+
+/** Is the disabled-but-keep-status-line marker present? Any stat error reads as absent: the failure
+ *  direction is then "no capture", i.e. the plain disabled state the operator already had. */
+export function keepStatuslineArmed(dir: string = dataDir()): boolean {
+  try { fs.statSync(keepStatuslinePath(dir)); return true } catch { return false }
+}
+
+/** Arm the keep-status-line marker. Idempotent. Returns its path. */
+export function armKeepStatusline(): string {
+  const p = keepStatuslinePath()
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  fs.writeFileSync(p, 'Status-line capture stays ON while AgentlensPro is disabled. Removed by `agentlenspro enable`.\n')
+  return p
+}
+
 /** Env var every server spawner stamps on the child, naming the PATH that started it. The server
  *  logs it at boot beside the brake state it observed. WHY (TRDD-8VGQK9L9): a server was found
  *  running 1h53m with the NO_REVIVE brake in place, and the log carried nothing to say WHO started
@@ -142,8 +164,18 @@ export function armKillSwitch(reason?: string): string {
  *  "now ENABLED" while the flag stayed on disk and every hook kept no-op'ing. */
 export function disarmKillSwitch(): boolean {
   const p = killSwitchPath()
-  try { fs.unlinkSync(p); return true } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
-    throw e
+  // The FLAG goes first. A marker that cannot be deleted still throws, but only after the flag is already
+  // gone: AgentlensPro is left enabled (the marker is inert without the flag), not disabled with the flag
+  // still on disk. The throw still reaches `enable`, which stops before restoring the parked skills.
+  let existed = true
+  try { fs.unlinkSync(p) } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+    existed = false
   }
+  // The keep-status-line marker only means something beside the flag (owner request 2026-10-27), so
+  // it goes with it: a stale marker would resurrect status-line-only capture at the next `disable`.
+  try { fs.unlinkSync(keepStatuslinePath()) } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+  }
+  return existed
 }

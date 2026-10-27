@@ -16,8 +16,11 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { spawnSync } from 'child_process'
+import { disarmKillSwitch, killSwitchPath, keepStatuslinePath } from '../cli/killSwitch'
+import { statuslineRoot } from '../cli/statuslineHistoryCli'
+import { queryStatusline } from '../statuslineStore'
 import {
-  parseStatuslineArgs, toStatuslineRecord, STATUSLINE_EV, SUBAGENT_STATUSLINE_EV,
+  parseStatuslineArgs, toStatuslineRecord, captureStatusline, STATUSLINE_EV, SUBAGENT_STATUSLINE_EV,
 } from '../cli/statuslineCapture'
 import {
   shSingleQuote, parseSingleQuoted, isOurStatuslineCommand, unwrapStatuslineCommand,
@@ -288,5 +291,66 @@ suite('statusline install — wrapping and unwrapping must round-trip exactly', 
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// Owner request 2026-10-27, verbatim: "stop everything except the statusline data collection, so the
+// agentlenspro cli can still answer the basic questions about the session". Disabled + the
+// DISABLED-KEEP-STATUSLINE marker => captureStatusline appends straight to the store's WAL layout.
+suite('statusline capture — disabled with --keep-statusline writes straight to disk', () => {
+  let dir: string
+  let savedDataDir: string | undefined
+  let savedGeneric: string | undefined
+  setup(() => {
+    savedDataDir = process.env.AGENTLENS_DATA_DIR
+    savedGeneric = process.env.DATA_DIR
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-keep-'))
+    process.env.AGENTLENS_DATA_DIR = dir
+    delete process.env.DATA_DIR
+    fs.writeFileSync(killSwitchPath(), 'disabled')
+  })
+  teardown(() => {
+    if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR; else process.env.AGENTLENS_DATA_DIR = savedDataDir
+    if (savedGeneric === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = savedGeneric
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+  const walFile = (): string => path.join(dir, 'statusline', 'main', new Date().toISOString().slice(0, 10), 'wal-cli.ndjson')
+
+  test('(a) marker present: one flattened line with ts lands in wal-cli.ndjson', async () => {
+    fs.writeFileSync(keepStatuslinePath(), 'keep')
+    const before = Date.now()
+    await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
+    const lines = fs.readFileSync(walFile(), 'utf8').trim().split('\n')
+    assert.strictEqual(lines.length, 1)
+    const row = JSON.parse(lines[0]) as Record<string, unknown>
+    assert.strictEqual(row.rate_limits_five_hour_used_percentage, 23.5)
+    assert.strictEqual(row.context_window_current_usage_cache_read_input_tokens, 2000)
+    assert.deepStrictEqual(row.workspace_added_dirs, [], 'arrays stay untouched')
+    assert.strictEqual(row.statusline_stream, 'main')
+    assert.ok(typeof row.ts === 'number' && row.ts >= before)
+    assert.strictEqual(row.model, undefined, 'nested objects are flattened, not kept')
+  })
+
+  test('(b) no marker: nothing is written', async () => {
+    await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
+    assert.ok(!fs.existsSync(path.join(dir, 'statusline')))
+  })
+
+  test('(c) the statusline-history reader loads a WAL written this way', async function () {
+    this.timeout(60000)
+    fs.writeFileSync(keepStatuslinePath(), 'keep')
+    await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
+    const rows = await queryStatusline(statuslineRoot(), 'main', 'SELECT session_id, rate_limits_five_hour_used_percentage AS p FROM samples')
+    assert.ok(rows, 'reader must find the store')
+    assert.strictEqual(rows.length, 1)
+    assert.strictEqual(rows[0].session_id, 'abc123')
+    assert.strictEqual(Number(rows[0].p), 23.5)
+  })
+
+  test('(d) disarmKillSwitch() removes both the flag and the marker', () => {
+    fs.writeFileSync(keepStatuslinePath(), 'keep')
+    assert.strictEqual(disarmKillSwitch(), true, 'the flag existed, so disarm reports it removed')
+    assert.ok(!fs.existsSync(killSwitchPath()), 'the flag must be gone')
+    assert.ok(!fs.existsSync(keepStatuslinePath()), 'a stale marker would resurrect status-line-only capture at the next disable')
   })
 })

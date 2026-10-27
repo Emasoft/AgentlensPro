@@ -7,7 +7,8 @@
 // (a hook inherits CLAUDE's env, not the operator's). A flag FILE is the only channel that reaches
 // every already-running session, because every hook is a fresh process that re-reads the disk.
 import * as path from 'path'
-import { killSwitchPath, agentlensDisabled } from './killSwitch'
+import * as fs from 'fs'
+import { killSwitchPath, agentlensDisabled, armKeepStatusline, keepStatuslinePath } from './killSwitch'
 import { disableAgentlensSurfaces, enableAgentlensSurfaces } from './surfaces'
 import { AutoSetupDeps, ensureInstalled } from './autoSetup'
 import { findServerPid, stopServer } from './serverControl'
@@ -21,6 +22,13 @@ export async function runDisableCli(args: string[]): Promise<number> {
   // Kill-switch AND the skills/rules move together (owner order 2026-10-02): one function, so the two
   // can never disagree. The agents stay installed — they do not depend on the CLI.
   const { flag: p, moved } = disableAgentlensSurfaces(reason)
+  // `--keep-statusline`: owner request 2026-10-27, verbatim: "stop everything except the statusline data
+  // collection, so the agentlenspro cli can still answer the basic questions about the session". The marker
+  // only lets statuslineCapture.ts keep appending to disk; the server, hooks and ingestion stay off. A plain
+  // `disable` clears any marker left by an earlier `--keep-statusline`, so it still means everything off.
+  const keepStatusline = args.includes('--keep-statusline')
+  if (keepStatusline) armKeepStatusline()
+  else fs.rmSync(keepStatuslinePath(), { force: true })
 
   // Arming the flag stops hooks from SPAWNING a server, but a server already running would keep
   // ingesting — "disabled" would be a lie. Stop it too, so the state the user asked for is the state
@@ -56,6 +64,7 @@ export async function runDisableCli(args: string[]): Promise<number> {
 
   console.log('AgentlensPro is now DISABLED.')
   console.log(`  flag:    ${p}`)
+  if (keepStatusline) console.log(`  keep:    ${keepStatuslinePath()} (status-line capture stays ON, written straight to disk)`)
   console.log(`  server:  ${stopped}`)
   console.log(`  capture: ${capture}`)
   console.log(`  skills:  ${moved.length ? `${moved.length} moved to ${path.join(dataDir(), 'disabled-surfaces')} (agents stay installed)` : 'none were installed'}`)
