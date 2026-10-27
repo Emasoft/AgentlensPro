@@ -38,6 +38,8 @@ pub mod body_archive;
 pub mod body_writers;
 pub mod burn;
 pub mod burn_calibration;
+#[cfg(test)]
+mod burn_subset_tests;
 pub mod cache_break;
 pub mod cache_break_timeline;
 pub mod turn_prefix_codec;
@@ -149,6 +151,12 @@ pub struct BodiesPassStats {
     pub last_non_zero_pass_at_ms: i64,
 }
 
+/// What `CoreState::burn_snapshot` copies under the state lock for the burn path (TRDD-735Q3JF4 item 2).
+pub(crate) struct BurnInputs {
+    pub spans: Vec<Arc<Value>>,
+    pub cards: Vec<Arc<Value>>,
+    pub accounts: IndexMap<String, String>,
+}
 /// A copy of everything a summary rebuild reads, taken under the state lock so the rebuild can
 /// run outside it (TRDD-HFV4AIT7). Every field holds `Arc`s, so building one is a pointer copy per
 /// span/card — never a deep clone of the window or of the card corpus.
@@ -256,6 +264,8 @@ pub struct CoreState {
     pub sweeper: Option<log_reader::SweeperControl>,
     /// server.ts summaryCache — the merged summary, memoized by data_version (derived_cache.rs).
     pub summary_cache: derived_cache::VersionedCache<Value>,
+    /// The burn subset summary memoized by `data_version` (TRDD-735Q3JF4 item 2): `ui::burn_summary_now` computes it once per version, not on every 4 s tick and burn request. Dropped with `summary_cache` under stage-2 memory pressure.
+    pub burn_subset_memo: Option<(u64, Arc<Value>)>,
     /// Set by the first `ui::summary_now` call and never cleared: "a summary reader has asked since boot".
     /// `ui::rebuild_once` builds nothing until it is true (TRDD-735Q3JF4 increment 1, item 1). Lives here, not in a
     /// process-global, so each test's fresh state starts unasked and parallel tests stay isolated.
@@ -475,7 +485,15 @@ impl CoreState {
         // registry holds. With the closure stubbed, every card came out account-less, so
         // `/api/burn-status` reported one `accountUuid: null` bucket instead of per-account
         // windows, and anything keyed on the account (P5 capacity calibration) silently never ran.
-        let mut summary = summarize::summarizer::summarize_spans(spans, &|sid| accounts.get(sid).cloned());
+        let summary = summarize::summarizer::summarize_spans(spans, &|sid| accounts.get(sid).cloned());
+        Self::merge_summary(summary, log_cards)
+    }
+
+    /// The merge half of `summary_over`: the OTEL `summary` already built, folded with `log_cards`
+    /// (feed collision merge, subagent link, newest-first sort). Split out so the burn path's
+    /// subset builder (`burn_subset_summary`) runs THIS code and not a copy of it
+    /// (TRDD-735Q3JF4 item 2).
+    fn merge_summary(mut summary: Value, log_cards: &[Arc<Value>]) -> (Value, IndexMap<String, Vec<Value>>) {
         let mut attribution: IndexMap<String, Vec<Value>> = IndexMap::new();
         if log_cards.is_empty() {
             // No merge: every OTEL card survives into the served summary, so its entries are
@@ -541,6 +559,79 @@ impl CoreState {
         (summary, attribution)
     }
 
+    /// The inputs of one burn-status computation, copied under the state lock (Arc clones only: a
+    /// pointer per span and per card, no card text, no parse). The card SELECTION happens off the
+    /// lock in `burn_subset_summary`, so the lock never waits on a scan of the corpus.
+    pub(crate) fn burn_snapshot(&self) -> BurnInputs {
+        BurnInputs { spans: self.window.spans.clone(), cards: self.cards.parsed_cards(), accounts: self.accounts.snapshot() }
+    }
+
+    /// The merged summary restricted to the cards `burn_status_for` can read, for the 4 s burn tick and
+    /// the burn routes (TRDD-735Q3JF4 item 2). `summary_over` over the whole corpus was ~43,811 sessions
+    /// built every 4 s from boot, for a computation that only reads api_request events.
+    ///
+    /// WHY THE SUBSET IS SAFE. Burn status reads events from session timelines only, and
+    /// `demote_cold` strips the timeline of every card but the most recently active, so a card with an
+    /// empty timeline contributes no event. The merge, though, DECIDES which cards survive, so the
+    /// subset must hold every card the merge needs to decide the same way as the full corpus:
+    ///   (a) every log card with a non-empty timeline: the sources of events;
+    ///   (b) every log card whose sessionId is an OTEL window session: the feed merge lets a log card
+    ///       displace its OTEL twin (`is_displaced_otel`), and a cold log card left out would let the
+    ///       twin survive and contribute ITS events, which the full summary drops;
+    ///   (c) the placeholder / `agent-<id>` twin of every selected card, in both directions and
+    ///       transitively (`link_subagent_transcripts` collapses the pair into the transcript's card,
+    ///       so a hot placeholder over a cold transcript yields the cold card and its events vanish;
+    ///       leaving either side out would keep the hot one).
+    /// The OTEL spans are all kept, and that is not cheap: the window is bounded at up to 1,000,000 spans over
+    /// `summaryWindowHours`, and `summarize_spans` runs over all of them. The memo in `ui::burn_summary_now`
+    /// makes it one computation per data_version.
+    /// Parity argument (by code reading of feed_merge.rs, not proven): every merge step is keyed by sessionId or by the placeholder/twin id pair, so
+    /// restricting its input to a set closed under those two relations changes no decision about any
+    /// kept card, and the dropped cards are event-free. `merge_summary` is the SAME code as the full
+    /// path; `burn_subset_tests` asserts equal output against `summary_over`.
+    /// This is a second summary-shaped path: if `summary_over` grows a new cross-card relation, add it
+    /// to the closure here, or the parity test's fixture must gain a case that breaks.
+    pub(crate) fn burn_subset_summary(spans: &[Arc<Value>], cards: &[Arc<Value>], accounts: &IndexMap<String, String>) -> Value {
+        let summary = summarize::summarizer::summarize_spans(spans, &|sid| accounts.get(sid).cloned());
+        let otel_ids: std::collections::HashSet<&str> = summary
+            .get("sessions")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|c| c.get("sessionId").and_then(Value::as_str)).collect())
+            .unwrap_or_default();
+        let id_of = |c: &Value| c.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
+        // An empty sessionId is no identity: indexing it would let "agent-" / "" pair unrelated cards.
+        let index: std::collections::HashMap<String, usize> =
+            cards.iter().enumerate().map(|(i, c)| (id_of(c), i)).filter(|(id, _)| !id.is_empty()).collect();
+        let mut keep = vec![false; cards.len()];
+        let mut work: Vec<usize> = Vec::new();
+        for (i, c) in cards.iter().enumerate() {
+            let hot = c.get("timeline").and_then(Value::as_array).is_some_and(|t| !t.is_empty());
+            let window_twin = c.get("sessionId").and_then(Value::as_str).is_some_and(|id| !id.is_empty() && otel_ids.contains(id));
+            if hot || window_twin {
+                keep[i] = true;
+                work.push(i);
+            }
+        }
+        while let Some(i) = work.pop() {
+            let c = &cards[i];
+            let id = id_of(c);
+            if id.is_empty() {
+                continue;
+            }
+            let twin_of_placeholder = feed_merge::link_twin_id(c);
+            let placeholder_of_twin = id.strip_prefix("agent-");
+            for other in [Some(twin_of_placeholder.as_str()), placeholder_of_twin].into_iter().flatten() {
+                if let Some(&j) = index.get(other) {
+                    if !keep[j] {
+                        keep[j] = true;
+                        work.push(j);
+                    }
+                }
+            }
+        }
+        let subset: Vec<Arc<Value>> = cards.iter().zip(&keep).filter(|(_, k)| **k).map(|(c, _)| c.clone()).collect();
+        Self::merge_summary(summary, &subset).0
+    }
     /// buildSessionSummary — the merged summary, rebuilt only when data_version moved. The
     /// attribution side-map is replaced in the same compute (the TS rebuilds the module-level
     /// Map inside the memoized computeSessionSummary), so map and summary always share a version.
@@ -708,6 +799,7 @@ impl CoreState {
             log_scan: log_reader::LogScanStats::default(),
             sweeper: None,
             summary_cache: derived_cache::VersionedCache::default(),
+            burn_subset_memo: None,
             summary_asked: false,
             summary_engine: Arc::new(summary_engine::SummaryEngine::default()),
             accounts: account_registry::AccountRegistry::default(),
@@ -823,6 +915,7 @@ impl CoreState {
                 // stage 1 freed the stripped twin, removed by TRDD-091Z1FU0; its new action is TRDD-VLJFJ9ZC
                 if new >= 2 {
                     self.summary_cache.clear();
+                    self.burn_subset_memo = None;
                     self.latest_resident_blobs.clear();
                     // u64::MAX over a budget of 1 forces the time window to halve (floored at 5 min).
                     narrowed = self.window.apply_memory_pressure(u64::MAX, 1);

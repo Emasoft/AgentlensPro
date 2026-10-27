@@ -287,8 +287,9 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
         // 25 ms loop passed the back-off at boot (flight.last is None) and built the whole summary (~43,811 sessions)
         // for no reader at all; run C2 measured mimalloc commit at ~660 MB with the build off against ~1964 MB on.
         // Trade-off: the first reader after boot pays one cold build (same as after a stage-2 cache clear); once
-        // any reader has asked, behaviour is unchanged. CAVEAT: the burn tick and resident_blob_scan still call
-        // summary_now until items 2 and 3 land, so on its own this item does not keep boot memory down.
+        // any reader has asked, behaviour is unchanged. CAVEAT: the burn tick no longer calls summary_now (item 2: it builds a
+        // card subset instead, see CoreState::burn_subset_summary); resident_blob_scan still calls
+        // summary_now until item 3 lands, so on its own this item does not keep boot memory down.
         // The flag is monotonic and advisory, written under the state lock that every reader and this pass already
         // take, so no atomic ordering is involved.
         if !st.summary_asked {
@@ -505,6 +506,31 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
     (inputs.version, st.store_summary(inputs.version, build))
 }
 
+/// The merged summary restricted to what the burn computation reads, built with the state lock
+/// RELEASED and memoized on `data_version` (TRDD-735Q3JF4 item 2). The lock is held only to check the memo
+/// and take `burn_snapshot` (Arc clones); the card selection and the merge run after it, and the result is
+/// stored only if no write moved `data_version` meanwhile. The 4 s tick and every burn route share the one
+/// computation per version. The memo is the SUMMARY, not the burn status: `burn_status_for` depends on `now`.
+/// Does not touch `summary_cache` and does not set `summary_asked`: asking for burn status must not start
+/// the whole-summary rebuilder.
+pub(crate) fn burn_summary_now(state: &Arc<Mutex<CoreState>>) -> Arc<Value> {
+    let (version, inputs) = {
+        let st = state.lock_timed();
+        if let Some((v, memo)) = &st.burn_subset_memo {
+            if *v == st.data_version {
+                return memo.clone();
+            }
+        }
+        (st.data_version, st.burn_snapshot())
+    };
+    let built = Arc::new(CoreState::burn_subset_summary(&inputs.spans, &inputs.cards, &inputs.accounts));
+    let mut st = state.lock_timed();
+    if st.data_version == version {
+        st.burn_subset_memo = Some((version, built.clone()));
+    }
+    built
+}
+
 /// The request-path twin of the 4 s tick's off-lock compute (TRDD-O3ICDRLO): the burn status
 /// for a route, computed with the state lock RELEASED. Every route that used to call
 /// `CoreState::live_burn_status` under its guard goes through here instead.
@@ -513,13 +539,13 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
 /// 4,894 ms inside the `get_burn_status` tool route — `live_burn_status` is a whole-window
 /// `build_session_summary` PLUS the gather + `compute_burn_status`, all under the lock, and the
 /// sweeper's `save_cards` (4.7 s) and the rebuilder (2.9 s) queued behind that one request. The
-/// summary comes from `summary_now` (cache-served, off-lock; the same slightly-stale-under-rebuild
-/// trade the tick already makes), the only two lock-guarded inputs are snapshotted in a short
+/// summary comes from `burn_summary_now` (the burn subset built off the lock and memoized per data_version, TRDD-735Q3JF4 item 2;
+/// the lock is taken twice (summary, then ttl/config), so the two can come from slightly different moments, which is harmless), the only two lock-guarded inputs are snapshotted in a short
 /// hold, and `burn_status_for` runs released. Callers hold the lock again only for what they
 /// store or read next (`current_account`, `latest_resident_blobs`) — do not fold the compute
 /// back under a guard.
 pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Value {
-    let (_, summary) = summary_now(state, now_ms);
+    let summary = burn_summary_now(state);
     let (ttl, config) = {
         let mut st = state.lock_timed();
         (st.burn.ttl_context(now_ms), st.burn.config.clone())
@@ -4330,7 +4356,7 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         // every install, with or without a dashboard connected, and `live_burn_status` rebuilt the
         // whole window inside the lock — the single biggest source of the 83k `__psynch_mutexwait`
         // samples under an ingest flood. `burn_status_over` below now gets a ready summary.
-        let (_, tick_summary) = summary_now(&state, crate::now_ms() as f64);
+        let tick_summary = burn_summary_now(&state);
         // Declared OUTSIDE the lock blocks (uninitialized — the only paths that skip the
         // assignment are the `continue`s below, which also skip every read): the rotation edge is
         // detected under the lock, and the capture it triggers runs after the lock is released.
