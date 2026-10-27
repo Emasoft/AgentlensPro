@@ -1,10 +1,10 @@
 ---
 trdd-id: NZ9Z9ALO
 title: alcore ignores the AgentlensPro off switch when started directly
-column: ai_review
-status: tasked
+column: complete
+status: archived
 created: 2026-10-27T18:58:56+0100
-updated: 2026-10-27T20:28:17+0100
+updated: 2026-10-27T20:29:24+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -26,6 +26,7 @@ Premise verified 2026-10-27. The CLI honours the AgentlensPro off switch: src/cl
 
 - 2026-10-27T18:58:56+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-27T19:58:01+0100 — column → ai_review. fix committed 97752fb1 + dc3f4da0, reviewed; full suites not yet run
+- 2026-10-27T20:29:24+0100 — COMPLETE by main-agent@agentlenspro. all five acceptance items met; reviewed.
 
 ## Fix 2026-10-27
 
@@ -34,3 +35,11 @@ Premise verified 2026-10-27. The CLI honours the AgentlensPro off switch: src/cl
 - Known gaps, deliberate: (1) the AGENTLENS_DISABLED=1 environment variable is not read, like the old server, because --force-install-telemetry overrides the env half only in-process and its children inherit the variable (src/cli/killSwitch.ts:118-122); (2) new boots only: a running server is stopped by `agentlenspro disable` (disableCli.ts stopServer), not by this gate; (3) launchd behaviour is unchanged by this fix: the LaunchAgent runs the TS supervisor, which refuses under DISABLED; with KeepAlive true launchd relaunches it about every 10 s, a pre-existing refusal loop this fix neither causes nor cures.
 - Consequence for clone harnesses: a copy of the live data dir carries DISABLED (and DISABLED-KEEP-STATUSLINE), so any run with a binary at or after 97752fb1 must remove them from its own copy; scripts_dev/735q3jf4-repeat/run.sh (a local dev harness, not in the repo) now does, and aborts if alcore is not alive after readiness. The harness strips the flag from its own copy instead of the explicit override the original body suggested.
 - Full suites run 2026-10-27 at 317c873e (load below 30): cargo test -p agentlens-core 937 passed, 4 failed; TS unit suite 3256 passed, 0 failed. The 4 cargo failures are pre-existing and unrelated to DISABLED: core_cap_guard::no_literal_duckdb_threads_outside_the_allowlist, and three 1h-backfill tests (restore_backfill_fills_the_correct_deduplicated_value_and_touches_nothing_else, run_1h_backfill_step_persists_before_returning_so_a_hard_exit_loses_nothing, run_1h_backfill_step_does_not_scan_the_whole_card_store). Evidence: docs_dev/20261027_202639+0100-NZ9Z9ALO-full-suites-report.md (local, gitignored). No CI job was checked for a fixture data dir holding DISABLED.
+
+## Acceptance checklist
+
+- [x] alcore exits 78 at boot when <data_dir>/DISABLED exists, before any file, lock, key or listener (97752fb1; test disabled_refuses_boot)
+- [x] the test fails when the gate is removed (timeout) and when it is moved below the pid lock (pid-lock assertion)
+- [x] the test removes its temp dir on every exit path (dc3f4da0)
+- [x] full cargo and TS suites run after the fix with no new failure (937/4 pre-existing, 3256/0)
+- [x] deliberate gaps recorded: env var not read, new boots only, launchd refusal loop unchanged
