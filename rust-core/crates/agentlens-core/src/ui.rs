@@ -240,12 +240,6 @@ static READER_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// a tokio worker thread would stall every other task on that worker, which is the same class of
 /// bug as holding a lock across a syscall.
 pub async fn run_summary_rebuild(state: Arc<Mutex<CoreState>>) {
-    // WHY (TRDD-735Q3JF4 run C2): test instrument, to be removed or consolidated before any deploy. With the build off,
-    // this returns before REBUILDER_ACTIVE is set, so no reader waits on a loop that never runs; summary_now
-    // short-circuits too, so no summary is ever built or stored. Unset = the production path.
-    if summary_build_disabled() {
-        return;
-    }
     REBUILDER_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(25));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -258,22 +252,6 @@ pub async fn run_summary_rebuild(state: Arc<Mutex<CoreState>>) {
         let _ = tokio::task::spawn_blocking(move || rebuild_once(&state)).await;
     }
 }
-
-/// Reads `AGENTLENS_SUMMARY_BUILD` once. TEST INSTRUMENT for TRDD-735Q3JF4 run C2, to be removed or consolidated
-/// before any deploy. The first evaluation logs the startup line; run_summary_rebuild evaluates it first.
-pub(crate) fn summary_build_disabled() -> bool {
-    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OFF.get_or_init(|| {
-        let off = std::env::var("AGENTLENS_SUMMARY_BUILD").is_ok_and(|v| v.trim().eq_ignore_ascii_case("off"));
-        if off {
-            println!("{} alcore: summary build disabled by AGENTLENS_SUMMARY_BUILD=off", crate::log_ts());
-        }
-        off
-    })
-}
-
-/// `summary_now` calls answered by the short-circuit while the build is off (printed on the composition line).
-pub(crate) static SUMMARY_SHORT_CIRCUITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// One rebuild pass, or nothing if the cache is already current. Blocking; the gate is held only
 /// for the duration of THIS pass, and `summary_from` runs off the state lock.
@@ -354,17 +332,11 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
 }
 
 pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Value>) {
-    // WHY (TRDD-735Q3JF4 run C2): with the build off, return before the snapshot, the wait branch and the version
-    // check, so nothing is cloned or stored and the cache stays none. Remove with the instrument.
-    if summary_build_disabled() {
-        SUMMARY_SHORT_CIRCUITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return (0, Arc::new(serde_json::json!({})));
-    }
     // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
     // essentially always (see `cached_any`), so `stale` is what actually answers the request.
     let stale = {
         // Releases rebuild_once (TRDD-735Q3JF4 item 1): a reader has now asked. Set before the cache check so a
-        // warm-cache hit also counts, and after the summary_build_disabled return above so a disabled build stays inert.
+        // warm-cache hit also counts.
         let mut st = state.lock_timed();
         st.summary_asked = true;
         let version = st.data_version;

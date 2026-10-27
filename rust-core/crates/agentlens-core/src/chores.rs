@@ -1099,11 +1099,6 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
         suffix
     );
 
-    // TRDD-735Q3JF4 run C2: while the summary build is off, print how many summary_now calls the short-circuit
-    // answered, so a run shows the instrument was reached.
-    if crate::ui::summary_build_disabled() {
-        println!("{} {}alcore: summary build off, summary_now short-circuits {}", crate::log_ts(), crate::uptime_prefix(), crate::ui::SUMMARY_SHORT_CIRCUITS.load(std::sync::atomic::Ordering::Relaxed));
-    }
     // TRDD-2JOIAH2G collect-probe: force mimalloc's FULL collect (visits ALL heaps, including
     // the 32 worker theaps) and log commit before/after. A big drop = the memory is a DRAINABLE
     // POOL (retire-pools, abandoned pages); a small drop = LIVE data. KNOWN CAVEAT (round-74):
