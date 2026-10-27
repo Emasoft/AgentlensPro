@@ -256,6 +256,10 @@ pub struct CoreState {
     pub sweeper: Option<log_reader::SweeperControl>,
     /// server.ts summaryCache — the merged summary, memoized by data_version (derived_cache.rs).
     pub summary_cache: derived_cache::VersionedCache<Value>,
+    /// Set by the first `ui::summary_now` call and never cleared: "a summary reader has asked since boot".
+    /// `ui::rebuild_once` builds nothing until it is true (TRDD-735Q3JF4 increment 1, item 1). Lives here, not in a
+    /// process-global, so each test's fresh state starts unasked and parallel tests stay isolated.
+    pub summary_asked: bool,
     /// The incremental summary rebuild (TRDD-9VX3WTGU Phase C part 2). `Arc` so the off-lock rebuild
     /// owns a handle without touching the state lock; `force_full` is set wherever the OTEL window
     /// changes wholesale (prune, pressure ladder, clear).
@@ -704,6 +708,7 @@ impl CoreState {
             log_scan: log_reader::LogScanStats::default(),
             sweeper: None,
             summary_cache: derived_cache::VersionedCache::default(),
+            summary_asked: false,
             summary_engine: Arc::new(summary_engine::SummaryEngine::default()),
             accounts: account_registry::AccountRegistry::default(),
             bodies: call_body_registry::CallBodyRegistry::default(),

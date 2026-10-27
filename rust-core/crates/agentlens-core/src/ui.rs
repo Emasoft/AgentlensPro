@@ -283,6 +283,17 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     {
         let mut st = state.lock_timed();
         let version = st.data_version;
+        // WHY (TRDD-735Q3JF4 increment 1, item 1): build nothing until a reader has asked. Before this gate the
+        // 25 ms loop passed the back-off at boot (flight.last is None) and built the whole summary (~43,811 sessions)
+        // for no reader at all; run C2 measured mimalloc commit at ~660 MB with the build off against ~1964 MB on.
+        // Trade-off: the first reader after boot pays one cold build (same as after a stage-2 cache clear); once
+        // any reader has asked, behaviour is unchanged. CAVEAT: the burn tick and resident_blob_scan still call
+        // summary_now until items 2 and 3 land, so on its own this item does not keep boot memory down.
+        // The flag is monotonic and advisory, written under the state lock that every reader and this pass already
+        // take, so no atomic ordering is involved.
+        if !st.summary_asked {
+            return;
+        }
         if st.summary_cache.current(version).is_some() {
             return;
         }
@@ -350,7 +361,10 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
     // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
     // essentially always (see `cached_any`), so `stale` is what actually answers the request.
     let stale = {
+        // Releases rebuild_once (TRDD-735Q3JF4 item 1): a reader has now asked. Set before the cache check so a
+        // warm-cache hit also counts, and after the summary_build_disabled return above so a disabled build stays inert.
         let mut st = state.lock_timed();
+        st.summary_asked = true;
         let version = st.data_version;
         if let Some(cached) = st.summary_cache.current(version) {
             return (version, cached);
@@ -4638,6 +4652,8 @@ mod rebuild_admission_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let state = Arc::new(Mutex::new(CoreState::open(&dir)));
         let set_record = |last| rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = last;
+        // A reader has asked, or the item-1 gate would make every pass below a no-op.
+        state.lock_timed().summary_asked = true;
         let is_current = |state: &Arc<Mutex<CoreState>>| {
             let mut st = state.lock_timed();
             let version = st.data_version;
@@ -4685,6 +4701,44 @@ mod rebuild_admission_tests {
         set_record(None);
     }
 
+    /// TRDD-735Q3JF4 item 1: the loop must not pre-build for nobody. A fresh state that no reader has
+    /// asked about stays unbuilt across a pass, even with the back-off record empty (the boot condition).
+    ///
+    /// MUTATION CHECK: delete the `summary_asked` early return in `rebuild_once` and this MUST fail.
+    #[test]
+    fn the_rebuild_loop_builds_nothing_before_a_reader_has_asked() {
+        let _serial = serial();
+        let dir = std::env::temp_dir().join(format!("al-unasked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        state.lock_timed().data_version += 1;
+
+        rebuild_once(&state);
+        let mut st = state.lock_timed();
+        let version = st.data_version;
+        assert!(st.summary_cache.current(version).is_none(), "the loop built a summary no reader had asked for");
+    }
+
+    /// TRDD-735Q3JF4 item 1, other half: one `summary_now` call releases the loop, which then builds
+    /// the next version exactly as before.
+    ///
+    /// MUTATION CHECK: delete the `summary_asked = true` write in `summary_now` and this MUST fail.
+    #[test]
+    fn after_one_reader_has_asked_the_rebuild_loop_builds() {
+        let _serial = serial();
+        let dir = std::env::temp_dir().join(format!("al-asked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        summary_now(&state, crate::now_ms() as f64);
+        state.lock_timed().data_version += 1;
+
+        rebuild_once(&state);
+        let mut st = state.lock_timed();
+        let version = st.data_version;
+        assert!(st.summary_cache.current(version).is_some(), "the loop must build once a reader has asked");
+    }
     /// THE FIX FOR THE GATE WINNER (TRDD-2R36W8Q1). With a background rebuilder owning rebuilds,
     /// a reader whose cache missed must NOT build even when the gate is completely free — it waits
     /// out its budget and serves the last good summary.
