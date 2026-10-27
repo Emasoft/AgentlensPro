@@ -202,6 +202,27 @@ fn main() {
     if !media_dir.join("index.html").is_file() {
         usage(&format!("--media-dir {}: no index.html there", media_dir.display()));
     }
+    // THE GLOBAL DISABLED GATE (TRDD-NZ9Z9ALO). Ported from the retired TS server (standalone/server.ts
+    // before 567fc5c2, lines 107-119) and dropped in the Rust port: with `<data_dir>/DISABLED` present
+    // alcore booted anyway, so a supervisor spawned under DISABLED got a live server.
+    //
+    // It runs before any file, lock, key or listener is touched. Exit 78 (EX_CONFIG) is the code the
+    // supervisor treats as terminal (src/cli/serverControl.ts isTerminalExit), so it does not respawn.
+    //
+    // FILE ONLY, on purpose, like the old server: AGENTLENS_DISABLED=1 in the env is NOT honoured here,
+    // because --force-install-telemetry overrides the env half only in-process and its children inherit
+    // the variable (src/cli/killSwitch.ts:118-122). That is a known remaining gap. Path::exists reads an
+    // unreadable flag as absent, the same fail-open direction as killSwitch.ts. This covers new boots
+    // only; `agentlenspro disable` is what stops a running server.
+    let disabled_flag = std::path::Path::new(&data_dir).join("DISABLED");
+    if disabled_flag.exists() {
+        eprintln!(
+            "{} alcore: DISABLED flag present ({}) — refusing to boot. Re-enable with: agentlenspro enable",
+            agentlens_core::log_ts(),
+            disabled_flag.display()
+        );
+        exit(78);
+    }
     // BOOT PROVENANCE + THE NO_REVIVE BRAKE WARN (TRDD-Q8ZW00CI, ported from standalone/server.ts
     // :293-307 as part of TRDD-1B98LCVR).
     //
@@ -222,8 +243,8 @@ fn main() {
         let started_by = std::env::var("AGENTLENS_STARTED_BY").ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| {
             "unknown (no AGENTLENS_STARTED_BY — launched by hand, or by a spawner without the stamp)".to_owned()
         });
-        // NO_REVIVE only, never the global DISABLED switch: DISABLED is terminal and is handled by
-        // the CLI gate; NO_REVIVE is a pause whose stated scope is resurrection (killSwitch.ts:56).
+        // NO_REVIVE only: the global DISABLED switch is refused above (exit 78) before we get here;
+        // NO_REVIVE is a pause whose stated scope is resurrection (killSwitch.ts:56), so it stays a warning only.
         let brake_present = std::path::Path::new(&data_dir).join("NO_REVIVE").exists();
         let brake = if brake_present { "PRESENT" } else { "absent" };
         println!(
