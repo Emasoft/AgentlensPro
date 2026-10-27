@@ -4701,6 +4701,24 @@ mod rebuild_admission_tests {
         set_record(None);
     }
 
+    /// Removes its directory on drop, so a failing assertion still cleans up (pattern of the TRDD-R36S0PS9 test).
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A fresh temp dir unique per call (pid plus counter) and its cleanup guard. Declare the guard BEFORE the
+    /// state that opens the dir, so the state drops first and the removal runs after its files are closed.
+    fn unique_dir(tag: &str) -> (std::path::PathBuf, RemoveOnDrop) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("al-{}-{}-{}", tag, std::process::id(), n));
+        std::fs::create_dir_all(&dir).unwrap();
+        (dir.clone(), RemoveOnDrop(dir))
+    }
+
     /// TRDD-735Q3JF4 item 1: the loop must not pre-build for nobody. A fresh state that no reader has
     /// asked about stays unbuilt across a pass, even with the back-off record empty (the boot condition).
     ///
@@ -4708,8 +4726,7 @@ mod rebuild_admission_tests {
     #[test]
     fn the_rebuild_loop_builds_nothing_before_a_reader_has_asked() {
         let _serial = serial();
-        let dir = std::env::temp_dir().join(format!("al-unasked-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (dir, _cleanup) = unique_dir("unasked");
         let state = Arc::new(Mutex::new(CoreState::open(&dir)));
         rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
         state.lock_timed().data_version += 1;
@@ -4727,8 +4744,7 @@ mod rebuild_admission_tests {
     #[test]
     fn after_one_reader_has_asked_the_rebuild_loop_builds() {
         let _serial = serial();
-        let dir = std::env::temp_dir().join(format!("al-asked-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let (dir, _cleanup) = unique_dir("asked");
         let state = Arc::new(Mutex::new(CoreState::open(&dir)));
         rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
         summary_now(&state, crate::now_ms() as f64);
@@ -4739,6 +4755,35 @@ mod rebuild_admission_tests {
         let version = st.data_version;
         assert!(st.summary_cache.current(version).is_some(), "the loop must build once a reader has asked");
     }
+
+    /// TRDD-735Q3JF4 item 2 check: PINS CURRENT BEHAVIOUR at boot. Rebuilder active, nothing ever cached, no reader
+    /// has asked yet. `stale` is None so the REBUILDER_ACTIVE wait block is skipped (it needs a stale value) and the
+    /// first reader falls through to the inline build: with the gate free it wins it and returns the REAL summary for
+    /// the current version (it carries the seeded session), building on the request path (the cold-boot exception).
+    /// Only the stale = None case is tested. The gate-held case (the reader polls for up to 500 ms, then blocks on
+    /// rebuild_gate().lock() until the rebuilder's in-flight build finishes, and the re-check under the gate avoids
+    /// a second build) is reasoned from code, not tested here.
+    #[test]
+    fn at_boot_with_the_rebuilder_active_and_nothing_cached_the_first_reader_builds_inline() {
+        let _active = RebuilderActive::on();
+        let (dir, _cleanup) = unique_dir("boot-inline");
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        // Seed one session so an empty summary tagged with the current version cannot pass.
+        state.lock_timed().put_log_session(serde_json::json!({ "sessionId": "boot-seed-session", "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": [] }));
+        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        assert!(!state.lock_timed().summary_asked, "precondition: no reader has asked");
+        assert!(rebuild_gate().try_lock().is_ok(), "the gate must be free — that is the case under test");
+        let (served_version, summary) = summary_now(&state, crate::now_ms() as f64);
+        let listed = summary.get("sessions").and_then(|v| v.as_array()).map(|a| a.iter().any(|s| s["sessionId"] == "boot-seed-session"));
+        assert_eq!(listed, Some(true), "the served summary must contain the seeded session, got {summary}");
+
+        let mut st = state.lock_timed();
+        let current = st.data_version;
+        assert_eq!(served_version, current, "the first boot reader must get the real current summary, not a stale or empty one");
+        assert!(st.summary_cache.current(current).is_some(), "the inline build must have stored the summary");
+        assert!(st.summary_asked, "summary_now must release the rebuild loop");
+    }
+
     /// THE FIX FOR THE GATE WINNER (TRDD-2R36W8Q1). With a background rebuilder owning rebuilds,
     /// a reader whose cache missed must NOT build even when the gate is completely free — it waits
     /// out its budget and serves the last good summary.
