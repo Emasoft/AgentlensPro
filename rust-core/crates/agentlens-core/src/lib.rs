@@ -40,6 +40,8 @@ pub mod burn;
 pub mod burn_calibration;
 #[cfg(test)]
 mod burn_subset_tests;
+#[cfg(test)]
+mod composition_subset_tests;
 pub mod cache_break;
 pub mod cache_break_timeline;
 pub mod turn_prefix_codec;
@@ -1411,8 +1413,9 @@ use std::panic::Location;
 /// method form called `build_session_summary` under the state lock, and on a cache miss that is
 /// the whole O(window) rebuild while every ingest and read path queues — measured on the live
 /// server at 12.6 s and 30.1 s per call with the other two statements under that guard at 0 ms.
-/// Callers get the summary from `ui::summary_now` (off-lock; warm, stale, or the one cold-boot
-/// build) and take the lock only for what actually needs it.
+/// Callers: `ui::composition_projects` (the resident-blob scan and `compositions_in_scope`) gets the projects from
+/// the cards table and the burn subset, with no summary built. `/api/composition-index` still takes the full summary
+/// from `ui::summary_now` (off-lock; warm, stale, or the one cold-boot build) and then calls this.
 pub fn composition_project_map(summary: &Value) -> std::collections::HashMap<String, String> {
     COMPOSITION_PROJECT_MAP_BUILDS.with(|c| c.set(c.get() + 1));
     let mut map = std::collections::HashMap::new();
@@ -1437,9 +1440,12 @@ thread_local! {
     /// sessions must build the map ONCE.
     ///
     /// THREAD-LOCAL, not global: cargo runs the unit tests on parallel threads, and a global
-    /// counter would count OTHER tests' builds and make the assertion a race. The scope pass
-    /// runs on one task's thread end to end (the body parse is the only `spawn_blocking`), so
-    /// a thread-local count is exactly this pass's count.
+    /// counter would count OTHER tests' builds and make the assertion a race. `composition_projects` builds
+    /// the map on the task that awaits it, after its `spawn_blocking` read, so a build is counted on that
+    /// task's thread. The regression test runs on a current-thread runtime (`#[tokio::test]`), where that task
+    /// never changes thread: the delta of two reads on the test thread is exactly this pass's count. On a
+    /// multi-threaded runtime an await can resume on another worker, and the count is then per thread, not per
+    /// pass. Nothing in production reads the counter.
     static COMPOSITION_PROJECT_MAP_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

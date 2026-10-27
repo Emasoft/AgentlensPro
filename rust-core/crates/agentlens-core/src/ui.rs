@@ -287,9 +287,10 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
         // 25 ms loop passed the back-off at boot (flight.last is None) and built the whole summary (~43,811 sessions)
         // for no reader at all; run C2 measured mimalloc commit at ~660 MB with the build off against ~1964 MB on.
         // Trade-off: the first reader after boot pays one cold build (same as after a stage-2 cache clear); once
-        // any reader has asked, behaviour is unchanged. CAVEAT: the burn tick no longer calls summary_now (item 2: it builds a
-        // card subset instead, see CoreState::burn_subset_summary); resident_blob_scan still calls
-        // summary_now until item 3 lands, so on its own this item does not keep boot memory down.
+        // any reader has asked, behaviour is unchanged. CAVEAT: the burn tick and resident_blob_scan no longer call
+        // summary_now (item 2: a card subset, see CoreState::burn_subset_summary; item 3: the cards table, see
+        // composition_projects). Other summary_now callers (the dashboard, SSE, the MCP and HTTP routes, the
+        // pre-warm, the composition-index route) still build the whole summary on their first request.
         // The flag is monotonic and advisory, written under the state lock that every reader and this pass already
         // take, so no atomic ordering is involved.
         if !st.summary_asked {
@@ -539,9 +540,10 @@ pub(crate) fn burn_summary_now(state: &Arc<Mutex<CoreState>>) -> Arc<Value> {
 /// 4,894 ms inside the `get_burn_status` tool route — `live_burn_status` is a whole-window
 /// `build_session_summary` PLUS the gather + `compute_burn_status`, all under the lock, and the
 /// sweeper's `save_cards` (4.7 s) and the rebuilder (2.9 s) queued behind that one request. The
-/// summary comes from `burn_summary_now` (the burn subset built off the lock and memoized per data_version, TRDD-735Q3JF4 item 2;
-/// the lock is taken twice (summary, then ttl/config), so the two can come from slightly different moments, which is harmless), the only two lock-guarded inputs are snapshotted in a short
-/// hold, and `burn_status_for` runs released. Callers hold the lock again only for what they
+/// summary comes from `burn_summary_now` (the burn subset built off the lock and memoized per data_version,
+/// TRDD-735Q3JF4 item 2; the lock is taken twice (summary, then ttl/config), so the two can come from slightly
+/// different moments, which is harmless), the only two lock-guarded inputs are snapshotted in a short hold, and
+/// `burn_status_for` runs released. Callers hold the lock again only for what they
 /// store or read next (`current_account`, `latest_resident_blobs`) — do not fold the compute
 /// back under a guard.
 pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Value {
@@ -966,17 +968,17 @@ async fn composition_for(
 /// bounds the work — fanning them out would just make the same bounded work concurrent while
 /// multiplying peak memory.
 pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: Option<&str>, now: f64) -> Result<(Vec<Value>, Value), String> {
-    // The project map comes from the summary read OFF the lock (TRDD-UTFVMVT8). This guard was
-    // the top state-lock holder on the live server — 82 `held` lines on one pid, 16 of them ≥ 10 s,
-    // the worst 274 s — and a per-statement split measured 100 % of it in the inline summary
-    // rebuild the old `CoreState::composition_project_map` ran under the lock (12.6 s and 30.1 s),
-    // with the id collect and `resolve_scope` at 0 ms. Only those two run under the guard now.
-    let (_, summary) = summary_now(state, now);
-    let projects = crate::composition_project_map(&summary);
-    let (ids, coverage) = {
+    // The project map comes from the cards table and the burn subset, never from `summary_now` (TRDD-735Q3JF4
+    // item 3). This scan used to build the whole summary at boot and every 30 s, one of the summary_now callers
+    // that run C2 measured against the idle commit fill. The state lock is held only for the two short reads
+    // below; TRDD-UTFVMVT8 measured the inline rebuild this replaced at 12.6 s and 30.1 s under that same lock.
+    let all_ids: Vec<String> = {
         let st = state.lock_timed();
-        let ids: Vec<String> = st.bodies.session_ids().iter().map(|s| (*s).to_owned()).collect();
-        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        st.bodies.session_ids().iter().map(|s| (*s).to_owned()).collect()
+    };
+    let projects = composition_projects(state, &all_ids).await?;
+    let (ids, coverage) = {
+        let refs: Vec<&str> = all_ids.iter().map(String::as_str).collect();
         crate::context_composition_index::resolve_scope(
             &refs,
             scope,
@@ -992,6 +994,80 @@ pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: 
         comps.push(composition_for(state, &id, now, &projects).await?);
     }
     Ok((comps, coverage))
+}
+
+/// TRDD-735Q3JF4 item 3 — the `sessionId → project` map `compositions_in_scope` needs for the bodies in
+/// `ids`: exactly `composition_project_map` over the full summary, for those ids, with no summary built.
+///
+/// The full merge settles an id's project from three things, and each is read here: its own card row (its
+/// project, and whether a log card displaces an OTEL twin of the same id); the `agent-<id>` row, which the
+/// feed merge collapses with the placeholder `<id>`; and that placeholder row, whose workspace the collapsed
+/// transcript falls back to. So the card read covers the closure of every bodies id, `{id, agent-<id>, id
+/// without an agent- prefix}`. The OTEL-window sessions come from `burn_summary_now`: its OTEL survivors are
+/// the full merge's own, because every card with an OTEL id is in the burn subset, so the displacement is the
+/// same. The merge is `feed_merge`'s, run unchanged over light copies of the values it reads.
+///
+/// The DuckDB read runs on a second connection (`CardStore::read_connection`, taken under the lock) and on
+/// the blocking pool. The merge and the projection run on this task, so the thread-local
+/// `composition_project_map_builds` counter sees this pass's build. A failed step (the clone, the blocking task,
+/// the query, one row's parse) returns an error naming it; `compositions_in_scope` propagates it with `?`.
+///
+/// KNOWN GAP, theoretical and not reachable by the ids seen so far (the review judged that real ids never take
+/// this shape; not checked here): the closure fetches an id's own `agent-` twin, not that twin's twin. If a bodies
+/// id `X` is an `agent-Y` transcript that is itself a placeholder candidate (it carries a parent), the full merge may
+/// consume `X` through its own twin row `agent-agent-Y`, which this closure does not fetch. `X` would then map here
+/// and be absent from the full summary.
+pub(crate) async fn composition_projects(state: &Arc<Mutex<CoreState>>, ids: &[String]) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut closure: Vec<String> = Vec::with_capacity(ids.len() * 3);
+    for id in ids {
+        closure.push(id.clone());
+        // The twin rule of `feed_merge::link_twin_id`, applied to an id: `agent-` followed by the sessionId.
+        closure.push(format!("agent-{id}"));
+        if let Some(placeholder) = id.strip_prefix("agent-") {
+            closure.push(placeholder.to_owned());
+        }
+    }
+    closure.sort();
+    closure.dedup();
+    let conn = state.lock_timed().cards.read_connection()?;
+    let burn = burn_summary_now(state);
+    let rows = {
+        let read = closure.clone();
+        tokio::task::spawn_blocking(move || crate::card_store::composition_rows(&conn, &read))
+            .await
+            .map_err(|e| format!("the composition card read did not finish: {e}"))??
+    };
+    let in_closure: std::collections::HashSet<&str> = closure.iter().map(String::as_str).collect();
+    // Only the OTEL-fed entries of the burn subset: its log cards are already in `rows`. Light copies, so the
+    // window sessions' timelines are not cloned on every pass.
+    let otel: Vec<Value> = burn
+        .get("sessions")
+        .and_then(Value::as_array)
+        .map(|sessions| {
+            sessions
+                .iter()
+                .filter(|s| s.get("dataSource").and_then(Value::as_str) == Some("otel"))
+                .filter(|s| s.get("sessionId").and_then(Value::as_str).is_some_and(|id| in_closure.contains(id)))
+                .map(light_session)
+                .collect()
+        })
+        .unwrap_or_default();
+    let merged = crate::feed_merge::link_subagent_transcripts(crate::feed_merge::merge_otel_and_log_sessions(otel, rows));
+    let mut root = Map::new();
+    root.insert("sessions".into(), Value::Array(merged));
+    Ok(crate::composition_project_map(&Value::Object(root)))
+}
+
+/// The fields of a session that the feed merge and the project resolver read, copied. The rest, the
+/// timeline above all, stays where it is.
+fn light_session(session: &Value) -> Value {
+    let mut light = Map::new();
+    for key in ["sessionId", "source", "dataSource", "projectPath", "workspace"] {
+        if let Some(value) = session.get(key) {
+            light.insert(key.into(), value.clone());
+        }
+    }
+    Value::Object(light)
 }
 
 /// resolveSessionCard (server.ts) — the summary card with its timeline made REAL. Shared by freeze

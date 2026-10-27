@@ -1117,6 +1117,15 @@ impl CardStore {
         )
     }
 
+    /// TRDD-735Q3JF4 item 3 — a second connection to the same card database, for a read that runs OFF
+    /// the `CoreState` lock (`ui::composition_projects`). `try_clone` opens a connection on the same
+    /// database instance, so the clone sees every committed write. WHY not read under the guard: a
+    /// DuckDB read holds every other request behind the lock for its whole duration. A failed clone is returned, not
+    /// panicked: the caller is the resident-blob scan, which warns and keeps its last cache.
+    pub(crate) fn read_connection(&self) -> Result<Connection, String> {
+        self.conn.try_clone().map_err(|e| format!("clone the card store connection for the composition read: {e}"))
+    }
+
     /// `{total, roots, subagents, bySource}` from the KEY COLUMNS only — a COUNT and a GROUP BY,
     /// never `json_extract` over the card text (that is the O(corpus) scan Amendment 1 bans). A
     /// card with no `source` is counted under `"unknown"`.
@@ -1215,6 +1224,45 @@ fn persist_strip_cold(card: Arc<Value>) -> Arc<Value> {
     let mut stripped = obj.clone();
     persist_strip_map(&mut stripped);
     Arc::new(Value::Object(stripped))
+}
+
+/// TRDD-735Q3JF4 item 3 — the card rows `ui::composition_projects` reads, for the bodies closure `ids`:
+/// each id's own row, its `agent-` twin and the placeholder that twin names. The feed merge decides a
+/// row's fate only from those rows, so the closure is exact. One object per row, holding the JSON
+/// VALUES of the fields the merge and the project resolver read. `json_extract` keeps each value's JSON
+/// type: a number stays a number (`feed_merge::f` reads `as_f64`), and an absent field is null, which
+/// every reader treats as absent. WHY not `json_extract_string`: it turns `8000` into the string "8000",
+/// and the merge would then read that card as 0 tokens. A failed step returns an error naming it, never a panic:
+/// the caller is the resident-blob scan, which warns and keeps its last cache.
+pub(crate) fn composition_rows(conn: &Connection, ids: &[String]) -> Result<Vec<Value>, String> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let marks = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT CAST(json_object(
+             'sessionId', json_extract(card, '$.sessionId'),
+             'source', json_extract(card, '$.source'),
+             'dataSource', json_extract(card, '$.dataSource'),
+             'parentSessionId', json_extract(card, '$.parentSessionId'),
+             'projectPath', json_extract(card, '$.projectPath'),
+             'workspace', json_extract(card, '$.workspace'),
+             'inputTokens', json_extract(card, '$.inputTokens'),
+             'outputTokens', json_extract(card, '$.outputTokens'),
+             'cacheReadTokens', json_extract(card, '$.cacheReadTokens'),
+             'cacheCreateTokens', json_extract(card, '$.cacheCreateTokens')
+         ) AS VARCHAR)
+         FROM cards WHERE session_id IN ({marks})"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare the composition card read: {e}"))?;
+    let rows = stmt
+        .query_map(agentlens_store::duckdb::params_from_iter(ids.iter()), |r| r.get::<_, String>(0))
+        .map_err(|e| format!("run the composition card read: {e}"))?;
+    rows.map(|row| {
+        let text = row.map_err(|e| format!("read a composition card row: {e}"))?;
+        serde_json::from_str::<Value>(&text).map_err(|e| format!("parse a composition card row: {e}"))
+    })
+    .collect()
 }
 
 /// A stored card is a string THIS process wrote with `serde_json::to_string`; a parse failure
