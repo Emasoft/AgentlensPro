@@ -4,7 +4,7 @@ title: A hang during alcore boot leaves a live pid with no listeners that the re
 column: backburner
 status: tasked
 created: 2026-10-28T20:45:09+0100
-updated: 2026-10-28T20:45:09+0100
+updated: 2026-10-28T21:29:49+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -30,3 +30,7 @@ start_sweeper blocks on boot_rx.recv() (log_reader.rs:1751) while the sweeper th
 ## Approval log
 
 - 2026-10-28T20:45:09+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Related evidence 2026-10-28
+
+735Q3JF4 deferred runs: the boot ingest held the state lock about 40 s at log_reader.rs:1223 (6 s at :1536), host load 8-10 (docs_dev/20261028_211829+0100-735Q3JF4-deferred-measurements.md).

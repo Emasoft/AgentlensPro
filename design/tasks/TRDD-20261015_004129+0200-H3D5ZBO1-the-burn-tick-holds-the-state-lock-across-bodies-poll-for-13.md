@@ -37,4 +37,4 @@ approval-datetime: 2026-10-15T00:41:29+0200
 
 ## Live evidence 2026-10-28
 
-735Q3JF4 deferred run A (real-data copy, log scan on, 185636 body files): a 12.6 s state-lock hold at ui.rs:4426 at up ~0 made three waiters (ui.rs:948, ui.rs:262, chores.rs:69) wait 12.5 s (docs_dev/20261028_211829+0100-735Q3JF4-deferred-measurements.md).
+735Q3JF4 deferred run A (real-data copy, log scan on, 185636 body files): a 12.6 s state-lock hold attributed to ui.rs:4426, i.e. the burn tick's whole locked block (which contains bodies.poll, plus statusline.flush and ttl_context) at up ~0 made three waiters (ui.rs:948, ui.rs:262, chores.rs:69) wait 12.5 s (docs_dev/20261028_211829+0100-735Q3JF4-deferred-measurements.md). With 185636 body files vs 588k when 130-576 s was measured: a size data point consistent with first-pass cost scaling with file count, not a re-confirmation of that magnitude.
