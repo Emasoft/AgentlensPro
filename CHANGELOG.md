@@ -142,8 +142,8 @@ All notable changes to AgentlensPro are documented here.
   increase. **Only rows indexed from this version on use the 1h rate; existing rows keep the old
   value**: there is no rebuild command, and the indexer rewrites a row (keyed on `call_id`) only when
   it re-scans that call's response body inside its bounded window. `cost_usd` and `billable_weight` now
-  read the same tier field; they can still disagree on a row whose 1h tier exceeds its cache-write
-  total, which `cost_usd` clamps and `billable_weight` does not (TRDD-M6SVB8UY).
+  read the same tier field; they can still disagree on a row whose tier split does not match its
+  cache-write total, which `cost_usd` reconciles and `billable_weight` does not (TRDD-M6SVB8UY).
 - **The burn tick and the scope pass stopped copying the whole corpus per session.** The live profile
   put 14,071 of 14,071 samples in `composition_project_map` -> `IndexMap::get_index_of` ->
   `_platform_memcmp`: the `sessionId -> project` map was rebuilt once per session, and the burn tick
