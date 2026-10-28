@@ -4,7 +4,7 @@ title: alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and
 column: dev
 status: tasked
 created: 2026-10-23T04:39:08+0200
-updated: 2026-10-28T21:29:56+0100
+updated: 2026-10-28T21:32:03+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -168,3 +168,11 @@ Lock hold, run A: ui.rs:4426 state lock held 12.6 s at up ~0; three waiters (ui.
 Not measured: populated-window cost on the real data (span window loaded 0 spans, 'loaded 0 span(s) (last 24h window)'); first dashboard visit with log scan on; repeat runs for variance; rss falls and rises (A and B differ, each is one run).
 Scratch left in place, not deleted: scratch copies left on the measuring host, see the session report; the run-A and run-B copies were deleted by the harness.
 Binary built 2026-10-27 20:47 (sha256 56ad6bc044effc6c2ebd5c4e3ebef40a71b034a042cd1be2633dbdb3d44b7793) while HEAD was 18bdd70c; containment not verified (the report does not say whether it contains 2294f718 / increment 1). Host load: run A ~8-10, run B higher (boot scan 69.5 s vs 26.2 s); ready times and lock holds are load-sensitive.
+
+## Boot log-scan filler analysis 2026-10-28
+
+Read-only code analysis: docs_dev/20261028_212954+0100-735Q3JF4-logscan-filler-analysis.md. The boot sweep takes the warm sequential tail_one path (card store reused), not the rayon cold scan.
+Candidate 1 (pattern VERIFIED by reading log_reader.rs:612-677; size INFERRED): at boot the accumulator LRU is empty, so can_resume is false and every changed file (1990) is re-read from byte 0; read_lines_from does read_to_end of the whole file plus a second full copy as Vec<Vec<u8>> lines, then a serde_json Value per line. Transcripts over 200 MB occur in real use (8 in one live ~/.claude/projects count), but none is verified to be among the 1990 changed files of the measured copy; per file the transient is at least ~2x its size (read buffer plus line copies), more during Vec reallocation. Fix shape: stream with BufRead::read_until into one reused line buffer, keeping the do-not-consume-the-trailing-partial-line rule.
+Candidate 2 (pattern VERIFIED, size INFERRED): ingest flushes only at SCAN_CHUNK=2000 files, and changed=1990 < 2000, so all parsed cards are held and ingested in one batch (consistent with, not shown to cause, the ~40 s hold at log_reader.rs:1223; per-card demote/DuckDB work under the lock is an alternative). Fix shape: flush by cumulative bytes/cards.
+Candidate 3 (INFERRED, lower): restore_reused seed_written per-card clone+serialize and the 54935-entry offsets map.
+Order of runs, after the same-binary log-scan-off control (STATE NEXT ACTION): one variable each — (a) streaming read_lines_from, (b) SCAN_CHUNK=200, (c) a commit/free-in-page probe right after restore vs after the sweep. Not run yet: host load was ~86 on 14 cores.
