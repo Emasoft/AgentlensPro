@@ -303,6 +303,23 @@ suite('pricing — claude-sonnet-5 (TRDD-ZK37VG4X spec 1)', () => {
     assert.ok(lookupRates('claude-sonnet-5-20260601'))
   })
 
+  // TRDD-K4XQ7M2B review follow-up: the 1h argument is a PART of cacheWrite (5m remainder = write - 1h).
+  // Nothing upstream enforces 1h <= cache_creation (the two come from separate usage fields), so the
+  // clamp lives here: an over-large or negative 1h count must never yield a negative 5m bucket or a credit.
+  test('a 1h count larger than the cache write is clamped to it (no negative 5m bucket); a negative 1h count is ignored', () => {
+    assert.ok(Math.abs(calcTokenCostUsd(0, 0, 1_000_000, 0, 'claude-opus-5', 3_000_000) - 10.0) < 1e-9)
+    assert.ok(Math.abs(calcTokenCostUsd(0, 0, 1_000_000, 0, 'claude-opus-5', -500_000) - 6.25) < 1e-9)
+  })
+
+  // Non-Anthropic-shaped entry (gemini-2.5-pro: cacheWritePerMTok 0, not 1.25x input): 1h tokens must
+  // be priced at the entry's own write rate, never at a derived 2x input. 50k input + 50k 1h write
+  // = 50k * $1.25/MTok = $0.0625 — a derived 2x write rate would give $0.1875.
+  test('1h tokens on a non-Anthropic-shaped entry cost the same as the same tokens all-5m', () => {
+    const all5m = calcTokenCostUsd(50_000, 0, 50_000, 0, 'gemini-2.5-pro', 0)
+    const with1h = calcTokenCostUsd(50_000, 0, 50_000, 0, 'gemini-2.5-pro', 50_000)
+    assert.strictEqual(with1h, all5m)
+    assert.ok(Math.abs(with1h - 0.0625) < 1e-12, `expected $0.0625, got $${with1h}`)
+  })
   test('an unknown model returns null rates and $0 raw cost (the flag, not the table, carries the alarm)', () => {
     assert.strictEqual(lookupRates('totally-unknown-model-xyz'), null)
     assert.strictEqual(calcTokenCostUsd(1_000_000, 0, 0, 1_000_000, 'totally-unknown-model-xyz'), 0)

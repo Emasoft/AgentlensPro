@@ -131,6 +131,17 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`api_calls.cost_usd` now prices 1h-tier cache writes at the 1h rate (TRDD-K4XQ7M2B).** The
+  forensics indexer (`forensics_scan.rs`, the live one; `src/forensicsIndex.ts` `apiCallParams` is its
+  TypeScript parity twin, reachable only from the parity generators and tests) passed `0` as the 1h
+  cache-write argument, so every 1h write was priced at the 5m rate (1.25x input instead of 2x) while
+  the same row's `billable_weight` already used the measured tier split. It now passes the row's
+  `tier_1h_tokens`. **Numbers for 1h-heavy rows go UP**, by up to x1.6 on the cache-write bucket (the
+  old figure was 37.5% low); flat-total rows (both tiers 0) and 5m-only rows are unchanged. **Cutover:**
+  a cost series spanning this version shows a step up that is an accounting correction, not a cost
+  increase. **Only rows indexed from this version on use the 1h rate; existing rows keep the old
+  value**: there is no rebuild command, and the indexer rewrites a row (keyed on `call_id`) only when
+  it re-scans that call's response body inside its bounded window.
 - **The burn tick and the scope pass stopped copying the whole corpus per session.** The live profile
   put 14,071 of 14,071 samples in `composition_project_map` -> `IndexMap::get_index_of` ->
   `_platform_memcmp`: the `sessionId -> project` map was rebuilt once per session, and the burn tick

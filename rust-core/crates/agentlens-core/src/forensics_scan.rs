@@ -355,20 +355,7 @@ pub fn index_api_calls(
         // here. An earlier version guarded at THIS site and fell back to the clock, which quietly
         // introduced a second, contradictory policy for an unknowable timestamp — the very
         // back-dating `resolve_ts` refuses by name. One condition, one policy, one place.
-        let cost_usd = match model {
-            // The TS calls the 5-ARG calcTokenCostUsd, whose trailing 1h argument defaults to 0.
-            Some(m) => calc_token_cost_usd(
-                ev.input_tokens,
-                ev.cache_read_tokens,
-                ev.cache_creation_tokens,
-                ev.output_tokens,
-                m,
-                0.0,
-                None,
-                ev.ts,
-            ),
-            None => 0.0,
-        };
+        let cost_usd = event_cost_usd(ev, model);
         // A response can carry a FLAT cache_creation total with no tier sub-object, leaving both
         // tiers 0. Attribute that flat total to the 5-minute tier for the WEIGHT only, so the
         // priciest bucket is counted instead of dropped — otherwise billable_weight disagrees with
@@ -681,6 +668,75 @@ pub fn scan_api_call_events(opts: &ScanApiCallOptions, now_ms: f64) -> (Vec<ApiC
     )
 }
 
+/// cost_usd for one call row. WHY the 1h argument is `ev.tier_1h_tokens` (TRDD-K4XQ7M2B): cost_usd must
+/// price the MEASURED 5m/1h split, the same one billable_weight uses. Hard-coding 0.0 priced 1h cache
+/// writes at the 5m rate (1.25x vs 2x input), 37.5% low. A flat-total row (both tiers 0) passes 0.0,
+/// so it is unchanged. Mirrors the TS call site in forensicsIndex.ts `apiCallParams`.
+fn event_cost_usd(ev: &ApiCallEvent, model: Option<&str>) -> f64 {
+    match model {
+        Some(m) => calc_token_cost_usd(
+            ev.input_tokens,
+            ev.cache_read_tokens,
+            ev.cache_creation_tokens,
+            ev.output_tokens,
+            m,
+            ev.tier_1h_tokens,
+            None,
+            ev.ts,
+        ),
+        None => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod event_cost_tests {
+    use super::{event_cost_usd, ApiCallEvent};
+    use crate::pricing::calc_token_cost_usd;
+
+    fn ev(cache_creation: f64, t5m: f64, t1h: f64) -> ApiCallEvent {
+        ApiCallEvent {
+            call_id: "c1".into(),
+            response_ref: "r1".into(),
+            request_ref: None,
+            request_content_tags: None,
+            ts: 1_788_213_600_000.0,
+            session_id: None,
+            account_uuid: None,
+            model: Some("claude-opus-5".into()),
+            effort: "none".into(),
+            frontmatter_fp: None,
+            input_tokens: 0.0,
+            output_tokens: 0.0,
+            cache_read_tokens: 0.0,
+            cache_creation_tokens: cache_creation,
+            tier_5m_tokens: t5m,
+            tier_1h_tokens: t1h,
+            injections: vec![],
+            attributed: false,
+        }
+    }
+
+    // 1M tokens, all 1h tier: opus-5 writes cost $10/MTok at 1h vs $6.25 at 5m.
+    #[test]
+    fn a_1h_tier_write_is_priced_at_the_1h_rate_not_the_5m_rate() {
+        let e = ev(1_000_000.0, 0.0, 1_000_000.0);
+        let got = event_cost_usd(&e, Some("claude-opus-5"));
+        let want = calc_token_cost_usd(0.0, 0.0, 1_000_000.0, 0.0, "claude-opus-5", 1_000_000.0, None, e.ts);
+        let all_5m = calc_token_cost_usd(0.0, 0.0, 1_000_000.0, 0.0, "claude-opus-5", 0.0, None, e.ts);
+        assert_eq!(got, want);
+        assert!((got - 10.0).abs() < 1e-9, "expected $10.00, got {got}");
+        assert!(got > all_5m, "1h price {got} must exceed the all-5m price {all_5m}");
+    }
+
+    #[test]
+    // Regression guard for TRDD-K4XQ7M2B acceptance item 2 (flat-total rows keep today's number); NOT
+    // mutation evidence for the fix — it passes with or without the 1h argument.
+    fn a_flat_total_row_with_both_tiers_zero_is_priced_as_all_5m() {
+        let e = ev(1_000_000.0, 0.0, 0.0);
+        let got = event_cost_usd(&e, Some("claude-opus-5"));
+        assert!((got - 6.25).abs() < 1e-9, "expected $6.25, got {got}");
+    }
+}
 #[cfg(test)]
 mod resolve_ts_tests {
     use super::resolve_ts;

@@ -616,8 +616,11 @@ export function apiCallParams(ev: ApiCallEvent, spawn: ResolvedSpawn, now: numbe
   // If this export is ever retired, retire the guard with it. Falling back to `undefined` means
   // "price at today's rate" — a degradation rather than a crash.
   const atIso = Number.isFinite(ev.ts) && Math.abs(ev.ts) <= 8.64e15 ? new Date(ev.ts).toISOString() : undefined
+  // WHY the 6th arg is ev.tier1hTokens (TRDD-K4XQ7M2B): cost_usd must price the MEASURED 5m/1h split,
+  // the same one billable_weight uses below. Hard-coding 0 priced every 1h cache write at the 5m rate
+  // (1.25x vs 2x input), i.e. 37.5% low. A flat-total row (both tiers 0) passes 0 here, so it is unchanged.
   const costUsd = model
-    ? calcTokenCostUsd(ev.inputTokens, ev.cacheReadTokens, ev.cacheCreationTokens, ev.outputTokens, model, 0, atIso)
+    ? calcTokenCostUsd(ev.inputTokens, ev.cacheReadTokens, ev.cacheCreationTokens, ev.outputTokens, model, ev.tier1hTokens, atIso)
     : 0
   // billable_weight is built from the tier split (5m/1h), but a response can carry a flat
   // cache_creation total with NO tier sub-object (both tiers 0) — see cacheCreationForensics. In that
