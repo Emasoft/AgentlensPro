@@ -4,7 +4,7 @@ title: Count failed pass-state saves in server stats so a full disk stays visibl
 column: todo
 status: tasked
 created: 2026-10-29T00:39:58+0100
-updated: 2026-10-29T00:40:02+0100
+updated: 2026-10-29T00:42:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -26,3 +26,9 @@ Found by the review of commit 79723010 (TRDD-ZR3OGSAV). After TRDD-ZR3OGSAV, a f
 ## Approval log
 
 - 2026-10-29T00:39:58+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Acceptance criteria
+
+- [ ] /api/server-stats reports the consecutive failed pass-state saves and the time of the last failure, next to the bodies-pass figures.
+- [ ] A test forces a save failure through the pass (resetting the per-process STATE_SAVE_FAILS first) and reads the figures back.
+- [ ] The test fails when the counter is not exposed (mutation-checked).

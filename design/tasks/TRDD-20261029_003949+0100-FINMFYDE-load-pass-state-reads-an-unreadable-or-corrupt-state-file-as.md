@@ -4,7 +4,7 @@ title: load_pass_state reads an unreadable or corrupt state file as empty
 column: todo
 status: tasked
 created: 2026-10-29T00:39:49+0100
-updated: 2026-10-29T00:39:54+0100
+updated: 2026-10-29T00:42:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -26,3 +26,11 @@ Found by the review of commit 79723010 (TRDD-ZR3OGSAV). rust-core/crates/agentle
 ## Approval log
 
 - 2026-10-29T00:39:49+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Acceptance criteria
+
+- [ ] An absent .pass-state.json loads as empty sets (test).
+- [ ] A present but corrupt or unreadable .pass-state.json is an error, not empty sets (test).
+- [ ] alstore unpark on a corrupt state file exits non-zero and leaves the file byte-identical (test).
+- [ ] alcore bodies_pass logs and skips that tick's save when the state cannot be read.
+- [ ] Each new test fails when its fix is reverted (mutation-checked).
