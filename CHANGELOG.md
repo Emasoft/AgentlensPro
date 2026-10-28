@@ -131,6 +131,16 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **A failed save of the bodies-pass state file is now reported instead of silently dropped (TRDD-ZR3OGSAV).**
+  `save_pass_state` discarded both the temp-file write error and the rename result, so a full disk or
+  a permission error lost stranded/skip names with no trace. It now returns the error and removes a
+  stale `.pass-state.json.tmp` after a failed rename. alcore logs `FAILED to persist <path>` on the
+  first failing tick, suppresses the repeats of the 60s chore (counting them), and logs one
+  `recovered after N failed saves` line on the next successful save; on a full disk that server.log
+  line may itself be lost. **alstore CLI contract change:** `alstore pass` still prints its result
+  JSON, then exits 3 when the state was not saved; `alstore unpark` exits 3 and prints no counts.
+  Exit 3 is new (2 stays reconstruct/verify errors); every in-repo caller already treats any non-zero
+  exit other than 75 as a failure.
 - **`api_calls.cost_usd` now prices 1h-tier cache writes at the 1h rate (TRDD-K4XQ7M2B).** The
   forensics indexer (`forensics_scan.rs`, the live one; `src/forensicsIndex.ts` `apiCallParams` is its
   TypeScript parity twin, not in the shipped bundle; imported only by tests, the parity generators and the unbundled `src/mcpServer.ts`) passed `0` as the 1h

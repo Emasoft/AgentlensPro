@@ -10,6 +10,10 @@
 //!       persisted stranded set, under the pass lock (TRDD-8TM7I49X) — run AFTER the ts rows
 //!       those names were parked for have been repaired, or the next pass re-parks them
 //!
+//! Exit codes: 0 ok; 1 failure / verify mismatch; 2 reconstruct/verify store error; 3 the pass state
+//!   file (.pass-state.json) could not be saved (`pass` still prints its result first, `unpark` prints
+//!   no counts); 64 usage; 75 another alstore pass owns the store (EX_TEMPFAIL, skip the tick).
+//!
 //! The parity tests drive these against the TS store on the same files/directories: the
 //! Parquet parts are the compatibility boundary (both engines are DuckDB).
 
@@ -97,7 +101,11 @@ fn main() {
         let names: Vec<String> =
             raw.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
         let state_file = std::path::Path::new(store_dir).join(agentlens_store::pass::PASS_STATE_FILE);
-        let (requested, removed, remaining) = agentlens_store::pass::unpark_names(&state_file, &names);
+        // TRDD-ZR3OGSAV: a failed state save means nothing was unparked; fail (exit 3) instead of printing counts.
+        let (requested, removed, remaining) = agentlens_store::pass::unpark_names(&state_file, &names).unwrap_or_else(|e| {
+            eprintln!("alstore: cannot save {}: {e}", state_file.display());
+            exit(3);
+        });
         println!(
             "{}",
             serde_json::json!({ "requested": requested, "removed": removed, "strandedRemaining": remaining })
@@ -225,8 +233,14 @@ fn main() {
             let prune_line = agentlens_store::pass::prune_pass_names(std::slice::from_ref(&opts.bodies_dir), &mut skip, &mut stranded);
             let mut res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
             res.failed.extend(prune_line);
-            agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
+            // TRDD-ZR3OGSAV: the pass already ran (and may have deleted), so still print its result for
+            // the operator, but exit 3: the state it relies on next run was not persisted.
+            let saved = agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
             println!("{}", serde_json::to_string(&res).expect("serializable"));
+            if let Err(e) = saved {
+                eprintln!("alstore: cannot save {}: {e}", state_file.display());
+                exit(3);
+            }
         }
         other => usage(&format!("unknown command {other}")),
     }

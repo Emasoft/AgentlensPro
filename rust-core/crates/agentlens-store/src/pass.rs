@@ -99,16 +99,24 @@ pub fn load_pass_state(p: &Path) -> (HashSet<String>, HashSet<String>) {
 /// not of HashSet iteration order — otherwise every pass rewrites a byte-different file. Temp +
 /// rename so a crash mid-write cannot leave a truncated state that reads back as "nothing is
 /// stranded".
-pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<String>) {
+pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<String>) -> std::io::Result<()> {
     let mut skip_v: Vec<&String> = skip.iter().collect();
     let mut str_v: Vec<&String> = stranded.iter().collect();
     skip_v.sort();
     str_v.sort();
     let json = serde_json::json!({ "skipNames": skip_v, "strandedNames": str_v });
     let tmp = p.with_extension("json.tmp");
-    if fs::write(&tmp, json.to_string()).is_ok() {
-        let _ = fs::rename(&tmp, p);
+    // WHY a Result (TRDD-ZR3OGSAV): the old `if write.is_ok() { let _ = rename }` swallowed a full
+    // disk / permission error, so a lost stranded or skip name vanished without a trace. Every
+    // failure is now returned for the caller to surface; the temp+rename atomicity is kept.
+    fs::write(&tmp, json.to_string())?;
+    if let Err(e) = fs::rename(&tmp, p) {
+        // A rename that failed leaves the temp file behind; remove it so it does not linger. Its own
+        // removal error is irrelevant: the rename error is the one to report.
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
     }
+    Ok(())
 }
 
 /// The state file's name inside a store dir. ONE definition — the CLI and alcore must not each
@@ -762,15 +770,16 @@ pub fn ingest_pass_observed_with(
 /// silently resurrecting or dropping names in either set. Returns (requested, removed,
 /// stranded_remaining). skipNames is preserved untouched — an unparked name stays skip-listed,
 /// which is exactly what routes it to the delete gate instead of a re-ingest.
-pub fn unpark_names(state_file: &Path, names: &[String]) -> (usize, usize, usize) {
+pub fn unpark_names(state_file: &Path, names: &[String]) -> std::io::Result<(usize, usize, usize)> {
     let (skip, mut stranded) = load_pass_state(state_file);
     let before = stranded.len();
     for n in names {
         stranded.remove(n);
     }
     let removed = before - stranded.len();
-    save_pass_state(state_file, &skip, &stranded);
-    (names.len(), removed, stranded.len())
+    // TRDD-ZR3OGSAV: a failed save means the unpark did NOT happen; reporting success would lie.
+    save_pass_state(state_file, &skip, &stranded)?;
+    Ok((names.len(), removed, stranded.len()))
 }
 
 /// Prune the persisted name sets against EVERY bodies dir of a tick (TRDD-2HRA270Y). Call it ONCE per tick,
@@ -831,20 +840,53 @@ mod tests {
     #[test]
     fn unpark_removes_only_named_stranded_and_preserves_skip() {
         let dir = std::env::temp_dir().join(format!("al-unpark-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
         fs::create_dir_all(&dir).unwrap();
         let state = dir.join(PASS_STATE_FILE);
         let skip: HashSet<String> = ["a.request.json", "b.request.json"].iter().map(|s| s.to_string()).collect();
         let stranded: HashSet<String> = ["a.request.json", "c.response.json"].iter().map(|s| s.to_string()).collect();
-        save_pass_state(&state, &skip, &stranded);
+        save_pass_state(&state, &skip, &stranded).unwrap();
 
         // Remove one present name, one absent name — removed counts only what was actually there.
         let (req, removed, remaining) =
-            unpark_names(&state, &["a.request.json".to_string(), "zzz.request.json".to_string()]);
+            unpark_names(&state, &["a.request.json".to_string(), "zzz.request.json".to_string()]).unwrap();
         assert_eq!((req, removed, remaining), (2, 1, 1));
 
         let (skip2, stranded2) = load_pass_state(&state);
         assert_eq!(skip2, skip, "skipNames must survive an unpark byte-for-byte");
         assert!(stranded2.contains("c.response.json") && !stranded2.contains("a.request.json"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-ZR3OGSAV: a write failure must surface. The TEMP path is an existing directory, so the
+    /// temp write fails with EISDIR (21 on macOS and Linux). WHY this shape: if the write error were
+    /// swallowed, the rename of that directory onto the free state path would SUCCEED, so the test
+    /// goes red; a write failure under a missing/non-directory parent would not (the rename fails too).
+    #[test]
+    fn save_pass_state_reports_a_write_failure() {
+        let dir = std::env::temp_dir().join(format!("al-save-write-fail-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        let state = dir.join(PASS_STATE_FILE);
+        fs::create_dir_all(state.with_extension("json.tmp")).unwrap();
+        let none: HashSet<String> = HashSet::new();
+        let err = save_pass_state(&state, &none, &none).expect_err("a failed temp write must be an Err");
+        assert_eq!(err.raw_os_error(), Some(21), "expected EISDIR from the temp write, got {err:?}");
+        assert!(!state.exists(), "a failed write must not produce a state file");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-ZR3OGSAV: a rename failure must surface AND leave no stale `.json.tmp`. The state path
+    /// is an existing non-empty directory, so the temp write succeeds and the rename onto it fails.
+    #[test]
+    fn save_pass_state_reports_a_rename_failure_and_removes_the_temp_file() {
+        let dir = std::env::temp_dir().join(format!("al-save-rename-fail-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        let state = dir.join(PASS_STATE_FILE);
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("occupant"), b"x").unwrap();
+        let none: HashSet<String> = HashSet::new();
+        assert!(save_pass_state(&state, &none, &none).is_err(), "a failed rename must be an Err");
+        assert!(!state.with_extension("json.tmp").exists(), "the failed rename must not leave its temp file");
         fs::remove_dir_all(&dir).ok();
     }
 

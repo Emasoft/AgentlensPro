@@ -344,6 +344,10 @@ static LEFTOVER_LOGGED: Mutex<Option<(String, std::time::Instant)>> = Mutex::new
 static BUSY_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static REOPEN_REFUSED_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
+/// Consecutive failed saves of `.pass-state.json` (TRDD-ZR3OGSAV): the pass runs every 60s, so a
+/// persistent failure (full disk) is logged on the first failure only, then counted and summarized on recovery.
+static STATE_SAVE_FAILS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The last bodies-pass reading (TRDD-HDUETCU7), held here and not in `CoreState`; `server_stats`
 /// reads it through `bodies_pass_stats()`. The type is `crate::BodiesPassStats`.
 // ponytail: this static is per PROCESS, not per data dir: alcore owns exactly one data dir (pid
@@ -764,7 +768,29 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             }
         }
     }
-    agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
+    // TRDD-ZR3OGSAV: this tick's deletions already ran, so a failed save cannot be rolled back and the
+    // tick cannot return an error. WHY state-change-only: the pass ticks every 60s, so a full disk would
+    // otherwise repeat this line forever; log the first failure, count repeats, log recovery once.
+    // Real risk of a lost save (the next tick RELOADS the old file from disk, nothing stays in memory):
+    // a body never reaches the delete gate on the strength of these name sets — the gate re-verifies
+    // the content against the store (verify_bodies_in_store + content_unchanged_since_read) — so no
+    // unverified body is deleted. The loss is wasted work: skip names are forgotten (bodies re-ingested,
+    // dedup makes that a no-op), a pending stranded->skip move or prune is redone. Stranded names are
+    // only consulted for `relocate_stranded_to`, which this chore never sets. And on a full disk this
+    // very log line may itself be lost.
+    match agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded) {
+        Err(e) => {
+            if STATE_SAVE_FAILS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                eprintln!("{} alcore: bodies pass: FAILED to persist {} (repeats suppressed until it recovers): {e}", crate::log_ts(), state_file.display());
+            }
+        }
+        Ok(()) => {
+            let n = STATE_SAVE_FAILS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            if n > 0 {
+                eprintln!("{} alcore: bodies pass: persisting {} recovered after {n} failed saves", crate::log_ts(), state_file.display());
+            }
+        }
+    }
     // Release in reverse lock order (FSYNCED_PARTS, writer, then `.pass.lock`); the store itself
     // stays open in the slot for the next tick.
     drop(fsynced);

@@ -736,7 +736,8 @@ mod capture_block_tests {
             &store_dir.join(agentlens_store::pass::PASS_STATE_FILE),
             &std::collections::HashSet::new(),
             &["a.request.json".to_string(), "gone.request.json".to_string()].into_iter().collect(),
-        );
+        )
+        .unwrap();
 
         let (files, bytes, on_disk) = parked_bodies_gauge(&store_dir, std::slice::from_ref(&live_dir)).unwrap();
         assert_eq!(files, 2, "files counts the persisted stranded-name set, not just what's on disk");
