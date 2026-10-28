@@ -346,6 +346,7 @@ static REOPEN_REFUSED_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(Non
 
 /// Consecutive failed saves of `.pass-state.json` (TRDD-ZR3OGSAV): the pass runs every 60s, so a
 /// persistent failure (full disk) is logged on the first failure only, then counted and summarized on recovery.
+/// Per PROCESS (one alcore = one data dir): any test forcing a save failure through bodies_pass must reset it.
 static STATE_SAVE_FAILS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The last bodies-pass reading (TRDD-HDUETCU7), held here and not in `CoreState`; `server_stats`

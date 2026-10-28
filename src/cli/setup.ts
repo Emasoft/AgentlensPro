@@ -35,9 +35,9 @@ import {
 } from '../telemetryConfig'
 import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
-import { alstoreBin as resolveAlstoreBin, rustIngestPass } from '../rustStorePass'
+import { alstoreBin as resolveAlstoreBin, rustIngestPass, type RustPassResult } from '../rustStorePass'
 import { safeConfigEdit } from '../safeConfigEdit'
-import { DEFAULT_MAX_BYTES_PER_PASS, IngestPassResult } from '../store/ingestPass'
+import { DEFAULT_MAX_BYTES_PER_PASS } from '../store/ingestPass'
 import { envPort, sleep } from './cliCore'
 import { dataDirFrom } from '../dataDir'
 import {
@@ -490,7 +490,7 @@ export interface SpoolMigrationDeps {
    *  passed: the drain's whole point is to empty the volume before it is detached.
    *  `relocateStrandedTo` moves stranded bodies (bytes proven, ts row wrong — the pass keeps
    *  them on disk and skips them forever) onto the SSD dir so they survive the detach. */
-  drain: (storeDir: string, bodiesDir: string, relocateStrandedTo?: string) => Promise<IngestPassResult | null>
+  drain: (storeDir: string, bodiesDir: string, relocateStrandedTo?: string) => Promise<RustPassResult | null>
   /** Resolve the alstore binary, or null when unavailable (a broken install — loud FAIL, the
    *  fail-fast direction: migration NEVER detaches with bodies undrained). */
   alstoreBin: () => string | null
@@ -617,6 +617,7 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
   // iterations) AND the readdir gate reports zero files. The cap also bounds a huge backlog
   // (8 × DEFAULT_MAX_BYTES_PER_PASS ≈ 4 GB per setup run; a larger one refuses and re-runs).
   let drained = false
+  let stateWarn: string | null = null
   if (detected.volumeMounted) {
     if (!deps.alstoreBin()) {
       return {
@@ -633,7 +634,7 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
     // relocated to the SSD dir so they cannot be lost with the volume (review round 1).
     const DRAIN_LOOP_MAX = 8
     for (let pass = 1; ; pass++) {
-      let res: IngestPassResult | null = null
+      let res: RustPassResult | null = null
       let drainErr: Error | null = null
       try {
         res = await deps.drain(path.join(ctx.dataDir, 'store'), path.join(SPOOL_VOLUME, 'otel-bodies'), path.join(ctx.dataDir, 'otel-bodies'))
@@ -647,6 +648,10 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
           acted: false,
         }
       }
+      // WHY (TRDD-ZR3OGSAV): exit 3 from the binary means the drain RAN (ingest, verify, delete) and
+      // only .pass-state.json could not be saved. The no-residue readdir gate below is independent of
+      // that bookkeeping, so it is a warning on the final result, not a reason to refuse the migration.
+      if (res.stateNotSaved !== undefined) stateWarn = res.stateNotSaved
       if (res.failed.length > 0 || res.throttled) {
         return {
           result: {
@@ -736,7 +741,7 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
       verify: residue ? 'FAIL' : 'PASS',
       detail: residue
         ? `residue after migration: ${residue}`
-        : `bodies now in the store; disabled plist kept at ${path.join(path.dirname(detected.plistPath), `disabled-${SPOOL_AGENT_LABEL}.plist.bak`)}`,
+        : `bodies now in the store; disabled plist kept at ${path.join(path.dirname(detected.plistPath), `disabled-${SPOOL_AGENT_LABEL}.plist.bak`)}${stateWarn ? `; WARNING: the alstore pass state was not saved (${stateWarn.slice(0, 160)}) — only skip/stranded bookkeeping is affected` : ''}`,
     },
     acted: drained || settingsRewritten || agentTornDown,
   }
