@@ -1,9 +1,9 @@
 ---
 trdd-id: K4XQ7M2B
 title: cost_usd and billable_weight disagree about the 1h cache-write tier in the same api_calls row
-column: todo
+column: complete
 created: 2026-09-04T07:41:22+0200
-updated: 2026-09-04T07:51:51+0200
+updated: 2026-10-28T23:23:18+0100
 current-owner: main-session
 task-type: bugfix
 project-id: agentlenspro
@@ -16,8 +16,12 @@ effort: S
 relevant-rules: []
 npt: []
 eht: []
-implementation-commits: []
+implementation-commits: [c8eb737d]
 external-refs: []
+status: archived
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-10-28T23:23:18+0100
 ---
 
 # cost_usd understates every 1h-tier cache write, and the row's own sibling column knows it
@@ -80,15 +84,27 @@ do not use it.
 
 ## Acceptance criteria
 
-- [ ] `cost_usd` and `billable_weight` agree about the tier split for the same row, in BOTH
+- [x] `cost_usd` and `billable_weight` agree about the tier split for the same row, in BOTH
       languages, pinned by a test that fails if either call site reverts to a hard-coded `0`.
-- [ ] A row with a flat `cache_creation` total and no tier sub-object is unchanged.
-- [ ] TS↔Rust parity fixtures regenerated, and a fixture case actually EXERCISES 1h tokens —
+- [x] A row with a flat `cache_creation` total and no tier sub-object is unchanged.
+- [x] TS↔Rust parity fixtures regenerated, and a fixture case actually EXERCISES 1h tokens —
       otherwise the suites stay green while proving nothing about the change, which has happened
       three times in this area already.
-- [ ] The persisted-row decision is made explicitly and recorded in `CHANGELOG.md`.
+- [x] The persisted-row decision is made explicitly and recorded in `CHANGELOG.md`.
 
 ## Non-goals
 
 - Do NOT fold in the sonnet-5 work; that is landed (897f51eb, f7610871, 8f00e737, 2abda566).
 - Do NOT repair the 3,283 sonnet-5 rows here — that is a separate, still-undecided call.
+
+## Acceptance evidence
+
+Box 1 evidence: both call sites pass the measured 1h count. src/forensicsIndex.ts:623 passes ev.tier1hTokens as the 6th argument of calcTokenCostUsd, and rust-core/crates/agentlens-core/src/forensics_scan.rs:358 calls event_cost_usd (forensics_scan.rs:675), which passes ev.tier_1h_tokens. Absolute-dollar tests: src/test/forensicsIndexPricingTs.test.ts (a 1h-tier cache write is priced at the 1h rate, expects $10.00) and forensics_scan.rs event_cost_tests (a_1h_tier_write_is_priced_at_the_1h_rate_not_the_5m_rate, expects $10.00). Mutation: reverting the TS 6th argument to 0 turned the 1h test red (docs_dev/k4-mocha-red.txt); reverting the Rust helper to pass 0.0 turned the 1h cargo test red (docs_dev/k4-cargo-red.txt); both restored and green.
+Box 2 evidence: flat-total rows (both tiers 0) keep the all-5m number. Tests: src/test/forensicsIndexPricingTs.test.ts (a flat cache_creation total with both tiers 0 is unchanged, expects $6.25) and forensics_scan.rs event_cost_tests (a_flat_total_row_with_both_tiers_zero_is_priced_as_all_5m, expects $6.25). Both are labelled in the code as regression guards, not mutation evidence: they pass with or without the 1h argument, so they cannot detect a revert to 0.
+Box 3 evidence: rust-core/crates/agentlens-core/tests/fixtures/forensicsindexer-expected.json regenerated. Its claude-opus-5 row with tier_1h_tokens 15 changed cost_usd 0.0059 -> 0.00595625 (= 15 x (10.00 - 6.25) / 1e6), so that fixture case exercises 1h tokens. Parity suites passed (cargo): forensicsindexer, forensicsdb, forensicsscan, forensicsindex, pricing (docs_dev/k4-cargo-parity2.txt).
+Box 4 evidence: CHANGELOG.md [Unreleased] Fixed entry for api_calls.cost_usd (line 134) states that rows indexed from this version on use the 1h rate, existing rows keep the old value, there is no rebuild command (the indexer rewrites a row only when its call is re-scanned inside its bounded window), and the cutover step-up is an accounting correction, not a cost increase. No reindex was done.
+Test scope: scoped runs only (host overloaded), meaning targeted mocha and cargo filters plus the named parity suites; no full Rust suite was run for this close-out. The impl report also cites an earlier full mocha run (3256 passing) without recording its code state.
+
+## Approval log
+
+- 2026-10-28T23:23:18+0100 — COMPLETE by main-agent@agentlenspro. all four acceptance boxes met with evidence; commit c8eb737d reviewed.
