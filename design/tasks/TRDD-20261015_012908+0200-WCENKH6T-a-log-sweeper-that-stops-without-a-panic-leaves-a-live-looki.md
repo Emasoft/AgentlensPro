@@ -4,7 +4,7 @@ title: A log-sweeper that stops without a panic leaves a live-looking collector 
 column: plan
 status: tasked
 created: 2026-10-15T01:29:08+0200
-updated: 2026-10-28T04:14:33+0100
+updated: 2026-10-28T20:44:14+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T01:29:08+0200
 project-id: agentlenspro
+npt: [H3D5ZBO1]
 ---
 
 # A log-sweeper that stops without a panic leaves a live-looking collector that nothing restarts
@@ -41,3 +42,14 @@ A sweeper heartbeat timestamp (or `JoinHandle::is_finished()`) checked by the ma
 - Test: unit test of a pure check_liveness(liveness, limit) -> Option<Cause> (Exited, Stalled, None while beating, None when stopping); acceptance 2's process-level variant would need a test-only stop hook, owner to decide.
 - Strongest reason not to: a false positive kills a healthy collector and a long first pass could cause a restart loop; also unverified that the hook revive restarts a dead pid promptly (src/cli/hookHandlers.ts:108-133 not re-read).
 - Status: proposal only; needs the propose-then-review round (MEASURE + REVIEW) before any code. Deploy remains blocked by TRDD-12FGMAEP.
+
+## Review round 1 2026-10-28
+
+MEASURE: docs_dev/20261028_204123+0100-WCENKH6T-measure.md. Revive is pidfile-only and fires only on a failed hook delivery (hookHandlers.ts:118-133, 334, 463); no launchd supervisor installed here, so with zero Claude sessions a watchdog exit stays down until the next session's hook.
+MEASURE: restart throttle REFUTED for watchdog exits: lifetime > REVIVE_CRASH_WINDOW_MS (5 min, hookHandlers.ts:156) is never a quick death and resets backoff (:266), so a deterministic stall would restart every ~15-25 min unthrottled.
+MEASURE: boot (restore + boot sweep) completes before start_sweeper returns (log_reader.rs:1751), so the watchdog cannot false-positive at boot, and a boot-phase hang is not covered (split to its own TRDD).
+MEASURE: the realistic false-positive source is the burn tick holding the state lock 130-576 s on first pass (TRDD-H3D5ZBO1, ui.rs:4425-4433) while sweeper lock_timed waits queue behind it with no beat; 576 s vs 900 s is a 36% margin that scales with store size and load. Hence npt H3D5ZBO1.
+REVIEW blocking, accepted: (1) restart premise unverified -> now measured as above; (2) no restart-loop protection -> revised design adds an in-alcore stall-exit counter (<dataDir>/sweeper-stall-count; after N consecutive stall exits, log FATAL and stay alive instead of _exit); (3) pure check_liveness test cannot detect wiring bugs and acceptance 2 is unmet -> add a process-level test (real binary, log root = FIFO with no writer, short limit via constructor, assert exit 1 + FATAL line), amend acceptance text only if the FIFO test genuinely fails to work; (4) exit erases the culprit -> FATAL line must carry a phase-label atomic and a non-blocking try_lock probe of the state mutex.
+REVIEW non-blocking, accepted: drop the AGENTLENS_SWEEPER_STALL_MS env var (same pattern 2294f718 removed), pass the limit through the watchdog constructor; set `stopping` before every stop path (alcore.rs:590) and test graceful stop exits 0.
+REVIEW non-blocking, deferred with reason: progress (offsets advanced) vs liveness beat - a liveness beat matches the live failure (hang); revisit if a stuck-but-beating case is observed. Exit also takes down OTLP/UI/API (larger blast radius than the sweeper) - accepted as the card's own fix direction; status quo for any alcore crash.
+NEXT: implement H3D5ZBO1 first, then re-propose this card with the four revisions above for review round 2.
