@@ -1,10 +1,10 @@
 ---
 trdd-id: WCENKH6T
 title: A log-sweeper that stops without a panic leaves a live-looking collector that nothing restarts
-column: todo
+column: plan
 status: tasked
 created: 2026-10-15T01:29:08+0200
-updated: 2026-10-15T01:43:36+0200
+updated: 2026-10-28T04:14:33+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -33,3 +33,11 @@ A sweeper heartbeat timestamp (or `JoinHandle::is_finished()`) checked by the ma
 ## Approval log
 
 - 2026-10-15T01:29:08+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Proposal 2026-10-28
+
+- Analysis (read-only, docs_dev/20261028_041400+0100-WCENKH6T-proposal.md): still open. install_exit_on_panic (542ceca2) covers panics only. The sweeper thread is unmonitored in steady state (log_reader.rs:1530, alcore.rs:391,436). The live non-panic failure is a HANG (blocking I/O, state.lock_timed with no bound, stuck DuckDB/watcher call); a thread that returns is latent (only Stop/Disconnected return today).
+- Proposed fix: a heartbeat (Arc<AtomicU64>) beaten at the top of the sweeper loop, per ingest chunk and after each sweep_paths, plus a finished flag set by a drop guard; a std::thread "sweeper-watchdog" in alcore.rs (no tokio, never takes the state lock) checks every 10 s and calls libc::_exit(1) after a FATAL stderr line when the thread finished without a stop request or the heartbeat is older than SWEEPER_STALL_LIMIT (default 900 s); skipped under --no-log-scan.
+- Test: unit test of a pure check_liveness(liveness, limit) -> Option<Cause> (Exited, Stalled, None while beating, None when stopping); acceptance 2's process-level variant would need a test-only stop hook, owner to decide.
+- Strongest reason not to: a false positive kills a healthy collector and a long first pass could cause a restart loop; also unverified that the hook revive restarts a dead pid promptly (src/cli/hookHandlers.ts:108-133 not re-read).
+- Status: proposal only; needs the propose-then-review round (MEASURE + REVIEW) before any code. Deploy remains blocked by TRDD-12FGMAEP.
