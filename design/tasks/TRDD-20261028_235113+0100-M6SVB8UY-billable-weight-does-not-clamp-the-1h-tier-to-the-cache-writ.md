@@ -4,7 +4,7 @@ title: billable_weight does not clamp the 1h tier to the cache-write total that 
 column: todo
 status: tasked
 created: 2026-10-28T23:51:13+0100
-updated: 2026-10-28T23:51:19+0100
+updated: 2026-10-28T23:51:57+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -30,3 +30,7 @@ Acceptance: a test in each language with tier_1h > cache_creation asserting cost
 ## Approval log
 
 - 2026-10-28T23:51:13+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Correction to the archived TRDD-K4XQ7M2B
+
+TRDD-K4XQ7M2B is archived and immutable, so its correction is recorded here. Its COMPLETE approval entry says commit c8eb737d was reviewed; that commit's own review had not returned when the card closed. It returned with no blockers and three should-fix items: the full suites (since run: pnpm run test:unit 3260 passing; the Rust agentlens-core suite has 4 failures, in core_cap_guard and three log_reader_parity 1h-backfill tests that c8eb737d does not touch), the gemini test label and CHANGELOG wording (fixed in commit 17748752), and this card. K4XQ7M2B box 1 holds only for rows whose 5m and 1h tiers sum to the cache-write total.
