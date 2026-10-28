@@ -314,6 +314,7 @@ suite('pricing — claude-sonnet-5 (TRDD-ZK37VG4X spec 1)', () => {
   // Non-Anthropic-shaped entry (gemini-2.5-pro: cacheWritePerMTok 0, not 1.25x input): 1h tokens must
   // be priced at the entry's own write rate, never at a derived 2x input. 50k input + 50k 1h write
   // = 50k * $1.25/MTok = $0.0625 — a derived 2x write rate would give $0.1875.
+  // Scope: guards against a derived 2x-of-input rate on a non-1.25x-shaped entry only; it cannot tell 1h-at-own-write-rate from 1h-at-0 because this entry's write rate is 0.
   test('1h tokens on a non-Anthropic-shaped entry cost the same as the same tokens all-5m', () => {
     const all5m = calcTokenCostUsd(50_000, 0, 50_000, 0, 'gemini-2.5-pro', 0)
     const with1h = calcTokenCostUsd(50_000, 0, 50_000, 0, 'gemini-2.5-pro', 50_000)
