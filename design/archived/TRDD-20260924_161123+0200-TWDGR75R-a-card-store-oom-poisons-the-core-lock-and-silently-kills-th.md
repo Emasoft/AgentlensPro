@@ -1,9 +1,9 @@
 ---
 trdd-id: TWDGR75R
 title: A card-store OOM poisons the core lock and silently kills the log sweeper
-column: todo
+column: complete
 created: 2026-09-24T16:11:23+0200
-updated: 2026-09-24T17:51:15+0200
+updated: 2026-10-28T04:09:51+0100
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -14,6 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T16:11:23+0200
+status: archived
 ---
 
 # A card-store OOM poisons the core lock and silently kills the log sweeper
@@ -21,6 +22,7 @@ approval-datetime: 2026-09-24T16:11:23+0200
 ## Approval log
 
 - 2026-09-24T16:11:23+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-28T04:09:51+0100 — COMPLETE by main-agent@agentlenspro. already fixed by 542ceca2 and 86f4fa22; verified 2026-10-28.
 
 ## Evidence
 
@@ -48,3 +50,12 @@ The full-table scan cannot exceed DuckDB's MEMORY_LIMIT at 2x today's card count
 ## VERDICT (2026-09-24, reports/cc-alignment/20260924_164606+0200-cardstore-oom.md) — caused by the re-parse, not by row duplication. card_store.rs put() (lines 161-165) is a strict upsert on the session_id PRIMARY KEY: a re-parsed card for an already-seen session id REPLACES that row's card/last_active_ms/timeline_len in place, it never adds a row. A freshly parsed card is much larger than the restored form (cacheCreate1hTokens and other fields the persisted/stripped form on disk did not carry), so re-parsing ~8,900 transcripts roughly doubled cards.duckdb (215 MB live, un-reparsed, vs 430 MB after re-parse on the same corpus) and the FIRST cards_json() call (card_store.rs:218) exceeded DuckDB's 256 MiB buffer-pool limit. The deployed binary (a187815e build, no re-parse) ran the same cards_json() scan 26+ times on the un-re-parsed corpus without incident, and runs fine today at ~34.7k cards. Whether the 256 MiB ceiling is ALSO reachable by ordinary organic growth (no re-parse) is inferred, not verified — no run tested un-reparsed growth past today's corpus size.
 
 Cause strongly indicated; one unverified confound: the two binaries compared were separate builds and their DuckDB crate version and flags were not cross-checked; the larger-payload mechanism is inferred from file size, not from which fields grew.
+
+## Acceptance checklist
+
+- [x] Poisoned lock can no longer kill the sweeper silently: install_exit_on_panic (rust-core/crates/agentlens-core/src/bin/alcore.rs:65, called :103, commit 542ceca2) exits loudly on any panic; tests tests/exit_on_panic.rs, tests/card_reuse.rs ingest_chunk_on_a_poisoned_lock_panics_and_appends_nothing.
+- [x] The full-table card scan no longer runs on a production path: 86f4fa22 replaced the re-parse with a usage-only backfill; no non-test caller of cards_json()/cards() remains (verified by grep 2026-10-28).
+
+## Verdict 2026-10-28
+
+Closed 2026-10-28: both defects already fixed on this branch by 542ceca2, aa61b49d, 86f4fa22, e3c3c388 (verified by reading the code and grep; cargo tests not re-run). Residual, not tracked: cards_json() would panic past ~256 MiB if a future caller used it; it has no production caller. Stale comment at card_store.rs:68-73 says it runs on every summary rebuild.
