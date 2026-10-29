@@ -13,7 +13,7 @@ import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, autoSetup
 import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runEnableCli } from '../cli/disableCli'
-import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, isFileOnlyAccountStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
+import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
 import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
@@ -1558,12 +1558,12 @@ suite('get_account_status --all works while DISABLED — and the singular form s
   }
 
   test('the predicate: only the plural form, --all in any position', () => {
-    assert.strictEqual(isFileOnlyAccountStatus(['get_account_status', '--all']), true)
+    assert.strictEqual(isAllAccountsStatus(['get_account_status', '--all']), true)
     // main.ts has always matched `--all` anywhere in argv; kept identical so dispatch and gate cannot disagree.
-    assert.strictEqual(isFileOnlyAccountStatus(['get_account_status', '--out', 'x', '--all']), true)
-    assert.strictEqual(isFileOnlyAccountStatus(['get_account_status']), false)
-    assert.strictEqual(isFileOnlyAccountStatus(['budget', '--all']), false)
-    assert.strictEqual(isFileOnlyAccountStatus([]), false)
+    assert.strictEqual(isAllAccountsStatus(['get_account_status', '--out', 'x', '--all']), true)
+    assert.strictEqual(isAllAccountsStatus(['get_account_status']), false)
+    assert.strictEqual(isAllAccountsStatus(['budget', '--all']), false)
+    assert.strictEqual(isAllAccountsStatus([]), false)
   })
 
   test('armed the production way (killSwitchHalf), --all answers: exit 0 and a roster row', async () => {

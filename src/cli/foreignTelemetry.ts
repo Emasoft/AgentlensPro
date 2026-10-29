@@ -42,7 +42,7 @@ const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", 
  *  writes to user config — owner directive 2026-10-29: "are you saying that in reduced mode you cannot determine the
  *  accounts status?? this is bad. fix this." The singular form needs the server and is NOT covered. Any position of
  *  `--all` counts (same rule main.ts always applied). */
-export function isFileOnlyAccountStatus(argv: string[]): boolean {
+export function isAllAccountsStatus(argv: string[]): boolean {
   return argv[0] === "get_account_status" && argv.includes("--all")
 }
 
@@ -76,8 +76,9 @@ export function disabledNotice(argv: string[]): { text: string; code: number } |
   const verb = argv[0] ?? ""
   // Checked BEFORE the kill-switch stat: statusline runs on every Claude render and must cost nothing here.
   if (HOOK_PATH_VERBS.has(verb) || READ_ONLY_VERBS.has(verb) || DISABLED_PASSTHROUGH.has(verb)) return null
-  // File-only read: the brake must not block it (owner directive 2026-10-29, see isFileOnlyAccountStatus).
-  if (isFileOnlyAccountStatus(argv)) return null
+  // Read-only, no-server read (files, plus the owner's long-lived-key probes): the brake must not block it
+  // (owner directive 2026-10-29, see isAllAccountsStatus).
+  if (isAllAccountsStatus(argv)) return null
   const half = killSwitchHalf()
   if (half === null) return null
   const reason = recordedReason()

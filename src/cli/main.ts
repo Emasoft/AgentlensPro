@@ -29,7 +29,7 @@ import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
 import { autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
-import { disabledNotice, isFileOnlyAccountStatus } from './foreignTelemetry'
+import { disabledNotice, isAllAccountsStatus } from './foreignTelemetry'
 import { beginLaunchNotices, endLaunchNotices, flushNoticesToStderr } from './launchNotices'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
@@ -169,7 +169,7 @@ export const DISPATCHED_VERBS: ReadonlySet<string> = new Set([
 function reachesDiagnosticsSurface(cmd: string | undefined, argv: string[]): boolean {
   if (cmd === undefined) return false // the bare foreground server
   // only the plural form is file-backed; a read must never be blocked by the brake or write settings (owner directive 2026-10-29)
-  if (cmd === 'get_account_status') return !isFileOnlyAccountStatus(argv)
+  if (cmd === 'get_account_status') return !isAllAccountsStatus(argv)
   return !DISPATCHED_VERBS.has(cmd)
 }
 
@@ -314,7 +314,7 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
       // deciding what to do about a wedged machine — where proxying to a server that may itself be
       // down turns the one useful answer into "cannot reach localhost:4316". The singular form still
       // goes over the wire: it needs the live session accessors, which only the server has.
-      if (isFileOnlyAccountStatus(argv)) return await runAllAccountsCli(argv.slice(1))
+      if (isAllAccountsStatus(argv)) return await runAllAccountsCli(argv.slice(1))
       // Not `--all`: fall through to the diagnostics surface, which proxies it to the server.
       await (deps.diagnostics ?? runDiagnosticsCli)(argv)
       return 0
