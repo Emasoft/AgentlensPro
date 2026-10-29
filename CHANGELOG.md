@@ -70,6 +70,8 @@ All notable changes to AgentlensPro are documented here.
 
 ### Changed
 
+- **The warm log sweep streams transcripts line by line instead of reading each changed file whole**, cutting about 850 MiB of reserved memory after a large boot sweep in a test build. No change to what is parsed (TRDD-735Q3JF4).
+
 - **The RSS hard cap and the memory-pressure ladder now measure the mimalloc committed heap of alcore, not whole-process physical footprint.**
   `AGENTLENS_RSS_HARD_CAP_MB` is charged only for mimalloc committed bytes, so DuckDB memory (system malloc, governed by the
   DuckDB memory_limit setting) is no longer charged to the cap. The breach log line now leads with

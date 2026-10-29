@@ -16,7 +16,7 @@
 //!   (TS takes it on a db error; here the error is logged and the db skipped).
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -629,22 +629,25 @@ impl LogTailer {
             },
         };
         let from = if can_resume { prev_offset } else { 0 };
-        let (lines, consumed) = match read_lines_from(&f.path, from) {
-            Ok(x) => x,
-            Err(e) => {
-                eprintln!("{} alcore: read error {}: {e}", crate::log_ts(), f.path.display());
-                return None;
-            }
-        };
-        for line in &lines {
-            let Ok(v) = serde_json::from_slice::<Value>(line) else { continue };
+        // WHY the Err arm is safe with a half-fed accumulator: lines may already have reached
+        // `accum` before an I/O error, but `accum` was taken out of the cache (shift_remove) and is
+        // dropped on this path with no file_state.insert and no lru_put, so the next sweep re-reads
+        // from 0. Keep it that way (TRDD-735Q3JF4).
+        let consumed = match read_lines_from(&f.path, from, |line| {
+            let Ok(v) = serde_json::from_slice::<Value>(line) else { return };
             if let Value::Object(entry) = v {
                 match &mut accum {
                     Accum::Claude(a) => agentlens_logscan::on_entry(a, &entry),
                     Accum::Codex(a) => agentlens_logscan::codex::on_entry(a, &entry),
                 }
             }
-        }
+        }) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("{} alcore: read error {}: {e}", crate::log_ts(), f.path.display());
+                return None;
+            }
+        };
         let state = FileState { bytes_read: consumed, mtime_ms, ino, size };
         self.file_state.insert(f.path.clone(), state);
         let path_str = f.path.to_string_lossy();
@@ -664,14 +667,30 @@ impl LogTailer {
 
 /// TS `_streamLinesFrom`: the complete lines from `from` to EOF and the offset just past the last
 /// '\n' — a trailing partial line is NOT consumed (it is re-read, whole, on the next sweep).
-fn read_lines_from(path: &Path, from: u64) -> std::io::Result<(Vec<Vec<u8>>, u64)> {
+/// WHY streaming: the whole-file read held ~850 MiB of free-in-page commit after a 1990-file warm
+/// boot sweep (TRDD-735Q3JF4, docs_dev/20261029_031000+0100-735Q3JF4-diff1-streaming.md); TS
+/// `_streamLinesFrom` (src/logReader.ts) already streams.
+fn read_lines_from(path: &Path, from: u64, mut on_line: impl FnMut(&[u8])) -> std::io::Result<u64> {
+    use std::io::BufRead;
     let mut file = std::fs::File::open(path)?;
     file.seek(SeekFrom::Start(from))?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf)?;
-    let Some(last_nl) = buf.iter().rposition(|b| *b == b'\n') else { return Ok((Vec::new(), from)) };
-    let lines = buf[..last_nl].split(|b| *b == b'\n').filter(|l| !l.iter().all(u8::is_ascii_whitespace)).map(<[u8]>::to_vec).collect();
-    Ok((lines, from + last_nl as u64 + 1))
+    let mut rd = std::io::BufReader::with_capacity(64 * 1024, file);
+    let mut line: Vec<u8> = Vec::new();
+    let mut consumed = from;
+    loop {
+        line.clear();
+        let n = rd.read_until(b'\n', &mut line)?;
+        if n == 0 || line.last() != Some(&b'\n') {
+            break;
+        }
+        consumed += n as u64;
+        line.pop();
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        on_line(&line);
+    }
+    Ok(consumed)
 }
 
 // ── Durable state (P5e — server.ts TRDD-PJC8N1HO + the delta logs of TRDD-K3WDPR7M) ────────────
@@ -1777,6 +1796,51 @@ pub fn strip_timeline_value(card: &mut Map<String, Value>) {
 mod sweeper_backstop_tests {
     use super::should_full_sweep;
     use std::time::{Duration, Instant};
+
+    /// The pre-streaming whole-file implementation, kept verbatim as the oracle (TRDD-735Q3JF4).
+    fn old_read_lines_from(path: &std::path::Path, from: u64) -> std::io::Result<(Vec<Vec<u8>>, u64)> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(path)?;
+        file.seek(SeekFrom::Start(from))?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let Some(last_nl) = buf.iter().rposition(|b| *b == b'\n') else { return Ok((Vec::new(), from)) };
+        let lines = buf[..last_nl].split(|b| *b == b'\n').filter(|l| !l.iter().all(u8::is_ascii_whitespace)).map(<[u8]>::to_vec).collect();
+        Ok((lines, from + last_nl as u64 + 1))
+    }
+
+    /// The streaming read must yield the same lines and the same consumed offset as the whole-file oracle.
+    #[test]
+    fn streaming_read_lines_from_matches_the_whole_file_oracle() {
+        let mut long = vec![b'x'; 200_000];
+        long.extend_from_slice(b"\npartial");
+        let cases: Vec<(&str, Vec<u8>, u64)> = vec![
+            ("empty", vec![], 0),
+            ("no newline", b"abc".to_vec(), 0),
+            ("one complete line", b"{\"a\":1}\n".to_vec(), 0),
+            ("trailing partial", b"one\ntwo\npart".to_vec(), 0),
+            ("blank lines", b"\n\n".to_vec(), 0),
+            ("whitespace-only line", b"a\n  \t\nb\n".to_vec(), 0),
+            ("crlf", b"a\r\nb\r\n".to_vec(), 0),
+            ("lone crlf", b"\r\n".to_vec(), 0),
+            ("invalid utf8", b"a\xff\xfe\nb\n".to_vec(), 0),
+            ("from mid-line", b"abcdef\nghi\njk".to_vec(), 3),
+            ("from == len", b"abc\ndef\n".to_vec(), 8),
+            ("line longer than buffer", long, 0),
+        ];
+        let dir = std::env::temp_dir().join(format!("alcore-rlf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (i, (name, bytes, from)) in cases.iter().enumerate() {
+            let p = dir.join(format!("case{i}.jsonl"));
+            std::fs::write(&p, bytes).unwrap();
+            let mut got: Vec<Vec<u8>> = Vec::new();
+            let off = super::read_lines_from(&p, *from, |l| got.push(l.to_vec())).unwrap();
+            let (want, want_off) = old_read_lines_from(&p, *from).unwrap();
+            assert_eq!(got, want, "lines differ for case {name}");
+            assert_eq!(off, want_off, "offset differs for case {name}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// TRDD-ORGJ0E3G follow-up: the backstop must fire exactly once it is due, and stay quiet
     /// both before the deadline and after being re-armed to a later deadline — the loop re-arms
