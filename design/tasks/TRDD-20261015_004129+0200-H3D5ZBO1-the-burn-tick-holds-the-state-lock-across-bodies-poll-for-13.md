@@ -1,10 +1,10 @@
 ---
 trdd-id: H3D5ZBO1
 title: The burn tick holds the state lock across bodies.poll, for 130-576 s on the first pass after boot
-column: todo
+column: testing
 status: tasked
 created: 2026-10-15T00:41:29+0200
-updated: 2026-10-28T21:24:07+0100
+updated: 2026-10-29T06:10:26+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-15T00:41:29+0200
+implementation-commits: [8e0cb02c, 4e095f80, a2c4459d]
 ---
 
 # The burn tick holds the state lock across bodies.poll, for 130-576 s on the first pass after boot
@@ -38,3 +39,11 @@ approval-datetime: 2026-10-15T00:41:29+0200
 ## Live evidence 2026-10-28
 
 735Q3JF4 deferred run A (real-data copy, log scan on, 185636 body files): a 12.6 s state-lock hold attributed to ui.rs:4426, i.e. the burn tick's whole locked block (which contains bodies.poll, plus statusline.flush and ttl_context) at up ~0 made three waiters (ui.rs:948, ui.rs:262, chores.rs:69) wait 12.5 s (docs_dev/20261028_211829+0100-735Q3JF4-deferred-measurements.md). With 185636 body files vs 588k when 130-576 s was measured: a size data point consistent with first-pass cost scaling with file count, not a re-confirmation of that magnitude.
+
+## ⏵ STATE — 2026-10-29 (authoritative)
+
+Implemented in two commits after two review rounds: 8e0cb02c + 4e095f80 split BodiesActivityTracker into BodiesPoller (scan &self, commit) and BodiesActivity (merge, prune, report), no behaviour change, frozen-oracle tests; a2c4459d runs the scan in a spawn_blocking task the burn tick starts and never awaits, holding the state lock only to clone two Arcs and to merge. Lock order poller then state. in_flight CAS + drop guard. Names commit to seen only after merge. /api/burn-risk and MCP check_burn_risk no longer poll; new bodiesScan {seeded, inProgress, lastMergeAgeMs}.
+Gate trade-off settled: the agent-gate hook fails open after 4 s (src/cli/hookHandlers.ts:473-487), so during a first pass it already allowed everything; now it answers at once.
+Evidence: live server.log lock_a 534087-587855 ms with bodies_poll within 17-41 ms of it (statusline_flush <= 38 ms). Design facts and reviews: docs_dev/20261029_054348+0100-H3D5ZBO1-design-facts.md, docs_dev/20261029_054540+0100-H3D5ZBO1-measure.md, docs_dev/20261029_054758+0100-H3D5ZBO1-measure-r2.md, docs_dev/20261029_060541+0100-H3D5ZBO1-commit2-report.md.
+Not guarded by a test: the merge-then-commit order inside run_bodies_scan_with (comment and review only); the poisoned-poller recovery is reachable only in test binaries (production panic hook exits).
+NEXT: (1) commit-2 review follow-ups in flight (poll doc-hidden, TS BurnRiskReport.bodiesScan + digest line, CHANGELOG, full agentlens-core suite incl shutdown_flush); (2) delete the frozen OracleTracker and its oracle-comparison asserts (keep the delta-level and rescan tests); (3) real-data boot measurement on an APFS clone (cp -cpR, mtimes preserved, 60 GB free guard) with otel-bodies present, AGENTLENS_LOCK_TRACE_MS=250: pass/fail = burn-tick lock A and merge holds <= 1 s with bodies scan > 10 s; report-only = the /api/burn-risk hold (guard.rs:215 read_dir), peak phys_footprint and mimalloc commit vs TRDD-735Q3JF4 baselines, and server stop time; (4) deploy blocked by TRDD-12FGMAEP.
