@@ -267,14 +267,14 @@ impl BodiesActivityTracker {
 
     /// One incremental pass. A missing dir returns silently — report() says available:false.
     pub fn poll(&mut self, now: f64) {
-        let d = self.poller.scan(now);
+        let mut d = self.poller.scan(now);
         if !d.listed {
             return;
         }
         // WHY this order: names enter `seen` only AFTER the merge succeeded, so a delta that is
         // scanned but never merged is simply re-read by the next scan instead of being lost.
         // Prepares TRDD-H3D5ZBO1 commit 2 (scan off the state lock, merge under it).
-        self.activity.merge(&d, now);
+        self.activity.merge(&mut d, now);
         self.poller.commit(d);
     }
 
@@ -357,11 +357,11 @@ impl BodiesPoller {
 
 impl BodiesActivity {
     /// Apply a scan's findings in scan order, then age the rings out against `merge_now`.
-    fn merge(&mut self, d: &BodiesDelta, merge_now: f64) {
-        self.large_requests.extend(d.large_requests.iter().cloned());
-        self.responses.extend(d.responses.iter().cloned());
-        for (pm, v) in &d.msg_session {
-            self.msg_session.insert(pm.clone(), v.clone());
+    fn merge(&mut self, d: &mut BodiesDelta, merge_now: f64) {
+        self.large_requests.extend(std::mem::take(&mut d.large_requests));
+        self.responses.extend(std::mem::take(&mut d.responses));
+        for (pm, v) in std::mem::take(&mut d.msg_session) {
+            self.msg_session.insert(pm, v);
         }
         self.prune(merge_now);
     }
@@ -591,7 +591,10 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    // frozen copy of the pre-split poll; do not edit; it is the oracle for the split
+    // frozen copy of the pre-split poll; do not edit; it is the oracle for the split.
+    // Verified verbatim against 8e0cb02c^ (diff -w with the type renamed: identical); this oracle
+    // and the tests comparing against it are deleted once TRDD-H3D5ZBO1 commit 2 is accepted, so
+    // it cannot pin later intended changes to report().
 pub struct OracleTracker {
     dir: PathBuf,
     opts: BodiesActivityOptions,
@@ -935,6 +938,13 @@ impl OracleTracker {
         format!("{:?}|{:?}|{:?}", o.large_requests, o.responses, o.msg_session)
     }
 
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn seed_first_batch(dir: &Path) {
         write_request(dir, "r1.request.json", "msg_w"); // its response lands in poll 2
         write_request(dir, "r2.request.json", "msg_a");
@@ -946,6 +956,7 @@ impl OracleTracker {
     #[test]
     fn split_tracker_equals_frozen_oracle_across_two_polls() {
         let dir = temp_dir("b");
+        let _guard = TempDir(dir.clone());
         let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
         let mut old = OracleTracker::new(dir.clone(), BodiesActivityOptions::default());
         seed_first_batch(&dir);
@@ -970,18 +981,18 @@ impl OracleTracker {
         assert_eq!(new.report(now2)["thrash"]["active"], serde_json::json!(true), "fixture must exercise thrash");
         assert!(new.session_warm_since(SID, now2 - 600_000.0, 50_000.0));
         assert_eq!(old.session_warm_since(SID, now2 - 600_000.0, 50_000.0), new.session_warm_since(SID, now2 - 600_000.0, 50_000.0));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn scan_time_and_merge_time_differ_like_poll_then_prune() {
         let dir = temp_dir("c");
+        let _guard = TempDir(dir.clone());
         seed_first_batch(&dir);
         let t1 = now_ms();
         let t2 = t1 + 11.0 * 60_000.0; // past the 10-min large ring, inside the 15-min response ring
         let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
-        let d = new.poller.scan(t1);
-        new.activity.merge(&d, t2);
+        let mut d = new.poller.scan(t1);
+        new.activity.merge(&mut d, t2);
         new.poller.commit(d);
         let mut old = OracleTracker::new(dir.clone(), BodiesActivityOptions::default());
         old.poll(t1);
@@ -989,12 +1000,12 @@ impl OracleTracker {
         assert_eq!(state_new(&new.activity), state_old(&old));
         assert!(new.activity.large_requests.is_empty(), "pruned against merge time");
         assert_eq!(new.activity.responses.len(), 1);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn unmerged_delta_is_rescanned() {
         let dir = temp_dir("d");
+        let _guard = TempDir(dir.clone());
         write_response(&dir, "a.response.json", "msg_a", 150_000, 100);
         let t = now_ms();
         let p = BodiesPoller { dir: dir.clone(), seen: HashSet::new(), seeded: false };
@@ -1003,6 +1014,55 @@ impl OracleTracker {
         let again = p.scan(t);
         assert_eq!(again.new_names, vec!["a.response.json".to_owned()]);
         assert_eq!(again.responses.len(), 1);
-        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn seed_window_and_missing_dir_match_the_oracle() {
+        let base = temp_dir("e");
+        let _guard = TempDir(base.clone());
+        let dir = base.join("later");
+        let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
+        let mut old = OracleTracker::new(dir.clone(), BodiesActivityOptions::default());
+
+        // (a) the dir does not exist yet: nothing is listed, so the seed pass must not be spent
+        let t0 = now_ms();
+        new.poll(t0);
+        old.poll(t0);
+        assert!(!new.poller.seeded, "a missing dir must not consume the seed pass");
+        assert_eq!(state_new(&new.activity), state_old(&old));
+        assert_eq!(new.report(t0), old.report(t0));
+
+        // (b) the dir appears with one fresh and one 20-minute-old response
+        std::fs::create_dir_all(&dir).unwrap();
+        write_response(&dir, "fresh1.response.json", "msg_f1", 150_000, 100);
+        write_response(&dir, "old.response.json", "msg_old", 150_000, 100);
+        let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(1200);
+        std::fs::File::options().write(true).open(dir.join("old.response.json")).unwrap().set_modified(stale).unwrap();
+        // The floor is asserted at the delta: SEED_LOOKBACK_MS equals the response ring window, so prune hides it in the rings; the floor only saves first-pass parse work.
+        let tf = now_ms();
+        let unseeded = BodiesPoller { dir: dir.clone(), seen: HashSet::new(), seeded: false }.scan(tf);
+        let ids: Vec<_> = unseeded.responses.iter().map(|r| r.id.as_deref()).collect();
+        assert!(ids.contains(&Some("msg_f1")) && !ids.contains(&Some("msg_old")), "unseeded scan must skip the old response, got {ids:?}");
+        let seeded = BodiesPoller { dir: dir.clone(), seen: HashSet::new(), seeded: true }.scan(tf);
+        let ids: Vec<_> = seeded.responses.iter().map(|r| r.id.as_deref()).collect();
+        assert!(ids.contains(&Some("msg_old")), "seeded scan must not apply the floor, got {ids:?}");
+        let t1 = now_ms();
+        new.poll(t1);
+        old.poll(t1);
+        assert!(new.poller.seeded);
+        assert_eq!(new.activity.responses.len(), 1, "only the fresh response is inside the seed window");
+        assert!(new.activity.responses.iter().all(|r| r.id.as_deref() != Some("msg_old")), "old response must be skipped by the seed floor");
+        assert_eq!(state_new(&new.activity), state_old(&old));
+        assert_eq!(new.report(t1), old.report(t1));
+
+        // (c) a later poll must not resurrect the old file: it is already in `seen`
+        write_response(&dir, "fresh2.response.json", "msg_f2", 150_000, 100);
+        let t2 = now_ms();
+        new.poll(t2);
+        old.poll(t2);
+        assert_eq!(new.activity.responses.len(), 2);
+        assert!(new.activity.responses.iter().all(|r| r.id.as_deref() != Some("msg_old")), "old response stays absent once seen");
+        assert_eq!(state_new(&new.activity), state_old(&old));
+        assert_eq!(new.report(t2), old.report(t2));
     }
 }
