@@ -76,7 +76,7 @@ All notable changes to AgentlensPro are documented here.
 
 ### Changed
 
-- `call`/`batch` with a missing or malformed argument (or a batch member without a tool) now exit 64 before contacting the server, so an unreachable server no longer masks the usage error. A malformed JSON flag value is also refused with exit 64, but only after the server answers the tool's schema lookup, because that schema types the value. (TRDD-HO94JMKD)
+- `call`/`batch` with a missing or malformed argument (or a batch member without a tool) now exit 64 instead of 1, and the check runs before the tool session opens, so an unreachable server no longer masks the usage error. The launch self-heal still runs first. A malformed JSON flag value is also refused with exit 64, after the schema lookup. (TRDD-HO94JMKD)
 
 - **The warm log sweep streams transcripts line by line instead of reading each changed file whole**, cutting about 850 MiB of reserved memory after a large boot sweep in a test build. No change to what is parsed (TRDD-735Q3JF4).
 

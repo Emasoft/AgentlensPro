@@ -4,7 +4,7 @@ title: get_account_status refuses to run while AgentlensPro is disabled
 column: complete
 status: tasked
 created: 2026-10-29T07:52:44+0100
-updated: 2026-10-29T17:55:54+0100
+updated: 2026-10-29T18:04:27+0100
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -42,6 +42,9 @@ release-via: publish
 - 2026-10-29T17:52:09+0100 — column → complete. human review done; follow-ups minted (spike TRDD-YG0T6FGY, LOCAL key-03 card); release via publish
 - 2026-10-29T17:55:16+0100 — column → human_review. acceptance checklist missing; adding it before closing
 - 2026-10-29T17:55:54+0100 — column → complete. acceptance checklist written and verified; human review done; follow-up spike TRDD-YG0T6FGY
+- 2026-10-29 — box 2 verified on the live disabled machine: `agentlenspro get_account_status` exits 69 and prints 'Every account's status is available WITHOUT enabling: agentlenspro get_account_status --all (the singular form needs the server).'
+- 2026-10-29 — box 3 scope: it holds for each working, matched key (key 03 is refused with 403; an unmatched key refreshes nothing). The 10-minute bound is tested (steady-state test); the per-model weekly window rests on the header parser (WINDOW_HEADER, SCOPE_LABELS), not on an observed run.
+- 2026-10-29 — correction to the STATE bullet on 2642b168: since 1e2d30ed the archive warning names the rows that no working key refreshes (keyRefreshesRow); only the Exception sentence counts key-taken readings. Box 6's full-suite run is of a2da6a12; d21fdf8f changed only a changelog line and two comments; check-identities re-run on HEAD passed.
 
 ## Owner directive
 
