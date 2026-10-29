@@ -274,9 +274,11 @@ suite('usageFromHeaders — the reply headers become the reading', () => {
 
 suite('probeRateLimits — what comes back, scrubbed', () => {
   test('a 200 and a 429 both return their unified headers, so the 429 is a reading', async () => {
-    const ok = fakeFetch(() => reply(200, H200))
-    const r200 = await probeRateLimits('sk-ant-oat01-FAKE1111', ok.impl, 'claude-code/test')
+    const sentBodies: string[] = []
+    const okImpl = (async (_url: string, init: { body: string }) => { sentBodies.push(init.body); return reply(200, H200) }) as unknown as FetchLike
+    const r200 = await probeRateLimits('sk-ant-oat01-FAKE1111', okImpl, 'claude-code/test')
     assert.strictEqual(r200.httpStatus, 200)
+    assert.strictEqual(JSON.parse(sentBodies[0]).max_tokens, 0)
     assert.strictEqual(r200.headers['anthropic-ratelimit-unified-5h-utilization'], '0.01')
     const limited = fakeFetch(() => reply(429, H429, { type: 'error' }))
     const r429 = await probeRateLimits('sk-ant-oat01-FAKE1111', limited.impl, 'claude-code/test')

@@ -1,7 +1,7 @@
 // src/longOAuthKeys.ts — the owner's long-lived OAuth keys, read by get_account_status --all.
 //
 // WHY THIS EXISTS. The usage endpoint answers 403 oauth_scope_insufficient to a long-lived key (measured
-// 2026-10-29), so the account windows cannot be read the way the live credential reads them. A one-token
+// 2026-10-29), so the account windows cannot be read the way the live credential reads them. A zero-output-token
 // message to claude-fable-5-1 is different: its reply carries the anthropic-ratelimit-unified-* headers on a
 // 200 AND on a 429. Those headers are the reading recorded here. A 429 is a valid reading, not a failure: it
 // is the server stating that the window is full, which is the measurement itself.
@@ -154,7 +154,7 @@ function parseErrorEnvelope(text: string): ErrorEnvelope {
   return { errorType: asText(err.type), errorCode: asText(details.error_code), message: asText(err.message) }
 }
 
-/** Send one 1-token message with the key and return what came back, scrubbed. It never throws: a failure is a
+/** Send one zero-output-token message (about 33 input tokens) with the key and return what came back, scrubbed. It never throws: a failure is a
  *  result with its message in it, so one bad key cannot discard the other keys' readings in Promise.all. WHY the
  *  Headers object is built inside the try: the platform throws on a control character in a header value, and that
  *  error must come back as a scrubbed failed result, not escape unformatted. */
@@ -171,7 +171,11 @@ export async function probeRateLimits(
       'content-type': 'application/json',
       'User-Agent': userAgentValue,
     })
-    const body = JSON.stringify({ model: PROBE_MODEL, max_tokens: 1, system: PROBE_SYSTEM, messages: [{ role: 'user', content: '.' }] })
+    // WHY max_tokens 0: measured 2026-10-29 (TRDD-HO94JMKD). max_tokens 0 is accepted (200, empty content,
+    // stop_reason max_tokens), bills input_tokens 33 and output_tokens 0 with no cache write, and still returns all
+    // anthropic-ratelimit-unified-* headers. A request rejected before inference (400/404) returns NO rate-limit
+    // headers, and count_tokens returns none, so this is the cheapest probe that still reports the windows.
+    const body = JSON.stringify({ model: PROBE_MODEL, max_tokens: 0, system: PROBE_SYSTEM, messages: [{ role: 'user', content: '.' }] })
     const res = await fetchImpl(PROBE_URL, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeoutMs) })
     const rate: Partial<Record<string, string>> = {}
     res.headers.forEach((value, name) => {
@@ -248,7 +252,7 @@ export function usageFromHeaders(
     sevenDayPercent: find('weekly_all')?.percent ?? null,
     usageCreditsEnabled: null,
     spendPercent: null,
-    note: 'Read from the rate-limit headers of one 1-token message sent with an owner-supplied long-lived key. '
+    note: 'Read from the rate-limit headers of one zero-output-token message (about 33 input tokens) sent with an owner-supplied long-lived key. '
       + 'Only the 5-hour window, the 7-day window and the per-model 7-day windows in those headers are known here. '
       + 'Credits, spend and every other window stay unknown until the next usage-endpoint read.',
     source: 'ratelimit-headers',
