@@ -147,7 +147,7 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
-- **get_account_status --all review fixes.** A cached key row keeps its last check's verdict and date and says when its next check is allowed; the "Exception" sentence and the archive warning count only readings a key actually took; a corrupt key stamp names its file; the usage cache and cooldown files are written atomically; the usage-fetch lock reclaims a stale lock (older than three request timeouts) through the exclusive create and releases only its own lock. (TRDD-HO94JMKD)
+- **get_account_status --all review fixes.** A cached key row keeps its last check's verdict and date and says when its next check is allowed; the "Exception" sentence counts only readings a key actually took, and the archive warning names the rows that no working key refreshes; a corrupt key stamp names its file; the usage cache and cooldown files are written atomically; the usage-fetch lock reclaims a stale lock (older than three request timeouts) through the exclusive create and releases only its own lock. (TRDD-HO94JMKD)
 
 - **`get_account_status --all` now answers while AgentlensPro is disabled.** The plural form only reads files (the account-state timeline and the per-account usage archive), but the off-switch gate refused it with exit 69 like the server-only verbs. It now passes the gate and skips the launch self-heal, so it never writes settings; rows do not refresh while disabled. The singular `get_account_status` still needs the server and exits 69, and its disabled notice now points to `get_account_status --all` instead of only telling the reader to re-enable. Also fixed: the dispatcher rejected `--all` as an unknown flag (exit 64) since TRDD-PIB6T4RU (TRDD-HO94JMKD).
 

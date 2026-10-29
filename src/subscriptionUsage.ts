@@ -311,7 +311,7 @@ export function armCooldown(retryAfterSeconds: number | null, now = Date.now()):
     ? Math.max(retryAfterSeconds * 1000, 60_000)
     : Math.min(BACKOFF_BASE_MS * 2 ** (consecutive - 1), BACKOFF_CAP_MS)
   // WHY write-then-rename: readCooldown in another process must never see half a file, which would read as no cooldown.
-  // A crash between the write and the rename leaves one <file>.tmp-<pid> behind; the next write by that same pid overwrites it, and nothing else reads it.
+  // A crash between the write and the rename leaves one <file>.tmp-<pid> behind; nothing reads it, and nothing removes it.
   try {
     const tmp = `${cooldownPath()}.tmp-${process.pid}`
     fs.writeFileSync(tmp, JSON.stringify({ until: now + delay, consecutive }))
@@ -730,7 +730,7 @@ export async function getSubscriptionUsage(
       const claimed = getCurrentAccount().email
       const usage = normalize(await res.json() as RawUsage, now, 'ok', now, currentFp, identity, claimed)
       // WHY write-then-rename: a concurrent readCache must never parse half a file, which would read as no cache at all.
-      // A crash between the write and the rename leaves one <file>.tmp-<pid> behind; the next write by that same pid overwrites it, and nothing else reads it.
+      // A crash between the write and the rename leaves one <file>.tmp-<pid> behind; nothing reads it, and nothing removes it.
       try {
         const tmp = `${cachePath()}.tmp-${process.pid}`
         fs.writeFileSync(tmp, JSON.stringify(usage))
