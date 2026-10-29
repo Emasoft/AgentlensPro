@@ -718,6 +718,30 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     return
   }
 
+  // WHY validate call/batch before init(): a malformed argument is a bad command line (exit 64), so it must fail
+  // before any server contact. A down server would otherwise answer first with a connection error, and the usage
+  // mistake would never be reported. The parsed values are kept here and used by the branches below (parsed once).
+  let rawArgs: Record<string, unknown> = {}
+  let spec: Array<{ tool: string; args?: Record<string, unknown>; full?: boolean }> = []
+  if (cmd === 'call') {
+    if (!rest[1]) throw new UsageError('call requires a tool name')
+    // A present-but-non-JSON second arg is a mistake (usually flag syntax on the wrong verb) — fail
+    // fast rather than silently call the tool with {} and measure the wrong thing.
+    if (rest[2] !== undefined) {
+      if (!rest[2].startsWith('{')) {
+        throw new UsageError('call expects a JSON object as the second argument — for flag syntax use: agentlenspro <tool> --flag value')
+      }
+      // WHY UsageError: malformed JSON is a bad command line (exit 64, as the help says), not a crash (exit 1).
+      try { rawArgs = JSON.parse(rest[2]) as Record<string, unknown> } catch (e) { throw new UsageError(`call: the argument is not valid JSON: ${(e as Error).message}`) }
+    }
+  }
+  if (cmd === 'batch') {
+    if (!rest[1]) throw new UsageError('batch requires a JSON array: [{"tool":"...","args":{...}}]')
+    // WHY UsageError: as for call, malformed JSON is a bad command line (exit 64), not a crash.
+    try { spec = JSON.parse(rest[1]) } catch (e) { throw new UsageError(`batch: the argument is not valid JSON: ${(e as Error).message}`) }
+    if (!Array.isArray(spec)) throw new UsageError('batch requires a JSON array')
+  }
+
   await init()
 
   if (cmd === 'list') {
@@ -742,27 +766,11 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
 
   if (cmd === 'call') {
     const tool = rest[1]
-    if (!tool) throw new Error('call requires a tool name')
-    // A present-but-non-JSON second arg is a mistake (usually flag syntax on the wrong verb) — fail
-    // fast rather than silently call the tool with {} and measure the wrong thing.
-    let rawArgs: Record<string, unknown> = {}
-    if (rest[2] !== undefined) {
-      if (!rest[2].startsWith('{')) {
-        throw new Error('call expects a JSON object as the second argument — for flag syntax use: agentlenspro <tool> --flag value')
-      }
-      // WHY UsageError: malformed JSON is a bad command line (exit 64, as the help says), not a crash (exit 1).
-      try { rawArgs = JSON.parse(rest[2]) as Record<string, unknown> } catch (e) { throw new UsageError(`call: the argument is not valid JSON: ${(e as Error).message}`) }
-    }
     emit(tool, await callTool(tool, rawArgs, globals.full), globals)
     return
   }
 
   if (cmd === 'batch') {
-    if (!rest[1]) throw new Error('batch requires a JSON array: [{"tool":"...","args":{...}}]')
-    // WHY UsageError: as for call, malformed JSON is a bad command line (exit 64), not a crash.
-    let spec: Array<{ tool: string; args?: Record<string, unknown>; full?: boolean }>
-    try { spec = JSON.parse(rest[1]) } catch (e) { throw new UsageError(`batch: the argument is not valid JSON: ${(e as Error).message}`) }
-    if (!Array.isArray(spec)) throw new Error('batch requires a JSON array')
     // Sequential on purpose: the endpoint is stateless per request and the server does bounded
     // disk scans; firing them concurrently would multiply the scan cost for no wall-clock win.
     for (let i = 0; i < spec.length; i++) {

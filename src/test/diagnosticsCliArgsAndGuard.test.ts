@@ -123,6 +123,20 @@ suite('ops flags: a value that is itself a flag is a mistake, not a value', () =
     await rejects(['--until', '--json'])
   })
 
+  test('call with no tool name, or a malformed argument, is refused before any server contact', async () => {
+    // WHY no server is needed: the endpoint is dead, so a refusal that came from init() would be a connection
+    // error, not a UsageError. A bad command line must fail on its own, exit 64, whatever the server is doing.
+    await rejects(['call'])
+    await rejects(['call', 'get_burn_status', '{bad'])
+    await rejects(['call', 'get_burn_status', 'notjson'])
+  })
+
+  test('batch with no array, a malformed array, or a non-array is refused before any server contact', async () => {
+    await rejects(['batch'])
+    await rejects(['batch', '[bad'])
+    await rejects(['batch', '{}'])
+  })
+
   test('a real value is still accepted — the guard must not reject correct usage', async () => {
     // No subcommand, so this prints usage and returns without touching the network.
     const log = console.log
