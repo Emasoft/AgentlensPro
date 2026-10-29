@@ -13,6 +13,11 @@
 // never read or returned, so every row here is what was ALREADY observed while that account was live —
 // stamped, with its own freshness stated, and never refreshed by acquiring a credential.
 //
+// ONE EXCEPTION (TRDD-HO94JMKD, increment 2). The owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_01 to _10 environment
+// variables are read by the --all verb only. Each valid key probes its own account with one billed message
+// (src/longOAuthKeys.ts), and the reading is filed under the account the email matches. The keys come from the
+// environment alone: never from a file, never printed, never stored. No row shape changes.
+//
 // THE IDEA THAT MAKES OBSERVED DATA USEFUL. A stale reading is not automatically unknown. A window has
 // an absolute `resetsAt`; once that instant passes, the window it described no longer exists. For an
 // account this machine LEFT before the reading was taken, no local activity can have refilled it — so

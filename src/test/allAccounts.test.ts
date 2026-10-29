@@ -243,7 +243,7 @@ suite('the --all CLI — answers with the server DOWN, and BLIND is not "no acco
   /** The plural verb is assembled from files precisely so it works when the server does not. Before
    *  the local fast path it proxied to the server and answered `cannot reach localhost:4316` — the one
    *  answer that is useless to a rotator, since a wedged machine is when it asks. */
-  function inSandbox<T>(timelineLines: string, fn: () => T): T {
+  async function inSandbox<T>(timelineLines: string, fn: () => Promise<T>): Promise<T> {
     const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'all-cli-'))
     const dir = path.join(sandbox, 'data')
     fs.mkdirSync(dir)
@@ -253,36 +253,36 @@ suite('the --all CLI — answers with the server DOWN, and BLIND is not "no acco
     const prevLog = process.env.AGENTLENS_ACCOUNT_STATE_LOG
     process.env.AGENTLENS_DATA_DIR = dir
     process.env.AGENTLENS_ACCOUNT_STATE_LOG = tl
-    try { return fn() } finally {
+    try { return await fn() } finally {
       if (prevData === undefined) delete process.env.AGENTLENS_DATA_DIR; else process.env.AGENTLENS_DATA_DIR = prevData
       if (prevLog === undefined) delete process.env.AGENTLENS_ACCOUNT_STATE_LOG; else process.env.AGENTLENS_ACCOUNT_STATE_LOG = prevLog
       fs.rmSync(sandbox, { recursive: true, force: true })
     }
   }
 
-  test('an empty roster exits BLIND (2 — the house "cannot answer honestly" code), and says so in words', () => {
-    inSandbox('', () => {
+  test('an empty roster exits BLIND (2 — the house "cannot answer honestly" code), and says so in words', async () => {
+    await inSandbox('', async () => {
       const errs: string[] = []
       const realErr = console.error
       console.error = (...a: unknown[]): void => { errs.push(a.join(' ')) }
       try {
-        assert.strictEqual(runAllAccountsCli([]), 2, 'BLIND must be the house EX_UNKNOWN (2) — non-zero, and distinct from a runtime failure (1)')
+        assert.strictEqual(await runAllAccountsCli([]), 2, 'BLIND must be the house EX_UNKNOWN (2) — non-zero, and distinct from a runtime failure (1)')
       } finally { console.error = realErr }
       assert.ok(errs.join('\n').includes('cannot see'), 'and it must not read as "no accounts"')
     })
   })
 
-  test('a populated roster renders a table and exits 0', () => {
+  test('a populated roster renders a table and exits 0', async () => {
     const line = JSON.stringify({
       ts: NOW - HOUR, accountId: A, email: 'a@x', mode: 'subscription (within plan)',
       plan: 'Max 20x', authRegime: 'subscription', ttlMinutes: 60, ttlSource: 'doc-matrix',
     }) + '\n'
-    inSandbox(line, () => {
+    await inSandbox(line, async () => {
       const outs: string[] = []
       const realLog = console.log
       console.log = (...a: unknown[]): void => { outs.push(a.join(' ')) }
       try {
-        assert.strictEqual(runAllAccountsCli([]), 0)
+        assert.strictEqual(await runAllAccountsCli([]), 0)
       } finally { console.log = realLog }
       const text = outs.join('\n')
       assert.ok(text.includes('a@x'))
@@ -322,7 +322,7 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
       usageCreditsEnabled: false, spendPercent: null, note: '',
     } as unknown as SubscriptionUsage
   }
-  function inSandbox<T>(timeline: AccountStateRecord[], fn: () => T): T {
+  async function inSandbox<T>(timeline: AccountStateRecord[], fn: () => Promise<T>): Promise<T> {
     const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'headroom-'))
     const dir = path.join(sandbox, 'data')
     fs.mkdirSync(dir)
@@ -332,7 +332,7 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     const prevLog = process.env.AGENTLENS_ACCOUNT_STATE_LOG
     process.env.AGENTLENS_DATA_DIR = dir
     process.env.AGENTLENS_ACCOUNT_STATE_LOG = tl
-    try { return fn() } finally {
+    try { return await fn() } finally {
       if (prevData === undefined) delete process.env.AGENTLENS_DATA_DIR; else process.env.AGENTLENS_DATA_DIR = prevData
       if (prevLog === undefined) delete process.env.AGENTLENS_ACCOUNT_STATE_LOG; else process.env.AGENTLENS_ACCOUNT_STATE_LOG = prevLog
       fs.rmSync(sandbox, { recursive: true, force: true })
@@ -340,8 +340,8 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
   }
   const ROSTER = [rec(A, 'a@x', NOW - 40 * HOUR), rec(B, 'b@x', NOW - 20 * HOUR), rec(C, 'c@x', NOW - 10 * HOUR)]
 
-  test('modelWindows carries each scoped bucket CLASSIFIED, so a rotator never gates on a raw percent', () => {
-    inSandbox(ROSTER, () => {
+  test('modelWindows carries each scoped bucket CLASSIFIED, so a rotator never gates on a raw percent', async () => {
+    await inSandbox(ROSTER, async () => {
       archiveAccountUsage(usageM(C, NOW - 60_000, 12, 30, 45))
       const c = listAllAccounts({ now: NOW, liveAccountId: C }).accounts.find(x => x.accountId === C)!
       assert.strictEqual(c.modelWindows.length, 1)
@@ -352,8 +352,8 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
-  test('--model partitions by the MODEL bucket: a spent Fable window excludes an account whose 5h/7d are fine', () => {
-    inSandbox(ROSTER, () => {
+  test('--model partitions by the MODEL bucket: a spent Fable window excludes an account whose 5h/7d are fine', async () => {
+    await inSandbox(ROSTER, async () => {
       archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 100))  // Fable spent, account-wide fine
       archiveAccountUsage(usageM(B, NOW - 60_000, 15, 25, 40))   // Fable headroom
       archiveAccountUsage(usageM(C, NOW - 60_000, 99, 20, 5))    // Fable fine but 5h nearly spent
@@ -367,8 +367,8 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
-  test('none-with-headroom fires ONLY when every account is positively spent', () => {
-    inSandbox(ROSTER.slice(0, 2), () => {
+  test('none-with-headroom fires ONLY when every account is positively spent', async () => {
+    await inSandbox(ROSTER.slice(0, 2), async () => {
       archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 100))
       archiveAccountUsage(usageM(B, NOW - 60_000, 15, 100, 40))
       const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: B }), { model: 'fable' })
@@ -378,8 +378,8 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
-  test('an unreadable account downgrades "none" to indeterminate — unknown is never counted as spent', () => {
-    inSandbox(ROSTER.slice(0, 2), () => {
+  test('an unreadable account downgrades "none" to indeterminate — unknown is never counted as spent', async () => {
+    await inSandbox(ROSTER.slice(0, 2), async () => {
       archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 100))  // spent on Fable; B has NO reading
       const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: A }), { model: 'fable' })
       assert.strictEqual(sel.verdict, 'indeterminate')
@@ -389,8 +389,8 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
-  test('a reading with NO bucket for the queried model is undecidable with the reason stated, never a silent pass', () => {
-    inSandbox(ROSTER.slice(0, 1), () => {
+  test('a reading with NO bucket for the queried model is undecidable with the reason stated, never a silent pass', async () => {
+    await inSandbox(ROSTER.slice(0, 1), async () => {
       archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, null))
       const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: A }), { model: 'fable' })
       assert.strictEqual(sel.verdict, 'indeterminate')
@@ -398,8 +398,8 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
-  test('--with-headroom (no model) gates on 5h AND 7d only — a spent per-model bucket does not exclude', () => {
-    inSandbox(ROSTER.slice(0, 2), () => {
+  test('--with-headroom (no model) gates on 5h AND 7d only — a spent per-model bucket does not exclude', async () => {
+    await inSandbox(ROSTER.slice(0, 2), async () => {
       archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 100))  // Fable spent, account-wide fine
       archiveAccountUsage(usageM(B, NOW - 60_000, 15, 100, 40))  // 7d spent
       const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: B }), {})
@@ -409,8 +409,8 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
-  test('best-first ORDERS BY the model bucket too — the fullest gate breaks the tie, not always 5h', () => {
-    inSandbox(ROSTER.slice(0, 2), () => {
+  test('best-first ORDERS BY the model bucket too — the fullest gate breaks the tie, not always 5h', async () => {
+    await inSandbox(ROSTER.slice(0, 2), async () => {
       archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 90))  // best 5h, nearly-spent Fable
       archiveAccountUsage(usageM(B, NOW - 60_000, 30, 20, 5))   // worse 5h, empty Fable
       const sel = selectAccountsWithHeadroom(listAllAccounts({ now: NOW, liveAccountId: A }), { model: 'fable' })
@@ -419,14 +419,14 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
-  test('the CLI adds a `selection` block to --json WITHOUT changing the existing answer shape', () => {
-    inSandbox(ROSTER.slice(0, 1), () => {
+  test('the CLI adds a `selection` block to --json WITHOUT changing the existing answer shape', async () => {
+    await inSandbox(ROSTER.slice(0, 1), async () => {
       archiveAccountUsage(usageM(A, NOW - 60_000, 10, 20, 40))
       const outs: string[] = []
       const realLog = console.log
       console.log = (...a: unknown[]): void => { outs.push(a.join(' ')) }
       try {
-        assert.strictEqual(runAllAccountsCli(['--json', '--model', 'fable']), 0)
+        assert.strictEqual(await runAllAccountsCli(['--json', '--model', 'fable']), 0)
       } finally { console.log = realLog }
       const parsed = JSON.parse(outs.join('\n'))
       assert.ok(Array.isArray(parsed.accounts), 'prior consumers keep their fields')
@@ -436,24 +436,24 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
     })
   })
 
-  test('a rotation flag with a bad value exits 64, never a silently unfiltered report a script would mis-parse', () => {
+  test('a rotation flag with a bad value exits 64, never a silently unfiltered report a script would mis-parse', async () => {
     const errs: string[] = []
     const realErr = console.error
     console.error = (...a: unknown[]): void => { errs.push(a.join(' ')) }
     try {
-      assert.strictEqual(runAllAccountsCli(['--model']), 64, '--model without a value')
-      assert.strictEqual(runAllAccountsCli(['--with-headroom', '--threshold', 'zesty']), 64, 'non-numeric threshold')
-      assert.strictEqual(runAllAccountsCli(['--with-headroom', '--threshold', '0']), 64, 'out-of-range threshold')
+      assert.strictEqual(await runAllAccountsCli(['--model']), 64, '--model without a value')
+      assert.strictEqual(await runAllAccountsCli(['--with-headroom', '--threshold', 'zesty']), 64, 'non-numeric threshold')
+      assert.strictEqual(await runAllAccountsCli(['--with-headroom', '--threshold', '0']), 64, 'out-of-range threshold')
     } finally { console.error = realErr }
   })
 
-  test('the human verdict says NO ACCOUNT HAS HEADROOM in words, and names the live account', () => {
+  test('the human verdict says NO ACCOUNT HAS HEADROOM in words, and names the live account', async () => {
     // The CLI runs on the REAL clock (it cannot inject `now`), so this fixture must be built
     // relative to Date.now() — a window anchored on the frozen NOW has "already reset" by the time
     // the test runs, which turns a positively-spent account into an undecidable one.
     const real = Date.now()
     const recNow = { ...rec(A, 'a@x', real - HOUR) }
-    inSandbox([recNow], () => {
+    await inSandbox([recNow], async () => {
       const u = usageM(A, real - 60_000, 100, 20, 40)
       u.limits.forEach(l => { l.resetsAt = iso(real + (l.group === 'session' ? 1 : 48) * HOUR) })
       archiveAccountUsage(u)
@@ -461,7 +461,7 @@ suite('selectAccountsWithHeadroom — per-model rotation query', () => {
       const realLog = console.log
       console.log = (...a: unknown[]): void => { outs.push(a.join(' ')) }
       try {
-        assert.strictEqual(runAllAccountsCli(['--with-headroom']), 0, 'an honest "none" is an ANSWER, exit 0')
+        assert.strictEqual(await runAllAccountsCli(['--with-headroom']), 0, 'an honest "none" is an ANSWER, exit 0')
       } finally { console.log = realLog }
       const text = outs.join('\n')
       assert.ok(text.includes('NO ACCOUNT HAS HEADROOM'), `verdict line missing in:\n${text}`)

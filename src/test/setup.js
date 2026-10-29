@@ -81,7 +81,31 @@ for (const k of [
   'AGENTLENS_UI_URL', 'AGENTLENS_MCP_URL', 'AGENTLENS_DASHBOARD_URL',
   'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_PROTOCOL', 'OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE',
   'CLAUDE_CONFIG_DIR',
+  // Owner-supplied long-lived OAuth keys (src/longOAuthKeys.ts): real credentials in the owner's shell.
+  // A test that saw them would probe the real API with them, so they are stripped like the endpoints above.
+  'CLAUDE_CODE_LONG_OAUTH_KEY_01', 'CLAUDE_CODE_LONG_OAUTH_KEY_02', 'CLAUDE_CODE_LONG_OAUTH_KEY_03',
+  'CLAUDE_CODE_LONG_OAUTH_KEY_04', 'CLAUDE_CODE_LONG_OAUTH_KEY_05', 'CLAUDE_CODE_LONG_OAUTH_KEY_06',
+  'CLAUDE_CODE_LONG_OAUTH_KEY_07', 'CLAUDE_CODE_LONG_OAUTH_KEY_08', 'CLAUDE_CODE_LONG_OAUTH_KEY_09',
+  'CLAUDE_CODE_LONG_OAUTH_KEY_10',
 ]) delete process.env[k]
+
+// ---- offline guard: no test reaches the real Anthropic API ------------------------------------
+//
+// The owner's CLAUDE_CODE_LONG_OAUTH_KEY_* keys are stripped above, which only stops the ENVIRONMENT
+// route. A test could still build a request itself, so every fetch to api.anthropic.com throws here
+// instead of going out. The throw is synchronous on purpose: a caller that wraps fetch in try/catch
+// must see the same failure whether it awaits or not. Every other URL reaches the original fetch.
+const realFetch = globalThis.fetch
+globalThis.fetch = function guardedFetch(input, init) {
+  const raw = typeof input === 'string' ? input
+    : input instanceof URL ? input.href
+    : input && typeof input.url === 'string' ? input.url
+    : String(input)
+  let host = ''
+  try { host = new URL(raw).hostname } catch { /* not an absolute URL: the original fetch decides */ }
+  if (host === 'api.anthropic.com') throw new Error('network disabled in tests')
+  return realFetch(input, init)
+}
 
 // ---- 2. HOME / DATA_DIR --------------------------------------------------------------------
 //

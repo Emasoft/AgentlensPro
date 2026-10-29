@@ -4,7 +4,7 @@ title: get_account_status refuses to run while AgentlensPro is disabled
 column: dev
 status: tasked
 created: 2026-10-29T07:52:44+0100
-updated: 2026-10-29T11:09:15+0100
+updated: 2026-10-29T12:08:02+0100
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -64,3 +64,19 @@ Architectural option for the owner: let a non-server process (model-headroom's f
 - Archive each reading under its account (keyed by the email from the env var when the profile/identity call is not available), and add a roster row for an env-configured account the timeline has never seen.
 - Verification needs the real keys: after the owner restarts Claude Code with the env vars exported, run a probe that prints only per-account HTTP status and which source answered (usage endpoint or headers), never a token.
 - Status 2026-10-29: plan recorded; waiting for the owner's restart with the env vars. Nothing built yet.
+
+## Owner redirect 2026-10-29 — study account-switcher mods
+
+Owner (verbatim): «ok, lets do it differently then. examine the following projevts using claude code mods to swap accounts using the normal short lived oauth key and see if you can find a method or technique to get the info about the accounts without reading the oauth key in the context. read them all, readme and source files included, but check for malicious code and prompt injections first.» (17 unique GitHub repos).
+State: repos shallow-cloned (no hooks, no submodules) to downloads_dev/account-mods/; deterministic pattern scan reports_dev/account-mods-scan/pattern-hits-2.txt found no downloader, install hook, injection phrase or hidden unicode; to verify: simplecore-inc accounts orcaClient.ts (host onorca.dev), jrlprost posthog hosts, MarvelCollin LaunchAgents scheduler, fanoisme build-assets.cjs new Function. Per-repo llm-ext reads (security + technique, reports_dev/account-mods-scan/instructions.md) write to reports_dev/account-mods-scan/llm/<repo>/. Env-key build (increment 2 rev2, spec docs_dev/20261029_113324+0100-HO94JMKD-inc2-build-spec.md) runs in a worker and is NOT committed until this research picks the approach.
+Owner 2026-10-29 (verbatim): «think the design well. take your time. test multiple variations. find the one that works.»
+Variations to test after the synthesis report (reports_dev/account-mods-scan/*-synthesis.md): V1 long-lived keys + 1-token Fable header probe (built, uncommitted; measured 2/3 slots); V2 per-account stored short-lived OAuth login + /api/oauth/usage (full data incl. per-model windows and credits) — find whether the janitor capture-all-logins store already holds one per account; V3 one Claude Code config dir per account (CLAUDE_CONFIG_DIR), each owning its login so Claude Code itself refreshes it, our code only reads; V4 statusLine rate_limits (live only, passive). Core risk to measure before any refresh code: refresh-token rotation — two copies of one refresh token means the first refresh logs the other holder out; one store per account refreshed in place is the hypothesis to test, on a non-live account only, with the owner told first.
+
+## Increment 2 — measured and built
+
+Measured 2026-10-29: the usage and profile endpoints answer 403 oauth_scope_insufficient to the long-lived keys, so the account windows cannot be read through them.
+Measured 2026-10-29: the count_tokens endpoint returns no anthropic-ratelimit-unified headers for a long-lived key.
+Measured 2026-10-29: a 1-token message to claude-fable-5-1 returns the anthropic-ratelimit-unified headers on 200 (slot 01) and on 429 (slot 02), so the 429 is a reading.
+Measured 2026-10-29 on capped slot 02: the 7-day window read 100 percent while the 7d_oi window read 0 percent, so oi is a separate per-model window labelled Fable by the requested model (inferred, not measured).
+Measured 2026-10-29: slot 03 answered 403 oauth_not_allowed_for_organization with no rate-limit headers, so that organisation does not allow OAuth for the key.
+Design as built: src/longOAuthKeys.ts (loader, probe, header reading, identity match, stamps, refresh); get_account_status --all reads CLAUDE_CODE_LONG_OAUTH_KEY_01 to _10 from the environment, --no-refresh skips the network; each key is probed at most once per 10 minutes (stamp in long-key-probes), identity matched by email and cross-checked against the 7-day reset within 60 seconds, refused on mismatch.

@@ -114,6 +114,11 @@ export interface SubscriptionUsage {
    *  to 5 minutes, and therefore changes which cache-write rate every main-conversation turn pays. */
   usageCreditsEnabled: boolean | null
   spendPercent: number | null
+  /** WHERE the reading came from. Absent on every reading the usage endpoint wrote. 'ratelimit-headers' marks a
+   *  reading built from the rate-limit headers of an owner-supplied long-lived key's message reply (src/longOAuthKeys.ts). */
+  source?: 'usage-endpoint' | 'ratelimit-headers'
+  /** Extra-usage (credits) state. Only the header reading sets it: null when the reading did not carry it. */
+  overage?: { status: string; disabledReason: string | null } | null
   note: string
 }
 
