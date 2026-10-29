@@ -137,6 +137,11 @@ suite('ops flags: a value that is itself a flag is a mistake, not a value', () =
     await rejects(['batch', '{}'])
   })
 
+  test('a batch member without a string tool name is refused before any server contact', async () => {
+    await rejects(['batch', '[1]'])
+    await rejects(['batch', '[{}]'])
+  })
+
   test('a real value is still accepted — the guard must not reject correct usage', async () => {
     // No subcommand, so this prints usage and returns without touching the network.
     const log = console.log

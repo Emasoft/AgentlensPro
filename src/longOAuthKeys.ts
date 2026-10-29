@@ -337,7 +337,9 @@ function readStamp(file: string, token: string): Stamp | null {
     // No stamp yet is the normal first run. Any other failure is re-raised with the file named: a corrupt stamp fails the
     // whole --all run on purpose (fail fast), rather than probing the key again without saying so.
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw new Error(redact('cannot read the long-lived key stamp ' + file + ': ' + (e as Error).message, token), { cause: e })
+    // WHY no cause: the SyntaxError from JSON parsing quotes stamp bytes unredacted, and util.inspect prints a cause, which would bypass redact().
+    // The redacted message already carries e.message, so the raw cause must not travel.
+    throw new Error(redact('cannot read the long-lived key stamp ' + file + ': ' + (e as Error).message, token))
   }
 }
 

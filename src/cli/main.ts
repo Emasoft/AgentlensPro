@@ -168,7 +168,7 @@ export const DISPATCHED_VERBS: ReadonlySet<string> = new Set([
 /** Does this invocation go to the diagnostics surface (runDiagnosticsCli) — the only place a tool can refuse? */
 function reachesDiagnosticsSurface(cmd: string | undefined, argv: string[]): boolean {
   if (cmd === undefined) return false // the bare foreground server
-  // only the plural form is file-backed; a read must never be blocked by the brake or write settings (owner directive 2026-10-29)
+  // only the plural form needs no server; it writes no user config, so the brake must not block it (owner directive 2026-10-29)
   if (cmd === 'get_account_status') return !isAllAccountsStatus(argv)
   return !DISPATCHED_VERBS.has(cmd)
 }

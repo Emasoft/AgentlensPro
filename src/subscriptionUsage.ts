@@ -54,6 +54,9 @@ export const TTL_MS = 600_000          // never refetch inside this window
 const BACKOFF_BASE_MS = 600_000        // first 429 (when the server names no Retry-After)...
 const BACKOFF_CAP_MS = 7_200_000       // ...doubling per CONSECUTIVE 429, capped at 2h
 const HTTP_TIMEOUT_MS = 8_000
+// WHY three timeouts: the lock holder awaits the usage fetch AND then fetchTokenIdentity, each bounded by HTTP_TIMEOUT_MS,
+// so a healthy holder can take two of them, plus parse and write time. A lock must not be reclaimed while its holder works.
+const LOCK_STALE_MS = HTTP_TIMEOUT_MS * 3
 
 /** One limit bucket as the endpoint reports it. Read `limits[]` rather than the named `five_hour` /
  *  `seven_day` fields: the payload already carries several unreleased buckets, and per-model
@@ -308,6 +311,7 @@ export function armCooldown(retryAfterSeconds: number | null, now = Date.now()):
     ? Math.max(retryAfterSeconds * 1000, 60_000)
     : Math.min(BACKOFF_BASE_MS * 2 ** (consecutive - 1), BACKOFF_CAP_MS)
   // WHY write-then-rename: readCooldown in another process must never see half a file, which would read as no cooldown.
+  // A crash between the write and the rename leaves one <file>.tmp-<pid> behind; the next write by that same pid overwrites it, and nothing else reads it.
   try {
     const tmp = `${cooldownPath()}.tmp-${process.pid}`
     fs.writeFileSync(tmp, JSON.stringify({ until: now + delay, consecutive }))
@@ -666,13 +670,14 @@ export async function getSubscriptionUsage(
 
   // Cross-process guard. Two callers can both clear the cooldown check above before either fires;
   // without this they double-hit the endpoint and, reading the same consecutive-429 count, fail to
-  // escalate the back-off. `wx` is the atomic create-or-fail primitive; a stale lock older than the
-  // HTTP timeout is reclaimed so a crashed holder cannot wedge this forever.
+  // escalate the back-off. `wx` is the atomic create-or-fail primitive; a stale lock older than LOCK_STALE_MS is
+  // reclaimed so a crashed holder cannot wedge this forever.
   // WHY a per-call nonce: the lock names its holder, so release unlinks only its own lock. Without it, a holder whose
   // lock went stale and was reclaimed would unlink the reclaimer's fresh lock.
-  // Residual race, stated honestly: fs has no compare-and-swap. Two waiters that both see the same stale lock can still
-  // both take it over if one unlinks the other's fresh lock between that waiter's stat and its unlink. That window is
-  // microseconds; before this change every waiter that saw a stale lock took it.
+  // Residual race, stated honestly: fs has no compare-and-swap. The window lies between the stat and the unlink by a waiter
+  // that saw a stale lock: in that gap another waiter can take the lock over, and the unlink then removes that fresh lock.
+  // Only waiters that saw the SAME stale lock can collide this way, and several waiters may share one. Before this change
+  // every waiter that saw a stale lock took it.
   const nonce = `${process.pid}:${randomUUID()}`
   let held = false
   try {
@@ -680,7 +685,7 @@ export async function getSubscriptionUsage(
     held = true
   } catch {
     let stale = false
-    try { stale = now - fs.statSync(lockPath()).mtimeMs > HTTP_TIMEOUT_MS * 2 } catch { /* vanished: not stale, the next call takes it */ }
+    try { stale = now - fs.statSync(lockPath()).mtimeMs > LOCK_STALE_MS } catch { /* vanished: not stale, the next call takes it */ }
     if (stale) {
       try { fs.unlinkSync(lockPath()) } catch { /* another waiter reclaimed it first */ }
       try { fs.writeFileSync(lockPath(), nonce, { flag: 'wx' }); held = true } catch { /* another waiter won the create */ }
@@ -725,6 +730,7 @@ export async function getSubscriptionUsage(
       const claimed = getCurrentAccount().email
       const usage = normalize(await res.json() as RawUsage, now, 'ok', now, currentFp, identity, claimed)
       // WHY write-then-rename: a concurrent readCache must never parse half a file, which would read as no cache at all.
+      // A crash between the write and the rename leaves one <file>.tmp-<pid> behind; the next write by that same pid overwrites it, and nothing else reads it.
       try {
         const tmp = `${cachePath()}.tmp-${process.pid}`
         fs.writeFileSync(tmp, JSON.stringify(usage))

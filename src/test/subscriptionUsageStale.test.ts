@@ -243,7 +243,7 @@ suite('subscriptionUsage — the cross-process lock (TRDD-HO94JMKD)', () => {
     })
   })
 
-  test('a lock older than twice the HTTP timeout is reclaimed, the call fetches, and no lock is left behind', async () => {
+  test('a lock older than three times the HTTP timeout is reclaimed, the call fetches, and no lock is left behind', async () => {
     await withLockSandbox(async (dir, calls) => {
       const lock = path.join(dir, 'subscription-usage.lock')
       fs.writeFileSync(lock, '4242:crashed-holder')
@@ -252,6 +252,33 @@ suite('subscriptionUsage — the cross-process lock (TRDD-HO94JMKD)', () => {
       await getSubscriptionUsage({})
       assert.strictEqual(calls.count, 1, 'the reclaimed lock lets this call fetch')
       assert.strictEqual(fs.existsSync(lock), false, 'the caller that took the lock over releases it')
+    })
+  })
+  test('a lock overwritten while the holder is in flight is not unlinked: release unlinks only the lock it wrote', async () => {
+    await withLockSandbox(async dir => {
+      const lock = path.join(dir, 'subscription-usage.lock')
+      // The stubbed fetch is the in-flight window: another caller's lock lands on disk before the holder releases it.
+      globalThis.fetch = (async () => {
+        fs.writeFileSync(lock, 'other-holder:nonce')
+        return new Response('{}', { status: 500 })
+      }) as typeof fetch
+      await getSubscriptionUsage({})
+      assert.ok(fs.existsSync(lock), 'the holder must not unlink a lock it did not write')
+      assert.strictEqual(fs.readFileSync(lock, 'utf8'), 'other-holder:nonce', 'the other holder keeps its lock')
+    })
+  })
+
+  test('a lock aged between two and three HTTP timeouts is not reclaimed: the call is contended and sends nothing', async () => {
+    await withLockSandbox(async (dir, calls) => {
+      const lock = path.join(dir, 'subscription-usage.lock')
+      fs.writeFileSync(lock, '4242:slow-holder')
+      // 20 s is past two HTTP timeouts (16 s) and inside three (24 s): a healthy holder can run two sequential bounded fetches.
+      const aged = new Date(Date.now() - 20_000)
+      fs.utimesSync(lock, aged, aged)
+      const u = await getSubscriptionUsage({})
+      assert.strictEqual(u?.reason, 'lock_contended')
+      assert.strictEqual(calls.count, 0, 'a holder still inside its budget is not reclaimed')
+      assert.strictEqual(fs.readFileSync(lock, 'utf8'), '4242:slow-holder', 'the lock is unchanged')
     })
   })
 })

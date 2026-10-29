@@ -740,6 +740,9 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     // WHY UsageError: as for call, malformed JSON is a bad command line (exit 64), not a crash.
     try { spec = JSON.parse(rest[1]) } catch (e) { throw new UsageError(`batch: the argument is not valid JSON: ${(e as Error).message}`) }
     if (!Array.isArray(spec)) throw new UsageError('batch requires a JSON array')
+    // WHY checked here: a member without a string tool would otherwise fail after server contact, so a usage mistake would not be reported as one.
+    const badMember = (spec as unknown[]).findIndex(m => typeof m !== 'object' || m === null || typeof (m as { tool?: unknown }).tool !== 'string')
+    if (badMember !== -1) throw new UsageError(`batch: member ${badMember} needs a "tool" name`)
   }
 
   await init()
