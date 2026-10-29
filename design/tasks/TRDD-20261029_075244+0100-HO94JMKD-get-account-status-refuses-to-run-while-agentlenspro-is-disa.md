@@ -1,10 +1,10 @@
 ---
 trdd-id: HO94JMKD
 title: get_account_status refuses to run while AgentlensPro is disabled
-column: human_review
+column: complete
 status: tasked
 created: 2026-10-29T07:52:44+0100
-updated: 2026-10-29T17:46:02+0100
+updated: 2026-10-29T17:55:54+0100
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@AgentlensPro
 approval-datetime: 2026-10-29T07:52:44+0100
-implementation-commits: [9a35bd4f, 4ae78b7d, abbf793c, 0f9764f8, d486e1a0, 927a9fc1, 2642b168, 1e2d30ed, bf2c62e4, f301e1c4, a2da6a12]
+implementation-commits: [9a35bd4f, 4ae78b7d, abbf793c, 0f9764f8, d486e1a0, 927a9fc1, 2642b168, 1e2d30ed, bf2c62e4, f301e1c4, a2da6a12, d21fdf8f]
 release-via: publish
 ---
 
@@ -27,7 +27,7 @@ release-via: publish
 - Increment 1 DONE, commit 9a35bd4f (in implementation-commits): get_account_status --all passes the disabled gate and skips the launch self-heal. Its follow-up tests are commit 4ae78b7d.
 - Side effects of --all while disabled: (a) possible copy of a newer legacy cache into ~/.agentlens/subscription-usage (archiveAccountUsage, src/subscriptionUsage.ts:502); (b) possible macOS keychain read in the diagnosis branch via loadToken when consent is stored; (c) --out FILE writes the named file. (d) one stamp file per probed or refused key under <dataDir>/long-key-probes. The predicate named isFileOnlyAccountStatus in the body below is now isAllAccountsStatus (f301e1c4).
 - Boundary: server-only verbs still refuse while disabled with exit 69 (singular get_account_status, investigate_burn, get_burn_status, budget).
-- NEXT ACTION: the orchestrator mints two follow-up cards (a spike measuring whether a max_tokens 0 probe opens a 5-hour window on an idle account; a LOCAL owner-only action to re-mint key 03 under an organisation that allows OAuth) and corrects the stale 'Open gaps' and Increment 2 BLOCKED lines; then complete, and publish at the next release. The rejected credits fallback stays in git stash 'HO94JMKD guarded credits fallback'.
+- NEXT ACTION: publish at the next release. Follow-ups: TRDD-YG0T6FGY (does a key probe open a 5-hour window on an idle account); the owner's key-03 re-mint is tracked in a LOCAL card. The rejected credits fallback stays in git stash 'HO94JMKD guarded credits fallback'.
 2026-10-29 — 927a9fc1: a long-lived key whose check failed inside the 10-minute wait shows no figures and its check age (KeyRow.checkedAt), never an old archived reading. Split out and REJECTED after its own review (kept in git stash, message 'HO94JMKD guarded credits fallback'): taking a cached row's credits state from the key's stamp mixes two sources on one line, and a usage-endpoint record keeps its credits fact in usageCreditsEnabled, which the stamp can contradict; a cached row whose record has no overage shows credits ? instead.
 
 ## Approval log
@@ -39,6 +39,9 @@ release-via: publish
 - 2026-10-29T17:44:43+0100 — column → complete. human review done; every finding fixed or triaged (STATE)
 - 2026-10-29T17:45:46+0100 — column → human_review. complete held: open questions get their own cards first
 - 2026-10-29 — owner directive, verbatim: «do the human review yourself. fix all issues. run the /ultimate-bug-scanner on all files». The human review is delegated to the agent.
+- 2026-10-29T17:52:09+0100 — column → complete. human review done; follow-ups minted (spike TRDD-YG0T6FGY, LOCAL key-03 card); release via publish
+- 2026-10-29T17:55:16+0100 — column → human_review. acceptance checklist missing; adding it before closing
+- 2026-10-29T17:55:54+0100 — column → complete. acceptance checklist written and verified; human review done; follow-up spike TRDD-YG0T6FGY
 
 ## Owner directive
 
@@ -58,11 +61,13 @@ Known side effects left unchanged: listObservedAccountUsage (src/subscriptionUsa
 
 BLOCKED: fold fresh status-line rate_limits into listAllAccounts. Fact check: status-line samples carry NO account field (only session_id and rate_limits_*), so it is not buildable; needs an owner decision on the attribution source.
 Owner decision 2026-10-29 (supersedes the BLOCKED line above): the owner chose «Fetch from Anthropic (Recommended)» — "When `get_account_status --all` runs, make one request to the OAuth usage endpoint (the source `/usage` and `model-headroom` already use) and store the result for the live account. Exact 5h, 7d and per-model weekly (Fable) numbers. One network call per run, live account only." Not part of increment 1.
+2026-10-29 — both the BLOCKED line and the usage-endpoint decision above are superseded by the long-lived-key redesign below.
 
 ## Open gaps
 
 Per-account model windows (Fable) stay archive-only while disabled (model-headroom answers the live account only); server-only verbs (investigate_burn, get_burn_status, budget) cannot answer while disabled.
 Architectural option for the owner: let a non-server process (model-headroom's fetch or the status-line capture) write the per-account archive.
+2026-10-29 — superseded in part: an account with a long-lived key refreshes all its windows on each --all run, including the per-model weekly window (the 7d_oi header, shown as Fable); only accounts without a key stay archive-only while disabled. The server-only verbs still cannot answer while disabled.
 
 ## Increment 2 redesign — long-lived OAuth keys (owner 2026-10-29)
 
@@ -96,3 +101,12 @@ Measured 2026-10-29: a 1-token message to claude-fable-5-1 returns the anthropic
 Measured 2026-10-29 on capped slot 02: the 7-day window read 100 percent while the 7d_oi window read 0 percent, so oi is a separate per-model window labelled Fable by the requested model (inferred, not measured).
 Measured 2026-10-29: slot 03 answered 403 oauth_not_allowed_for_organization with no rate-limit headers, so that organisation does not allow OAuth for the key.
 Design as built: src/longOAuthKeys.ts (loader, probe, header reading, identity match, stamps, refresh); get_account_status --all reads CLAUDE_CODE_LONG_OAUTH_KEY_01 to _10 from the environment, --no-refresh skips the network; each key is probed at most once per 10 minutes (stamp in long-key-probes), identity matched by email and cross-checked against the 7-day reset within 60 seconds, refused on mismatch.
+
+## Acceptance checklist
+
+- [x] `get_account_status --all` runs while AgentlensPro is disabled (exit 0, not 69) and skips the launch self-heal — 9a35bd4f, 4ae78b7d.
+- [x] The singular `get_account_status` still refuses while disabled (exit 69) and points to `--all`.
+- [x] Each owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_* key refreshes its account's windows, including the per-model weekly window, with one max_tokens 0 probe at most every 10 minutes — abbf793c, 0f9764f8, d486e1a0.
+- [x] No key line prints a key, shows old figures as current, or claims a key took a reading it did not take — 927a9fc1, 2642b168, 1e2d30ed.
+- [x] Human review done by the agent on the owner's directive, every finding fixed or triaged — 2642b168, 1e2d30ed, bf2c62e4, f301e1c4, a2da6a12, d21fdf8f.
+- [x] Full test suite passes (3331 passing, 0 failing); type-check, lint and the identity check pass.
