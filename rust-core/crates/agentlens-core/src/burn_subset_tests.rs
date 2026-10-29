@@ -239,3 +239,16 @@ fn burn_status_never_asks_for_the_full_summary() {
     let hits: Vec<&str> = body[..end].lines().filter(|l| !l.trim_start().starts_with("//") && bare_call(l)).collect();
     assert!(hits.is_empty(), "run_burn_tick must not call summary_now: {hits:?}");
 }
+
+/// TRDD-H3D5ZBO1: the bodies scan must never come back under the first (lock A) hold of the burn
+/// tick. That hold once ran `bodies.poll` for 534-588 s on the first pass after boot.
+#[test]
+fn the_burn_tick_runs_no_bodies_poll_or_scan_under_lock_a() {
+    let src = include_str!("ui.rs");
+    let start = src.find("pub async fn run_burn_tick").expect("run_burn_tick");
+    let body = &src[start..];
+    let lock_a = body.find("lock_timed()").expect("lock A");
+    let end = lock_a + body[lock_a..].find("\n        };\n").expect("end of lock A");
+    let hits: Vec<&str> = body[lock_a..end].lines().filter(|l| !l.trim_start().starts_with("//") && (l.contains(".poll(") || l.contains(".scan"))).collect();
+    assert!(hits.is_empty(), "lock A of run_burn_tick must not poll or scan the bodies folder: {hits:?}");
+}

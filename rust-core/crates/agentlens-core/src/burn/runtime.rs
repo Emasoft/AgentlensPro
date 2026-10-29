@@ -40,7 +40,7 @@ pub struct BurnRuntime {
     /// paths and by the TTL resolver's usage-credit signal (a ≤4s-stale pct is fine).
     pub last_status: Option<Value>,
     /// server.ts bodiesActivityReport() — the incremental raw-bodies watcher behind
-    /// HUGE_REQUEST_BURST + CACHE_THRASH. Polled on the burn tick (O(new files) per poll).
+    /// HUGE_REQUEST_BURST + CACHE_THRASH. Scanned off the state lock by a blocking task the burn tick starts.
     pub bodies: super::bodies_activity::BodiesActivityTracker,
     /// server.ts `lastSeenAccountUuid` — the burn tick's rotation edge detector. ROTATION IS THE
     /// ONE MOMENT A NON-LIVE ACCOUNT CAN BE READ: rate limits are per account and the usage

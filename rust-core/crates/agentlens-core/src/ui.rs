@@ -4422,24 +4422,30 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         // hold snapshots those two inputs, the status is computed with the lock RELEASED, and the
         // second hold stores it and does the rest. Every ingest and read path was queued behind
         // that 1.5 s four times a minute — do not fold the compute back under either guard.
-        let (ttl, config, t_poll, t_flush, held_a) = {
+        let (ttl, config, t_flush, held_a, bodies_in_flight) = {
             let mut st = state.lock_timed();
             let t0 = std::time::Instant::now();
-            // The bodies watcher's poll cadence (the TS runs a dedicated 5s timer; folding it
-            // into this 4s tick keeps the same ≤5s staleness with one fewer task). The gate's
-            // buildGateState reads the report WITHOUT polling — a poll landing on new multi-MB
-            // response files costs 100-400ms of parsing, the TRDD-9CNHP8CN request-latency
-            // outlier — so this tick is what keeps its snapshot fresh.
-            st.burn.bodies.poll(now);
-            let t_poll = t0.elapsed();
+            // TRDD-H3D5ZBO1: the bodies scan is NOT run here. Its first pass after boot held this
+            // lock for 534-588 s; it runs in a blocking task started below that takes the lock
+            // only for the merge. The gate and the risk report read the last merged result.
+            let bodies_in_flight = st.burn.bodies.in_flight_handle();
             // The statusline WAL flush (the TS runs a dedicated 5s timer; this 4s tick gives
             // the same ≤5s durability window with one fewer task). Sealing is NOT here — it
             // runs DuckDB over whole WALs and lives on alcore's own 60s task, outside the lock.
             st.statusline.flush(None);
             let t_flush = t0.elapsed();
             let ttl = st.burn.ttl_context(now);
-            (ttl, st.burn.config.clone(), t_poll, t_flush, t0.elapsed())
+            (ttl, st.burn.config.clone(), t_flush, t0.elapsed(), bodies_in_flight)
         };
+        // The bodies watcher's cadence (the TS runs a dedicated 5s timer; this 4s tick gives the
+        // same ≤5s staleness with one fewer task). Fire-and-forget and never awaited: a scan that
+        // outlasts the tick must not stall it, and `in_flight` stops the next tick stacking a
+        // second one. The task's own compare_exchange is the authority; this load only skips a
+        // pointless spawn.
+        if !bodies_in_flight.load(std::sync::atomic::Ordering::Acquire) {
+            let scan_state = state.clone();
+            tokio::task::spawn_blocking(move || crate::burn::bodies_activity::run_bodies_scan(&scan_state));
+        }
         let t_off = std::time::Instant::now();
         let status = crate::burn_status_for(&tick_summary, &config, &ttl, now);
         let off_lock = t_off.elapsed();
@@ -4505,11 +4511,10 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             let threshold = std::time::Duration::from_millis(crate::lock_trace_threshold_ms());
             if held_a >= threshold || held_b >= threshold {
                 eprintln!(
-                    "{} alcore: burn tick guard split: lock_a {} ms (bodies_poll {} ms, statusline_flush {} ms, ttl_config {} ms), off_lock burn_status {} ms, lock_b {} ms (account_timeline {} ms, alerts_notify {} ms)",
+                    "{} alcore: burn tick guard split: lock_a {} ms (statusline_flush {} ms, ttl_config {} ms), off_lock burn_status {} ms, lock_b {} ms (account_timeline {} ms, alerts_notify {} ms)",
                     crate::log_ts(),
                     held_a.as_millis(),
-                    t_poll.as_millis(),
-                    (t_flush - t_poll).as_millis(),
+                    t_flush.as_millis(),
                     (held_a - t_flush).as_millis(),
                     off_lock.as_millis(),
                     held_b.as_millis(),

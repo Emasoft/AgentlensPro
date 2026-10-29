@@ -702,7 +702,7 @@ impl CoreState {
         burn::monitor::compute_session_status(sessions, &events, &self.burn.config, session_id, workspace, now_ms, Some(&ttl))
     }
 
-    /// The `/api/burn-risk` body (freeze row 12): poll the bodies watcher, then checkBurnRisk
+    /// The `/api/burn-risk` body (freeze row 12): read the bodies watcher (scanned off-lock by the burn tick), then checkBurnRisk
     /// over the three feeds, then attach the verbatim spawning calls behind an active fan-out.
     /// `last_status` is filled inline when the 4s tick has not run yet (freshly booted server),
     /// exactly as the TS route does. NOT PORTED: the in-memory hook-event ring (P4m note) — the
@@ -727,7 +727,6 @@ impl CoreState {
         if self.burn.last_status.is_none() {
             self.burn.last_status = status_when_unset;
         }
-        self.burn.bodies.poll(now_ms);
         let bodies = self.burn.bodies.report(now_ms);
         let mut report = burn::guard::check_burn_risk(&burn::guard::BurnGuardOptions {
             now: now_ms,
@@ -741,6 +740,11 @@ impl CoreState {
         });
         let dirs = agentlens_logscan::discovery::claude_projects_dirs(&self.log_env);
         burn::guard::attach_risk_causing_calls(&mut report, &dirs);
+        // TRDD-H3D5ZBO1: the bodies watcher is scanned in the background by the burn tick, so
+        // this report no longer polls; say how fresh the bodies feed is instead.
+        if let Some(obj) = report.as_object_mut() {
+            obj.insert("bodiesScan".into(), self.burn.bodies.scan_status(now_ms));
+        }
         report
     }
 }
