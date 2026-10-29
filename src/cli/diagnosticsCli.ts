@@ -255,6 +255,7 @@ export interface BurnRiskReport {
   risks?: Array<{ code: string; detail: string; active: boolean }>
   advice?: string
   sources?: { hookEvents?: unknown; bodies?: unknown; burnStatus?: unknown }
+  bodiesScan?: { seeded: boolean; inProgress: boolean; lastMergeAgeMs: number | null }
 }
 // Exported so `budget --with-risks` can fold guard transitions into its own stream (one Monitor
 // instead of two) without duplicating the REST-then-MCP fallback logic.
@@ -291,6 +292,10 @@ async function runRisk(): Promise<void> {
     throw new Error(`${msg} — ${hint}`)
   }
   const active = (rep.risks || []).filter(r => r.active)
+  const bs = rep.bodiesScan
+  if (bs && (!bs.seeded || bs.inProgress)) {
+    console.log(`bodies feed: ${!bs.seeded ? "not scanned yet" : `last merge ${bs.lastMergeAgeMs === null ? "?" : Math.round(bs.lastMergeAgeMs / 1000)}s ago`}${bs.inProgress ? " (scan in progress)" : ""}`)
+  }
   if (active.length === 0) {
     const s = rep.sources || {}
     console.log(`no active burn risks (${Date.now() - t0}ms; feeds: hooks=${!!s.hookEvents} bodies=${!!s.bodies} monitor=${!!s.burnStatus})`)

@@ -279,9 +279,11 @@ impl BodiesActivityTracker {
         }
     }
 
-    /// One incremental pass, inline (scan, merge, commit). Production runs `run_bodies_scan`
-    /// instead so the scan holds no state lock; this stays for the parity test. A missing dir
-    /// returns silently — report() says available:false.
+    /// One incremental pass, inline (scan, merge, commit). A missing dir returns silently —
+    /// report() says available:false.
+    ///
+    /// Test-only inline scan. Never call while holding the state lock (it takes the poller: reverse lock order, deadlocks against a background scan). Production uses run_bodies_scan.
+    #[doc(hidden)]
     pub fn poll(&mut self, now: f64) {
         let mut poller = self.poller.lock().unwrap_or_else(|p| p.into_inner());
         let mut d = poller.scan(now);
@@ -347,6 +349,8 @@ pub fn run_bodies_scan(state: &Arc<Mutex<CoreState>>) {
 /// wall clock when the findings land, as the old inline poll did after its scan), while the seed
 /// floor uses scan time, the moment the directory was listed. A slow first pass must not age
 /// its own findings out against a clock taken before it started.
+///
+/// A scan that never returns (a wedged volume) leaves in_flight true and the rings stale; bodiesScan.inProgress=true with a growing lastMergeAgeMs is how that shows.
 pub fn run_bodies_scan_with(state: &Arc<Mutex<CoreState>>, scan_now: f64, merge_now: impl FnOnce() -> f64, on_entry: &mut dyn FnMut()) {
     let (poller, in_flight) = {
         let st = state.lock_timed();

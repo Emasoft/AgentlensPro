@@ -8,6 +8,8 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **The burn tick's otel-bodies scan no longer holds the server state lock.** The first pass after boot held it for up to ~10 minutes (534-588 s measured), stalling every request that needed the state. The scan now runs in a background task off the lock and merges its findings in one short step. `/api/burn-risk` and MCP `check_burn_risk` report the last background scan rather than polling the bodies folder at call time, so a body file written just now shows up on the next scan, not the next call. `/api/burn-risk` gains a top-level `bodiesScan: { seeded, inProgress, lastMergeAgeMs }` field; `agentlenspro --risk` prints a `bodies feed:` line while the feed is unseeded or a scan is running (TRDD-H3D5ZBO1).
+
 - **`/api/server-stats` reports failed `.pass-state.json` saves.** `bodies.stateSaveFails` is the number of consecutive failed saves of the bodies pass state file (0 = healthy), and `bodies.lastStateSaveFailAt` is the epoch ms of the last failed save (0 = never). A full disk that also loses the one-time log line now shows here. The count resets on the next successful save; the timestamp does not (TRDD-5K0YLLEF).
 
 - **`server status` shows failed `.pass-state.json` saves.** When `/api/server-stats` reports `bodies.stateSaveFails` above zero, `agentlenspro server status` prints one `save:` line with the consecutive-failure count and the time of the last failure. A zero or absent count prints nothing (TRDD-LDWBRV9B).
