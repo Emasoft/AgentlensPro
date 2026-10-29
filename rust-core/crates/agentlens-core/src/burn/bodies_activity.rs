@@ -695,313 +695,6 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    // frozen copy of the pre-split poll; do not edit; it is the oracle for the split.
-    // Verified verbatim against 8e0cb02c^ (diff -w with the type renamed: identical); this oracle
-    // and the tests comparing against it are deleted once TRDD-H3D5ZBO1 commit 2 is accepted, so
-    // it cannot pin later intended changes to report().
-pub struct OracleTracker {
-    dir: PathBuf,
-    opts: BodiesActivityOptions,
-    seen: HashSet<String>,
-    seeded: bool,
-    large_requests: Vec<LargeRequestEntry>,
-    responses: Vec<ResponseEntry>,
-    /// The previous_message_id chain: a request from session S carrying previous_message_id=m
-    /// proves response m belongs to S — the only realtime response→session attribution the
-    /// bodies afford (response bodies carry no metadata; request/response FILES share no
-    /// basename). Attribution therefore lags by exactly one call, as in TS.
-    msg_session: IndexMap<String, (String, f64)>,
-}
-
-impl OracleTracker {
-    pub fn new(dir: PathBuf, opts: BodiesActivityOptions) -> OracleTracker {
-        OracleTracker {
-            dir,
-            opts: opts.clamped(),
-            seen: HashSet::new(),
-            seeded: false,
-            large_requests: Vec::new(),
-            responses: Vec::new(),
-            msg_session: IndexMap::new(),
-        }
-    }
-
-    /// One incremental pass. A missing dir returns silently — report() says available:false.
-    pub fn poll(&mut self, now: f64) {
-        let Ok(rd) = std::fs::read_dir(&self.dir) else { return };
-        let names: Vec<String> = rd.flatten().filter_map(|e| e.file_name().to_str().map(str::to_owned)).collect();
-        let seed_floor = if self.seeded { 0.0 } else { now - SEED_LOOKBACK_MS };
-        for name in &names {
-            if self.seen.contains(name) {
-                continue;
-            }
-            self.seen.insert(name.clone());
-            let is_req = name.ends_with(".request.json");
-            let is_resp = name.ends_with(".response.json");
-            if !is_req && !is_resp {
-                continue;
-            }
-            let path = self.dir.join(name);
-            let Ok(md) = std::fs::metadata(&path) else { continue }; // raced with the archiver
-            let mtime = md
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0.0, |d| d.as_secs() as f64 * 1000.0 + d.subsec_nanos() as f64 / 1e6);
-            if mtime < seed_floor {
-                continue; // pre-boot history beyond the seed window
-            }
-            let size = md.len();
-            if is_req {
-                if size >= ATTRIB_REQUEST_BYTES {
-                    let (session_id, model, previous_message_id) = extract_request_attribution(&path, size);
-                    self.large_requests.push(LargeRequestEntry { t: mtime, bytes: size, huge: size > HUGE_REQUEST_BYTES, session_id: session_id.clone(), model });
-                    if let (Some(sid), Some(pm)) = (session_id, previous_message_id) {
-                        self.msg_session.insert(pm, (sid, mtime));
-                    }
-                }
-                continue;
-            }
-            if size > RESPONSE_PARSE_CAP {
-                continue;
-            }
-            // Truncated mid-write or not JSON — skip.
-            if let Some(body) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
-                if let Some((model, cc, cr, id)) = extract_response_usage(&body) {
-                    let (tier_1h, miss_reason) = extract_miss_diagnostics(&body);
-                    self.responses.push(ResponseEntry { t: mtime, model, cc, cr, id, tier_1h, miss_reason });
-                }
-            }
-        }
-        self.seeded = true;
-        self.prune(now);
-        // The hourly archiver removes old files; rebuild `seen` from the live listing when it
-        // drifts well past the dir's contents so memory stays bounded.
-        if self.seen.len() > names.len() * 2 + 512 {
-            self.seen = names.into_iter().collect();
-        }
-    }
-
-    fn prune(&mut self, now: f64) {
-        // Unconditional filter: entries arrive in readdir order, NOT mtime order, so a
-        // "check the head, skip the pass" shortcut could strand old entries forever.
-        let l_floor = now - LARGE_RING_WINDOW_MS;
-        let r_floor = now - RESPONSE_RING_WINDOW_MS;
-        self.large_requests.retain(|e| e.t >= l_floor);
-        self.responses.retain(|e| e.t >= r_floor);
-        self.msg_session.retain(|_, v| v.1 >= r_floor);
-    }
-
-    fn session_of(&self, e: &ResponseEntry) -> Option<&str> {
-        e.id.as_ref().and_then(|id| self.msg_session.get(id)).map(|(s, _)| s.as_str())
-    }
-
-    /// sessionWarmSince — the cold-resume disarm evidence: did `session` complete a WARM request
-    /// after `since_ms`? Warm = a big cache_read with a small cache_creation share, i.e. proof
-    /// the prompt cache survived, so holding the deny longer only blocks legitimate work.
-    pub fn session_warm_since(&self, session: &str, since_ms: f64, warm_read_floor: f64) -> bool {
-        self.responses
-            .iter()
-            .any(|e| e.t > since_ms && e.cr >= warm_read_floor && e.cc < e.cr * 0.25 && self.session_of(e) == Some(session))
-    }
-
-    /// Aggregate fat-request entries by sending session, heaviest first.
-    fn senders(entries: &[&LargeRequestEntry]) -> Vec<Value> {
-        let mut by: IndexMap<String, (Option<String>, Option<String>, f64, f64)> = IndexMap::new();
-        for e in entries {
-            let key = e.session_id.clone().unwrap_or_else(|| "(unattributed)".to_owned());
-            let slot = by.entry(key).or_insert((e.session_id.clone(), e.model.clone(), 0.0, 0.0));
-            slot.2 += 1.0;
-            slot.3 += e.bytes as f64;
-            if slot.1.is_none() {
-                slot.1.clone_from(&e.model);
-            }
-        }
-        let mut out: Vec<(Option<String>, Option<String>, f64, f64)> = by.into_values().collect();
-        out.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
-        out.into_iter()
-            .map(|(session, model, count, bytes)| {
-                let mut m = Map::new();
-                m.insert("session".into(), session.map_or(Value::Null, Value::from));
-                m.insert("model".into(), model.map_or(Value::Null, Value::from));
-                m.insert("count".into(), num(count));
-                m.insert("bytes".into(), num(bytes));
-                Value::Object(m)
-            })
-            .collect()
-    }
-
-    /// The BodiesActivityReport wire shape.
-    pub fn report(&mut self, now: f64) -> Value {
-        let available = std::fs::metadata(&self.dir).is_ok();
-        self.prune(now);
-
-        let huge90: Vec<&LargeRequestEntry> = self.large_requests.iter().filter(|e| e.huge && now - e.t <= 90_000.0).collect();
-        let huge_count = huge90.len() as f64;
-        let huge_bytes: f64 = huge90.iter().map(|e| e.bytes as f64).sum();
-
-        let all_misses: Vec<&ResponseEntry> = self
-            .responses
-            .iter()
-            .filter(|e| {
-                if now - e.t > self.opts.thrash_window_ms {
-                    return false;
-                }
-                let denom = e.cc + e.cr;
-                e.cc > self.opts.thrash_min_cc && denom > 0.0 && e.cr / denom < self.opts.thrash_max_read_share
-            })
-            .collect();
-        // TRDD-DIZ289UQ: ONE rule — a big 5m-tier write is a SUBAGENT's own prefix (its boot, or
-        // its own turn-2 rewrite: the `cc_prev_req` prefix break the API labels `system_changed`),
-        // never the caller's; on a subscription the caller's turns are 1h-tier (see
-        // `extract_miss_diagnostics` for the measurement). 2026-09-04: five sonnet workers booting
-        // under their parent's session id tripped "the same session re-wrote its prefix 5×" and
-        // the gate blamed the launches; the real thrash that day was opus 1h-tier main-turn writes
-        // the API labelled `previous_message_not_found`. A 5m write leaves `misses` entirely, so
-        // `count`, `topSource` and `missReasons` all describe the same population; a 1h-tier or
-        // legacy (untiered) write always counts.
-        let is_subagent_write = |e: &ResponseEntry| e.tier_1h == Some(0.0);
-        let (subagent_writes, misses): (Vec<&ResponseEntry>, Vec<&ResponseEntry>) =
-            all_misses.into_iter().partition(|e| is_subagent_write(e));
-        let subagent_cc: f64 = subagent_writes.iter().map(|e| e.cc).sum();
-        let mut by_model: IndexMap<&str, f64> = IndexMap::new();
-        let mut rebilled = 0.0;
-        for m in &misses {
-            rebilled += m.cc;
-            if let Some(model) = m.model.as_deref().filter(|s| !s.is_empty()) {
-                *by_model.entry(model).or_insert(0.0) += 1.0;
-            }
-        }
-        // `[...entries].sort((a,b) => b[1]-a[1])[0]?.[0]` — first-seen wins ties (stable sort).
-        let mut ranked: Vec<(&str, f64)> = by_model.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let top_model: Option<String> = ranked.first().map(|(m, _)| (*m).to_owned());
-
-        // Per-SOURCE attribution: thrash = the SAME session re-writing its prefix
-        // ≥ thrash_min_count times; N distinct sessions' single cold-start writes are a fan-out
-        // paying its one-time cost, not thrash.
-        let mut by_source: IndexMap<Option<String>, (f64, f64)> = IndexMap::new();
-        for m in &misses {
-            let sid = self.session_of(m).map(str::to_owned);
-            let g = by_source.entry(sid).or_insert((0.0, 0.0));
-            g.0 += 1.0;
-            g.1 += m.cc;
-        }
-        let mut top_source: Option<(String, f64, f64)> = None;
-        let (mut unattributed_count, mut unattributed_cc) = (0.0, 0.0);
-        let (mut cold_start_sessions, mut cold_start_rebilled) = (0.0, 0.0);
-        for (sid, g) in &by_source {
-            let Some(sid) = sid else {
-                // The unattributed pool CANNOT flip `active` (TRDD-THRGX41P): attribution fails
-                // for most requests in the field, so it is usually N distinct one-time boots,
-                // not one mutating caller. Surfaced separately instead of feeding the deny.
-                unattributed_count = g.0;
-                unattributed_cc = g.1;
-                continue;
-            };
-            if top_source.as_ref().is_none_or(|t| g.0 > t.1) {
-                top_source = Some((sid.clone(), g.0, g.1));
-            }
-            if g.0 < self.opts.thrash_min_count {
-                cold_start_sessions += 1.0;
-                cold_start_rebilled += g.1;
-            }
-        }
-        let thrash_active = top_source.as_ref().is_some_and(|t| t.1 >= self.opts.thrash_min_count);
-        let window_large: Vec<&LargeRequestEntry> = self.large_requests.iter().filter(|e| now - e.t <= self.opts.thrash_window_ms).collect();
-        // Exact culprit narrowing: name the thrashing session's OWN fat requests, so an innocent
-        // fat parent is not blamed.
-        let culprit_large: Vec<&LargeRequestEntry> = match (&top_source, thrash_active) {
-            (Some(t), true) => window_large.iter().copied().filter(|e| e.session_id.as_deref() == Some(t.0.as_str())).collect(),
-            _ => window_large.clone(),
-        };
-        let suspects: Vec<Value> = Self::senders(if culprit_large.is_empty() { &window_large } else { &culprit_large })
-            .into_iter()
-            // A sender on a DIFFERENT model cannot be the prefix-mutating caller; unknown-model
-            // senders STAY (honest uncertainty is not a mismatch).
-            .filter(|s| {
-                let sm = s.get("model").and_then(Value::as_str);
-                top_model.is_none() || sm.is_none() || sm == top_model.as_deref()
-            })
-            .collect();
-
-        let recent: Vec<&ResponseEntry> = self.responses.iter().filter(|e| now - e.t <= 300_000.0).collect();
-        let premium_count = recent.iter().filter(|e| e.model.as_deref().is_some_and(is_premium)).count() as f64;
-        // Newest by mtime, not by array position — entries arrive in readdir order.
-        let newest = recent.iter().fold(None::<&&ResponseEntry>, |a, e| match a {
-            None => Some(e),
-            Some(cur) if e.t > cur.t => Some(e),
-            keep => keep,
-        });
-
-        let mut huge_obj = Map::new();
-        huge_obj.insert("count".into(), num(huge_count));
-        huge_obj.insert("bytes".into(), num(huge_bytes));
-        huge_obj.insert("senders".into(), Value::Array(Self::senders(&huge90)));
-
-        let mut thrash = Map::new();
-        thrash.insert("active".into(), Value::Bool(thrash_active));
-        thrash.insert("count".into(), num(misses.len() as f64));
-        thrash.insert("rebilledTokens".into(), num(rebilled));
-        thrash.insert("model".into(), top_model.clone().map_or(Value::Null, Value::from));
-        thrash.insert("windowMs".into(), num(self.opts.thrash_window_ms));
-        thrash.insert("suspects".into(), Value::Array(suspects));
-        thrash.insert(
-            "topSource".into(),
-            match &top_source {
-                Some((session, count, cc)) => {
-                    let mut m = Map::new();
-                    m.insert("session".into(), session.clone().into());
-                    m.insert("count".into(), num(*count));
-                    m.insert("rebilledTokens".into(), num(*cc));
-                    Value::Object(m)
-                }
-                None => Value::Null,
-            },
-        );
-        let mut un = Map::new();
-        un.insert("count".into(), num(unattributed_count));
-        un.insert("rebilledTokens".into(), num(unattributed_cc));
-        thrash.insert("unattributed".into(), Value::Object(un));
-        // TRDD-DIZ289UQ: counted over `misses` AFTER the tier partition — on a tiered wire a fresh
-        // agent's 5m boot lands in `subagentWrites`, so this counts only untiered (older CC)
-        // bodies plus 1h-tier callers below the repeat threshold. Mirrors the TS doc comment.
-        thrash.insert("coldStartSessions".into(), num(cold_start_sessions));
-        thrash.insert("coldStartRebilledTokens".into(), num(cold_start_rebilled));
-        let mut subagent_obj = Map::new();
-        subagent_obj.insert("count".into(), num(subagent_writes.len() as f64));
-        subagent_obj.insert("rebilledTokens".into(), num(subagent_cc));
-        thrash.insert("subagentWrites".into(), Value::Object(subagent_obj));
-        // The API's own reasons for the top source's misses — what the warning names as the cause.
-        let mut reasons: IndexMap<String, f64> = IndexMap::new();
-        for m in &misses {
-            // A legacy body (no tier data at all) is "no data", not a cause — it counts toward
-            // `active` but says nothing here; the clause is prefixed "API cache_miss_reason".
-            if m.tier_1h.is_none() {
-                continue;
-            }
-            if top_source.as_ref().is_none_or(|t| self.session_of(m) == Some(t.0.as_str())) {
-                // A 1h-tier rewrite the API did not label still counts — say so, rather than
-                // print no reason at all in exactly the case the histogram exists for.
-                *reasons.entry(m.miss_reason.clone().unwrap_or_else(|| "unlabelled".to_owned())).or_insert(0.0) += 1.0;
-            }
-        }
-        thrash.insert("missReasons".into(), Value::Object(reasons.into_iter().map(|(k, v)| (k, num(v))).collect()));
-
-        let mut premium = Map::new();
-        premium.insert("share".into(), num(if recent.is_empty() { 0.0 } else { premium_count / recent.len() as f64 }));
-        premium.insert("sampled".into(), num(recent.len() as f64));
-        premium.insert("lastModel".into(), newest.and_then(|e| e.model.clone()).map_or(Value::Null, Value::from));
-
-        let mut out = Map::new();
-        out.insert("available".into(), Value::Bool(available));
-        out.insert("hugeRequests90s".into(), Value::Object(huge_obj));
-        out.insert("thrash".into(), Value::Object(thrash));
-        out.insert("premium".into(), Value::Object(premium));
-        Value::Object(out)
-    }
-}
-
     const SID: &str = "11111111-aaaa-bbbb-cccc-000000000001";
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -1034,14 +727,6 @@ impl OracleTracker {
         std::fs::write(dir.join(name), body.to_string()).unwrap();
     }
 
-    fn state_new(a: &BodiesActivity) -> String {
-        format!("{:?}|{:?}|{:?}", a.large_requests, a.responses, a.msg_session)
-    }
-
-    fn state_old(o: &OracleTracker) -> String {
-        format!("{:?}|{:?}|{:?}", o.large_requests, o.responses, o.msg_session)
-    }
-
     struct TempDir(PathBuf);
     impl Drop for TempDir {
         fn drop(&mut self) {
@@ -1057,38 +742,9 @@ impl OracleTracker {
         std::fs::write(dir.join("small.request.json"), "{}").unwrap();
     }
 
+    /// Prune is judged at merge time, not scan time: a delta scanned 11 minutes before its merge drops its large request but keeps its response.
     #[test]
-    fn split_tracker_equals_frozen_oracle_across_two_polls() {
-        let dir = temp_dir("b");
-        let _guard = TempDir(dir.clone());
-        let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
-        let mut old = OracleTracker::new(dir.clone(), BodiesActivityOptions::default());
-        seed_first_batch(&dir);
-        let now = now_ms();
-        new.poll(now);
-        old.poll(now);
-        assert_eq!(new.activity.large_requests[0].session_id.as_deref(), Some(SID), "fixture must be attributable");
-        assert_eq!(new.report(now), old.report(now));
-        assert!(!new.session_warm_since(SID, now - 600_000.0, 50_000.0));
-        assert_eq!(old.session_warm_since(SID, now - 600_000.0, 50_000.0), new.session_warm_since(SID, now - 600_000.0, 50_000.0));
-
-        write_response(&dir, "w.response.json", "msg_w", 10, 80_000); // the response for poll 1's request
-        write_response(&dir, "b.response.json", "msg_b", 150_000, 100);
-        write_response(&dir, "c.response.json", "msg_c", 150_000, 100);
-        write_request(&dir, "r3.request.json", "msg_b");
-        write_request(&dir, "r4.request.json", "msg_c");
-        let now2 = now_ms();
-        new.poll(now2);
-        old.poll(now2);
-        assert_eq!(state_new(&new.activity), state_old(&old));
-        assert_eq!(new.report(now2), old.report(now2));
-        assert_eq!(new.report(now2)["thrash"]["active"], serde_json::json!(true), "fixture must exercise thrash");
-        assert!(new.session_warm_since(SID, now2 - 600_000.0, 50_000.0));
-        assert_eq!(old.session_warm_since(SID, now2 - 600_000.0, 50_000.0), new.session_warm_since(SID, now2 - 600_000.0, 50_000.0));
-    }
-
-    #[test]
-    fn scan_time_and_merge_time_differ_like_poll_then_prune() {
+    fn merge_time_not_scan_time_decides_prune() {
         let dir = temp_dir("c");
         let _guard = TempDir(dir.clone());
         seed_first_batch(&dir);
@@ -1098,14 +754,11 @@ impl OracleTracker {
         let mut d = new.poller.lock().unwrap().scan(t1);
         new.activity.merge(&mut d, t2);
         new.poller.lock().unwrap().commit(d);
-        let mut old = OracleTracker::new(dir.clone(), BodiesActivityOptions::default());
-        old.poll(t1);
-        old.prune(t2);
-        assert_eq!(state_new(&new.activity), state_old(&old));
         assert!(new.activity.large_requests.is_empty(), "pruned against merge time");
         assert_eq!(new.activity.responses.len(), 1);
     }
 
+    /// A scanned but never merged or committed delta leaves its names unseen, so the next scan re-reads the same files.
     #[test]
     fn unmerged_delta_is_rescanned() {
         let dir = temp_dir("d");
@@ -1120,21 +773,18 @@ impl OracleTracker {
         assert_eq!(again.responses.len(), 1);
     }
 
+    /// A missing dir consumes no seed pass, the seed window skips a 20-minute-old response, and a later poll never resurrects a seen file.
     #[test]
-    fn seed_window_and_missing_dir_match_the_oracle() {
+    fn seed_window_and_missing_dir_and_no_resurrection() {
         let base = temp_dir("e");
         let _guard = TempDir(base.clone());
         let dir = base.join("later");
         let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
-        let mut old = OracleTracker::new(dir.clone(), BodiesActivityOptions::default());
 
         // (a) the dir does not exist yet: nothing is listed, so the seed pass must not be spent
         let t0 = now_ms();
         new.poll(t0);
-        old.poll(t0);
         assert!(!new.poller.lock().unwrap().seeded, "a missing dir must not consume the seed pass");
-        assert_eq!(state_new(&new.activity), state_old(&old));
-        assert_eq!(new.report(t0), old.report(t0));
 
         // (b) the dir appears with one fresh and one 20-minute-old response
         std::fs::create_dir_all(&dir).unwrap();
@@ -1152,21 +802,15 @@ impl OracleTracker {
         assert!(ids.contains(&Some("msg_old")), "seeded scan must not apply the floor, got {ids:?}");
         let t1 = now_ms();
         new.poll(t1);
-        old.poll(t1);
         assert!(new.poller.lock().unwrap().seeded);
         assert_eq!(new.activity.responses.len(), 1, "only the fresh response is inside the seed window");
         assert!(new.activity.responses.iter().all(|r| r.id.as_deref() != Some("msg_old")), "old response must be skipped by the seed floor");
-        assert_eq!(state_new(&new.activity), state_old(&old));
-        assert_eq!(new.report(t1), old.report(t1));
 
         // (c) a later poll must not resurrect the old file: it is already in `seen`
         write_response(&dir, "fresh2.response.json", "msg_f2", 150_000, 100);
         let t2 = now_ms();
         new.poll(t2);
-        old.poll(t2);
         assert_eq!(new.activity.responses.len(), 2);
         assert!(new.activity.responses.iter().all(|r| r.id.as_deref() != Some("msg_old")), "old response stays absent once seen");
-        assert_eq!(state_new(&new.activity), state_old(&old));
-        assert_eq!(new.report(t2), old.report(t2));
     }
 }
