@@ -71,8 +71,9 @@ export interface KeyRow {
   reading: SubscriptionUsage | null
   /** Set whenever the row carries the verdict of a stamp: a row replayed from one, or a cached row that dates the last check it still shows. The ISO 8601 instant of that check. */
   checkedAt?: string
-  /** Set on every row that was not probed this run: the ISO 8601 instant after which this key is probed again. A replayed row
-   *  waits for its check plus the TTL; a cached row waits for its archive record's fetch plus the TTL. */
+  /** Set when a stamp or an archive record inside the TTL stands in for a probe: the ISO 8601 instant after which this key is
+   *  probed again. A replayed row waits for its check plus the TTL; a cached row waits for its archive record's fetch plus the
+   *  TTL. skippedRows does not set it. */
   nextCheckAt?: string
 }
 export interface ProbeResult {
@@ -328,14 +329,15 @@ function stampFile(dir: string, token: string): string {
   return path.join(dir, createHash('sha256').update(token).digest('hex').slice(0, 16) + '.json')
 }
 
-function readStamp(file: string): Stamp | null {
+// WHY token: the thrown message quotes text read from the stamp file, so redact must scrub the token out of it.
+function readStamp(file: string, token: string): Stamp | null {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as Stamp
   } catch (e) {
     // No stamp yet is the normal first run. Any other failure is re-raised with the file named: a corrupt stamp fails the
     // whole --all run on purpose (fail fast), rather than probing the key again without saying so.
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw new Error('cannot read the long-lived key stamp ' + file + ': ' + (e as Error).message, { cause: e })
+    throw new Error(redact('cannot read the long-lived key stamp ' + file + ': ' + (e as Error).message, token), { cause: e })
   }
 }
 
@@ -373,7 +375,7 @@ export interface RefreshOptions { fetchImpl: FetchLike; now: number; stampDir: s
 
 async function settle(key: LongKey, match: Match, opts: RefreshOptions): Promise<KeyRow> {
   const file = stampFile(opts.stampDir, key.token)
-  const stamp = readStamp(file)
+  const stamp = readStamp(file, key.token)
   const archived = match.kind === 'matched' ? match.archived : null
   const base = { slot: key.slot, email: key.email, accountId: match.kind === 'matched' ? match.accountId : null }
   // Every probed or refused outcome is stamped, so its reason and its instant survive to the next run.

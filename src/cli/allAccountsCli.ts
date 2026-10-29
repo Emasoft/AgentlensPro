@@ -167,8 +167,8 @@ function creditsCell(o: SubscriptionUsage['overage']): string {
   return 'off (' + (o.disabledReason ?? 'no reason given') + ')'
 }
 
-/** One long-lived key as a text line: its outcome, its three windows, credits, identity and, when there is one, why. A row
- *  replayed from a stamp also says when it was checked and when the next check is allowed. */
+/** One long-lived key as a text line: its outcome, its three windows, credits, identity and, when there is one, why.
+ *  Whenever they are known, it also says when the key was last checked and when its next check is allowed. */
 function keyLine(r: KeyRow, now: number): string {
   // The age and the waits are computed from this run's clock, so a row reads them at the moment of this run. The check and
   // the next probe are dated apart: a cached row's next probe is gated by its archive record, not by the check it still shows.
@@ -247,8 +247,11 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
   const keyReading = keyRows.some(r => r.reading !== null)
   // WHY the slots come from the reading's source, not from keyReading or the outcome: a cached row can hold an archive record
   // that the usage endpoint wrote, and a refused or failed row can sit beside an archived one; neither is a reading a key
-  // produced. This one discriminator names the key in the Exception sentence and decides which archive warning prints.
+  // produced. This one discriminator names the key in the Exception sentence only; the archive warning asks a different question, answered by keyRefreshesRow below.
   const keyedSlots = keyRows.filter(r => r.reading?.source === 'ratelimit-headers').map(r => r.slot)
+  // WHY a second predicate: the archive warning asks whether a key refreshes a row at all. A matched key (accountId set and
+  // not refused) does, whatever the row reading source, so this is a different question from keyedSlots.
+  const keyRefreshesRow = keyRows.some(r => r.accountId !== null && r.outcome !== 'refused' && r.identity !== 'refused')
   const answer = listAllAccounts({ now, liveAccountId: deps.liveAccountId })
   const keyLines = keyRows.map(r => keyLine(r, now)).concat(loaded.invalid.map(i => 'key ' + i.slot + '  invalid  [' + i.reason + ']'))
   const keySection = keyLines.length === 0 ? '' : '\n\nLong-lived keys (CLAUDE_CODE_LONG_OAUTH_KEY_*):\n' + keyLines.join('\n')
@@ -282,8 +285,8 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
       : ''
     if (!noneRead && !live) {
       diagnosis = t.token
-        ? '\n\nNo account is live right now, so there is no live reading to show. A token IS readable; the server captures a reading at startup, hourly, and on every account change.'
-        : `\n\nNo account is live right now, and NO TOKEN is readable by this process (${t.reason}).` + keychainHint
+        ? '\n\nNone of the listed accounts is live right now, so there is no live reading to show. A token IS readable; the server captures a reading at startup, hourly, and on every account change.'
+        : `\n\nNone of the listed accounts is live right now, and NO TOKEN is readable by this process (${t.reason}).` + keychainHint
     } else {
       const subject = noneRead ? 'No account has a usage reading' : 'The live account has no usage reading'
       diagnosis = t.token
@@ -295,11 +298,11 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
 
   // A human needs the archive verdict as much as a program does (issue #9 §4): without it, rows that
   // can never refresh again look exactly like rows that simply have not changed.
-  // WHY ONE WARNING: the key line and this archive line both name the rows no key reaches. Printing both said the same
-  // thing twice, so when a key read a row the key line alone prints, and it carries the archive reason.
+  // WHY the wording turns on keyRefreshesRow: when a key matched an account, the rows without a key are the ones this line
+  // names; when no key matched, every row is one that no key refreshes.
   const archiveLine = answer.archive.maintained
     ? ''
-    : keyedSlots.length > 0
+    : keyRefreshesRow
       ? `\n\n⚠ rows without a long-lived key are NOT being refreshed — ${answer.archive.reason}`
       : `\n\n⚠ these rows are NOT being refreshed — ${answer.archive.reason}`
 

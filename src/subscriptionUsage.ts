@@ -27,7 +27,7 @@
 //     and a cross-process lock so two callers cannot double-hit and then fail to escalate.
 
 import { execFileSync } from 'child_process'
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -307,7 +307,12 @@ export function armCooldown(retryAfterSeconds: number | null, now = Date.now()):
   const delay = retryAfterSeconds && retryAfterSeconds > 0
     ? Math.max(retryAfterSeconds * 1000, 60_000)
     : Math.min(BACKOFF_BASE_MS * 2 ** (consecutive - 1), BACKOFF_CAP_MS)
-  try { fs.writeFileSync(cooldownPath(), JSON.stringify({ until: now + delay, consecutive })) } catch { /* best effort */ }
+  // WHY write-then-rename: readCooldown in another process must never see half a file, which would read as no cooldown.
+  try {
+    const tmp = `${cooldownPath()}.tmp-${process.pid}`
+    fs.writeFileSync(tmp, JSON.stringify({ until: now + delay, consecutive }))
+    fs.renameSync(tmp, cooldownPath())
+  } catch { /* best effort */ }
   return delay
 }
 
@@ -328,7 +333,9 @@ export function retryAfterSeconds(headers: Headers | null, now = Date.now()): nu
   if (ra) {
     if (/^\d+$/.test(ra)) return Number(ra)
     const t = Date.parse(ra)
-    if (!isNaN(t)) return Math.max(0, Math.round((t - now) / 1000))
+    // WHY Number.isNaN: the global isNaN coerces its argument, so a non-number would be tested by coercion. Every operand
+    // here is a number from Date.parse or getTime, so the strict check is the one that says what is meant.
+    if (!Number.isNaN(t)) return Math.max(0, Math.round((t - now) / 1000))
   }
   for (const key of ['anthropic-ratelimit-unified-reset', 'anthropic-ratelimit-unified-5h-reset',
                      'anthropic-ratelimit-requests-reset', 'anthropic-ratelimit-tokens-reset']) {
@@ -336,7 +343,7 @@ export function retryAfterSeconds(headers: Headers | null, now = Date.now()): nu
     if (!v) continue
     if (/^\d+$/.test(v)) { const s = Number(v) - Math.floor(now / 1000); if (s > 0) return s }
     const t = Date.parse(v)
-    if (!isNaN(t)) { const s = Math.round((t - now) / 1000); if (s > 0) return s }
+    if (!Number.isNaN(t)) { const s = Math.round((t - now) / 1000); if (s > 0) return s }
   }
   return null
 }
@@ -344,7 +351,7 @@ export function retryAfterSeconds(headers: Headers | null, now = Date.now()): nu
 function secsUntil(iso: string | null, now: number): number | null {
   if (!iso) return null
   const t = Date.parse(iso)
-  return isNaN(t) ? null : Math.round((t - now) / 1000)
+  return Number.isNaN(t) ? null : Math.round((t - now) / 1000)
 }
 
 /** A window's fill, whichever way the endpoint spelled it this time. Both are percentages (0-100). */
@@ -377,13 +384,13 @@ export function normalizeResetsAt(raw: unknown): string | null {
       n = Number(s)
     } else {
       const t = Date.parse(s)
-      return isNaN(t) ? null : s          // already a date string — keep it verbatim
+      return Number.isNaN(t) ? null : s          // already a date string — keep it verbatim
     }
   }
   if (n === null) return null
   const ms = n < 1e12 ? n * 1000 : n
   const d = new Date(ms)
-  return isNaN(d.getTime()) ? null : d.toISOString()
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
 }
 
 export function normalize(
@@ -573,7 +580,7 @@ export function staleReason(u: SubscriptionUsage, now: number): 'too-old' | 'win
   const rolled = u.limits.some(l => {
     if (l.resetsAt === null) return false
     const t = Date.parse(l.resetsAt)
-    return !isNaN(t) && t <= now
+    return !Number.isNaN(t) && t <= now
   })
   return rolled ? 'window-reset' : null
 }
@@ -661,15 +668,23 @@ export async function getSubscriptionUsage(
   // without this they double-hit the endpoint and, reading the same consecutive-429 count, fail to
   // escalate the back-off. `wx` is the atomic create-or-fail primitive; a stale lock older than the
   // HTTP timeout is reclaimed so a crashed holder cannot wedge this forever.
+  // WHY a per-call nonce: the lock names its holder, so release unlinks only its own lock. Without it, a holder whose
+  // lock went stale and was reclaimed would unlink the reclaimer's fresh lock.
+  // Residual race, stated honestly: fs has no compare-and-swap. Two waiters that both see the same stale lock can still
+  // both take it over if one unlinks the other's fresh lock between that waiter's stat and its unlink. That window is
+  // microseconds; before this change every waiter that saw a stale lock took it.
+  const nonce = `${process.pid}:${randomUUID()}`
   let held = false
   try {
-    fs.writeFileSync(lockPath(), String(process.pid), { flag: 'wx' })
+    fs.writeFileSync(lockPath(), nonce, { flag: 'wx' })
     held = true
   } catch {
-    try {
-      const age = now - fs.statSync(lockPath()).mtimeMs
-      if (age > HTTP_TIMEOUT_MS * 2) { fs.writeFileSync(lockPath(), String(process.pid)); held = true }
-    } catch { /* fall through */ }
+    let stale = false
+    try { stale = now - fs.statSync(lockPath()).mtimeMs > HTTP_TIMEOUT_MS * 2 } catch { /* vanished: not stale, the next call takes it */ }
+    if (stale) {
+      try { fs.unlinkSync(lockPath()) } catch { /* another waiter reclaimed it first */ }
+      try { fs.writeFileSync(lockPath(), nonce, { flag: 'wx' }); held = true } catch { /* another waiter won the create */ }
+    }
     if (!held) return serve(cached, 'lock_contended')
   }
   try {
@@ -709,7 +724,12 @@ export async function getSubscriptionUsage(
       const identity = await fetchTokenIdentity(token)
       const claimed = getCurrentAccount().email
       const usage = normalize(await res.json() as RawUsage, now, 'ok', now, currentFp, identity, claimed)
-      try { fs.writeFileSync(cachePath(), JSON.stringify(usage)) } catch { /* best effort */ }
+      // WHY write-then-rename: a concurrent readCache must never parse half a file, which would read as no cache at all.
+      try {
+        const tmp = `${cachePath()}.tmp-${process.pid}`
+        fs.writeFileSync(tmp, JSON.stringify(usage))
+        fs.renameSync(tmp, cachePath())
+      } catch { /* best effort */ }
       // The SAME reading, also filed under its own account. This is the only moment it can be kept:
       // the next fetch overwrites the line above, and a reading not archived here is gone forever.
       archiveAccountUsage(usage)
@@ -719,7 +739,8 @@ export async function getSubscriptionUsage(
   } catch {
     return serve(cached, 'http_error')
   } finally {
-    if (held) { try { fs.unlinkSync(lockPath()) } catch { /* already gone */ } }
+    // WHY the nonce check: a holder whose lock went stale and was reclaimed must not unlink the reclaimer's lock.
+    if (held) { try { if (fs.readFileSync(lockPath(), 'utf8') === nonce) fs.unlinkSync(lockPath()) } catch { /* already gone */ } }
   }
 }
 
@@ -750,7 +771,7 @@ function rolledNote(u: SubscriptionUsage): string {
   const rolled = u.limits.filter(l => {
     if (l.resetsAt === null) return false
     const t = Date.parse(l.resetsAt)
-    return !isNaN(t) && t <= Date.now()
+    return !Number.isNaN(t) && t <= Date.now()
   })
   if (rolled.length === 0) return ''
   const which = rolled.length === u.limits.length

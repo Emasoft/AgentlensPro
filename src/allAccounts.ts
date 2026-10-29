@@ -402,10 +402,13 @@ export function selectAccountsWithHeadroom(
       continue
     }
     const unknown = gates.find(g => g.window.percent === null)
-    if (unknown || modelGateMissing) {
+    // WHY one value for the test and the text: the reason is computed in the same expression that decides whether to
+    // record the account, so the two cannot drift apart and no non-null assertion is needed. modelGateMissing is either
+    // a sentence or null, so the ?? chain is exact.
+    const why = modelGateMissing ?? (unknown ? `${unknown.gate}: ${unknown.window.reason ?? 'no usable reading'}` : null)
+    if (why !== null) {
       undecidable.push({
-        accountId: a.accountId, email: a.email, isLive: a.isLive,
-        why: modelGateMissing ?? `${unknown!.gate}: ${unknown!.window.reason ?? 'no usable reading'}`,
+        accountId: a.accountId, email: a.email, isLive: a.isLive, why,
       })
       continue
     }

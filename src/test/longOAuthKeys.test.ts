@@ -298,7 +298,8 @@ suite('probeRateLimits — what comes back, scrubbed', () => {
 
   test('a fetch that never answers is cut by the timeout and reads as no reply', async () => {
     const hanging = ((_url: string, init: { signal?: AbortSignal | null }) => new Promise<Response>((_resolve, reject) => {
-      init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+      // WHY once: the signal belongs to this one call, so the listener must not outlive it.
+      init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
     })) as unknown as FetchLike
     const r = await probeRateLimits('sk-ant-oat01-FAKE1111', hanging, 'claude-code/test', 50)
     assert.strictEqual(r.httpStatus, null)
@@ -538,6 +539,9 @@ suite('the --all CLI — the TTL, the flags, the unmatched and BLIND cases', () 
       assert.strictEqual(json.outcome, 'cached')
       assert.strictEqual(json.identity, 'not-checked')
       assert.strictEqual(json.checkedAt, undefined)
+      // WHY: the unmatched stamp lends the matched row neither its verdict nor its reason, so both read as absent.
+      assert.strictEqual(json.httpStatus, null)
+      assert.strictEqual(json.reason, null)
     })
   })
 
@@ -552,6 +556,7 @@ suite('the --all CLI — the TTL, the flags, the unmatched and BLIND cases', () 
       assert.strictEqual(probe.probes.count, 1, 'a corrupt stamp sends nothing')
     })
   })
+
   test('a refreshed stamp inside the TTL does not replay an archive record older than the TTL: the key is probed again', async () => {
     await sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async dir => {
       const probe = fakeFetch(() => reply(200, H200))
@@ -684,6 +689,46 @@ suite('the text output — the archive warning and the exception sentence follow
       assert.ok(!res.out.includes('No account has a usage reading'), res.out)
     })
   })
+
+  test('a matched key whose row is cached from a fresh usage-endpoint archive still names the rows without a key', async () => {
+    await withoutCredentials(() => sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async () => {
+      const reason = usageRefreshCapability().reason
+      assert.ok(reason !== null, 'with no credentials the archive is not maintained, so there is a reason to carry')
+      archiveAccountUsage(archived(A, 'x@example.com', NOW - 60_000, '2026-11-03T15:00:00.000Z'))
+      const probe = fakeFetch(() => reply(200, H200))
+      const res = await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      assert.strictEqual(res.code, 0, res.err)
+      assert.strictEqual(probe.probes.count, 0, 'the archive is inside the TTL, so nothing is sent')
+      assert.ok(res.out.includes('key 01  x@example.com  cached'), res.out)
+      assert.ok(res.out.includes('⚠ rows without a long-lived key are NOT being refreshed — ' + reason), res.out)
+      assert.ok(!res.out.includes('Exception:'), res.out)
+    }))
+  })
+
+  test('a later run inside the TTL reads the same archive with no probe, and still names the key and the rows without one', async () => {
+    await withoutCredentials(() => sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async () => {
+      const reason = usageRefreshCapability().reason
+      assert.ok(reason !== null, 'with no credentials the archive is not maintained, so there is a reason to carry')
+      const probe = fakeFetch(() => reply(200, H200))
+      const first = await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      assert.strictEqual(first.code, 0, first.err)
+      assert.strictEqual(probe.probes.count, 1)
+      const second = await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW + 60_000 })
+      assert.strictEqual(second.code, 0, second.err)
+      assert.strictEqual(probe.probes.count, 1, 'inside the TTL nothing is sent')
+      assert.ok(second.out.includes('Exception: the readings shown for key 01 were taken with the owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_* keys.'), second.out)
+      assert.ok(second.out.includes('⚠ rows without a long-lived key are NOT being refreshed — ' + reason), second.out)
+    }))
+  })
+
+  test('with no live account the diagnosis says none of the listed accounts is live right now', async () => {
+    await sandboxed([rosterRec(B, 'other@example.com', NOW - 2 * HOUR), rosterRec(A, 'x@example.com', NOW - HOUR)], async () => {
+      archiveAccountUsage(archived(B, 'other@example.com', NOW - 60_000, '2026-11-03T15:00:00.000Z'))
+      const res = await runCli([], { env: {}, fetchImpl: fakeFetch(() => reply(200, H200)).impl, now: NOW })
+      assert.ok(res.out.includes('None of the listed accounts is live right now'), res.out)
+    })
+  })
+
   test('a key that reads nothing adds no exception sentence, and the archive warning stays the original line', async () => {
     await withoutCredentials(() => sandboxed([rosterRec(B, 'other@example.com', NOW - HOUR)], async () => {
       const reason = usageRefreshCapability().reason

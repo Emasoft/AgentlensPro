@@ -78,7 +78,7 @@ agentlenspro get_account_status --all --json   # every field, including the reas
 ```
 
 **No credential is read** — the OAuth token contract is unchanged. Every row is what was already
-observed while that account was live, stamped. It is assembled entirely from files, so it **answers
+observed while that account was live, stamped. It needs no server (files, plus one probe per owner-supplied long-lived key), so it **answers
 with the server down**, which is exactly when a wedged machine is asking.
 
 **The verdict is per WINDOW, not per account**, because the 5h and 7d roll at wildly different rates:

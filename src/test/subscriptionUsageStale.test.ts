@@ -199,3 +199,59 @@ suite('subscriptionUsage — a cached reading must never present itself as curre
       'a reader who sees only "old" may still anchor on the percentage; say the window is gone')
   })
 })
+
+suite('subscriptionUsage — the cross-process lock (TRDD-HO94JMKD)', () => {
+  /** A sandboxed data dir holding one stale cached reading and a readable credential, with a fetch that counts its calls and
+   *  never reaches the network. Each environment variable and the global fetch are restored afterwards. */
+  async function withLockSandbox(fn: (dir: string, calls: { count: number }) => Promise<void>): Promise<void> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sub-usage-lock-'))
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'sub-usage-lock-cfg-'))
+    fs.writeFileSync(path.join(cfg, '.credentials.json'),
+      JSON.stringify({ claudeAiOauth: { accessToken: 'tok-lock-test', expiresAt: Date.now() + 3_600_000 } }))
+    fs.writeFileSync(path.join(dir, 'subscription-usage.json'), JSON.stringify({
+      fetchedAt: Date.now() - 86_400_000, ageSeconds: 0, stale: false, reason: 'ok', limits: [],
+      fiveHourPercent: 7, sevenDayPercent: 37, usageCreditsEnabled: false, spendPercent: 0, note: '',
+    }))
+    const prevData = process.env['AGENTLENS_DATA_DIR']
+    const prevCfg = process.env['CLAUDE_CONFIG_DIR']
+    const prevFetch = globalThis.fetch
+    const calls = { count: 0 }
+    process.env['AGENTLENS_DATA_DIR'] = dir
+    process.env['CLAUDE_CONFIG_DIR'] = cfg
+    globalThis.fetch = (async () => { calls.count++; return new Response('{}', { status: 500 }) }) as typeof fetch
+    try {
+      await fn(dir, calls)
+    } finally {
+      globalThis.fetch = prevFetch
+      if (prevData === undefined) delete process.env['AGENTLENS_DATA_DIR']
+      else process.env['AGENTLENS_DATA_DIR'] = prevData
+      if (prevCfg === undefined) delete process.env['CLAUDE_CONFIG_DIR']
+      else process.env['CLAUDE_CONFIG_DIR'] = prevCfg
+      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(cfg, { recursive: true, force: true })
+    }
+  }
+
+  test('a lock held by another caller serves the cache as lock_contended, sends nothing, and leaves that lock alone', async () => {
+    await withLockSandbox(async (dir, calls) => {
+      const lock = path.join(dir, 'subscription-usage.lock')
+      fs.writeFileSync(lock, '4242:other-holder')
+      const u = await getSubscriptionUsage({})
+      assert.strictEqual(u?.reason, 'lock_contended')
+      assert.strictEqual(calls.count, 0, 'a contended call sends nothing')
+      assert.strictEqual(fs.readFileSync(lock, 'utf8'), '4242:other-holder', 'the other holder keeps its lock')
+    })
+  })
+
+  test('a lock older than twice the HTTP timeout is reclaimed, the call fetches, and no lock is left behind', async () => {
+    await withLockSandbox(async (dir, calls) => {
+      const lock = path.join(dir, 'subscription-usage.lock')
+      fs.writeFileSync(lock, '4242:crashed-holder')
+      const old = new Date(Date.now() - 60_000)
+      fs.utimesSync(lock, old, old)
+      await getSubscriptionUsage({})
+      assert.strictEqual(calls.count, 1, 'the reclaimed lock lets this call fetch')
+      assert.strictEqual(fs.existsSync(lock), false, 'the caller that took the lock over releases it')
+    })
+  })
+})

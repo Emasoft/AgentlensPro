@@ -269,7 +269,9 @@ export async function fetchBurnRisk(): Promise<BurnRiskReport> {
     }
   }
   const r = await callTool('check_burn_risk', {}, true)
-  return (typeof r === 'string' ? JSON.parse(r) : r) as BurnRiskReport
+  if (typeof r !== 'string') return r as BurnRiskReport
+  // WHY a parse with context: a non-JSON reply is named as a server fault, not left as a bare SyntaxError.
+  try { return JSON.parse(r) as BurnRiskReport } catch (e) { throw new Error(`the server's burn-risk reply is not JSON: ${(e as Error).message}`, { cause: e }) }
 }
 
 // One-shot realtime culprit check: prints ONLY the active risks (each detail names the
@@ -428,7 +430,8 @@ function coerce(flag: string, val: string, type: string | undefined): unknown {
     throw new Error(`--${flag} expects true|false`)
   }
   if (type === 'object' || type === 'array') {
-    try { return JSON.parse(val) } catch { throw new Error(`--${flag} expects a JSON ${type}, got "${val}"`) }
+    // WHY UsageError: a bad flag value is a bad command line (exit 64), like the other flag checks above.
+    try { return JSON.parse(val) } catch { throw new UsageError(`--${flag} expects a JSON ${type}, got "${val}"`) }
   }
   if (type === 'string') return String(val)
   // Untyped in the schema: best-effort JSON so numbers/objects pass through, else string.
@@ -747,7 +750,8 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
       if (!rest[2].startsWith('{')) {
         throw new Error('call expects a JSON object as the second argument — for flag syntax use: agentlenspro <tool> --flag value')
       }
-      rawArgs = JSON.parse(rest[2]) as Record<string, unknown>
+      // WHY UsageError: malformed JSON is a bad command line (exit 64, as the help says), not a crash (exit 1).
+      try { rawArgs = JSON.parse(rest[2]) as Record<string, unknown> } catch (e) { throw new UsageError(`call: the argument is not valid JSON: ${(e as Error).message}`) }
     }
     emit(tool, await callTool(tool, rawArgs, globals.full), globals)
     return
@@ -755,7 +759,9 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
 
   if (cmd === 'batch') {
     if (!rest[1]) throw new Error('batch requires a JSON array: [{"tool":"...","args":{...}}]')
-    const spec = JSON.parse(rest[1]) as Array<{ tool: string; args?: Record<string, unknown>; full?: boolean }>
+    // WHY UsageError: as for call, malformed JSON is a bad command line (exit 64), not a crash.
+    let spec: Array<{ tool: string; args?: Record<string, unknown>; full?: boolean }>
+    try { spec = JSON.parse(rest[1]) } catch (e) { throw new UsageError(`batch: the argument is not valid JSON: ${(e as Error).message}`) }
     if (!Array.isArray(spec)) throw new Error('batch requires a JSON array')
     // Sequential on purpose: the endpoint is stateless per request and the server does bounded
     // disk scans; firing them concurrently would multiply the scan cost for no wall-clock win.
