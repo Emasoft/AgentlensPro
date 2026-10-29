@@ -813,4 +813,40 @@ mod tests {
         assert_eq!(new.activity.responses.len(), 2);
         assert!(new.activity.responses.iter().all(|r| r.id.as_deref() != Some("msg_old")), "old response stays absent once seen");
     }
+
+    /// A request seen in one scan and its response seen in a LATER scan are joined by the persisted previous_message_id chain: report() names the request's session, model and sizes in topSource, suspects and missReasons.
+    #[test]
+    fn response_in_later_scan_is_attributed_to_earlier_request() {
+        let dir = temp_dir("f");
+        let _guard = TempDir(dir.clone());
+        write_request(&dir, "q.request.json", "msg_x");
+        let bytes = std::fs::metadata(dir.join("q.request.json")).unwrap().len();
+        let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
+
+        new.poll(now_ms()); // scan 1: only the request exists
+        assert_eq!(new.activity.large_requests.len(), 1);
+        assert!(new.activity.responses.is_empty());
+
+        write_response(&dir, "p.response.json", "msg_x", 150_000, 100);
+        new.poll(now_ms()); // scan 2: only the response is new
+        assert_eq!(new.activity.large_requests.len(), 1);
+        assert_eq!(new.activity.responses.len(), 1);
+
+        let report = new.report(now_ms() + 1000.0);
+        let expected = serde_json::json!({
+            "available": true,
+            "hugeRequests90s": { "count": 0, "bytes": 0, "senders": [] },
+            "thrash": {
+                "active": false, "count": 1, "rebilledTokens": 150_000, "model": "claude-opus-5", "windowMs": 300_000,
+                "suspects": [ { "session": SID, "model": "claude-opus-5", "count": 1, "bytes": bytes } ],
+                "topSource": { "session": SID, "count": 1, "rebilledTokens": 150_000 },
+                "unattributed": { "count": 0, "rebilledTokens": 0 },
+                "coldStartSessions": 1, "coldStartRebilledTokens": 150_000,
+                "subagentWrites": { "count": 0, "rebilledTokens": 0 },
+                "missReasons": { "previous_message_not_found": 1 }
+            },
+            "premium": { "share": 1, "sampled": 1, "lastModel": "claude-opus-5" }
+        });
+        assert_eq!(report, expected);
+    }
 }
