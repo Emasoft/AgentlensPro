@@ -490,6 +490,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // kept them as the same object). `keptBytes` is read LIVE here, never stored: a stored figure goes
     // stale on every skipped tick and the CLI prints it as "backlog ... not yet reclaimed".
     let bp = crate::chores::bodies_pass_stats();
+    let (state_save_fails, last_state_save_fail_at) = crate::chores::state_save_failures();
     let kept_bytes: u64 = bodies_scope.dirs.iter().map(|d| crate::chores::staged_body_bytes(d)).sum();
     let last_pass = json!({
         "at": bp.last_at_ms, "removedFiles": bp.last_removed_files, "freedBytes": bp.last_freed_bytes,
@@ -564,6 +565,10 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "lastPass": last_pass,
             "reclaimedSinceBoot": bp.reclaimed_since_boot,
             "lastNonZeroPassAt": bp.last_non_zero_pass_at_ms,
+            // TRDD-5K0YLLEF: consecutive failed `.pass-state.json` saves (0 = healthy) and the epoch ms of the last failed
+            // save (0 = never). A full disk shows here even when its one-time log line was lost.
+            "stateSaveFails": state_save_fails,
+            "lastStateSaveFailAt": last_state_save_fail_at,
             "live": { "files": live_files, "newestMs": live_newest_ms.map(num).unwrap_or(Value::Null) },
             // TRDD-U0L78B3Z: null = up, else the CLI prints `CAPTURE DOWN <N>m` (serverControl.ts
             // `bodiesCaptureLine`). Direct child of `bodies`, which is where the CLI reads it.

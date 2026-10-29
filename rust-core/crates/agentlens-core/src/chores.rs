@@ -348,6 +348,9 @@ static REOPEN_REFUSED_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(Non
 /// persistent failure (full disk) is logged on the first failure only, then counted and summarized on recovery.
 /// Per PROCESS (one alcore = one data dir): any test forcing a save failure through bodies_pass must reset it.
 static STATE_SAVE_FAILS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Epoch ms of the last failed `.pass-state.json` save (0 = never), TRDD-5K0YLLEF. A successful save clears the
+/// count but not this: the count answers "how many in a row now", this answers "when did the disk last refuse us".
+static LAST_STATE_SAVE_FAIL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Consecutive ticks on which an unreadable `.pass-state.json` could not be moved aside (TRDD-FINMFYDE). The move is
 /// retried every tick, so the failure is logged on its first tick only, counted while it persists, and the next readable load logs once.
@@ -372,6 +375,17 @@ pub fn bodies_pass_stats() -> crate::BodiesPassStats {
     *BODIES_PASS_STATS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// `(consecutive failed .pass-state.json saves, epoch ms of the last failed save)`, read by `server_stats` (TRDD-5K0YLLEF).
+/// Two separate loads, not one snapshot: a save can land between them. The reader is a diagnostic, so that skew is harmless.
+pub fn state_save_failures() -> (u64, u64) {
+    (STATE_SAVE_FAILS.load(std::sync::atomic::Ordering::Relaxed), LAST_STATE_SAVE_FAIL_MS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Test-only: zero both counters so a test that forces a save failure starts from a known state (TRDD-5K0YLLEF).
+pub fn reset_state_save_failures_for_test() {
+    STATE_SAVE_FAILS.store(0, std::sync::atomic::Ordering::Relaxed);
+    LAST_STATE_SAVE_FAIL_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
 /// Record one COMPLETED pass (TRDD-HDUETCU7). The TS overwrote its last-pass object on every pass,
 /// an empty one included. Only `bodies_pass` calls this, and only on the paths that ran a pass (or
 /// found nothing staged): the other early exits did not run one, so they must not claim one, and
@@ -818,6 +832,8 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // very log line may itself be lost.
     match agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded) {
         Err(e) => {
+            // TRDD-5K0YLLEF: stamped on EVERY failure, not only the first one the log prints, so the time is the LAST failure.
+            LAST_STATE_SAVE_FAIL_MS.store(now_ms as u64, std::sync::atomic::Ordering::Relaxed);
             if STATE_SAVE_FAILS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
                 eprintln!("{} alcore: bodies pass: FAILED to persist {} (repeats suppressed until it recovers): {e}", crate::log_ts(), state_file.display());
             }

@@ -75,7 +75,8 @@ fn body_matches_the_frozen_key_order_exactly() {
     // TRDD-HDUETCU7 started sending both — additive, same precedent as the notes above; `spool` REMOVED from
     // the emitter 2026-09-26, TRDD-Z53IJFE9 step D — the RAM-disk spool is gone, so the gauge had
     // nothing left to report). TRDD-FGN5TY7E's producer↔consumer gate is therefore half-built: this half.
-    assert_eq!(keys(&body["bodies"]), ["archive", "lastPass", "reclaimedSinceBoot", "lastNonZeroPassAt", "live", "captureDownSince", "sinkProblem", "parked"]);
+    // `stateSaveFails` + `lastStateSaveFailAt` ADDED 2026-10-29 (TRDD-5K0YLLEF) — additive only, same precedent as the notes above.
+    assert_eq!(keys(&body["bodies"]), ["archive", "lastPass", "reclaimedSinceBoot", "lastNonZeroPassAt", "stateSaveFails", "lastStateSaveFailAt", "live", "captureDownSince", "sinkProblem", "parked"]);
     assert_eq!(body["bodies"]["captureDownSince"], Value::Null, "fresh boot, no activity ⇒ up");
     assert_eq!(keys(&body["bodies"]["archive"]), ["volumes", "bytes", "entries"]);
     assert_eq!(keys(&body["hookEvents"]), ["files", "bytes", "receivedSinceBoot", "spooled"]);

@@ -632,6 +632,10 @@ export interface ServerStatsBodies {
   // never "0 since boot".
   reclaimedSinceBoot?: number
   lastNonZeroPassAt?: number
+  // TRDD-5K0YLLEF: consecutive failed .pass-state.json saves (0 = healthy) and epoch ms of the last failed save (0 = never).
+  // An older server omits both; absent is not zero, so nothing renders them yet.
+  stateSaveFails?: number
+  lastStateSaveFailAt?: number
   // TRDD-4FMHW124 / TRDD-U0L78B3Z: null = up. Absent is not "healthy", it is "not reported".
   captureDownSince?: number | null
   sinkProblem?: string | null
