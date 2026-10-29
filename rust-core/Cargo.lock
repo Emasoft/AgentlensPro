@@ -103,6 +103,7 @@ version = "0.1.0"
 dependencies = [
  "duckdb",
  "fs2",
+ "libc",
  "regex",
  "serde",
  "serde_json",

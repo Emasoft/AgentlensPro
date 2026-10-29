@@ -152,8 +152,9 @@ All notable changes to AgentlensPro are documented here.
   `alstore unpark` refuse before any ingest or delete when the state cannot be read: they print
   `alstore: cannot read pass state` with the cause on stderr, print nothing on stdout, leave the file in place
   and exit with the new code 4 (1, 2, 3, 64 and 75 keep their meanings). The CLI refuses instead of moving the
-  file aside because a person runs it and decides. The save now fsyncs the temp file and the directory, so a
-  power cut cannot leave a zero-byte state under the real name.
+  file aside because a person runs it and decides. The save now fsyncs the temp file and the directory (the
+  directory sync is skipped where the volume cannot sync a directory), so a power cut cannot leave a zero-byte
+  state under the real name.
 - **`api_calls.cost_usd` now prices 1h-tier cache writes at the 1h rate (TRDD-K4XQ7M2B).** The
   forensics indexer (`forensics_scan.rs`, the live one; `src/forensicsIndex.ts` `apiCallParams` is its
   TypeScript parity twin, not in the shipped bundle; imported only by tests, the parity generators and the unbundled `src/mcpServer.ts`) passed `0` as the 1h

@@ -120,7 +120,10 @@ pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<Stri
     // WHY sync_all (TRDD-FINMFYDE): without it the rename can reach the disk before the data does, so a
     // power cut leaves a zero-byte state under the real name. A zero-byte file is an Err for the CLI (exit 4)
     // and a move-aside for alcore, so a save must not produce one. The directory sync after the rename makes
-    // the rename itself durable; its failure is returned like any other.
+    // the rename itself durable; its failure is returned like any other. The one exception is a volume that
+    // cannot sync a directory: it may fail with ENOTSUP (errno 45 on macOS), which Rust does not map to
+    // Unsupported (only EOPNOTSUPP, errno 102, is), so the check compares errno values; there the rename
+    // already happened, so the sync is skipped.
     {
         let mut file = fs::File::create(&tmp)?;
         file.write_all(json.to_string().as_bytes())?;
@@ -133,8 +136,25 @@ pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<Stri
         return Err(e);
     }
     let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    fs::File::open(dir)?.sync_all()?;
-    Ok(())
+    match fs::File::open(dir)?.sync_all() {
+        Ok(()) => Ok(()),
+        Err(e) if dir_sync_unsupported(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Classifies a failed directory sync as "this volume cannot sync a directory". Classification ONLY:
+/// nothing here performs or tests the sync itself.
+#[cfg(unix)]
+fn dir_sync_unsupported(e: &std::io::Error) -> bool {
+    let Some(code) = e.raw_os_error() else { return false };
+    code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+}
+
+/// Non-unix targets have no errno to compare, so the portable ErrorKind is the signal.
+#[cfg(not(unix))]
+fn dir_sync_unsupported(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::Unsupported | std::io::ErrorKind::InvalidInput)
 }
 
 /// The state file's name inside a store dir. ONE definition — the CLI and alcore must not each
@@ -908,6 +928,18 @@ mod tests {
         assert!(save_pass_state(&state, &none, &none).is_err(), "a failed rename must be an Err");
         assert!(!state.with_extension("json.tmp").exists(), "the failed rename must not leave its temp file");
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Classification ONLY: dir_sync_unsupported on real errno values; the directory sync itself is not
+    /// exercised here, because it cannot be made to fail without a mock.
+    #[cfg(unix)]
+    #[test]
+    fn dir_sync_unsupported_classifies_the_errnos_a_directory_sync_refuses_with() {
+        use std::io::Error;
+        assert!(dir_sync_unsupported(&Error::from_raw_os_error(libc::ENOTSUP)));
+        assert!(dir_sync_unsupported(&Error::from_raw_os_error(libc::EOPNOTSUPP)));
+        assert!(dir_sync_unsupported(&Error::from_raw_os_error(libc::EINVAL)));
+        assert!(!dir_sync_unsupported(&Error::from_raw_os_error(libc::EIO)));
     }
 
     #[test]
