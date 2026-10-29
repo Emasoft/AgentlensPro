@@ -1814,6 +1814,10 @@ mod sweeper_backstop_tests {
     fn streaming_read_lines_from_matches_the_whole_file_oracle() {
         let mut long = vec![b'x'; 200_000];
         long.extend_from_slice(b"\npartial");
+        let mut partial_tail = b"a\n".to_vec();
+        partial_tail.extend(vec![b'y'; 100_000]);
+        let mut boundary = vec![b'z'; 65_535];
+        boundary.extend_from_slice(b"\nnext\n");
         let cases: Vec<(&str, Vec<u8>, u64)> = vec![
             ("empty", vec![], 0),
             ("no newline", b"abc".to_vec(), 0),
@@ -1827,8 +1831,11 @@ mod sweeper_backstop_tests {
             ("from mid-line", b"abcdef\nghi\njk".to_vec(), 3),
             ("from == len", b"abc\ndef\n".to_vec(), 8),
             ("line longer than buffer", long, 0),
+            ("partial tail longer than buffer", partial_tail, 0),
+            ("newline on the buffer boundary", boundary, 0),
         ];
-        let dir = std::env::temp_dir().join(format!("alcore-rlf-{}", std::process::id()));
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("alcore-rlf-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for (i, (name, bytes, from)) in cases.iter().enumerate() {
             let p = dir.join(format!("case{i}.jsonl"));
