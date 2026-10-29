@@ -24,7 +24,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::{flush_detailed, ingest_body_with, Store, VerifyItemRef, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
@@ -78,27 +78,35 @@ pub fn acquire_pass_lock(store_dir: &Path) -> Result<fs::File, PassLockErr> {
 /// A dropped skip name means a body is re-examined forever; a dropped stranded name means a body
 /// that could NOT be reconstructed is forgotten, which is the one that loses data.
 ///
-/// A missing or unparseable file is EMPTY, not an error: the state is an optimization plus a
-/// quarantine list, and refusing to run because it is corrupt would stop the drain entirely. The
-/// cost of starting empty is one slow pass.
-pub fn load_pass_state(p: &Path) -> (HashSet<String>, HashSet<String>) {
-    let Ok(raw) = fs::read_to_string(p) else { return (Default::default(), Default::default()) };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return (Default::default(), Default::default());
+/// A missing file is EMPTY, not an error: it is the true first-run state. A file that is present but cannot
+/// be read, or whose bytes are not valid JSON, is an Err (TRDD-FINMFYDE). Loading that file as empty made
+/// `unpark_names` save empty sets over it and destroy every persisted skip and stranded name. So "corrupt"
+/// means exactly those two things. Valid JSON with a missing key, a non-array value or non-string entries is
+/// NOT corrupt and still reads as empty, as it always did; a top-level value that is not an object (`[]`, `42`)
+/// is valid JSON and reads the same way. Callers must not write over an Err. The alstore CLI exits 4 and
+/// leaves the file in place, because a person runs it and decides; alcore's bodies pass moves the file aside
+/// to `<name>.corrupt-<unix_ms>` and rebuilds the state from empty sets (chores.rs).
+pub fn load_pass_state(p: &Path) -> std::io::Result<(HashSet<String>, HashSet<String>)> {
+    let raw = match fs::read_to_string(p) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Default::default(), Default::default())),
+        Err(e) => return Err(std::io::Error::new(e.kind(), format!("{}: {e}", p.display()))),
     };
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: not valid JSON: {e}", p.display()))
+    })?;
     let set = |k: &str| {
         v.get(k)
             .and_then(|a| a.as_array())
             .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
             .unwrap_or_default()
     };
-    (set("skipNames"), set("strandedNames"))
+    Ok((set("skipNames"), set("strandedNames")))
 }
 
 /// Write the pass state. Sorted so the file is diffable and its content is a function of the SET,
 /// not of HashSet iteration order — otherwise every pass rewrites a byte-different file. Temp +
-/// rename so a crash mid-write cannot leave a truncated state that reads back as "nothing is
-/// stranded".
+/// rename so a crash mid-write cannot leave a truncated state under the real name.
 pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<String>) -> std::io::Result<()> {
     let mut skip_v: Vec<&String> = skip.iter().collect();
     let mut str_v: Vec<&String> = stranded.iter().collect();
@@ -109,13 +117,23 @@ pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<Stri
     // WHY a Result (TRDD-ZR3OGSAV): the old `if write.is_ok() { let _ = rename }` swallowed a full
     // disk / permission error, so a lost stranded or skip name vanished without a trace. Every
     // failure is now returned for the caller to surface; the temp+rename atomicity is kept.
-    fs::write(&tmp, json.to_string())?;
+    // WHY sync_all (TRDD-FINMFYDE): without it the rename can reach the disk before the data does, so a
+    // power cut leaves a zero-byte state under the real name. A zero-byte file is an Err for the CLI (exit 4)
+    // and a move-aside for alcore, so a save must not produce one. The directory sync after the rename makes
+    // the rename itself durable; its failure is returned like any other.
+    {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(json.to_string().as_bytes())?;
+        file.sync_all()?;
+    }
     if let Err(e) = fs::rename(&tmp, p) {
         // A rename that failed leaves the temp file behind; remove it so it does not linger. Its own
         // removal error is irrelevant: the rename error is the one to report.
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
+    let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    fs::File::open(dir)?.sync_all()?;
     Ok(())
 }
 
@@ -771,7 +789,9 @@ pub fn ingest_pass_observed_with(
 /// stranded_remaining). skipNames is preserved untouched — an unparked name stays skip-listed,
 /// which is exactly what routes it to the delete gate instead of a re-ingest.
 pub fn unpark_names(state_file: &Path, names: &[String]) -> std::io::Result<(usize, usize, usize)> {
-    let (skip, mut stranded) = load_pass_state(state_file);
+    // WHY the `?` (TRDD-FINMFYDE): a state file that cannot be read must stop the unpark before the save below.
+    // Saving the empty sets a failed load would return writes over the real file and destroy every persisted name.
+    let (skip, mut stranded) = load_pass_state(state_file)?;
     let before = stranded.len();
     for n in names {
         stranded.remove(n);
@@ -852,7 +872,7 @@ mod tests {
             unpark_names(&state, &["a.request.json".to_string(), "zzz.request.json".to_string()]).unwrap();
         assert_eq!((req, removed, remaining), (2, 1, 1));
 
-        let (skip2, stranded2) = load_pass_state(&state);
+        let (skip2, stranded2) = load_pass_state(&state).unwrap();
         assert_eq!(skip2, skip, "skipNames must survive an unpark byte-for-byte");
         assert!(stranded2.contains("c.response.json") && !stranded2.contains("a.request.json"));
         fs::remove_dir_all(&dir).ok();
@@ -950,6 +970,47 @@ mod tests {
             ContentGate::Unreadable(msg) => assert!(msg.contains("re-read before delete failed"), "{msg}"),
             _ => panic!("a missing file must be Unreadable, not Unchanged and not Reemitted"),
         }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-FINMFYDE: an absent state file is the first-run state and loads as empty sets, not an error.
+    #[test]
+    fn load_pass_state_absent_file_is_empty() {
+        let dir = std::env::temp_dir().join(format!("al-load-absent-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        fs::create_dir_all(&dir).unwrap();
+        let (skip, stranded) = load_pass_state(&dir.join(PASS_STATE_FILE)).expect("an absent file is not an error");
+        assert!(skip.is_empty() && stranded.is_empty());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-FINMFYDE: a present file that is not valid JSON is an Err, never empty sets: empty sets are what
+    /// unpark would save over the file.
+    #[test]
+    fn load_pass_state_corrupt_file_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("al-load-corrupt-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        fs::create_dir_all(&dir).unwrap();
+        let state = dir.join(PASS_STATE_FILE);
+        fs::write(&state, b"{not json").unwrap();
+        let err = load_pass_state(&state).expect_err("a corrupt file must be an Err");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+        assert!(err.to_string().contains(&state.display().to_string()), "the error must name the path: {err}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-FINMFYDE: unpark over a corrupt state file is refused, and the file bytes are left as they were.
+    #[test]
+    fn unpark_names_refuses_a_corrupt_state_file_and_leaves_it_byte_identical() {
+        let dir = std::env::temp_dir().join(format!("al-unpark-corrupt-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        fs::create_dir_all(&dir).unwrap();
+        let state = dir.join(PASS_STATE_FILE);
+        let original = b"{not json";
+        fs::write(&state, original).unwrap();
+        assert!(unpark_names(&state, &["a.request.json".to_string()]).is_err(), "unpark over a corrupt file must be an Err");
+        assert_eq!(fs::read(&state).unwrap(), original, "the corrupt state file must not be overwritten");
+        assert!(!state.with_extension("json.tmp").exists(), "a refused unpark must not leave a temp file");
         fs::remove_dir_all(&dir).ok();
     }
 }

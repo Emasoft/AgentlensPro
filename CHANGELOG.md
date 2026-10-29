@@ -141,6 +141,19 @@ All notable changes to AgentlensPro are documented here.
   JSON, then exits 3 when the state was not saved; `alstore unpark` exits 3 and prints no counts.
   Exit 3 is new (2 stays reconstruct/verify errors); every in-repo caller already treats any non-zero
   exit other than 75 as a failure.
+- **An unreadable pass state file is no longer read as empty, and alcore moves it aside instead of stopping (TRDD-FINMFYDE).**
+  `load_pass_state` treated a corrupt or unreadable `.pass-state.json` as empty sets, and `alstore unpark`
+  then saved those empty sets over the real file, destroying every persisted skip and stranded name. An
+  absent file still loads as empty; a present file that cannot be read or is not valid JSON is now an error.
+  alcore's bodies pass moves such a file aside to `.pass-state.json.corrupt-<unix_ms>`, logs one line naming
+  both paths and the cause, and rebuilds the state from empty sets; if the move fails it logs once and skips
+  that tick, so the unreadable file is never overwritten. It does this only on a tick with staged bodies,
+  because an idle tick never reads the state. **alstore CLI contract change:** `alstore pass` and
+  `alstore unpark` refuse before any ingest or delete when the state cannot be read: they print
+  `alstore: cannot read pass state` with the cause on stderr, print nothing on stdout, leave the file in place
+  and exit with the new code 4 (1, 2, 3, 64 and 75 keep their meanings). The CLI refuses instead of moving the
+  file aside because a person runs it and decides. The save now fsyncs the temp file and the directory, so a
+  power cut cannot leave a zero-byte state under the real name.
 - **`api_calls.cost_usd` now prices 1h-tier cache writes at the 1h rate (TRDD-K4XQ7M2B).** The
   forensics indexer (`forensics_scan.rs`, the live one; `src/forensicsIndex.ts` `apiCallParams` is its
   TypeScript parity twin, not in the shipped bundle; imported only by tests, the parity generators and the unbundled `src/mcpServer.ts`) passed `0` as the 1h

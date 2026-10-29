@@ -349,6 +349,11 @@ static REOPEN_REFUSED_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(Non
 /// Per PROCESS (one alcore = one data dir): any test forcing a save failure through bodies_pass must reset it.
 static STATE_SAVE_FAILS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Consecutive ticks on which an unreadable `.pass-state.json` could not be moved aside (TRDD-FINMFYDE). The move is
+/// retried every tick, so the failure is logged on its first tick only, counted while it persists, and the next readable load logs once.
+/// Per PROCESS (one alcore = one data dir): any test forcing a move failure through bodies_pass must reset it.
+static STATE_LOAD_FAILS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The last bodies-pass reading (TRDD-HDUETCU7), held here and not in `CoreState`; `server_stats`
 /// reads it through `bodies_pass_stats()`. The type is `crate::BodiesPassStats`.
 // ponytail: this static is per PROCESS, not per data dir: alcore owns exactly one data dir (pid
@@ -630,7 +635,39 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         }
     }
     let state_file = store_dir.join(agentlens_store::pass::PASS_STATE_FILE);
-    let (mut skip, mut stranded) = agentlens_store::pass::load_pass_state(&state_file);
+    // WHY move the file aside and rebuild it, rather than skip the tick (TRDD-FINMFYDE): the save at the end of
+    // this pass writes its sets over the state file, so an unreadable file must not stay where that save can
+    // overwrite it, and it must not be read as empty and silently lose its bookkeeping. Moving it aside keeps the
+    // bytes for inspection, and the pass starts from empty sets. That is safe: a skip name is only a shortcut,
+    // because the delete gate re-reads the store and the body before any delete, and a stranded name is routed to
+    // that same gate. Only a failed move skips the tick, because then the unreadable file is still in place for the
+    // save to overwrite. An idle tick returns earlier and never reaches this load, so it never reads the state.
+    let (mut skip, mut stranded) = match agentlens_store::pass::load_pass_state(&state_file) {
+        Ok(sets) => {
+            let n = STATE_LOAD_FAILS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            if n > 0 {
+                eprintln!("{} alcore: bodies pass: pass state {} is readable again after {n} ticks it could not be moved aside", crate::log_ts(), state_file.display());
+            }
+            sets
+        }
+        Err(e) => {
+            let aside = std::path::PathBuf::from(format!("{}.corrupt-{}", state_file.display(), crate::now_ms()));
+            match std::fs::rename(&state_file, &aside) {
+                Ok(()) => {
+                    // The loud line below reports this move, so a count of failed moves starts over.
+                    STATE_LOAD_FAILS.store(0, std::sync::atomic::Ordering::Relaxed);
+                    eprintln!("{} alcore: bodies pass: cannot read the pass state ({e}); moved it aside to {} and rebuilt it from empty", crate::log_ts(), aside.display());
+                    (Default::default(), Default::default())
+                }
+                Err(move_err) => {
+                    if STATE_LOAD_FAILS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                        eprintln!("{} alcore: bodies pass skipped (repeats suppressed until it recovers): cannot read the pass state ({e}) and cannot move it aside to {}: {move_err}", crate::log_ts(), aside.display());
+                    }
+                    return;
+                }
+            }
+        }
+    };
     // B-1 (advisor verdict): parquet parts are immutable once written (`agentlens_store::lib.rs`
     // never merges/rewrites one), so a part fsynced on an earlier tick is fsynced for the life of
     // the process — recomputing the set fresh every tick (the old `HashSet::new()` here) made the
