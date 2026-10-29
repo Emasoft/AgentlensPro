@@ -20,7 +20,7 @@ priority: medium
 
 # agentlenspro server status does not show failed pass-state saves
 
-Found by the review of 805eea34 (TRDD-5K0YLLEF). /api/server-stats now reports bodies.stateSaveFails and bodies.lastStateSaveFailAt, but neither agentlenspro server status nor the dashboard prints them, so a full disk is visible only to someone querying the API. Direction: in src/cli/serverControl.ts, next to the capture-down line (bodiesCaptureLine), print one line when stateSaveFails > 0 (count and last failure time); absent field = older server, print nothing. Acceptance checklist: - [ ] server status prints a line when stateSaveFails > 0 (test). - [ ] nothing is printed when it is 0 or absent (test).
+Found by the review of 805eea34 (TRDD-5K0YLLEF). /api/server-stats now reports bodies.stateSaveFails and bodies.lastStateSaveFailAt, but neither agentlenspro server status nor the dashboard prints them, so a full disk is visible only to someone querying the API. Direction: in src/cli/serverControl.ts, next to the capture-down line (bodiesCaptureLine), print one line when stateSaveFails > 0 (count and last failure time); absent field = older server, print nothing. Acceptance: see the checklist below.
 
 ## Approval log
 

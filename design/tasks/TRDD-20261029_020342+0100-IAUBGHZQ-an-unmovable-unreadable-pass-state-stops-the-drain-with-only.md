@@ -20,7 +20,7 @@ priority: medium
 
 # an unmovable unreadable pass state stops the drain with only one log line
 
-Found by the review of 805eea34. TRDD-FINMFYDE: when .pass-state.json cannot be read AND cannot be renamed aside, alcore bodies_pass skips every tick, counting it only in the static STATE_LOAD_FAILS (rust-core/crates/agentlens-core/src/chores.rs) and logging once. No save runs, so TRDD-5K0YLLEF's stateSaveFails does not see it. Direction: expose the consecutive skipped-tick count and the last time in /api/server-stats bodies, same pattern as stateSaveFails/lastStateSaveFailAt (state_save_failures getter, frozen key-order test). Acceptance checklist: - [ ] /api/server-stats reports the count and last time (test forcing a read failure plus a failed rename through bodies_pass). - [ ] the test fails when the count is not exposed (mutation-checked).
+Found by the review of 805eea34. TRDD-FINMFYDE: when .pass-state.json cannot be read AND cannot be renamed aside, alcore bodies_pass skips every tick, counting it only in the static STATE_LOAD_FAILS (rust-core/crates/agentlens-core/src/chores.rs) and logging once. No save runs, so TRDD-5K0YLLEF's stateSaveFails does not see it. Direction: expose the consecutive skipped-tick count and the last time in /api/server-stats bodies, same pattern as stateSaveFails/lastStateSaveFailAt (state_save_failures getter, frozen key-order test). Acceptance: see the checklist below.
 
 ## Approval log
 
