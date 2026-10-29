@@ -1,10 +1,10 @@
 ---
 trdd-id: HO94JMKD
 title: get_account_status refuses to run while AgentlensPro is disabled
-column: dev
+column: human_review
 status: tasked
 created: 2026-10-29T07:52:44+0100
-updated: 2026-10-29T13:43:51+0100
+updated: 2026-10-29T17:46:02+0100
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -15,22 +15,30 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@AgentlensPro
 approval-datetime: 2026-10-29T07:52:44+0100
-implementation-commits: [9a35bd4f, 4ae78b7d, abbf793c, 0f9764f8, d486e1a0, 927a9fc1]
+implementation-commits: [9a35bd4f, 4ae78b7d, abbf793c, 0f9764f8, d486e1a0, 927a9fc1, 2642b168, 1e2d30ed, bf2c62e4, f301e1c4, a2da6a12]
+release-via: publish
 ---
 
 # get_account_status refuses to run while AgentlensPro is disabled
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-29
 
+- 2026-10-29 HUMAN REVIEW DONE by the agent on the owner's directive, verbatim: «do the human review yourself. fix all issues. run the /ultimate-bug-scanner on all files». Fixes: 2642b168 (a cached key row keeps its last verdict and check date; next check dated from what actually gates it; Exception sentence and archive warning count only key-taken readings; corrupt stamp names its file; diagnosis wording; six stale "file-only" prose claims), 1e2d30ed (bug-scanner findings: stale-lock takeover through the exclusive create and own-lock release, atomic cache and cooldown writes, call/batch/flag JSON errors are UsageError, Number.isNaN, no non-null assertions), bf2c62e4 (call/batch argument errors exit 64 before any server contact), f301e1c4 (isFileOnlyAccountStatus renamed isAllAccountsStatus), a2da6a12 (lock stale bound 3x the request timeout, lock tests that fail on the old code, stamp error carries no raw cause, batch member check, CHANGELOG). Bug-scanner scope: the 12 code files this card changed; src/test/autoSetup.test.ts hangs the scanner when scanned whole (900 s, 300 s, 1800 s), so it was scanned in 150-line chunks: no bugs (fs-sync and fixture assertions in a test). Every finding was triaged; the false positives are recorded in reports_dev/ho94jmkd-review-fix/. Checks: full suite 3331 passing, 13 pending, 0 failing; check-types, eslint, check-identities, bundle rebuilt. Not done: a bug scan of the whole repository (offered to the owner). 1e2d30ed, bf2c62e4 and a2da6a12 also carry bug-scanner fixes to older code in these files (lock, atomic writes, call/batch exit codes), made under the same directive. Scope note: 'all files' was taken as the card's 12 files and disclosed to the owner; critical and warning findings were read one by one, the info tier was triaged rule by rule; isNaN calls outside the scope remain (src/otelCallEvents.ts:89, src/logReader.ts:2683, :2686).
 - Increment 1 DONE, commit 9a35bd4f (in implementation-commits): get_account_status --all passes the disabled gate and skips the launch self-heal. Its follow-up tests are commit 4ae78b7d.
-- Side effects of --all while disabled: (a) possible copy of a newer legacy cache into ~/.agentlens/subscription-usage (archiveAccountUsage, src/subscriptionUsage.ts:502); (b) possible macOS keychain read in the diagnosis branch via loadToken when consent is stored; (c) --out FILE writes the named file.
+- Side effects of --all while disabled: (a) possible copy of a newer legacy cache into ~/.agentlens/subscription-usage (archiveAccountUsage, src/subscriptionUsage.ts:502); (b) possible macOS keychain read in the diagnosis branch via loadToken when consent is stored; (c) --out FILE writes the named file. (d) one stamp file per probed or refused key under <dataDir>/long-key-probes. The predicate named isFileOnlyAccountStatus in the body below is now isAllAccountsStatus (f301e1c4).
 - Boundary: server-only verbs still refuse while disabled with exit 69 (singular get_account_status, investigate_burn, get_burn_status, budget).
-- NEXT ACTION: variation 1 (long-lived keys + max_tokens 0 header probe) is the built approach (abbf793c, 0f9764f8, d486e1a0, 927a9fc1). Owner actions open: slot 03 needs a key minted under an organisation that allows OAuth; whether a probe opens a 5-hour window on an idle account is unmeasured. Variation 2 (stored short-lived logins) is dead on this machine (invalid_grant); variation 3 dropped by the owner.
+- NEXT ACTION: the orchestrator mints two follow-up cards (a spike measuring whether a max_tokens 0 probe opens a 5-hour window on an idle account; a LOCAL owner-only action to re-mint key 03 under an organisation that allows OAuth) and corrects the stale 'Open gaps' and Increment 2 BLOCKED lines; then complete, and publish at the next release. The rejected credits fallback stays in git stash 'HO94JMKD guarded credits fallback'.
 2026-10-29 — 927a9fc1: a long-lived key whose check failed inside the 10-minute wait shows no figures and its check age (KeyRow.checkedAt), never an old archived reading. Split out and REJECTED after its own review (kept in git stash, message 'HO94JMKD guarded credits fallback'): taking a cached row's credits state from the key's stamp mixes two sources on one line, and a usage-endpoint record keeps its credits fact in usageCreditsEnabled, which the stamp can contradict; a cached row whose record has no overage shows credits ? instead.
 
 ## Approval log
 
 - 2026-10-29T07:52:44+0100 — MANDATE issued by main-agent@AgentlensPro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-29T17:44:30+0100 — column → testing. full suite 3331 passing, 0 failing
+- 2026-10-29T17:44:34+0100 — column → ai_review. adversarial review forks after each of the five fix commits
+- 2026-10-29T17:44:39+0100 — column → human_review. owner directive 2026-10-29: the agent does the human review
+- 2026-10-29T17:44:43+0100 — column → complete. human review done; every finding fixed or triaged (STATE)
+- 2026-10-29T17:45:46+0100 — column → human_review. complete held: open questions get their own cards first
+- 2026-10-29 — owner directive, verbatim: «do the human review yourself. fix all issues. run the /ultimate-bug-scanner on all files». The human review is delegated to the agent.
 
 ## Owner directive
 
