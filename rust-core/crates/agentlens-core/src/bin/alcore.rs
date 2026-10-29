@@ -404,12 +404,13 @@ fn main() {
                 }
                 let s = boot.sweep;
                 println!(
-                    "{} alcore: log scan files={} changed={} parsed={} cards={} elapsed_ms={} threads={}",
+                    "{} alcore: log scan files={} changed={} parsed={} cards={} flushes={} elapsed_ms={} threads={}",
                     agentlens_core::log_ts(),
                     s.files,
                     s.changed,
                     s.parsed,
                     s.cards,
+                    s.flushes,
                     s.elapsed_ms,
                     rayon::current_num_threads()
                 );

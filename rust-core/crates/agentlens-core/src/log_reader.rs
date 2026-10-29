@@ -158,6 +158,17 @@ fn parse_one(f: &DiscoveredFile) -> Option<ParsedTranscript> {
 /// headroom over the ~1.1-1.3 GB steady state.
 pub const SCAN_CHUNK: usize = 2_000;
 
+/// TRDD-735Q3JF4 inc 3: the WARM boot sweep's mid-sweep save size (files per `ingest` call),
+/// smaller than [`SCAN_CHUNK`]. Measured (docs_dev/20261029_063500+0100-735Q3JF4-warm-flush-ab-r3.md,
+/// docs_dev/20261029_074750+0100-735Q3JF4-r3-per-site-holds.md): memory committed at 10 minutes is
+/// 134-157 MiB lower, all of it reserved-not-in-use (live memory unchanged); the longest lock hold
+/// AT THE SAVE STEP drops to 2.7-2.75 s from 14.7-15.0 s; total lock time is unchanged. The boot's
+/// longest hold is now the restore step (5.2-5.5 s), which this does not touch. The first-ever boot
+/// is unaffected (an empty file_state takes the cold path, and `cold_scan_chunked` slices by
+/// SCAN_CHUNK). The 60 s re-scan keeps SCAN_CHUNK because it was never measured. A warm boot with a
+/// large backlog makes proportionally more saves (unmeasured).
+pub const BOOT_SWEEP_CHUNK: usize = 200;
+
 /// The cold boot scan: every discovered session file, parsed in parallel (a file that cannot
 /// be read or yields no timestamps is skipped, as the TS sweep does), finished, in discovery
 /// order. OpenCode dbs are parsed sequentially (rusqlite, native WAL read). Collects EVERY
@@ -424,6 +435,9 @@ pub struct SweepStats {
     pub incremental_reads: u64,
     pub full_reads: u64,
     pub elapsed_ms: u128,
+    /// Number of `ingest` calls made INSIDE the sweep (incremental mid-sweep saves and the cold
+    /// path's per-chunk callback calls), excluding the caller's own final save of the remainder.
+    pub flushes: u64,
 }
 
 /// Owns the per-file offset gate and the bounded accumulator cache. `!Send` (the accumulators
@@ -469,7 +483,14 @@ impl LogTailer {
     /// thousands of lagged files and previously held every parsed card in one Vec until the
     /// caller's single bulk ingest (boot-phase peak 2539 MB, zero bodies passes). With `ingest`
     /// = None the behavior is exactly the unbounded-collect form (tests, tooling).
-    pub fn sweep(&mut self, env: &Env, now_ms: i64, mut ingest: Option<&mut dyn FnMut(Vec<ScannedFile>)>) -> (Vec<ScannedFile>, SweepStats) {
+    pub fn sweep(&mut self, env: &Env, now_ms: i64, ingest: Option<&mut dyn FnMut(Vec<ScannedFile>)>) -> (Vec<ScannedFile>, SweepStats) {
+        self.sweep_with_flush(env, now_ms, ingest, SCAN_CHUNK)
+    }
+
+    /// [`Self::sweep`] with an explicit mid-sweep save size: the incremental branch hands `ingest`
+    /// a batch every `flush_every` files. `pub` because the integration tests drive it directly.
+    /// Only the warm boot passes [`BOOT_SWEEP_CHUNK`]; everything else goes through `sweep`.
+    pub fn sweep_with_flush(&mut self, env: &Env, now_ms: i64, mut ingest: Option<&mut dyn FnMut(Vec<ScannedFile>)>, flush_every: usize) -> (Vec<ScannedFile>, SweepStats) {
         if self.file_state.is_empty() {
             // Seed the change gate from the chunked cold scan's returned states — flushed
             // chunks' offsets included, or the next sweep would re-parse the whole corpus.
@@ -478,9 +499,13 @@ impl LogTailer {
             // R5); production must pass Some. With Some, each chunk
             // is handed to the caller's ingest and dropped, bounding the boot's peak.
             let mut unflushed: Vec<ScannedFile> = Vec::new();
+            let mut cold_flushes: u64 = 0;
             let (remainder, s, states) = cold_scan_chunked(env, now_ms, &mut |chunk| {
                 match ingest.as_mut() {
-                    Some(st) => st(chunk),
+                    Some(st) => {
+                        cold_flushes += 1;
+                        st(chunk)
+                    }
                     None => unflushed.extend(chunk),
                 }
             });
@@ -496,6 +521,7 @@ impl LogTailer {
                 incremental_reads: 0,
                 full_reads: s.parsed as u64,
                 elapsed_ms: s.elapsed_ms,
+                flushes: cold_flushes,
             };
             return (unflushed, stats);
         }
@@ -506,13 +532,14 @@ impl LogTailer {
         let mut cards_seen: usize = 0; // F-3 closeout (TRDD-2JOIAH2G): whole-sweep cards — flushed chunks counted here, the returned tail below.
         for f in &files {
             self.process_file(f, now_ms, &mut stats, &mut out);
-            // Bound the accumulation (TRDD-2JOIAH2G R5): hand every SCAN_CHUNK files to the
+            // Bound the accumulation (TRDD-2JOIAH2G R5): hand every `flush_every` files to the
             // caller's ingest and drop them; only the last partial batch is returned. The
             // dropped files' gate states are already in `file_state` (process_file inserts
             // them), so a flush can never cause a re-parse.
             if let Some(st) = ingest.as_mut() {
-                if out.len() >= SCAN_CHUNK {
+                if out.len() >= flush_every {
                     cards_seen += out.iter().map(|s| s.cards.len()).sum::<usize>();
+                    stats.flushes += 1;
                     st(std::mem::take(&mut out));
                 }
             }
@@ -1571,7 +1598,9 @@ pub fn start_sweeper(
             // and THEN appends that chunk's read positions — a boot sweep killed partway resumes
             // from the last persisted chunk instead of re-reading the whole corpus.
             let mut ingest_boot = |chunk: Vec<ScannedFile>| durable.ingest_chunk(&state, chunk);
-            let (scanned, sweep) = tailer.sweep(&env, crate::now_ms(), Some(&mut ingest_boot));
+            // WHY BOOT_SWEEP_CHUNK and not SCAN_CHUNK (TRDD-735Q3JF4 inc 3): smaller saves cut the committed
+            // memory and the longest lock hold at the save step (see the constant's doc for numbers).
+            let (scanned, sweep) = tailer.sweep_with_flush(&env, crate::now_ms(), Some(&mut ingest_boot), BOOT_SWEEP_CHUNK);
             // The remainder takes the same path, BEFORE the lock below: `ingest_chunk` takes the
             // state lock itself, and std Mutex is not reentrant.
             if !scanned.is_empty() {
@@ -1736,6 +1765,8 @@ pub fn start_sweeper(
                     // cards and THEN appends its read positions, so a sweep killed partway resumes
                     // from the last chunk instead of re-reading everything.
                     let mut ingest_loop = |chunk: Vec<ScannedFile>| durable.ingest_chunk(&state, chunk);
+                    // WHY plain sweep() (SCAN_CHUNK) and not BOOT_SWEEP_CHUNK: the periodic re-scan was never
+                    // measured at the smaller save size (TRDD-735Q3JF4 inc 3).
                     let (scanned, sweep) = tailer.sweep(&env, crate::now_ms(), Some(&mut ingest_loop));
                     // The full sweep's remainder takes the same path. WHY here and not in the
                     // post-sweep block below: that block holds the state lock, and `ingest_chunk`

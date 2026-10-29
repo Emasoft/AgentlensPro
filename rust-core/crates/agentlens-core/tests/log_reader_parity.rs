@@ -200,6 +200,98 @@ fn sweep_incremental_flushes_in_scan_chunk_sized_batches_and_seeds_the_gate() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// TRDD-735Q3JF4 inc 3 helper: a scratch home whose tailer is already WARM (an initial cold sweep
+/// seeded `file_state` with the fixture's 5 files), plus a writer for N new session files that the
+/// next sweep must see through the INCREMENTAL branch (`changed == N`, not `5 + N` as a cold scan
+/// would report).
+fn warm_tailer_with_new_files(name: &str, n: usize) -> (PathBuf, Env, LogTailer) {
+    use std::io::Write;
+    let home = scratch_home(name);
+    let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+    let projects = home.join(".claude").join("projects").join("-Users-someone-flush");
+    std::fs::create_dir_all(&projects).unwrap();
+    let mut t = LogTailer::default();
+    let (_, s) = t.sweep(&env, agentlens_core::now_ms(), None);
+    assert_eq!((s.files, s.changed), (5, 5), "warm-up is the cold scan of the 5 fixture files");
+    assert_eq!(t.file_state.len(), 5, "the warm-up seeded the change gate");
+    for i in 0..n {
+        let p = projects.join(format!("eeeeeeee-1111-2222-3333-{:012}.jsonl", i));
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(f, "{{\"type\":\"user\",\"timestamp\":\"2026-08-01T10:00:00.000Z\",\"cwd\":\"/Users/someone/flush\",\"message\":{{\"role\":\"user\",\"content\":\"seed {}\"}}}}", i).unwrap();
+    }
+    (home, env, t)
+}
+
+/// TRDD-735Q3JF4 inc 3: the incremental branch saves every `flush_every` files. 450 new files at
+/// 200 give two saves of exactly 200 each, a 50-file remainder returned to the caller, and
+/// `flushes == 2`; the sweep is the incremental branch (`changed == 450`).
+#[test]
+fn sweep_with_flush_450_files_at_200_saves_twice_and_returns_50() {
+    let (home, env, mut t) = warm_tailer_with_new_files("flush450", 450);
+    let mut sizes: Vec<usize> = Vec::new();
+    let mut ingest = |chunk: Vec<ScannedFile>| sizes.push(chunk.len());
+    let (scanned, s) = t.sweep_with_flush(&env, agentlens_core::now_ms(), Some(&mut ingest), 200);
+    assert_eq!(s.changed, 450, "incremental branch ran: only the new files are changed");
+    assert_eq!(sizes, vec![200, 200], "two saves, every batch exactly 200 files");
+    assert_eq!(scanned.len(), 50);
+    assert_eq!(s.flushes, 2);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// TRDD-735Q3JF4 inc 3: an exact multiple (400 at 200) saves twice and returns nothing — pins `>=`
+/// against a `>` slip, which would save once and return 200.
+#[test]
+fn sweep_with_flush_400_files_at_200_saves_twice_and_returns_nothing() {
+    let (home, env, mut t) = warm_tailer_with_new_files("flush400", 400);
+    let mut sizes: Vec<usize> = Vec::new();
+    let mut ingest = |chunk: Vec<ScannedFile>| sizes.push(chunk.len());
+    let (scanned, s) = t.sweep_with_flush(&env, agentlens_core::now_ms(), Some(&mut ingest), 200);
+    assert_eq!(s.changed, 400, "incremental branch ran");
+    assert_eq!(sizes, vec![200, 200]);
+    assert_eq!(scanned.len(), 0);
+    assert_eq!(s.flushes, 2);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// TRDD-735Q3JF4 inc 3: with no `ingest` nothing is saved mid-sweep — all 450 files come back and
+/// `flushes == 0` (the counter counts ingest calls, not would-be flush points).
+#[test]
+fn sweep_with_flush_without_ingest_returns_everything_and_counts_no_flushes() {
+    let (home, env, mut t) = warm_tailer_with_new_files("flushnone", 450);
+    let (scanned, s) = t.sweep_with_flush(&env, agentlens_core::now_ms(), None, 200);
+    assert_eq!(s.changed, 450, "incremental branch ran");
+    assert_eq!(scanned.len(), 450);
+    assert_eq!(s.flushes, 0);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// TRDD-735Q3JF4 inc 3: plain `sweep()` keeps SCAN_CHUNK — 250 new files make no mid-sweep save
+/// and all 250 are returned. Guards the wrapper's default against inheriting the boot's 200.
+#[test]
+fn plain_sweep_keeps_the_scan_chunk_default() {
+    let (home, env, mut t) = warm_tailer_with_new_files("flushplain", 250);
+    let mut sizes: Vec<usize> = Vec::new();
+    let mut ingest = |chunk: Vec<ScannedFile>| sizes.push(chunk.len());
+    let (scanned, s) = t.sweep(&env, agentlens_core::now_ms(), Some(&mut ingest));
+    assert_eq!(s.changed, 250, "incremental branch ran");
+    assert!(sizes.is_empty(), "no mid-sweep save below SCAN_CHUNK");
+    assert_eq!(scanned.len(), 250);
+    assert_eq!(s.flushes, 0);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// TRDD-735Q3JF4 inc 3: source check of the two call sites — only the warm boot passes
+/// BOOT_SWEEP_CHUNK (via `sweep_with_flush`); the periodic re-scan stays on plain `sweep(`.
+#[test]
+fn only_the_boot_call_site_uses_the_boot_sweep_chunk() {
+    let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/log_reader.rs")).unwrap();
+    let boot: Vec<&str> = src.lines().filter(|l| l.contains("Some(&mut ingest_boot)")).collect();
+    assert_eq!(boot.len(), 1, "{boot:?}");
+    assert!(boot[0].contains("tailer.sweep_with_flush(") && boot[0].contains("BOOT_SWEEP_CHUNK"), "{}", boot[0]);
+    let rescan: Vec<&str> = src.lines().filter(|l| l.contains("Some(&mut ingest_loop)")).collect();
+    assert_eq!(rescan.len(), 1, "{rescan:?}");
+    assert!(rescan[0].contains("tailer.sweep(") && !rescan[0].contains("sweep_with_flush") && !rescan[0].contains("BOOT_SWEEP_CHUNK"), "{}", rescan[0]);
+}
 // ── The incremental tailer (P5d) ─────────────────────────────────────────────────────────────
 
 /// A private copy of the fixture tree the test can append to.
