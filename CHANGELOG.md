@@ -10,6 +10,8 @@ All notable changes to AgentlensPro are documented here.
 
 - **`/api/server-stats` reports failed `.pass-state.json` saves.** `bodies.stateSaveFails` is the number of consecutive failed saves of the bodies pass state file (0 = healthy), and `bodies.lastStateSaveFailAt` is the epoch ms of the last failed save (0 = never). A full disk that also loses the one-time log line now shows here. The count resets on the next successful save; the timestamp does not (TRDD-5K0YLLEF).
 
+- **`server status` shows failed `.pass-state.json` saves.** When `/api/server-stats` reports `bodies.stateSaveFails` above zero, `agentlenspro server status` prints one `save:` line with the consecutive-failure count and the time of the last failure. A zero or absent count prints nothing (TRDD-LDWBRV9B).
+
 - **`cheap-worker` and `fast-worker` — two more shipped worker agents, both on Haiku 5.5.**
   `cheap-worker` is `haiku[1m]` at `xhigh` effort (maximum depth on the smallest, cheapest model);
   `fast-worker` is the same shape at `medium` (the quickest model, shallower reasoning). Both take the
