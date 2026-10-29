@@ -36,8 +36,8 @@ export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "c
 
 const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", "setup", "server", "daemon"])
 
-/** `get_account_status --all` — the PLURAL form, assembled entirely from files (account-state timeline + per-account
- *  usage archive; main.ts case get_account_status). ONE rule shared by the dispatcher (no server proxy), the
+/** `get_account_status --all` — the PLURAL form, assembled from files (account-state timeline + per-account
+ *  usage archive) plus one probe per owner-supplied long-lived key (src/longOAuthKeys.ts); it needs no server and writes no user config (main.ts case get_account_status). ONE rule shared by the dispatcher (no server proxy), the
  *  disabled gate and the launch self-heal. WHY: a read must never be blocked by the off-switch brake nor trigger
  *  writes to user config — owner directive 2026-10-29: "are you saying that in reduced mode you cannot determine the
  *  accounts status?? this is bad. fix this." The singular form needs the server and is NOT covered. Any position of

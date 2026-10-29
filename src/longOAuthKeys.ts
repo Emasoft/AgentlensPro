@@ -69,8 +69,11 @@ export interface KeyRow {
   /** The reading this row reports: the archived record for a matched account, the stamped one for an unmatched
    *  account, and null when there is none. */
   reading: SubscriptionUsage | null
-  /** Set only on a row replayed from a stamp: the ISO 8601 instant of the check that the row replays. */
+  /** Set whenever the row carries the verdict of a stamp: a row replayed from one, or a cached row that dates the last check it still shows. The ISO 8601 instant of that check. */
   checkedAt?: string
+  /** Set on every row that was not probed this run: the ISO 8601 instant after which this key is probed again. A replayed row
+   *  waits for its check plus the TTL; a cached row waits for its archive record's fetch plus the TTL. */
+  nextCheckAt?: string
 }
 export interface ProbeResult {
   httpStatus: number | null
@@ -159,7 +162,8 @@ function parseErrorEnvelope(text: string): ErrorEnvelope {
 }
 
 /** Send one zero-output-token message (about 33 input tokens) with the key and return what came back, scrubbed. It never throws: a failure is a
- *  result with its message in it, so one bad key cannot discard the other keys' readings in Promise.all. WHY the
+ *  result with its message in it, so one bad key cannot discard the other keys' readings in Promise.all. A corrupt local
+ *  stamp is the one exception: readStamp throws on it, and that fails the whole run (see readStamp). WHY the
  *  Headers object is built inside the try: the platform throws on a control character in a header value, and that
  *  error must come back as a scrubbed failed result, not escape unformatted. */
 export async function probeRateLimits(
@@ -328,10 +332,10 @@ function readStamp(file: string): Stamp | null {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as Stamp
   } catch (e) {
-    // No stamp yet is the normal first run. Any other failure is re-raised: a stamp that cannot be read is a fault
-    // to see, not a reason to probe again without saying so.
+    // No stamp yet is the normal first run. Any other failure is re-raised with the file named: a corrupt stamp fails the
+    // whole --all run on purpose (fail fast), rather than probing the key again without saying so.
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw e
+    throw new Error('cannot read the long-lived key stamp ' + file + ': ' + (e as Error).message, { cause: e })
   }
 }
 
@@ -391,15 +395,22 @@ async function settle(key: LongKey, match: Match, opts: RefreshOptions): Promise
       ...base, outcome: stamp.outcome === 'refused' ? 'refused' : 'failed', identity: stamp.identity,
       httpStatus: stamp.httpStatus, reason: stamp.reason, overage: null, reading: null,
       checkedAt: new Date(stamp.at).toISOString(),
+      nextCheckAt: new Date(stamp.at + TTL_MS).toISOString(),
     }
   }
   // WHY the archive and the stamp are read separately: a failed check must never borrow an old archived record as its
   // reading, or a key that cannot be read shows weeks-old numbers as if they were its current reading. The archive is the
   // reading only while it is itself inside the TTL.
   if (archived && withinTtl(archived.fetchedAt, opts.now)) {
+    // WHY the last verdict of this key is carried, dated: the fresh archive must not erase the last check, but that check
+    // is shown with its own instant, never as the current one. An 'unmatched' stamp names no account this key matched, so
+    // it lends nothing here: the account that matches now must not inherit its identity.
+    const lastCheck = stamp && stamp.outcome !== 'unmatched' ? stamp : null
     return {
-      ...base, outcome: 'cached', identity: stamp?.identity ?? 'not-checked', httpStatus: stamp?.httpStatus ?? null,
-      reason: stamp?.reason ?? null, overage: archived.overage ?? null, reading: archived,
+      ...base, outcome: 'cached', identity: lastCheck?.identity ?? 'not-checked', httpStatus: lastCheck?.httpStatus ?? null,
+      reason: lastCheck?.reason ?? null, overage: archived.overage ?? null, reading: archived,
+      ...(lastCheck ? { checkedAt: new Date(lastCheck.at).toISOString() } : {}),
+      nextCheckAt: new Date(archived.fetchedAt + TTL_MS).toISOString(),
     }
   }
   // An unmatched account has no archive record, so its stamp is the only home of its reading.
@@ -407,6 +418,7 @@ async function settle(key: LongKey, match: Match, opts: RefreshOptions): Promise
     return {
       ...base, outcome: 'cached', identity: stamp.identity, httpStatus: stamp.httpStatus, reason: stamp.reason,
       overage: stamp.overage, reading: stamp.reading ?? null, checkedAt: new Date(stamp.at).toISOString(),
+      nextCheckAt: new Date(stamp.at + TTL_MS).toISOString(),
     }
   }
   // A 'refreshed' stamp whose archive record is outside the TTL falls through to a new probe: a 'refreshed' stamp stores no

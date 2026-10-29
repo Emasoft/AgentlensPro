@@ -1,7 +1,8 @@
 // src/cli/allAccountsCli.ts — `agentlenspro get_account_status --all`, answered WITHOUT the server.
 //
-// WHY IT BYPASSES THE SERVER. The plural answer is assembled entirely from files (the account-state
-// timeline + the per-account usage archive), and its audience is a rotator deciding what to do about a
+// WHY IT BYPASSES THE SERVER. The plural answer is assembled from files (the account-state
+// timeline + the per-account usage archive) plus one probe per owner-supplied long-lived key (src/longOAuthKeys.ts); it needs no server.
+// Its audience is a rotator deciding what to do about a
 // machine that is already in trouble. Proxying it to a server that may itself be down turns the one
 // useful answer into `cannot reach http://localhost:4316/mcp` — measured, before this existed. The
 // singular form still goes over the wire: it needs live-session accessors only the server has.
@@ -15,7 +16,7 @@ import {
   listAllAccounts, selectAccountsWithHeadroom,
   type AccountStatusRow, type AccountWindow, type HeadroomSelection,
 } from '../allAccounts'
-import { loadToken, userAgent, TTL_MS, type SubscriptionUsage, type UsageLimit } from '../subscriptionUsage'
+import { loadToken, userAgent, type SubscriptionUsage, type UsageLimit } from '../subscriptionUsage'
 import { dataPath } from '../dataDir'
 import {
   loadLongOAuthKeys, refreshLongKeys, skippedRows, type FetchLike, type KeyRow, type LoadedKeys,
@@ -60,7 +61,7 @@ With --json the rotation queries ADD a 'selection' block (which also names the l
 the unchanged full answer, so existing consumers of --all --json keep working.
 
 Works while AgentlensPro is DISABLED (kill-switch or AGENTLENS_DISABLED=1), with no server and no setup repair.
-While disabled the rows are what the server LAST captured — they do not refresh until it runs again.
+While disabled, a row with no long-lived key is what the server LAST captured and does not refresh until the server runs again; an account with a key is refreshed by that key's probe (below).
 
   --no-refresh      read the files only: no network, and no message is sent to any long-lived key
 
@@ -143,6 +144,8 @@ export interface AllAccountsDeps {
   env?: NodeJS.ProcessEnv
   now?: number
   dataDir?: string
+  /** The live account, when the caller already knows it. Unset, it is read from the machine by getCurrentAccount, which a test cannot set: that result is memoized for 60 seconds. */
+  liveAccountId?: string | null
 }
 
 /** One window of a key's reading as a table cell. A missing window is a dash, and a window with no percentage is a
@@ -167,10 +170,12 @@ function creditsCell(o: SubscriptionUsage['overage']): string {
 /** One long-lived key as a text line: its outcome, its three windows, credits, identity and, when there is one, why. A row
  *  replayed from a stamp also says when it was checked and when the next check is allowed. */
 function keyLine(r: KeyRow, now: number): string {
-  // The age and the wait are computed from this run's clock, so a replayed row reads them at the moment of this run.
-  const at = r.checkedAt === undefined ? null : Date.parse(r.checkedAt)
-  const checked = at === null ? '' : '  (checked ' + Math.floor((now - at) / 60_000) + 'm ago; next check allowed in '
-    + Math.max(0, Math.ceil((at + TTL_MS - now) / 60_000)) + 'm)'
+  // The age and the waits are computed from this run's clock, so a row reads them at the moment of this run. The check and
+  // the next probe are dated apart: a cached row's next probe is gated by its archive record, not by the check it still shows.
+  const parts: string[] = []
+  if (r.checkedAt !== undefined) parts.push('checked ' + Math.floor((now - Date.parse(r.checkedAt)) / 60_000) + 'm ago')
+  if (r.nextCheckAt !== undefined) parts.push('next check allowed in ' + Math.max(0, Math.ceil((Date.parse(r.nextCheckAt) - now) / 60_000)) + 'm')
+  const checked = parts.length === 0 ? '' : '  (' + parts.join('; ') + ')'
   return 'key ' + r.slot + '  ' + r.email + '  ' + r.outcome
     + '  5h ' + keyCell(r.reading, l => l.kind === 'session')
     + '  7d ' + keyCell(r.reading, l => l.kind === 'weekly_all')
@@ -202,6 +207,7 @@ function keyJson(r: KeyRow): Record<string, unknown> {
     slot: r.slot, email: r.email, accountId: r.accountId, outcome: r.outcome, identity: r.identity,
     httpStatus: r.httpStatus, reason: r.reason, overage: r.overage,
     checkedAt: r.checkedAt,
+    nextCheckAt: r.nextCheckAt,
     ...(r.outcome === 'unmatched' && r.reading !== null ? { windows: windowsOf(r.reading) } : {}),
   }
 }
@@ -239,9 +245,11 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
       fetchImpl: deps.fetchImpl ?? fetch, now, stampDir: deps.dataDir ?? dataPath('long-key-probes'), userAgentValue: userAgent(),
     })
   const keyReading = keyRows.some(r => r.reading !== null)
-  const answer = listAllAccounts({ now })
-  // Whether a key refreshed or re-served a row. It decides which archive warning prints (see archiveLine).
-  const keyFedRow = keyRows.some(r => r.outcome === 'refreshed' || (r.outcome === 'cached' && r.reading !== null))
+  // WHY the slots come from the reading's source, not from keyReading or the outcome: a cached row can hold an archive record
+  // that the usage endpoint wrote, and a refused or failed row can sit beside an archived one; neither is a reading a key
+  // produced. This one discriminator names the key in the Exception sentence and decides which archive warning prints.
+  const keyedSlots = keyRows.filter(r => r.reading?.source === 'ratelimit-headers').map(r => r.slot)
+  const answer = listAllAccounts({ now, liveAccountId: deps.liveAccountId })
   const keyLines = keyRows.map(r => keyLine(r, now)).concat(loaded.invalid.map(i => 'key ' + i.slot + '  invalid  [' + i.reason + ']'))
   const keySection = keyLines.length === 0 ? '' : '\n\nLong-lived keys (CLAUDE_CODE_LONG_OAUTH_KEY_*):\n' + keyLines.join('\n')
   if (answer.blind && !keyReading) {
@@ -261,27 +269,37 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
   let diagnosis = ''
   const live = answer.accounts.find(a => a.isLive)
   if (!answer.blind && ((live ? live.observedAt === null : true) || answer.accounts.every(a => a.observedAt === null))) {
+    // WHY the subject: "No account has a usage reading" is true only while no account has one. Once one does, a reader asks
+    // about the live account; with no live account there is no live reading to name, so the sentence says that instead.
     const t = loadToken()
-    diagnosis = t.token
-      ? '\n\nNo account has a usage reading yet. A token IS readable, so the next refresh should fill '
-        + 'this — the server captures one at startup, hourly, and on every account change.'
-      : `\n\nNo account has a usage reading, and NO TOKEN is readable by this process (${t.reason}).`
-        + (t.reason === 'opt_in_required'
-          ? ' On macOS the credential lives in the login keychain and reading it is opt-in, because an\n'
-            + 'un-ACL\'d read pops a password prompt. To let the SERVER refresh these numbers, set\n'
-            + '  AGENTLENS_READ_KEYCHAIN_USAGE=1\n'
-            + 'in the environment it starts in, then `agentlenspro server restart`. Setting it only for\n'
-            + 'this CLI does nothing: the fetch happens server-side.'
-          : '')
+    const noneRead = answer.accounts.every(a => a.observedAt === null)
+    const keychainHint = t.reason === 'opt_in_required'
+      ? ' On macOS the credential lives in the login keychain and reading it is opt-in, because an\n'
+        + 'un-ACL\'d read pops a password prompt. To let the SERVER refresh these numbers, set\n'
+        + '  AGENTLENS_READ_KEYCHAIN_USAGE=1\n'
+        + 'in the environment it starts in, then `agentlenspro server restart`. Setting it only for\n'
+        + 'this CLI does nothing: the fetch happens server-side.'
+      : ''
+    if (!noneRead && !live) {
+      diagnosis = t.token
+        ? '\n\nNo account is live right now, so there is no live reading to show. A token IS readable; the server captures a reading at startup, hourly, and on every account change.'
+        : `\n\nNo account is live right now, and NO TOKEN is readable by this process (${t.reason}).` + keychainHint
+    } else {
+      const subject = noneRead ? 'No account has a usage reading' : 'The live account has no usage reading'
+      diagnosis = t.token
+        ? '\n\n' + subject + ' yet. A token IS readable, so the next refresh should fill '
+          + 'this — the server captures one at startup, hourly, and on every account change.'
+        : `\n\n${subject}, and NO TOKEN is readable by this process (${t.reason}).` + keychainHint
+    }
   }
 
   // A human needs the archive verdict as much as a program does (issue #9 §4): without it, rows that
   // can never refresh again look exactly like rows that simply have not changed.
   // WHY ONE WARNING: the key line and this archive line both name the rows no key reaches. Printing both said the same
-  // thing twice, so when a key fed a row the key line alone prints, and it carries the archive reason.
+  // thing twice, so when a key read a row the key line alone prints, and it carries the archive reason.
   const archiveLine = answer.archive.maintained
     ? ''
-    : keyFedRow
+    : keyedSlots.length > 0
       ? `\n\n⚠ rows without a long-lived key are NOT being refreshed — ${answer.archive.reason}`
       : `\n\n⚠ these rows are NOT being refreshed — ${answer.archive.reason}`
 
@@ -299,8 +317,8 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
     ? JSON.stringify(jsonPayload, null, 2)
     : (selection ? `${selectionText(selection)}\n\n` : '')
     + table(answer.accounts.map(row)) + keySection + '\n\n' + answer.note
-      // WHY: the note says no credential is read, which is false once a key read a row. This sentence corrects it, and it is printed only when a key produced a reading.
-      + (keyReading ? ' Exception: rows marked in the Long-lived keys section were read with the owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_* keys.' : '')
+      // WHY: the note says no credential is read, which is false once a key read a row. This sentence names the slots whose rows a key read, and it is printed only when there are such slots (a row from the usage endpoint names no key).
+      + (keyedSlots.length > 0 ? ` Exception: the readings shown for key ${keyedSlots.join(', ')} were taken with the owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_* keys.` : '')
     + `\n\nReasons for every null are in --json; '*' marks the live account.${archiveLine}${diagnosis}`
 
   if (outFile) {

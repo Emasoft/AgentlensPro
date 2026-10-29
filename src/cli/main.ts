@@ -309,8 +309,8 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
       // burned the window is exactly when the server may be down.
       return runStatuslineHistoryCli(argv.slice(1))
     case 'get_account_status':
-      // Only the PLURAL form short-circuits the server. `--all` is assembled entirely from files (the
-      // account-state timeline + the per-account usage archive), and its whole audience is a rotator
+      // Only the PLURAL form short-circuits the server. `--all` is assembled from files (the
+      // account-state timeline + the per-account usage archive) plus one probe per owner-supplied long-lived key (src/longOAuthKeys.ts); it needs no server, and its whole audience is a rotator
       // deciding what to do about a wedged machine — where proxying to a server that may itself be
       // down turns the one useful answer into "cannot reach localhost:4316". The singular form still
       // goes over the wire: it needs the live session accessors, which only the server has.

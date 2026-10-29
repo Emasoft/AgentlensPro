@@ -502,6 +502,56 @@ suite('the --all CLI — the TTL, the flags, the unmatched and BLIND cases', () 
     })
   })
 
+  test('an out-of-TTL refusal beside a fresh archive is shown as cached, dated to its own check, and its next probe is dated by the archive', async () => {
+    await sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async () => {
+      archiveAccountUsage(archived(A, 'x@example.com', NOW - HOUR, '2026-11-10T15:00:00.000Z'))
+      const probe = fakeFetch(() => reply(200, H200))
+      const refusal = JSON.parse((await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: NOW })).out).longKeys[0]
+      assert.strictEqual(refusal.outcome, 'refused')
+      const later = NOW + TTL_MS + 60_000
+      const freshAt = later - 30_000
+      archiveAccountUsage(archived(A, 'x@example.com', freshAt, '2026-11-03T15:00:00.000Z'))
+      const json = JSON.parse((await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: later })).out).longKeys[0]
+      assert.strictEqual(probe.probes.count, 1, 'inside the archive TTL nothing is sent')
+      assert.strictEqual(json.outcome, 'cached')
+      assert.strictEqual(json.identity, 'refused')
+      assert.strictEqual(json.reason, refusal.reason)
+      assert.strictEqual(json.checkedAt, new Date(NOW).toISOString())
+      assert.strictEqual(json.nextCheckAt, new Date(freshAt + TTL_MS).toISOString())
+      const text = await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: later })
+      assert.ok(text.out.includes('key 01  x@example.com  cached  5h -  7d 40%'), text.out)
+      assert.ok(text.out.includes('(checked '), text.out)
+      assert.ok(!text.out.includes('next check allowed in 0m'), text.out)
+    })
+  })
+
+  test('an unmatched stamp inside the TTL does not lend its identity to the account that matches it later', async () => {
+    await sandboxed([], async dir => {
+      const probe = fakeFetch(() => reply(200, H200))
+      const first = JSON.parse((await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: NOW })).out).longKeys[0]
+      assert.strictEqual(first.outcome, 'unmatched')
+      fs.appendFileSync(path.join(dir, 'account-state.ndjson'), JSON.stringify(rosterRec(A, 'x@example.com', NOW - HOUR)) + '\n')
+      const later = NOW + 60_000
+      archiveAccountUsage(archived(A, 'x@example.com', later - 30_000, '2026-11-03T15:00:00.000Z'))
+      const json = JSON.parse((await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: later })).out).longKeys[0]
+      assert.strictEqual(probe.probes.count, 1, 'inside the TTL nothing is sent')
+      assert.strictEqual(json.outcome, 'cached')
+      assert.strictEqual(json.identity, 'not-checked')
+      assert.strictEqual(json.checkedAt, undefined)
+    })
+  })
+
+  test('a corrupt stamp fails the run, the error names the stamp file, and nothing is sent', async () => {
+    await sandboxed([], async dir => {
+      const probe = fakeFetch(() => reply(403, {}, FORBIDDEN_403))
+      await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      const stampDir = path.join(dir, 'long-key-probes')
+      const [stampName] = fs.readdirSync(stampDir)
+      fs.writeFileSync(path.join(stampDir, stampName), 'not json')
+      await assert.rejects(runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW + 60_000 }), /cannot read the long-lived key stamp .*long-key-probes/)
+      assert.strictEqual(probe.probes.count, 1, 'a corrupt stamp sends nothing')
+    })
+  })
   test('a refreshed stamp inside the TTL does not replay an archive record older than the TTL: the key is probed again', async () => {
     await sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async dir => {
       const probe = fakeFetch(() => reply(200, H200))
@@ -597,7 +647,7 @@ suite('the text output — the archive warning and the exception sentence follow
       assert.strictEqual(probe.probes.count, 1)
       assert.ok(!res.out.includes('⚠ these rows are NOT being refreshed'), res.out)
       assert.ok(res.out.includes('⚠ rows without a long-lived key are NOT being refreshed — ' + reason), res.out)
-      assert.ok(res.out.includes('Exception: rows marked in the Long-lived keys section were read with the owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_* keys.'), res.out)
+      assert.ok(res.out.includes('Exception: the readings shown for key 01 were taken with the owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_* keys.'), res.out)
     }))
   })
 
@@ -615,6 +665,25 @@ suite('the text output — the archive warning and the exception sentence follow
     }))
   })
 
+  test('a cached row whose reading came from the usage endpoint names no key, and adds no exception sentence', async () => {
+    await sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async () => {
+      archiveAccountUsage(archived(A, 'x@example.com', NOW - 60_000, '2026-11-03T15:00:00.000Z'))
+      const probe = fakeFetch(() => reply(200, H200))
+      const res = await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      assert.strictEqual(probe.probes.count, 0)
+      assert.ok(res.out.includes('key 01  x@example.com  cached'), res.out)
+      assert.ok(!res.out.includes('Exception:'), res.out)
+    })
+  })
+
+  test('with a reading on a non-live account and none on the live one, the diagnosis names the live account', async () => {
+    await sandboxed([rosterRec(B, 'other@example.com', NOW - 2 * HOUR), rosterRec(A, 'x@example.com', NOW - HOUR)], async () => {
+      archiveAccountUsage(archived(B, 'other@example.com', NOW - 60_000, '2026-11-03T15:00:00.000Z'))
+      const res = await runCli([], { env: {}, fetchImpl: fakeFetch(() => reply(200, H200)).impl, now: NOW, liveAccountId: A })
+      assert.ok(res.out.includes('The live account has no usage reading'), res.out)
+      assert.ok(!res.out.includes('No account has a usage reading'), res.out)
+    })
+  })
   test('a key that reads nothing adds no exception sentence, and the archive warning stays the original line', async () => {
     await withoutCredentials(() => sandboxed([rosterRec(B, 'other@example.com', NOW - HOUR)], async () => {
       const reason = usageRefreshCapability().reason

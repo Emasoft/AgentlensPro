@@ -188,7 +188,7 @@ export async function maybeAutoSetup(argv: string[], deps: AutoSetupDeps = {}): 
   // AGENTLENS_NO_AUTOSETUP=1 turns the check off ENTIRELY: nothing but this env check runs — no settings read,
   // no write, no kill-switch armed. (The read-only verdict per key is `agentlenspro setup --dry-run`.)
   if (AUTOSETUP_EXCLUDED_VERBS.has(verb) || (deps.env ?? process.env).AGENTLENS_NO_AUTOSETUP === "1") return null
-  // `get_account_status --all` is a file-only read: it must never write settings/skills/hooks (owner directive 2026-10-29).
+  // `get_account_status --all` needs no server and only reads (files, plus the owner's long-lived-key probes): it must never write settings/skills/hooks (owner directive 2026-10-29).
   // Argv-aware on purpose — the singular form is NOT in READ_ONLY_VERBS and keeps its self-heal.
   if (isFileOnlyAccountStatus(argv)) return null
   // The lines are HELD, not printed (launchNotices.ts, TRDD-YL3EWT6N item 7): printed before the verb they broke the

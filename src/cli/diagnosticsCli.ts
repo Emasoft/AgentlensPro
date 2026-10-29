@@ -212,7 +212,7 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro --guard 15                            arm in a bg monitor BEFORE a fan-out; 1 line/risk transition
   agentlenspro get_burn_status                       is anything burning RIGHT NOW across all live sessions?
   agentlenspro get_account_status                    which account/plan/cache-TTL + how much 5h/7d window is left
-  agentlenspro get_account_status --all              where EVERY account stands, not just the live one — file-only: works with the server DOWN and while DISABLED (rows = what the server last captured; no refresh while disabled)
+  agentlenspro get_account_status --all              where EVERY account stands, not just the live one — no server needed: works with the server DOWN and while DISABLED (rows = what the server last captured, except accounts with a CLAUDE_CODE_LONG_OAUTH_KEY_* key, which one billed probe refreshes)
   agentlenspro get_agent_tokens --agentId abc123     EXACT tokens + $ for ONE sub-agent
   agentlenspro get_cost_rollup --groupBy project --windowHours 5    cost per project over the last 5h
   agentlenspro predict_session_cost --task "xhigh review of auth"   estimate the $ BEFORE you launch
