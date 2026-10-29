@@ -1606,4 +1606,24 @@ suite('get_account_status --all works while DISABLED — and the singular form s
     await maybeAutoSetup(['get_account_status'], { ctx: f.ctx, repair: single.repair, stderr: quiet })
     assert.deepStrictEqual(single.calls, ['skill'])
   })
+  test('normal mode (switch not armed): --all and --all --with-headroom pass the real dispatcher with exit 0', async () => {
+    disarmKillSwitch()
+    const f = s.f(); const r = recorder()
+    for (const argv of [['get_account_status', '--all'], ['get_account_status', '--all', '--with-headroom']]) {
+      const res = await capture(() => cliMain(argv, async () => undefined,
+        { launchCheck: a => maybeAutoSetup(a, { ctx: f.ctx, repair: r.repair, stderr: quiet }) }))
+      assert.strictEqual(res.code, 0, `${argv.join(' ')}: ${res.err}`)
+    }
+  })
+
+  test('the singular get_account_status still runs the launch self-heal where it would write (the exemption is --all only)', async () => {
+    disarmKillSwitch()
+    const f = s.f()
+    const skill = path.join(f.skillsDir, SKILL_NAMES[0])
+    fs.rmSync(skill, { recursive: true })
+    const r = recorder(['skill'])
+    await maybeAutoSetup(['get_account_status'], { ctx: f.ctx, repair: r.repair, stderr: quiet })
+    assert.deepStrictEqual(r.calls, ['skill'])
+    assert.ok(fs.existsSync(path.join(skill, 'SKILL.md')), 'the skill was written back')
+  })
 })

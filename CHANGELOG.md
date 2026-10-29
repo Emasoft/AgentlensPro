@@ -139,6 +139,8 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **`get_account_status --all` now answers while AgentlensPro is disabled.** The plural form only reads files (the account-state timeline and the per-account usage archive), but the off-switch gate refused it with exit 69 like the server-only verbs. It now passes the gate and skips the launch self-heal, so it never writes settings; rows do not refresh while disabled. The singular `get_account_status` still needs the server and exits 69, and its disabled notice now points to `get_account_status --all` instead of only telling the reader to re-enable. Also fixed: the dispatcher rejected `--all` as an unknown flag (exit 64) since TRDD-PIB6T4RU (TRDD-HO94JMKD).
+
 - **A failed save of the bodies-pass state file is now reported instead of silently dropped (TRDD-ZR3OGSAV).**
   `save_pass_state` discarded both the temp-file write error and the rename result, so a full disk or
   a permission error lost stranded/skip names with no trace. It now returns the error and removes a

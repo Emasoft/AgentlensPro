@@ -53,6 +53,7 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 installs the server itself; the CLI starts it on demand.
 
 If any agentlenspro command prints "agentlenspro is DISABLED", run the reactivate command it prints; do not retry the original command.
+While disabled, the file-only reads still answer without enabling: `get_account_status --all` (every account's status), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`. Server-only verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) refuse with exit 69; for account status use `get_account_status --all` instead of re-enabling.
 `server`/`daemon` restarts do not self-heal the install: run any other agentlenspro command, or `agentlenspro enable`, to repair.
 
 ## Version floor — check this FIRST if a command is "unknown"

@@ -4,7 +4,7 @@ title: get_account_status refuses to run while AgentlensPro is disabled
 column: dev
 status: tasked
 created: 2026-10-29T07:52:44+0100
-updated: 2026-10-29T07:52:57+0100
+updated: 2026-10-29T08:05:15+0100
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -15,9 +15,17 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@AgentlensPro
 approval-datetime: 2026-10-29T07:52:44+0100
+implementation-commits: [9a35bd4f]
 ---
 
 # get_account_status refuses to run while AgentlensPro is disabled
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-29
+
+- Increment 1 DONE, commit 9a35bd4f (in implementation-commits): get_account_status --all passes the disabled gate and skips the launch self-heal. Follow-ups (dispatcher tests, CHANGELOG, docs) are working-tree changes, uncommitted.
+- Side effects of --all while disabled: (a) possible copy of a newer legacy cache into ~/.agentlens/subscription-usage (archiveAccountUsage, src/subscriptionUsage.ts:502); (b) possible macOS keychain read in the diagnosis branch via loadToken when consent is stored; (c) --out FILE writes the named file.
+- Boundary: server-only verbs still refuse while disabled with exit 69 (singular get_account_status, investigate_burn, get_burn_status, budget).
+- NEXT ACTION: increment 2 (fetch the live account from the OAuth usage endpoint on --all). Note: model-headroom appears to already archive its OAuth fetch into the per-account archive (the live row read observed 11m ago after a model-headroom run) - TO BE VERIFIED. If true, the footer verdict usageRefreshCapability must learn about that path.
 
 ## Approval log
 
