@@ -4,7 +4,7 @@ title: get_account_status refuses to run while AgentlensPro is disabled
 column: dev
 status: tasked
 created: 2026-10-29T07:52:44+0100
-updated: 2026-10-29T13:30:15+0100
+updated: 2026-10-29T13:43:51+0100
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -15,18 +15,18 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@AgentlensPro
 approval-datetime: 2026-10-29T07:52:44+0100
-implementation-commits: [9a35bd4f, abbf793c, 0f9764f8, d486e1a0, 927a9fc1]
+implementation-commits: [9a35bd4f, 4ae78b7d, abbf793c, 0f9764f8, d486e1a0, 927a9fc1]
 ---
 
 # get_account_status refuses to run while AgentlensPro is disabled
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-29
 
-- Increment 1 DONE, commit 9a35bd4f (in implementation-commits): get_account_status --all passes the disabled gate and skips the launch self-heal. Follow-ups (dispatcher tests, CHANGELOG, docs) are working-tree changes, uncommitted.
+- Increment 1 DONE, commit 9a35bd4f (in implementation-commits): get_account_status --all passes the disabled gate and skips the launch self-heal. Its follow-up tests are commit 4ae78b7d.
 - Side effects of --all while disabled: (a) possible copy of a newer legacy cache into ~/.agentlens/subscription-usage (archiveAccountUsage, src/subscriptionUsage.ts:502); (b) possible macOS keychain read in the diagnosis branch via loadToken when consent is stored; (c) --out FILE writes the named file.
 - Boundary: server-only verbs still refuse while disabled with exit 69 (singular get_account_status, investigate_burn, get_burn_status, budget).
-- NEXT ACTION: variation 1 (long-lived keys + rate-limit headers) is committed as abbf793c and PROVISIONAL — keep only as fallback unless chosen; the owner asked to test variations (per-account short-lived login store, one Claude Code config dir per account) after the account-switcher mods study (reports_dev/account-mods-scan/). Live 2026-10-29: slots 01/02 refreshed + identity cross-checked, slot 03 403 oauth_not_allowed_for_organization, second run inside TTL cached with no probe.
-2026-10-29 — 927a9fc1: a long-lived key whose check failed inside the 10-minute wait shows no figures and its check age (KeyRow.checkedAt), never an old archived reading. Split out, NOT built: taking a cached row's credits state from the stamp needs a freshness guard (withinTtl(stamp.at)) and its own review.
+- NEXT ACTION: variation 1 (long-lived keys + max_tokens 0 header probe) is the built approach (abbf793c, 0f9764f8, d486e1a0, 927a9fc1). Owner actions open: slot 03 needs a key minted under an organisation that allows OAuth; whether a probe opens a 5-hour window on an idle account is unmeasured. Variation 2 (stored short-lived logins) is dead on this machine (invalid_grant); variation 3 dropped by the owner.
+2026-10-29 — 927a9fc1: a long-lived key whose check failed inside the 10-minute wait shows no figures and its check age (KeyRow.checkedAt), never an old archived reading. Split out and REJECTED after its own review (kept in git stash, message 'HO94JMKD guarded credits fallback'): taking a cached row's credits state from the key's stamp mixes two sources on one line, and a usage-endpoint record keeps its credits fact in usageCreditsEnabled, which the stamp can contradict; a cached row whose record has no overage shows credits ? instead.
 
 ## Approval log
 
