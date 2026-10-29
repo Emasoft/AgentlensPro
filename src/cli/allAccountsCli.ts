@@ -233,9 +233,8 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
     })
   const keyReading = keyRows.some(r => r.reading !== null)
   const answer = listAllAccounts({ now })
-  const keyWarn = keyRows.some(r => r.outcome === 'refreshed' || (r.outcome === 'cached' && r.reading !== null))
-    ? '\n\n⚠ rows without a long-lived key are NOT being refreshed — only the accounts that have a long-lived key are refreshed by this run'
-    : ''
+  // Whether a key refreshed or re-served a row. It decides which archive warning prints (see archiveLine).
+  const keyFedRow = keyRows.some(r => r.outcome === 'refreshed' || (r.outcome === 'cached' && r.reading !== null))
   const keyLines = keyRows.map(r => keyLine(r)).concat(loaded.invalid.map(i => 'key ' + i.slot + '  invalid  [' + i.reason + ']'))
   const keySection = keyLines.length === 0 ? '' : '\n\nLong-lived keys (CLAUDE_CODE_LONG_OAUTH_KEY_*):\n' + keyLines.join('\n')
   if (answer.blind && !keyReading) {
@@ -271,9 +270,13 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
 
   // A human needs the archive verdict as much as a program does (issue #9 §4): without it, rows that
   // can never refresh again look exactly like rows that simply have not changed.
+  // WHY ONE WARNING: the key line and this archive line both name the rows no key reaches. Printing both said the same
+  // thing twice, so when a key fed a row the key line alone prints, and it carries the archive reason.
   const archiveLine = answer.archive.maintained
     ? ''
-    : `\n\n⚠ these rows are NOT being refreshed — ${answer.archive.reason}`
+    : keyFedRow
+      ? `\n\n⚠ rows without a long-lived key are NOT being refreshed — ${answer.archive.reason}`
+      : `\n\n⚠ these rows are NOT being refreshed — ${answer.archive.reason}`
 
   const selection = wantSelection ? selectAccountsWithHeadroom(answer, { model, threshold }) : null
 
@@ -289,7 +292,9 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
     ? JSON.stringify(jsonPayload, null, 2)
     : (selection ? `${selectionText(selection)}\n\n` : '')
     + table(answer.accounts.map(row)) + keySection + '\n\n' + answer.note
-    + `\n\nReasons for every null are in --json; '*' marks the live account.${archiveLine}${keyWarn}${diagnosis}`
+      // WHY: the note says no credential is read, which is false once a key read a row. This sentence corrects it, and it is printed only when a key produced a reading.
+      + (keyReading ? ' Exception: rows marked in the Long-lived keys section were read with the owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_* keys.' : '')
+    + `\n\nReasons for every null are in --json; '*' marks the live account.${archiveLine}${diagnosis}`
 
   if (outFile) {
     fs.mkdirSync(path.dirname(path.resolve(outFile)), { recursive: true })

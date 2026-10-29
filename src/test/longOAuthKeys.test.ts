@@ -13,7 +13,8 @@ import { runAllAccountsCli, type AllAccountsDeps } from '../cli/allAccountsCli'
 import {
   loadLongOAuthKeys, matchKey, probeRateLimits, redact, usageFromHeaders, type FetchLike, type KeyIdentity,
 } from '../longOAuthKeys'
-import { archiveAccountUsage, listObservedAccountUsage, TTL_MS, type SubscriptionUsage } from '../subscriptionUsage'
+import { archiveAccountUsage, listObservedAccountUsage, TTL_MS, usageRefreshCapability, type SubscriptionUsage } from '../subscriptionUsage'
+import { KEYCHAIN_ENV } from '../keychainConsent'
 
 const SLOTS = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10']
 
@@ -507,6 +508,67 @@ suite('the --all CLI — the TTL, the flags, the unmatched and BLIND cases', () 
       assert.ok(res.err.includes('cannot see'), res.err)
       assert.strictEqual(probe.probes.count, 0)
     })
+  })
+})
+/** Run fn with no credentials file reachable and no keychain consent in the environment. The archive then reports itself
+ *  as not maintained on every machine, and usageRefreshCapability() supplies the reason the tests compare against. */
+async function withoutCredentials<R>(fn: () => Promise<R>): Promise<R> {
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'long-keys-cfg-'))
+  const prevConfig = process.env.CLAUDE_CONFIG_DIR
+  const prevKeychain = process.env[KEYCHAIN_ENV]
+  process.env.CLAUDE_CONFIG_DIR = cfg
+  delete process.env[KEYCHAIN_ENV]
+  try {
+    return await fn()
+  } finally {
+    if (prevConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = prevConfig
+    if (prevKeychain === undefined) delete process.env[KEYCHAIN_ENV]
+    else process.env[KEYCHAIN_ENV] = prevKeychain
+    fs.rmSync(cfg, { recursive: true, force: true })
+  }
+}
+suite('the text output — the archive warning and the exception sentence follow what the keys read', () => {
+  test('a refreshed key replaces the archive warning with the keyed-rows line, which carries the archive reason', async () => {
+    await withoutCredentials(() => sandboxed([rosterRec(A, 'x@example.com', NOW - HOUR)], async () => {
+      const reason = usageRefreshCapability().reason
+      assert.ok(reason !== null, 'with no credentials the archive is not maintained, so there is a reason to carry')
+      const probe = fakeFetch(() => reply(200, H200))
+      const res = await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      assert.strictEqual(res.code, 0, res.err)
+      assert.strictEqual(probe.probes.count, 1)
+      assert.ok(!res.out.includes('⚠ these rows are NOT being refreshed'), res.out)
+      assert.ok(res.out.includes('⚠ rows without a long-lived key are NOT being refreshed — ' + reason), res.out)
+      assert.ok(res.out.includes('Exception: rows marked in the Long-lived keys section were read with the owner-supplied CLAUDE_CODE_LONG_OAUTH_KEY_* keys.'), res.out)
+    }))
+  })
+
+  test('with no key the archive warning is the original line alone, and no exception sentence is added', async () => {
+    await withoutCredentials(() => sandboxed([rosterRec(A, 'x@example.com', NOW - HOUR)], async () => {
+      const reason = usageRefreshCapability().reason
+      assert.ok(reason !== null, 'with no credentials the archive is not maintained, so there is a reason to carry')
+      const probe = fakeFetch(() => reply(200, H200))
+      const res = await runCli([], { env: {}, fetchImpl: probe.impl, now: NOW })
+      assert.strictEqual(res.code, 0, res.err)
+      assert.strictEqual(probe.probes.count, 0)
+      assert.ok(res.out.includes('⚠ these rows are NOT being refreshed — ' + reason), res.out)
+      assert.ok(!res.out.includes('rows without a long-lived key'), res.out)
+      assert.ok(!res.out.includes('Exception:'), res.out)
+    }))
+  })
+
+  test('a key that reads nothing adds no exception sentence, and the archive warning stays the original line', async () => {
+    await withoutCredentials(() => sandboxed([rosterRec(B, 'other@example.com', NOW - HOUR)], async () => {
+      const reason = usageRefreshCapability().reason
+      assert.ok(reason !== null, 'with no credentials the archive is not maintained, so there is a reason to carry')
+      const probe = fakeFetch(() => reply(403, {}, FORBIDDEN_403))
+      const res = await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      assert.strictEqual(res.code, 0, res.err)
+      assert.strictEqual(probe.probes.count, 1)
+      assert.ok(res.out.includes('⚠ these rows are NOT being refreshed — ' + reason), res.out)
+      assert.ok(!res.out.includes('rows without a long-lived key'), res.out)
+      assert.ok(!res.out.includes('Exception:'), res.out)
+    }))
   })
 })
 suite('the leak test — a token never leaves through output, a file or a stamp', () => {
