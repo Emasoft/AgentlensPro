@@ -4,7 +4,7 @@ title: get_account_status refuses to run while AgentlensPro is disabled
 column: dev
 status: tasked
 created: 2026-10-29T07:52:44+0100
-updated: 2026-10-29T12:18:30+0100
+updated: 2026-10-29T13:30:15+0100
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@AgentlensPro
 approval-datetime: 2026-10-29T07:52:44+0100
-implementation-commits: [9a35bd4f]
+implementation-commits: [9a35bd4f, abbf793c, 0f9764f8, d486e1a0, 927a9fc1]
 ---
 
 # get_account_status refuses to run while AgentlensPro is disabled
@@ -26,6 +26,7 @@ implementation-commits: [9a35bd4f]
 - Side effects of --all while disabled: (a) possible copy of a newer legacy cache into ~/.agentlens/subscription-usage (archiveAccountUsage, src/subscriptionUsage.ts:502); (b) possible macOS keychain read in the diagnosis branch via loadToken when consent is stored; (c) --out FILE writes the named file.
 - Boundary: server-only verbs still refuse while disabled with exit 69 (singular get_account_status, investigate_burn, get_burn_status, budget).
 - NEXT ACTION: variation 1 (long-lived keys + rate-limit headers) is committed as abbf793c and PROVISIONAL — keep only as fallback unless chosen; the owner asked to test variations (per-account short-lived login store, one Claude Code config dir per account) after the account-switcher mods study (reports_dev/account-mods-scan/). Live 2026-10-29: slots 01/02 refreshed + identity cross-checked, slot 03 403 oauth_not_allowed_for_organization, second run inside TTL cached with no probe.
+2026-10-29 — 927a9fc1: a long-lived key whose check failed inside the 10-minute wait shows no figures and its check age (KeyRow.checkedAt), never an old archived reading. Split out, NOT built: taking a cached row's credits state from the stamp needs a freshness guard (withinTtl(stamp.at)) and its own review.
 
 ## Approval log
 
