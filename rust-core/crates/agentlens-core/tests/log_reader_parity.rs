@@ -292,6 +292,23 @@ fn only_the_boot_call_site_uses_the_boot_sweep_chunk() {
     assert_eq!(rescan.len(), 1, "{rescan:?}");
     assert!(rescan[0].contains("tailer.sweep(") && !rescan[0].contains("sweep_with_flush") && !rescan[0].contains("BOOT_SWEEP_CHUNK"), "{}", rescan[0]);
 }
+
+/// TRDD-735Q3JF4 inc 3 review: a cold first boot calls `ingest` once per SCAN_CHUNK slice, partial tail included, and ignores `flush_every` (2055 files give flushes == 2).
+#[test]
+fn cold_first_boot_flushes_once_per_scan_chunk_including_the_partial_tail() {
+    use agentlens_core::log_reader::{BOOT_SWEEP_CHUNK, SCAN_CHUNK};
+    let (home, env, _warm) = warm_tailer_with_new_files("coldflush", 2050);
+    let mut sizes: Vec<usize> = Vec::new();
+    let mut ingest = |chunk: Vec<ScannedFile>| sizes.push(chunk.len());
+    let (scanned, s) = LogTailer::default().sweep_with_flush(&env, agentlens_core::now_ms(), Some(&mut ingest), BOOT_SWEEP_CHUNK);
+    assert_eq!(s.files, 2055, "5 fixture files plus 2050 new ones");
+    assert_eq!(s.flushes, 2, "ceil(2055 / SCAN_CHUNK): a full 2000-file slice, then the 55-file tail");
+    assert_eq!(sizes.len(), 2);
+    assert!(sizes.iter().all(|n| *n <= SCAN_CHUNK));
+    assert_eq!(sizes.iter().sum::<usize>() + scanned.len(), s.parsed);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 // ── The incremental tailer (P5d) ─────────────────────────────────────────────────────────────
 
 /// A private copy of the fixture tree the test can append to.

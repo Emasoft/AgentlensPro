@@ -435,8 +435,14 @@ pub struct SweepStats {
     pub incremental_reads: u64,
     pub full_reads: u64,
     pub elapsed_ms: u128,
-    /// Number of `ingest` calls made INSIDE the sweep (incremental mid-sweep saves and the cold
-    /// path's per-chunk callback calls), excluding the caller's own final save of the remainder.
+    /// Number of `ingest` calls made INSIDE the sweep; 0 when `ingest` is None. Warm path (the
+    /// incremental branch): one call each time the pending batch reaches `flush_every` files, all
+    /// mid-sweep. The final partial batch handed back to the caller is NOT counted. Cold path
+    /// (empty `file_state`): `flush_every` is ignored; `cold_scan_chunked` calls `ingest` once per
+    /// SCAN_CHUNK slice of the discovered files, the final partial slice included, and a slice whose
+    /// files all failed to parse still gets a call (an empty batch). So the cold value is
+    /// ceil(discovered files / SCAN_CHUNK), and 0 only when nothing was discovered. The remainder
+    /// the cold path returns holds only the OpenCode DB rows and is not counted.
     pub flushes: u64,
 }
 

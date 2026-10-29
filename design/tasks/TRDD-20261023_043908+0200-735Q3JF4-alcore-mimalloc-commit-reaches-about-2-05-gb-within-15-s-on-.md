@@ -4,7 +4,7 @@ title: alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and
 column: dev
 status: tasked
 created: 2026-10-23T04:39:08+0200
-updated: 2026-10-29T06:22:04+0100
+updated: 2026-10-29T11:27:01+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-23T04:39:08+0200
-implementation-commits: [6b6d8556, 72b69eca, 53281f19, d0fb2704, 2294f718, 33ab4b6b]
+implementation-commits: [6b6d8556, 72b69eca, 53281f19, d0fb2704, 2294f718, 33ab4b6b, b21fa87c]
 ---
 
 # alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and the pressure ladder frees nothing
@@ -176,3 +176,12 @@ Candidate 1 (pattern VERIFIED by reading log_reader.rs:612-677; size INFERRED): 
 Candidate 2 (pattern VERIFIED, size INFERRED): ingest flushes only at SCAN_CHUNK=2000 files, and changed=1990 < 2000, so all parsed cards are held and ingested in one batch (consistent with, not shown to cause, the ~40 s hold at log_reader.rs:1223; per-card demote/DuckDB work under the lock is an alternative). Fix shape: flush by cumulative bytes/cards.
 Candidate 3 (INFERRED, lower): restore_reused seed_written per-card clone+serialize and the 54935-entry offsets map.
 Order of runs, after the same-binary log-scan-off control (STATE NEXT ACTION): one variable each — (a) streaming read_lines_from, (b) SCAN_CHUNK=200, (c) a commit/free-in-page probe right after restore vs after the sweep. Not run yet: host load was ~86 on 14 cores.
+
+## Increment 3 result
+
+(a) Revision 3 committed as b21fa87c: the warm boot sweep saves every 200 changed files; the 60 s re-scan and the cold first boot keep SCAN_CHUNK.
+(b) Test boot: 11 saves, longest save-step lock hold 2,710 ms, restore hold 5,629 ms, at 1-minute load 27.7 against a target of 6 or below. This is a single pass/fail on the save-step bar (3.5 s), not a load-controlled A/B.
+(c) The 60 s re-scan is unchanged by code and a test (plain sweep keeps SCAN_CHUNK), not by measurement.
+(d) A warm boot with a large backlog (20k-50k changed files) is unmeasured; it is the first place to look if a slow boot is reported.
+(e) Cold first boot (empty file_state): flushes counts one ingest call per 2,000 discovered files, the last partial slice included, so it is ceil(files / 2,000); it is not the warm mid-sweep save count, and the 200-file batch size does not apply to it.
+(f) The card stays open: steady memory is about 1.16 GB against a target of about 800 MB.
