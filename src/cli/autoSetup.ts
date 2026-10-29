@@ -36,7 +36,7 @@ import * as path from "path"
 import { AGENT_NAMES, SKILL_NAMES, resolveOnPath, skillFiles, skillTreeHash } from "./hookInstall"
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
-import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, killSwitchArmedForForeign } from "./foreignTelemetry"
+import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, isFileOnlyAccountStatus, killSwitchArmedForForeign } from "./foreignTelemetry"
 import { agentlensDisabled, overrideKillSwitchEnv } from "./killSwitch"
 import { pushNotice } from "./launchNotices"
 import { SurfaceDirs, enableAgentlensSurfaces } from "./surfaces"
@@ -188,6 +188,9 @@ export async function maybeAutoSetup(argv: string[], deps: AutoSetupDeps = {}): 
   // AGENTLENS_NO_AUTOSETUP=1 turns the check off ENTIRELY: nothing but this env check runs — no settings read,
   // no write, no kill-switch armed. (The read-only verdict per key is `agentlenspro setup --dry-run`.)
   if (AUTOSETUP_EXCLUDED_VERBS.has(verb) || (deps.env ?? process.env).AGENTLENS_NO_AUTOSETUP === "1") return null
+  // `get_account_status --all` is a file-only read: it must never write settings/skills/hooks (owner directive 2026-10-29).
+  // Argv-aware on purpose — the singular form is NOT in READ_ONLY_VERBS and keeps its self-heal.
+  if (isFileOnlyAccountStatus(argv)) return null
   // The lines are HELD, not printed (launchNotices.ts, TRDD-YL3EWT6N item 7): printed before the verb they broke the
   // exit-2 contract — a refused tool call must leave exactly one JSON object on stderr. cliMain prints them, or a
   // refusal folds them into its JSON. An injected `stderr` (the tests) still receives them directly.

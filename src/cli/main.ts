@@ -29,7 +29,7 @@ import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
 import { autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
-import { disabledNotice } from './foreignTelemetry'
+import { disabledNotice, isFileOnlyAccountStatus } from './foreignTelemetry'
 import { beginLaunchNotices, endLaunchNotices, flushNoticesToStderr } from './launchNotices'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
@@ -168,7 +168,8 @@ export const DISPATCHED_VERBS: ReadonlySet<string> = new Set([
 /** Does this invocation go to the diagnostics surface (runDiagnosticsCli) — the only place a tool can refuse? */
 function reachesDiagnosticsSurface(cmd: string | undefined, argv: string[]): boolean {
   if (cmd === undefined) return false // the bare foreground server
-  if (cmd === 'get_account_status') return !argv.includes('--all') // only the plural form is file-backed
+  // only the plural form is file-backed; a read must never be blocked by the brake or write settings (owner directive 2026-10-29)
+  if (cmd === 'get_account_status') return !isFileOnlyAccountStatus(argv)
   return !DISPATCHED_VERBS.has(cmd)
 }
 
@@ -313,7 +314,7 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
       // deciding what to do about a wedged machine — where proxying to a server that may itself be
       // down turns the one useful answer into "cannot reach localhost:4316". The singular form still
       // goes over the wire: it needs the live session accessors, which only the server has.
-      if (argv.includes('--all')) return runAllAccountsCli(argv.slice(1))
+      if (isFileOnlyAccountStatus(argv)) return runAllAccountsCli(argv.slice(1))
       // Not `--all`: fall through to the diagnostics surface, which proxies it to the server.
       await (deps.diagnostics ?? runDiagnosticsCli)(argv)
       return 0

@@ -13,9 +13,9 @@ import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, autoSetup
 import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runEnableCli } from '../cli/disableCli'
-import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
+import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, isFileOnlyAccountStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
 import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
-import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
+import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
 import { DISPATCHED_VERBS, HOT_PATH_BUDGET_MS, cliMain } from '../cli/main'
 import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
@@ -1512,5 +1512,98 @@ suite('setup --json: one untruncated document, same exit codes, nothing mutated'
     assert.strictEqual(row.wouldWrite, '1')
     assert.ok(r.doc.hookDrift.some(d => /timeout 30 → 120/.test(d.problem)), JSON.stringify(r.doc.hookDrift))
     assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), before)
+  })
+})
+
+// ── `get_account_status --all` while DISABLED (TRDD-HO94JMKD, owner directive 2026-10-29) ───────────────────────
+// "are you saying that in reduced mode you cannot determine the accounts status?? this is bad. fix this."
+// The plural form only reads files, so neither the off-switch brake nor the launch self-heal may touch it.
+suite('get_account_status --all works while DISABLED — and the singular form still refuses', () => {
+  const s = fixtureSuite(true)
+  let savedLog: string | undefined
+  setup(() => {
+    savedLog = process.env.AGENTLENS_ACCOUNT_STATE_LOG
+    const f = s.f()
+    const tl = path.join(f.dataDir, 'account-state.ndjson')
+    fs.writeFileSync(tl, JSON.stringify({
+      ts: Date.now() - 3_600_000, accountId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', email: 'roster-row@x',
+      mode: 'subscription (within plan)', plan: 'Max 20x', authRegime: 'subscription', ttlMinutes: 60, ttlSource: 'doc-matrix',
+    }) + '\n')
+    process.env.AGENTLENS_ACCOUNT_STATE_LOG = tl
+    armKillSwitch('operator reason')
+  })
+  teardown(() => {
+    if (savedLog === undefined) delete process.env.AGENTLENS_ACCOUNT_STATE_LOG; else process.env.AGENTLENS_ACCOUNT_STATE_LOG = savedLog
+  })
+
+  /** every file under dir -> content digest, so "byte-identical" is a real comparison */
+  function digest(dir: string): Record<string, string> {
+    const out: Record<string, string> = {}
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else out[p] = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')
+      }
+    }
+    walk(dir)
+    return out
+  }
+  async function capture(fn: () => Promise<number>): Promise<{ code: number; out: string; err: string }> {
+    const out: string[] = []; const err: string[] = []
+    const rl = console.log; const re = console.error
+    console.log = (...a: unknown[]): void => { out.push(a.join(' ')) }
+    console.error = (...a: unknown[]): void => { err.push(a.join(' ')) }
+    try { const code = await fn(); return { code, out: out.join('\n'), err: err.join('\n') } } finally { console.log = rl; console.error = re }
+  }
+
+  test('the predicate: only the plural form, --all in any position', () => {
+    assert.strictEqual(isFileOnlyAccountStatus(['get_account_status', '--all']), true)
+    // main.ts has always matched `--all` anywhere in argv; kept identical so dispatch and gate cannot disagree.
+    assert.strictEqual(isFileOnlyAccountStatus(['get_account_status', '--out', 'x', '--all']), true)
+    assert.strictEqual(isFileOnlyAccountStatus(['get_account_status']), false)
+    assert.strictEqual(isFileOnlyAccountStatus(['budget', '--all']), false)
+    assert.strictEqual(isFileOnlyAccountStatus([]), false)
+  })
+
+  test('armed the production way (killSwitchHalf), --all answers: exit 0 and a roster row', async () => {
+    const f = s.f(); const r = recorder()
+    assert.strictEqual(killSwitchHalf(), 'file', 'precondition: the switch is armed')
+    const res = await capture(() => cliMain(['get_account_status', '--all'], async () => undefined,
+      { launchCheck: argv => maybeAutoSetup(argv, { ctx: f.ctx, repair: r.repair, stderr: quiet }) }))
+    assert.strictEqual(res.code, 0, res.err)
+    assert.ok(res.out.includes('roster-row@x'), res.out)
+  })
+
+  test('the singular form stays refused (69) and its notice points at --all', async () => {
+    const f = s.f(); const r = recorder()
+    const res = await capture(() => cliMain(['get_account_status'], async () => undefined,
+      { launchCheck: argv => maybeAutoSetup(argv, { ctx: f.ctx, repair: r.repair, stderr: quiet }) }))
+    assert.strictEqual(res.code, EXIT.DISABLED)
+    assert.ok(res.err.includes('get_account_status --all'), res.err)
+    assert.ok(!res.err.includes('Do not retry the original command'), 'the generic retry ban would contradict the pointer')
+  })
+
+  test('self-heal: a non-exempt verb restores a missing skill; --all leaves HOME/.claude byte-identical', async () => {
+    // The self-heal itself is off while the switch is armed (ensureInstalled), so disarm to exercise the exemption.
+    disarmKillSwitch()
+    const f = s.f()
+    const skill = path.join(f.skillsDir, SKILL_NAMES[0])
+    fs.rmSync(skill, { recursive: true })
+    // control: the same drift IS repaired for an ordinary verb (so the --all assertion below can fail)
+    const control = recorder(['skill'])
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: control.repair, stderr: quiet })
+    assert.deepStrictEqual(control.calls, ['skill'])
+    assert.ok(fs.existsSync(path.join(skill, 'SKILL.md')), 'control: the skill was written back')
+    fs.rmSync(skill, { recursive: true })
+    const before = digest(path.join(f.home, '.claude'))
+    const r = recorder(['skill'])
+    assert.strictEqual(await maybeAutoSetup(['get_account_status', '--all'], { ctx: f.ctx, repair: r.repair, stderr: quiet }), null)
+    assert.deepStrictEqual(r.calls, [], 'no repair step ran')
+    assert.deepStrictEqual(digest(path.join(f.home, '.claude')), before)
+    // and the singular form keeps its self-heal
+    const single = recorder()
+    await maybeAutoSetup(['get_account_status'], { ctx: f.ctx, repair: single.repair, stderr: quiet })
+    assert.deepStrictEqual(single.calls, ['skill'])
   })
 })

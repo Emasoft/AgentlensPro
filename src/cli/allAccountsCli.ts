@@ -19,7 +19,8 @@ import { loadToken } from '../subscriptionUsage'
 import { EXIT as CLI_EXIT } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
 
-const KNOWN_FLAGS = new Set(['--help', '-h', '--out', '--model', '--threshold', '--with-headroom', '--json'])
+// '--all' is the dispatcher's own selector (main.ts passes argv.slice(1), which still carries it): unlisted, the verb rejected its own invocation as an unknown flag.
+const KNOWN_FLAGS = new Set(['--all', '--help', '-h', '--out', '--model', '--threshold', '--with-headroom', '--json'])
 const VALUED_FLAGS = new Set(['--out', '--model', '--threshold'])
 
 export const ALL_ACCOUNTS_USAGE = `agentlenspro get_account_status --all [flags]
@@ -53,6 +54,9 @@ flags:
 
 With --json the rotation queries ADD a 'selection' block (which also names the live account) to
 the unchanged full answer, so existing consumers of --all --json keep working.
+
+Works while AgentlensPro is DISABLED (kill-switch or AGENTLENS_DISABLED=1), with no server and no setup repair.
+While disabled the rows are what the server LAST captured — they do not refresh until it runs again.
 
 exit: 0 = answered (including an honest "none-with-headroom") · 2 = BLIND (no account ever
 observed — "cannot see", NOT "no accounts") · 64 = bad command line`

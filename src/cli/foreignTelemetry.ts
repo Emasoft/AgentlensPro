@@ -36,6 +36,16 @@ export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "c
 
 const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", "setup", "server", "daemon"])
 
+/** `get_account_status --all` — the PLURAL form, assembled entirely from files (account-state timeline + per-account
+ *  usage archive; main.ts case get_account_status). ONE rule shared by the dispatcher (no server proxy), the
+ *  disabled gate and the launch self-heal. WHY: a read must never be blocked by the off-switch brake nor trigger
+ *  writes to user config — owner directive 2026-10-29: "are you saying that in reduced mode you cannot determine the
+ *  accounts status?? this is bad. fix this." The singular form needs the server and is NOT covered. Any position of
+ *  `--all` counts (same rule main.ts always applied). */
+export function isFileOnlyAccountStatus(argv: string[]): boolean {
+  return argv[0] === "get_account_status" && argv.includes("--all")
+}
+
 /** Is the kill-switch armed, and for THIS reason? (A missing/unreadable flag reads as no.) */
 export function killSwitchArmedForForeign(): boolean {
   try { return fs.readFileSync(killSwitchPath(), "utf8").includes(`Reason: ${FOREIGN_REASON}`) } catch { return false }
@@ -66,6 +76,8 @@ export function disabledNotice(argv: string[]): { text: string; code: number } |
   const verb = argv[0] ?? ""
   // Checked BEFORE the kill-switch stat: statusline runs on every Claude render and must cost nothing here.
   if (HOOK_PATH_VERBS.has(verb) || READ_ONLY_VERBS.has(verb) || DISABLED_PASSTHROUGH.has(verb)) return null
+  // File-only read: the brake must not block it (owner directive 2026-10-29, see isFileOnlyAccountStatus).
+  if (isFileOnlyAccountStatus(argv)) return null
   const half = killSwitchHalf()
   if (half === null) return null
   const reason = recordedReason()
@@ -82,6 +94,11 @@ export function disabledNotice(argv: string[]): { text: string; code: number } |
     lines.push(`Reason: ${reason ?? "no reason recorded"} (armed with \`agentlenspro disable\`).`)
     lines.push("To reactivate: agentlenspro enable")
   }
-  lines.push("Do not retry the original command; run the reactivation command above first.")
+  if (verb === "get_account_status") {
+    // The singular form needs the live server; the plural answers from files, so point at it (owner directive 2026-10-29).
+    lines.push("Every account's status is available WITHOUT enabling: agentlenspro get_account_status --all (the singular form needs the server).")
+  } else {
+    lines.push("Do not retry the original command; run the reactivation command above first.")
+  }
   return { text: lines.join("\n"), code: EXIT.DISABLED }
 }
