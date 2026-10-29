@@ -47,10 +47,12 @@ export interface LongKey { slot: string; email: string; token: string }
 export interface InvalidKey { slot: string; reason: string }
 export interface LoadedKeys { keys: LongKey[]; invalid: InvalidKey[] }
 
-/** refreshed: a new reading was filed under its account. cached: a stamp or an archive record is inside the TTL,
- *  so nothing was sent. failed: the probe returned no rate-limit headers (a 401, a 403, a timeout, an error).
- *  unmatched: a reading for an account that is in neither the archive nor the roster; it is kept in the stamp
- *  only. refused: the identity could not be trusted, so nothing was filed. skipped: --no-refresh. */
+/** refreshed: a new reading was filed under its account. cached: nothing was sent, because an archive record is inside the TTL
+ *  and no failed or refused stamp is, or because an unmatched stamp inside the TTL holds the reading. failed: the probe returned
+ *  no rate-limit headers (a 401, a 403, a timeout, an error); a stamp inside the TTL that recorded it is replayed with no
+ *  reading, even when the archive holds a fresh record. unmatched: a reading for an account that is in neither the archive nor
+ *  the roster; it is kept in the stamp only. refused: the identity could not be trusted, so nothing was filed; a stamp inside
+ *  the TTL that recorded it is replayed. skipped: --no-refresh. */
 export type KeyOutcome = 'refreshed' | 'cached' | 'failed' | 'unmatched' | 'refused' | 'skipped'
 /** How the key's account was identified. cross-checked: the 7-day reset agreed with the archived account.
  *  claimed: the archive had no live 7-day window to compare, so the email match stands alone. not-checked: there
@@ -67,6 +69,8 @@ export interface KeyRow {
   /** The reading this row reports: the archived record for a matched account, the stamped one for an unmatched
    *  account, and null when there is none. */
   reading: SubscriptionUsage | null
+  /** Set only on a row replayed from a stamp: the ISO 8601 instant of the check that the row replays. */
+  checkedAt?: string
 }
 export interface ProbeResult {
   httpStatus: number | null
@@ -378,14 +382,35 @@ async function settle(key: LongKey, match: Match, opts: RefreshOptions): Promise
     // nothing can file.
     return record({ ...base, accountId: null, outcome: 'refused', identity: 'refused', httpStatus: null, reason: match.reason, overage: null, reading: null }, null, null)
   }
-  if (withinTtl(archived?.fetchedAt, opts.now) || withinTtl(stamp?.at, opts.now)) {
-    // Nothing is sent and nothing is rewritten. The stamp keeps its original instant, so the TTL really runs out.
-    const reading = archived ?? stamp?.reading ?? null
+  // Nothing is sent and nothing is rewritten inside the TTL. The stamp keeps its original instant, so the TTL really runs out.
+  // WHY a stamp of a failed or refused check is read before the archive: a fresh archive from another source (model-headroom,
+  // the live account) must not make a key whose own check failed read as cached. An outcome this code does not know fails
+  // closed, as a failure, never as a cached reading.
+  if (stamp && withinTtl(stamp.at, opts.now) && stamp.outcome !== 'refreshed' && stamp.outcome !== 'unmatched') {
     return {
-      ...base, outcome: 'cached', identity: stamp?.identity ?? 'not-checked', httpStatus: stamp?.httpStatus ?? null,
-      reason: stamp?.reason ?? null, overage: reading?.overage ?? null, reading,
+      ...base, outcome: stamp.outcome === 'refused' ? 'refused' : 'failed', identity: stamp.identity,
+      httpStatus: stamp.httpStatus, reason: stamp.reason, overage: null, reading: null,
+      checkedAt: new Date(stamp.at).toISOString(),
     }
   }
+  // WHY the archive and the stamp are read separately: a failed check must never borrow an old archived record as its
+  // reading, or a key that cannot be read shows weeks-old numbers as if they were its current reading. The archive is the
+  // reading only while it is itself inside the TTL.
+  if (archived && withinTtl(archived.fetchedAt, opts.now)) {
+    return {
+      ...base, outcome: 'cached', identity: stamp?.identity ?? 'not-checked', httpStatus: stamp?.httpStatus ?? null,
+      reason: stamp?.reason ?? null, overage: archived.overage ?? null, reading: archived,
+    }
+  }
+  // An unmatched account has no archive record, so its stamp is the only home of its reading.
+  if (stamp && withinTtl(stamp.at, opts.now) && stamp.outcome === 'unmatched') {
+    return {
+      ...base, outcome: 'cached', identity: stamp.identity, httpStatus: stamp.httpStatus, reason: stamp.reason,
+      overage: stamp.overage, reading: stamp.reading ?? null, checkedAt: new Date(stamp.at).toISOString(),
+    }
+  }
+  // A 'refreshed' stamp whose archive record is outside the TTL falls through to a new probe: a 'refreshed' stamp stores no
+  // reading (the reading went to the archive), so there is nothing to replay.
   const probe = await probeRateLimits(key.token, opts.fetchImpl, opts.userAgentValue)
   // WHY the gate is the presence of the headers and not the status: a 200 and a 429 both carry them, and a 429 is the
   // server saying the window is full, which is the reading itself. A 401, a 403, a timeout or a 200 without headers

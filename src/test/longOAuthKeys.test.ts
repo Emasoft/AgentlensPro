@@ -11,7 +11,7 @@ import * as path from 'path'
 import type { AccountRosterEntry, AccountStateRecord } from '../accountStateTimeline'
 import { runAllAccountsCli, type AllAccountsDeps } from '../cli/allAccountsCli'
 import {
-  loadLongOAuthKeys, matchKey, probeRateLimits, redact, usageFromHeaders, type FetchLike, type KeyIdentity,
+  loadLongOAuthKeys, matchKey, probeRateLimits, redact, refreshLongKeys, usageFromHeaders, type FetchLike, type KeyIdentity,
 } from '../longOAuthKeys'
 import { archiveAccountUsage, listObservedAccountUsage, TTL_MS, usageRefreshCapability, type SubscriptionUsage } from '../subscriptionUsage'
 import { KEYCHAIN_ENV } from '../keychainConsent'
@@ -419,6 +419,10 @@ suite('the --all CLI — the reading, its identity, and the refusals', () => {
     })
   })
 })
+/** The rows refreshLongKeys settles for the slot-01 key, so a test can read a row's reading and checkedAt directly. */
+function settleKey(dir: string, fetchImpl: FetchLike, now: number) {
+  return refreshLongKeys(loadLongOAuthKeys(KEY_01).keys, { fetchImpl, now, stampDir: path.join(dir, 'long-key-probes'), userAgentValue: 'test' })
+}
 suite('the --all CLI — the TTL, the flags, the unmatched and BLIND cases', () => {
   test('a 403 files nothing and is stamped, and the next run inside the TTL sends nothing and shows the same reason', async () => {
     await sandboxed([rosterRec(B, 'other@example.com', NOW - HOUR)], async dir => {
@@ -431,8 +435,9 @@ suite('the --all CLI — the TTL, the flags, the unmatched and BLIND cases', () 
       assert.strictEqual(listObservedAccountUsage().length, 0, 'a failed probe files nothing')
       const second = JSON.parse((await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: NOW })).out)
       assert.strictEqual(probe.probes.count, 1, 'inside the TTL nothing is sent')
-      assert.strictEqual(second.longKeys[0].outcome, 'cached')
+      assert.strictEqual(second.longKeys[0].outcome, 'failed')
       assert.strictEqual(second.longKeys[0].reason, 'HTTP 403 oauth_not_allowed_for_organization')
+      assert.strictEqual(second.longKeys[0].checkedAt, new Date(NOW).toISOString())
     })
   })
 
@@ -454,6 +459,57 @@ suite('the --all CLI — the TTL, the flags, the unmatched and BLIND cases', () 
       const res = await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
       assert.strictEqual(probe.probes.count, 0)
       assert.strictEqual(JSON.parse(res.out).longKeys[0].outcome, 'cached')
+    })
+  })
+
+  test('a 403 stamped inside the TTL shows its failure with dashes, never the archived reading from 26 days earlier', async () => {
+    await sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async dir => {
+      archiveAccountUsage(archived(A, 'x@example.com', NOW - 26 * 24 * HOUR, '2026-11-03T15:00:00.000Z'))
+      const probe = fakeFetch(() => reply(403, {}, FORBIDDEN_403))
+      await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      const text = await runCli([], { env: KEY_01, fetchImpl: probe.impl, now: NOW + 2 * 60_000 })
+      assert.strictEqual(probe.probes.count, 1, 'inside the TTL nothing is sent')
+      assert.ok(text.out.includes('key 01  x@example.com  failed  5h -  7d -  Fable -  credits ?  identity not-checked  [HTTP 403 oauth_not_allowed_for_organization]  (checked 2m ago; next check allowed in 8m)'), text.out)
+      const json = JSON.parse((await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: NOW + 2 * 60_000 })).out).longKeys[0]
+      assert.strictEqual(json.outcome, 'failed')
+      assert.strictEqual(json.windows, undefined, 'a replayed failure carries no windows, so it has no reading')
+      const [row] = await settleKey(dir, probe.impl, NOW + 2 * 60_000)
+      assert.strictEqual(row.reading, null)
+    })
+  })
+
+  test('a failed 403 stamped inside the TTL beats a fresh archived record: the next run replays it with no reading and sends nothing', async () => {
+    await sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async dir => {
+      const probe = fakeFetch(() => reply(403, {}, FORBIDDEN_403))
+      await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      archiveAccountUsage(archived(A, 'x@example.com', NOW + 30_000, '2026-11-03T15:00:00.000Z'))
+      const [row] = await settleKey(dir, probe.impl, NOW + 60_000)
+      assert.strictEqual(probe.probes.count, 1, 'inside the TTL nothing is sent')
+      assert.strictEqual(row.outcome, 'failed')
+      assert.strictEqual(row.reading, null)
+    })
+  })
+
+  test('a refusal stamped inside the TTL is replayed as refused with the instant of its check, and sends nothing', async () => {
+    await sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async dir => {
+      archiveAccountUsage(archived(A, 'x@example.com', NOW - HOUR, '2026-11-10T15:00:00.000Z'))
+      const probe = fakeFetch(() => reply(200, H200))
+      await runCli(['--json'], { env: KEY_01, fetchImpl: probe.impl, now: NOW })
+      const [row] = await settleKey(dir, probe.impl, NOW + 60_000)
+      assert.strictEqual(probe.probes.count, 1, 'inside the TTL nothing is sent')
+      assert.strictEqual(row.outcome, 'refused')
+      assert.strictEqual(row.checkedAt, new Date(NOW).toISOString())
+    })
+  })
+
+  test('a refreshed stamp inside the TTL does not replay an archive record older than the TTL: the key is probed again', async () => {
+    await sandboxed([rosterRec(A, 'x@example.com', NOW - 2 * HOUR)], async dir => {
+      const probe = fakeFetch(() => reply(200, H200))
+      const [first] = await settleKey(dir, probe.impl, NOW)
+      assert.strictEqual(first.outcome, 'refreshed')
+      archiveAccountUsage(archived(A, 'x@example.com', NOW - HOUR, '2026-11-03T15:00:00.000Z'))
+      await settleKey(dir, probe.impl, NOW + 60_000)
+      assert.strictEqual(probe.probes.count, 2, 'the stamp holds no reading, and the archive record is outside the TTL')
     })
   })
 

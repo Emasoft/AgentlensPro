@@ -15,7 +15,7 @@ import {
   listAllAccounts, selectAccountsWithHeadroom,
   type AccountStatusRow, type AccountWindow, type HeadroomSelection,
 } from '../allAccounts'
-import { loadToken, userAgent, type SubscriptionUsage, type UsageLimit } from '../subscriptionUsage'
+import { loadToken, userAgent, TTL_MS, type SubscriptionUsage, type UsageLimit } from '../subscriptionUsage'
 import { dataPath } from '../dataDir'
 import {
   loadLongOAuthKeys, refreshLongKeys, skippedRows, type FetchLike, type KeyRow, type LoadedKeys,
@@ -164,8 +164,13 @@ function creditsCell(o: SubscriptionUsage['overage']): string {
   return 'off (' + (o.disabledReason ?? 'no reason given') + ')'
 }
 
-/** One long-lived key as a text line: its outcome, its three windows, credits, identity and, when there is one, why. */
-function keyLine(r: KeyRow): string {
+/** One long-lived key as a text line: its outcome, its three windows, credits, identity and, when there is one, why. A row
+ *  replayed from a stamp also says when it was checked and when the next check is allowed. */
+function keyLine(r: KeyRow, now: number): string {
+  // The age and the wait are computed from this run's clock, so a replayed row reads them at the moment of this run.
+  const at = r.checkedAt === undefined ? null : Date.parse(r.checkedAt)
+  const checked = at === null ? '' : '  (checked ' + Math.floor((now - at) / 60_000) + 'm ago; next check allowed in '
+    + Math.max(0, Math.ceil((at + TTL_MS - now) / 60_000)) + 'm)'
   return 'key ' + r.slot + '  ' + r.email + '  ' + r.outcome
     + '  5h ' + keyCell(r.reading, l => l.kind === 'session')
     + '  7d ' + keyCell(r.reading, l => l.kind === 'weekly_all')
@@ -173,6 +178,7 @@ function keyLine(r: KeyRow): string {
     + '  credits ' + creditsCell(r.overage)
     + '  identity ' + r.identity
     + (r.reason === null ? '' : '  [' + r.reason + ']')
+    + checked
 }
 
 /** The windows of an UNMATCHED reading, for --json. Its account is unknown, so these numbers carry no account name. */
@@ -195,6 +201,7 @@ function keyJson(r: KeyRow): Record<string, unknown> {
   return {
     slot: r.slot, email: r.email, accountId: r.accountId, outcome: r.outcome, identity: r.identity,
     httpStatus: r.httpStatus, reason: r.reason, overage: r.overage,
+    checkedAt: r.checkedAt,
     ...(r.outcome === 'unmatched' && r.reading !== null ? { windows: windowsOf(r.reading) } : {}),
   }
 }
@@ -235,7 +242,7 @@ export async function runAllAccountsCli(argv: string[], deps: AllAccountsDeps = 
   const answer = listAllAccounts({ now })
   // Whether a key refreshed or re-served a row. It decides which archive warning prints (see archiveLine).
   const keyFedRow = keyRows.some(r => r.outcome === 'refreshed' || (r.outcome === 'cached' && r.reading !== null))
-  const keyLines = keyRows.map(r => keyLine(r)).concat(loaded.invalid.map(i => 'key ' + i.slot + '  invalid  [' + i.reason + ']'))
+  const keyLines = keyRows.map(r => keyLine(r, now)).concat(loaded.invalid.map(i => 'key ' + i.slot + '  invalid  [' + i.reason + ']'))
   const keySection = keyLines.length === 0 ? '' : '\n\nLong-lived keys (CLAUDE_CODE_LONG_OAUTH_KEY_*):\n' + keyLines.join('\n')
   if (answer.blind && !keyReading) {
     console.error('BLIND: no account has ever been observed on this machine.\n'
