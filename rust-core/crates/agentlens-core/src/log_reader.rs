@@ -185,9 +185,10 @@ pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
 /// Boot churn alone crossed the 2048 MB phys_footprint cap (R0a: boot-phase peak 2539 MB with
 /// ZERO bodies passes; 93 of 238 kills boot-phase) because the scan collected every parsed
 /// file's cards in one Vec before the caller ingested — ~26k transcripts is the whole corpus
-/// resident at once. Each full chunk is handed to `flush` (the boot site ingests + drops it
-/// under a short state lock) and only the final partial chunk is returned, so the scan's own
-/// peak is one chunk, not the corpus. `states` carries the (path, offset) of EVERY parsed file
+/// resident at once. Every SCAN_CHUNK slice, the final partial one included, is handed to
+/// `flush` (the boot site ingests + drops it under a short state lock). The returned remainder
+/// holds only the OpenCode DB rows, so the scan's own peak is one chunk, not the corpus.
+/// `states` carries the (path, offset) of EVERY parsed file
 /// — flushed or not — because the caller seeds its change gate from them; dropping a flushed
 /// file's state would make the next sweep re-parse the whole corpus.
 /// Returns (unflushed remainder, stats, all parsed files' states).
@@ -1599,7 +1600,8 @@ pub fn start_sweeper(
             // event instead of waiting for the backstop (its stat gate makes a double-visit free).
             let (_watcher, watch_attached, watch_failed) = attach_watchers(&env, tx.clone());
             // TRDD-2JOIAH2G R5: the boot sweep ingests each SCAN_CHUNK under a short state lock
-            // and drops it — the only residual is the final partial chunk. TRDD-A2KNXCNH: every
+            // and drops it. On a warm boot the residual is the final partial batch; on a cold boot it is
+            // only the OpenCode DB rows. TRDD-A2KNXCNH: every
             // chunk goes through `ingest_chunk`, which puts its cards, marks both sidecars dirty
             // and THEN appends that chunk's read positions — a boot sweep killed partway resumes
             // from the last persisted chunk instead of re-reading the whole corpus.
