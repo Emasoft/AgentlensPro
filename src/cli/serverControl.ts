@@ -705,7 +705,7 @@ export function stateSaveFailLine(
   // timestamp must say so: `now - 0` would render as a failure about 57 years ago.
   const at = bodies.lastStateSaveFailAt
   const when = at ? `last failure ${Math.max(1, Math.round((now - at) / 60000))}m ago` : 'last failure time not reported'
-  return `save:   ${fails} consecutive failed .pass-state.json save(s), ${when} — pass state is not being persisted`
+  return `save:   ${fails} consecutive failed .pass-state.json save(s), ${when} — the last save failed; the pass state on disk is stale`
 }
 
 interface ServerStats {

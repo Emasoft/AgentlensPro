@@ -99,4 +99,14 @@ suite('stateSaveFailLine — failed pass-state saves (TRDD-LDWBRV9B)', () => {
   test('an older server that omits both fields prints nothing', () => {
     assert.strictEqual(stateSaveFailLine({}, NOW), null)
   })
+  test('a failure count with no usable timestamp reports the time as not reported, never as an age', () => {
+    // lastStateSaveFailAt 0 means never, and an older server omits it; either way now - 0 must not
+    // render as a failure about 57 years ago.
+    const zero = stateSaveFailLine({ stateSaveFails: 2, lastStateSaveFailAt: 0 }, NOW)
+    assert.ok(zero !== null, 'a failing pass state must print a line')
+    assert.ok(/last failure time not reported/.test(zero), zero)
+    const absent = stateSaveFailLine({ stateSaveFails: 2 }, NOW)
+    assert.ok(absent !== null, 'a failing pass state must print a line')
+    assert.ok(/last failure time not reported/.test(absent), absent)
+  })
 })
