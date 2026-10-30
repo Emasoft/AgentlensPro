@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: blocked
 created: 2026-09-02T22:05:41+0200
-updated: 2026-10-27T13:41:58+0100
+updated: 2026-10-30T02:40:56+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -105,6 +105,7 @@ for the USER to ratify as a golden rule (the USER owns golden rules).
   in the first minute alone.
 - Per-structure byte attribution is being measured right now
   (TRDD-768NEX6E box 4; report will land under `reports/trdd-768nex6e/`).
+OWNER DIRECTIVE RE-ISSUED 2026-10-30 (verbatim): *"it should not hit the memory limit. it should digest all data via duckdb at very high speed without allocating nothing. all must be handled by duckdb. duckdb will digest and save to disk. nothing will stay in memory. this is the task i gave you but you failed it. so we stopped agentlenspro since it is too slow now."*
 
 ## PRINCIPLE
 
