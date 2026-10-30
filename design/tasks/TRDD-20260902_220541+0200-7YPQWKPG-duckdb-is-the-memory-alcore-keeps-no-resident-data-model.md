@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: blocked
 created: 2026-09-02T22:05:41+0200
-updated: 2026-10-30T03:02:20+0100
+updated: 2026-10-30T03:28:41+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -21,7 +21,9 @@ blocker-probe: [trddgrep, why, 7YPQWKPG]
 blocker-holds-if: not-match:READY
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-06T04:42:39+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-30T03:28:41+0100
+
+**2026-10-30 — CURRENT (supersedes everything below in this block and the 2026-09-02 history further down).** The owner re-issued this card's directive on 2026-10-30 and ruled on the memory budget and the dashboard (all three quoted verbatim under WHY). PLAN v3 (the section `PLAN v3` at the end of this card) replaces the earlier phase lists; once approved, its Acceptance F becomes the checkboxes under `## ACCEPTANCE` and the current boxes there are void. Status: PROPOSED, reviewed twice; code steps wait for owner approval. Measurement under way: step S (DuckDB bound spike) and step A arms a to d (default warm, no log scan, bodies moved out, cold); the large-backlog and patched-build arms of step A are not run yet. The card stays `blocked` (7RM5YW2T, FSMISF5K) until the owner rules on those blockers. NEXT ACTION: read the S and A reports; when the owner approves PLAN v3 and rules on the blockers, cut branch feat/duckdb-is-the-memory from fix/setup-agent-preflight and do step 1.
 
 **RE-ISSUED BY THE USER 2026-09-05 22:00 and moved `todo → dev`.** Verbatim: *"why the hell alcore
 is using 17Gb of ram??? haven't i told you to make duckdb the only memory of agentlenspro? why there
@@ -181,7 +183,7 @@ Known resident structures (rust-core/crates/agentlens-core/src/):
 - No rewrite of ingestion sources (OTLP collector, log readers stay as-is).
 - No new MCP server.
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-02
+## STATE HISTORY — 2026-09-02 (superseded; not authoritative)
 
 EVIDENCE (768NEX6E box 4, 2026-09-02): bounded resident structures (335k-span
 window as `Arc<Value>`, 27,918 stripped + 50 hot cards, overlay ≤ 500) sum to
@@ -285,3 +287,31 @@ no-climb non-regression is verified here. Report:
 ## Note 2026-10-05
 
 - This card's title says alcore keeps no resident data model. That is no longer true in the code, by a deliberate later decision: TRDD-9VX3WTGU (dev) plans a resident parsed card layer by name with a memory budget, and commit 4306a017 (its Phase C part 1) re-added `parsed: IndexMap<String, Arc<Value>>` to CardStore. Children completed on 2026-10-05 in the owner's stead: YILE6N3T and XTFDRTH2. Children still open: 7RM5YW2T (blocked), BLAV6W15 (todo). Whether this parent should be superseded by 9VX3WTGU or reworded was not decided.
+
+## PLAN v3 — 2026-10-30 (PROPOSED, code steps await owner approval)
+
+PLAN v3 for TRDD-7YPQWKPG (2026-10-30) — PROPOSED; reviewed twice (adversarial rounds 1 and 2, two MEASURE reports in reports_dev/7ypqwkpg/); code steps wait for owner approval; measurement steps S and A started 2026-10-30
+Rationale: nothing in alcore memory grows with the data; DuckDB on disk digests and answers, Rust allocates only the answer, so the whole process stays within 2 GB while digesting and 4 GB during a CLI diagnosis.
+Evidence 1: 27 Oct death: footprint 2,247 MB vs cap 2,048; mimalloc commit 1,948 MB including freed pages not yet returned; 25.7 K of 26.6 K pages abandoned (exited threads); 298 MB outside the Rust allocator; first memory sample at second 38, one second before the kill; all 74,652 cards reloaded at second 2 (load_resident ran); the binary was older than this branch.
+Evidence 2: TRDD-735Q3JF4: summary build on, commit 655 to 1,964 MB in 16 s; off, flat 660 MB for 120 s; boot sweep loop adds about 1.1 GB, almost all freed-but-retained. Measured transient sources: summary rebuild and parse churn. Resident card layer share: unmeasured.
+Evidence 3: DuckDB memory_limit did not bound an IN-MEMORY DuckDB (512 MB gave 1,150 MiB; 1,536 MB gave 2,497 MiB; TRDD-2HRA270Y). A file-backed instance is unmeasured.
+Branch: feat/duckdb-is-the-memory cut from fix/setup-agent-preflight HEAD (542 ahead of main, 0 behind) when code starts.
+Step S (measurement): file-backed DuckDB on a copy of the data, memory_limit plus temp_directory plus capped threads, running the real query shapes (aggregates over typed columns, page scans, body-dedup insert at volume); record phys_footprint. It holds if peak footprint stays within memory_limit + 300 MB; if not, stop and re-plan.
+Step A (measurement, TRDD-735Q3JF4): current build on a frozen full copy of ~/.agentlens incl. otel-bodies on a separate volume, each arm on a copy-on-write clone; CLAUDE_CONFIG_DIR and CODEX_HOME at the real transcript roots (read-only; never symlink below the root); pinned non-live ports. Arms: default warm; --no-log-scan; bodies moved out; cold (no offsets, no cards.duckdb); large-backlog warm; later, patched scratch builds with the summary rebuild off and with load_resident off (discarded after). Each arm reports footprint, Rust live, free-in-page, abandoned and non-Rust memory per phase. Synthetic load: scripts/bench/alcore-ingest-flood.mjs at 2x the highest per-minute span rate in the span store. Also captures the parity oracle (totals, full session list, field set) and p95 of the current /api/summary.
+Step 1 (TRDD-7RM5YW2T, interim, removed by step 7): the 25 ms rebuild loop stops; a summary is built only when a reader asks and dropped after use. Gate: A arms re-run show the churn gone. Also allocator policy and thread reuse: per-request work runs on a bounded, reused thread pool and abandoned-page reclaim is measured, so freed pages of exited threads do not accumulate.
+Step 2 (TRDD-KBM09XHB): typed columns on the cards table plus a bounded, resumable backfill of existing rows.
+Step 3 (TRDD-Q9WD3K5R): page endpoints, additive: inventory every /api route and every caller (media/src, src/cli, skills, scripts, tests); one paged DuckDB query per view, including paged tab content; server-side filter, sort and search; no page query takes the global state lock.
+Step 4: every consumer moves to queries: burn check (lib.rs:761), MCP tools (ui.rs:2480-2497), agent gate (ui.rs:2084-2096), call-context (ui.rs:1260), subagent rollup (mcp_tools.rs:1978), composition diagnostic (chores.rs:1026-1177), rebuild gate (derived_cache.rs:70-110), the other summary_now readers in ui.rs. The merge rule (log wins for Claude) moves into the save step, pinned by tests/feed_merge_parity.rs.
+Step 5: the dashboard moves to pages per the owner ruling: one expanded branch; a window that drops rows above; tab data fetched on mount and released on unmount; a change notice re-queries only the visible page; the notice is capped and falls back to many-changed-re-query.
+Step 6: the full summary push and the /api/summary full payload are removed.
+Step 7 (TRDD-7RM5YW2T, TRDD-JJLI6GEH): delete the resident layers: card map and load_resident, summary engine, cached summaries, boot seed and save steps that read the map; migrate the engine tests and parity fixtures; machine diff against the A oracle.
+Step 8 (TRDD-LHCHVK9Z, TRDD-HFV4AIT7, TRDD-2HRA270Y, TRDD-2JOIAH2G): ingest straight into DuckDB: the existing opt-in spool plus aldigest path becomes the only path (own design card, parity against the TypeScript oracles); body-store sets, hash tables, file positions and body links become tables read by key; the body registry stops copying; the span window becomes queries over span files; the span writer pending buckets, otel_attribution and composition entries get bounds.
+Step 9 (TRDD-DKBGT7MQ, TRDD-12FGMAEP, TRDD-WKLD508O, TRDD-CQ4652DQ, TRDD-COJI87P7): one DuckDB instance with one memory limit, so the DuckDB total is bounded by construction (current separate limits: round-2 MEASURE report); the cap is on whole-process footprint including children (aldigest collect reaches about 730 MiB); 2 GB while digesting, 4 GB only while a diagnosis request is in flight, marked by its route; one combined cap when both run.
+Acceptance F (every check can fail): Rust live after boot plus full scan within 10 percent on the 1x copy and a 2x copy (duplicates get new session ids), reported apart from DuckDB; peak footprint at most 2 GB through boot, cold scan, backlog scan and 30 min of the stated load, beside the A figures; a forced overshoot trips the cap; every /api route and push frame under a row and byte bound; page p95 at most 200 ms under concurrent ingest; first page and totals equal the A oracle; DOM rows at most 3 pages after scrolling the whole list; expanding a second branch collapses the first; leaving a tab frees its data and re-entering re-fetches; investigate_burn over 7 days and the two other heaviest CLI analyses stay under 4 GB; light and dark screenshots. Then the live collector is restarted.
+Board: 7YPQWKPG is blocked by 7RM5YW2T and FSMISF5K. 7RM5YW2T is superseded by step 1 and step 7. FSMISF5K (human_review) says the span window is deleted, but SpanWindow is still a CoreState field (lib.rs:202): owner to rule. Dispositions: JJLI6GEH to step 7; COJI87P7 and CQ4652DQ to step 9; HFV4AIT7 and 2JOIAH2G to step 8; 1FWN9XBS stays separate (export speed, not memory); 9SOYXKNE (deploy) gives the live OTLP rate. This plan reverses the measure-and-cap approach of TRDD-9VX3WTGU.
+Owner question a2: the 2026-10-22 directive set the cap on Rust allocator memory only ("it cannot use more memory than 2gb. but duckdb on the other hand can."); the 2026-10-30 ruling reads as 2 GB for the whole process. Does the 2026-10-30 ruling replace it?
+Owner question b: body-dedup tables into the one database file (default yes).
+Owner question d: the current build caps only Rust allocator memory, so its whole footprint can pass 2 GB unnoticed (TRDD-12FGMAEP); run it as an interim collector after step A, or stay down? Hook events are spooled on disk; OTLP spans are lost while down.
+Owner question e: SessionSummarySql, connect or delete.
+Review findings rejected: none. Partly rejected: one DuckDB instance is not needed: kept, because one instance with one limit bounds the DuckDB total by construction, which several independent limits do not; sequenced last.
+Owner question f: clear the blockers 7RM5YW2T (superseded by steps 1 and 7) and FSMISF5K (its title says the span window is deleted; the code still has it, lib.rs:202), so this card can leave blocked?
