@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: blocked
 created: 2026-09-02T22:05:41+0200
-updated: 2026-10-30T02:40:56+0100
+updated: 2026-10-30T03:02:20+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -106,6 +106,8 @@ for the USER to ratify as a golden rule (the USER owns golden rules).
 - Per-structure byte attribution is being measured right now
   (TRDD-768NEX6E box 4; report will land under `reports/trdd-768nex6e/`).
 OWNER DIRECTIVE RE-ISSUED 2026-10-30 (verbatim): *"it should not hit the memory limit. it should digest all data via duckdb at very high speed without allocating nothing. all must be handled by duckdb. duckdb will digest and save to disk. nothing will stay in memory. this is the task i gave you but you failed it. so we stopped agentlenspro since it is too slow now."*
+OWNER RULING 2026-10-30 on the memory budget, answering "should the cap be the 2 GB DuckDB budget plus the measured Rust base usage?" (verbatim): *"yes, 2gb is the limit combined when digesting. when diagnosticating an issue or analyzing due to a cli command, it can grow to 4gb, but still using duckdb mostly. the rust code should allocate only the answer."*
+OWNER RULING 2026-10-30 on the dashboard (verbatim): *"- the dashboard must not receive the whole data at all. it should be lasy updated with the only the data visible on the browser page at that moment, with a strict rule of only one element branch expanded st any time, and the whole scroll handled loading new values below lazily and discarding those above. or even better with pagination all over. tabs must nopreserve content, they losd the content when they sre sekected. everything is ephemeral and loaded when it is displayed and only when must be visible. what is not visible is discared. everything must be handled by direct query to duckdb, handled lasily."*
 
 ## PRINCIPLE
 
