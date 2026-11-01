@@ -326,3 +326,47 @@ suite('pricing — claude-sonnet-5 (TRDD-ZK37VG4X spec 1)', () => {
     assert.strictEqual(calcTokenCostUsd(1_000_000, 0, 0, 1_000_000, 'totally-unknown-model-xyz'), 0)
   })
 })
+
+suite('pricing — claude-haiku-5-5 (TRDD-KQ549VCQ)', () => {
+  // TRDD-KQ549VCQ: claude-haiku-5-5 steps at 100,000 input tokens, not 200,000. A call at or under the
+  // threshold bills every bucket flat. Hand-computed, with cache writes of 40,000 of which 10,000 are at the 1h tier:
+  // input 20,000 x 0.10 + cache read 30,000 x 0.01 + 5m write 30,000 x 0.125 + 1h write 10,000 x 0.20
+  // + output 10,000 x 0.50 = 0.002 + 0.0003 + 0.00375 + 0.002 + 0.005 = 0.01305 USD (total input 90,000).
+  test('claude-haiku-5-5 bills a call under 100,000 input tokens at the flat rates, every bucket incl. 1h', () => {
+    for (const model of ['claude-haiku-5-5', 'claude-haiku-5-5[1m]']) {
+      const cost = calcTokenCostUsd(20_000, 30_000, 40_000, 10_000, model, 10_000)
+      assert.ok(Math.abs(cost - 0.01305) < 1e-12, 'expected 0.01305 for ' + model + ', got ' + cost)
+    }
+  })
+
+  // TRDD-KQ549VCQ: over 100,000 total input the WHOLE call bills at the over-100K rates, output included.
+  // Input 50,000, cache read 60,000, cache write 40,000 (10,000 at 1h, 30,000 at 5m), output 10,000.
+  // Total input 150,000: input 50,000 x 0.50 + cache read 60,000 x 0.05 + 5m write 30,000 x 0.625 + 1h write
+  // 10,000 x 1.00 + output 10,000 x 2.50 = 0.025 + 0.003 + 0.01875 + 0.01 + 0.025 = 0.08175 USD. The flat rates
+  // would give 0.01635, so a threshold of 200,000 fails this test.
+  test('claude-haiku-5-5 bills a call over 100,000 input tokens entirely at the over-100K rates', () => {
+    for (const model of ['claude-haiku-5-5', 'claude-haiku-5-5[1m]']) {
+      const cost = calcTokenCostUsd(50_000, 60_000, 40_000, 10_000, model, 10_000)
+      assert.ok(Math.abs(cost - 0.08175) < 1e-12, 'expected 0.08175 for ' + model + ', got ' + cost)
+    }
+  })
+
+  // TRDD-KQ549VCQ: the threshold is strict. Exactly 100,000 total input stays flat and one token more is over.
+  // At 100,000: input 40,000, cache read 30,000, cache write 30,000 (10,000 at 1h), output 10,000.
+  // Flat: 0.004 + 0.0003 + 0.0025 + 0.002 + 0.005 = 0.0138. Over-100K rates would give 0.069.
+  // At 100,001 (input 40,001, other buckets the same): 0.0200005 + 0.0015 + 0.0125 + 0.01 + 0.025 = 0.0690005.
+  test('claude-haiku-5-5 is flat at exactly 100,000 input tokens and over-100K one token later', () => {
+    for (const model of ['claude-haiku-5-5', 'claude-haiku-5-5[1m]']) {
+      const at = calcTokenCostUsd(40_000, 30_000, 30_000, 10_000, model, 10_000)
+      const over = calcTokenCostUsd(40_001, 30_000, 30_000, 10_000, model, 10_000)
+      assert.ok(Math.abs(at - 0.0138) < 1e-12, 'expected 0.0138 at 100,000 for ' + model + ', got ' + at)
+      assert.ok(Math.abs(over - 0.0690005) < 1e-12, 'expected 0.0690005 at 100,001 for ' + model + ', got ' + over)
+    }
+  })
+
+  // TRDD-KQ549VCQ: claude-haiku-5-5 has no explicit 1h write rate, so cacheWrite1hRate derives 2x its input rate
+  // (0.10 x 2 = 0.20), the 1h rate that the 1.25x 5m write shape implies.
+  test('claude-haiku-5-5 1h cache-write rate derives to 0.20 per MTok', () => {
+    assert.ok(Math.abs(cacheWrite1hRate(lookupRates('claude-haiku-5-5')!) - 0.2) < 1e-12)
+  })
+})

@@ -120,7 +120,7 @@ On `claude_code.llm_request` spans (per-API-call):
 - `ttft_ms` — time to first token in ms
 - `stop_reason` — e.g. `tool_use`, `end_turn`
 
-**Rates (USD per 1M tokens, verified 2026-06-08; opus-5-5/opus-5-5-fast/mythos-5-1 added 2026-09-24):**
+**Rates (USD per 1M tokens, verified 2026-06-08; opus-5-5/opus-5-5-fast/mythos-5-1 added 2026-09-24; claude-haiku-5-5 added 2026-11-01):**
 
 | Model                          | Input   | Cache Write (5m) | Cache Write (1h) | Cache Read | Output   |
 | ------------------------------ | ------- | ---------------- | ---------------- | ---------- | -------- |
@@ -137,13 +137,14 @@ On `claude_code.llm_request` spans (per-API-call):
 | `claude-sonnet-4-5`            | $3.00   | $3.75            | $6.00            | $0.30      | $15.00   |
 | `claude-sonnet-4`              | $3.00   | $3.75            | $6.00            | $0.30      | $15.00   |
 | `claude-haiku-4-5`             | $1.00   | $1.25            | $2.00            | $0.10      | $5.00    |
+| `claude-haiku-5-5`             | $0.10   | $0.125           | $0.20            | $0.01      | $0.50    |
 | `claude-opus-4-8` (fast, 2x)   | $10.00  | $12.50           | $20.00           | $1.00      | $50.00   |
 | `claude-opus-4-7` (fast, 6x)   | $30.00  | $37.50           | $60.00           | $3.00      | $150.00  |
 | `claude-opus-4-6` (fast — billed at STANDARD rates; pricing.ts:173-177) | $5.00 | $6.25 | $10.00 | $0.50 | $25.00 |
 
-**Tiered pricing — `claude-sonnet-4` only:**
+**Tiered pricing — `claude-sonnet-4`:**
 
-`claude-sonnet-4` has a two-tier rate structure where per-token rates increase once a single API call exceeds 200K tokens for a given token category. The tier is applied per-category (input, output, cache read, cache write each evaluated against the 200K threshold independently):
+`claude-sonnet-4` has a two-tier rate structure: once a single API call's total input (input + cache read + cache write) exceeds 200K tokens, every category of that call, output included, bills at the >200K rate. Below the threshold every category bills flat. The step is whole-request, not per-category (TRDD-R4DHDK7L); `calcTokenCostUsd` applies it per call:
 
 | Token category | ≤200K rate | >200K rate |
 | -------------- | ---------- | ---------- |
@@ -153,6 +154,22 @@ On `claude_code.llm_request` spans (per-API-call):
 | Cache read     | $0.30/MTok | $0.60/MTok |
 
 The threshold applies per API call, not cumulatively across a session. `calcTokenCostUsd` in `src/shared/pricing.ts` applies this tiered rate per turn (which corresponds to one API call). The session-level `calcTokenCost` in the same module uses flat rates as an approximation because it operates on session totals rather than per-call counts.
+
+**Tiered pricing — `claude-haiku-5-5` (prompt over 100,000 tokens):**
+
+`claude-haiku-5-5` is the only current Claude model with a prompt-length tier, and its step is at 100,000 input tokens, not 200,000. Anthropic's pricing page says: "Claude Haiku 5.5 is priced by prompt length: a request whose prompt is over 100,000 tokens pays higher prices. A request's prompt length counts all of its input tokens, including cache reads and cache writes. Each request is priced on its own." The step is whole-request, as for sonnet-4 above: when a call's total input (input + cache read + cache write) is over 100,000 tokens, every category bills at the over-100K rate, output included. Below it every category bills flat.
+
+| Token category   | ≤100K rate  | >100K rate  |
+| ---------------- | ----------- | ----------- |
+| Input            | $0.10/MTok  | $0.50/MTok  |
+| Output           | $0.50/MTok  | $2.50/MTok  |
+| Cache write (5m) | $0.125/MTok | $0.625/MTok |
+| Cache write (1h) | $0.20/MTok  | $1.00/MTok  |
+| Cache read       | $0.01/MTok  | $0.05/MTok  |
+
+Source: <https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing>, read 2026-11-01. The 1h write rates derive from the 1.25x 5m write shape (cacheWrite1hRate in src/shared/pricing.ts).
+
+Session-total costs computed by `calcTokenCost` (the flat display path, used by media/src/sessionMetrics.ts and media/src/tabs/HistoryTab.tsx) cannot apply the tier, so they under-report Haiku 5.5 calls over 100,000 input tokens by up to 5x; per-call costs from `calcTokenCostUsd` are exact.
 
 **Deprecated models (for historical sessions):**
 
@@ -275,7 +292,8 @@ and `surchargeThresholdTokens` (default 200,000) in `pricing.ts`; applied by `ca
 | --- | --- | --- | --- |
 | OpenAI | 272,000 | gpt-5.4, gpt-5.5 | <https://developers.openai.com/api/docs/pricing> (rate tables keyed "(<272K context length)" vs long-context) |
 | Google | 200,000 | gemini-2.5-pro, gemini-3-pro (delisted; launch-published tiers retained for recorded sessions), gemini-3.1-pro | <https://ai.google.dev/gemini-api/docs/pricing> ("$1.25, prompts <= 200k tokens / $2.50, prompts > 200k") — Flash models are flat. The application rule is stated in prose in Google Cloud's own docs: "If a query input context is longer than 200K tokens, all tokens (input and output) are charged at long context rates" — CAVEAT: that sentence surfaced through a search digest over cloud.google.com pages (Vertex / Gemini Enterprise Agent Platform pricing); direct fetches of both truncate before the section, so the verbatim wording and exact page are search-sourced, not eyeballed on the page. The whole-request-step conclusion itself has three independent corroborations (this sentence, the tier-table phrasing on ai.google.dev, third-party billing guides). OpenAI's rule is inferred from its tier-table headers. Whether CACHED tokens count toward the threshold is stated by no provider — we count input+cacheRead+cacheWrite (the request's prompt size) as the closest reading, marked INFERRED. |
-| Anthropic | 200,000 (historical) | claude-sonnet-4 only (1M-beta era) | <https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing> — current models have NO surcharge: "Claude 4.6 and later models include the full 1M token context window at standard pricing. (A 900k-token request is billed at the same per-token rate as a 9k-token request.)" Never add Above rates to a current Claude model. |
+| Anthropic | 200,000 (historical) | claude-sonnet-4 only (1M-beta era) | <https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing> — current Claude models have NO surcharge, except claude-haiku-5-5 (next row): "Claude 4.6 and later models (except Claude Haiku 5.5) ... include the full 1M token context window at standard pricing." Never add Above rates to a current Claude model other than Haiku 5.5. |
+| Anthropic | 100,000 | claude-haiku-5-5 only | <https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing> — "Claude Haiku 5.5 is priced by prompt length: a request whose prompt is over 100,000 tokens pays higher prices. A request's prompt length counts all of its input tokens, including cache reads and cache writes. Each request is priced on its own." Read 2026-11-01. |
 
 ## Notes for maintainers
 

@@ -9,7 +9,7 @@
 //   Request multipliers (pre Jun 1, 2026): https://docs.github.com/en/copilot/concepts/billing/copilot-requests
 //   Annual-plan multipliers (post Jun 1):  https://docs.github.com/en/copilot/reference/copilot-billing/model-multipliers-for-annual-plans
 //   Per-provider rate URLs: PRICING_SOURCES.md
-export const PRICING_LAST_UPDATED = '2026-09-24'
+export const PRICING_LAST_UPDATED = '2026-11-01'
 
 // Three Copilot billing modes (webview cost toggle):
 //   'token'          — new token-based AI Credits billing, effective Jun 1, 2026
@@ -43,7 +43,9 @@ export interface ModelRates {
   //   - OpenAI: rate tables keyed "(<272K context length)" vs long-context
   //     (developers.openai.com/api/docs/pricing)
   //   - Anthropic (historical Sonnet 4 1M beta): premium keyed on requests exceeding 200K input
-  //     tokens. Current Claude models have NO surcharge: "Claude 4.6 and later models include the
+  //     tokens. Current Claude models have NO surcharge, except claude-haiku-5-5 (a whole-request
+  //     step at 100,000 input tokens; see its RATES row): "Claude 4.6 and later models (except
+  //     Claude Haiku 5.5) include the
   //     full 1M token context window at standard pricing. (A 900k-token request is billed at the
   //     same per-token rate as a 9k-token request.)"
   //     (platform.claude.com/docs/en/about-claude/pricing#long-context-pricing)
@@ -121,6 +123,16 @@ export const RATES: Record<string, ModelRates> = {
   'claude-haiku-3-5':   { inputPerMTok:  0.80, cacheReadPerMTok: 0.08,  cacheWritePerMTok:  1.00, outputPerMTok:  4.00, contextWindowTokens: 200_000,   multiplier: 0,    multiplierAnnualPostJun1: 0 },
   // current
   'claude-haiku-4-5':   { inputPerMTok:  1.00, cacheReadPerMTok: 0.10,  cacheWritePerMTok:  1.25, outputPerMTok:  5.00, contextWindowTokens: 200_000,   multiplier: 0.33, multiplierAnnualPostJun1: 0.33 },
+  // Claude Haiku 5.5 is the only current Claude model with a prompt-length tier. Its threshold is 100,000
+  // input tokens, not 200,000. Anthropic's pricing page (platform.claude.com/docs/en/about-claude/pricing, read
+  // 2026-11-01) says a request whose prompt is over 100,000 tokens pays higher prices, and that the prompt counts
+  // cache reads and cache writes. Without this entry claude-haiku-5-5[1m] matched no key and priced at zero,
+  // the silent failure this table exists to prevent. The 1h write rates (0.20 and 1.00) derive from the 1.25x
+  // write shape, so no explicit cacheWrite1hPerMTok is set. multiplier 0 follows the convention for Claude models
+  // absent from the Copilot docs (opus-5-5, fable-5, sonnet-5) and equals what an absent row already produced
+  // (media/src/sessionMetrics.ts defaults a missing row to 0), so request-mode figures do not change.
+  'claude-haiku-5-5':   { inputPerMTok:  0.10, cacheReadPerMTok: 0.01,  cacheWritePerMTok:  0.125, outputPerMTok:  0.50, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0,
+                          inputAbove200kPerMTok: 0.50, outputAbove200kPerMTok: 2.50, cacheReadAbove200kPerMTok: 0.05, cacheWriteAbove200kPerMTok: 0.625, surchargeThresholdTokens: 100_000 },
   'claude-sonnet-4':    { inputPerMTok:  3.00, cacheReadPerMTok: 0.30,  cacheWritePerMTok:  3.75, outputPerMTok: 15.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 1,
                           inputAbove200kPerMTok: 6.00, outputAbove200kPerMTok: 22.50, cacheReadAbove200kPerMTok: 0.60, cacheWriteAbove200kPerMTok: 7.50 },
   'claude-sonnet-4-5':  { inputPerMTok:  3.00, cacheReadPerMTok: 0.30,  cacheWritePerMTok:  3.75, outputPerMTok: 15.00, contextWindowTokens: 1_000_000, multiplier: 1,    multiplierAnnualPostJun1: 6 },
