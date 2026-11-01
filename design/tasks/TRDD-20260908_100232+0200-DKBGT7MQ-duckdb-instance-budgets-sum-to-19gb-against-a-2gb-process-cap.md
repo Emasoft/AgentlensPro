@@ -3,7 +3,7 @@ trdd-id: DKBGT7MQ
 title: Eight independent DuckDB instances each carry their own buffer-pool limit and they sum to 19.25 GB against a 2 GB process cap
 column: todo
 created: 2026-09-08T10:02:32+0200
-updated: 2026-10-30T03:02:20+0100
+updated: 2026-11-01T02:38:43+0100
 current-owner: main
 task-type: bugfix
 parent-trdd: 7YPQWKPG
@@ -226,3 +226,4 @@ OWNER RULING 2026-10-30 on the memory budget, answering "should the cap be the 2
 ## Owner decisions
 
 2026-10-21 — USER chose, verbatim option: "One shared instance at ~1.5 GB (Recommended)" — every DuckDB site shares one process-wide instance whose memory_limit is the 2 GB cap minus a measured Rust floor (about 0.5 GB), so the process total stays inside 2 GB. Main agent's note (inference, not the user's words): this settles the STATE's open question (cap versus budget plus Rust floor) as budget plus floor.
+OWNER DIRECTIVE 2026-10-30 (verbatim): *"decide yourself. base your deisions on verified facts. keep the memory as low as possible, no matter what. make sure to write all data ingested into duckdb database compressed tables, not keeping anything in memory. do not follow an exact rule. 2gb is indicative. but cpu core usages is also essential and must be kept below 100% per core. the system must never become unresponsive. so design well. you planned a lot last time. did you found some good solution? if not try again. but be sure to make certain that no process become too cpu consuming to prevent other processes."* — the 2 GB figure is indicative, not a hard cap.

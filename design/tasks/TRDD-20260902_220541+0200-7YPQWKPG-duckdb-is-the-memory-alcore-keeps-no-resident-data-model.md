@@ -1,29 +1,32 @@
 ---
 trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
-column: blocked
+column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-10-30T03:28:41+0100
+updated: 2026-11-01T02:38:17+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
 min-approval-requirement: user
 requested-by: user
-blocked-by: [7RM5YW2T, FSMISF5K]
+blocked-by: []
 npt: [YILE6N3T, 7RM5YW2T, XTFDRTH2, FSMISF5K]
 related: [768NEX6E, CAJ5RCP9, O3ICDRLO, XX1UAZHS, N60JUWU3, Q9WD3K5R]
 approved-by: user
 approved-at: 2026-09-02T22:05:41+0200
 status: tasked
 unblock-when: [trdd:7RM5YW2T terminal, trdd:FSMISF5K terminal]
-pre-block-column: human_review
+pre-block-column: 
 blocker-probe: [trddgrep, why, 7YPQWKPG]
 blocker-holds-if: not-match:READY
+approved: true
+approval-judge: user
+approval-datetime: 2026-11-01T02:38:17+0100
 ---
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-30T03:28:41+0100
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-01T02:36:38+0100
 
-**2026-10-30 — CURRENT (supersedes everything below in this block and the 2026-09-02 history further down).** The owner re-issued this card's directive on 2026-10-30 and ruled on the memory budget and the dashboard (all three quoted verbatim under WHY). PLAN v3 (the section `PLAN v3` at the end of this card) replaces the earlier phase lists; once approved, its Acceptance F becomes the checkboxes under `## ACCEPTANCE` and the current boxes there are void. Status: PROPOSED, reviewed twice; code steps wait for owner approval. Measurement under way: step S (DuckDB bound spike) and step A arms a to d (default warm, no log scan, bodies moved out, cold); the large-backlog and patched-build arms of step A are not run yet. The card stays `blocked` (7RM5YW2T, FSMISF5K) until the owner rules on those blockers. NEXT ACTION: read the S and A reports; when the owner approves PLAN v3 and rules on the blockers, cut branch feat/duckdb-is-the-memory from fix/setup-agent-preflight and do step 1.
+**2026-11-01 — CURRENT (supersedes everything below in this block and the 2026-09-02 history further down).** The owner re-issued this card directive on 2026-10-30, ruled on the memory budget and the dashboard, then answered the open plan questions with "decide yourself" (all four quoted verbatim under WHY). PLAN v3 is APPROVED on that directive; its decisions, the CPU constraint, the step S amendments and the step A result are the last lines of the PLAN v3 section, and its Acceptance F replaces the boxes under ACCEPTANCE (those boxes are void). The 2 GB figure is indicative: a target that throttles, not an exit. Measured: step S (file-backed DuckDB; the bound does not hold in general, query shapes decide) and step A arms a to c (peaks 2477, 2186 and 1786 MB; arm d not run). Built in worktrees under AgentlensPro-worktrees/7yp-*, uncommitted, each awaiting its adversarial review before commit: step 1b (pools in runtimes.rs, thread reuse, background QoS), step 2 (32 typed columns, schema v2, SQL backfill), step 5a (one expanded branch, 150-row window, tabs re-fetch), step 9a (whole-process plus children target that throttles; exit only on macOS critical memory pressure or an emergency ceiling). In progress: step 1a (summary built on demand). Known red test on the base itself: agentlens-core tests/core_cap_guard.rs no_literal_duckdb_threads_outside_the_allowlist fails on a test literal at agentlens-store lib.rs:1749; its fix is a separate change. The collector stays disabled (the DISABLED file belongs to the owner). NEXT ACTION: review and commit steps 1b, 2, 5a and 9a; finish 1a; merge the worktrees into feat/duckdb-is-the-memory (order 2, 5a, 1b, 9a, 1); then steps 3, 4, 6, 7, the storage-version migration, and step 8 per TRDD-IPLPDD19.
 
 **RE-ISSUED BY THE USER 2026-09-05 22:00 and moved `todo → dev`.** Verbatim: *"why the hell alcore
 is using 17Gb of ram??? haven't i told you to make duckdb the only memory of agentlenspro? why there
@@ -110,6 +113,7 @@ for the USER to ratify as a golden rule (the USER owns golden rules).
 OWNER DIRECTIVE RE-ISSUED 2026-10-30 (verbatim): *"it should not hit the memory limit. it should digest all data via duckdb at very high speed without allocating nothing. all must be handled by duckdb. duckdb will digest and save to disk. nothing will stay in memory. this is the task i gave you but you failed it. so we stopped agentlenspro since it is too slow now."*
 OWNER RULING 2026-10-30 on the memory budget, answering "should the cap be the 2 GB DuckDB budget plus the measured Rust base usage?" (verbatim): *"yes, 2gb is the limit combined when digesting. when diagnosticating an issue or analyzing due to a cli command, it can grow to 4gb, but still using duckdb mostly. the rust code should allocate only the answer."*
 OWNER RULING 2026-10-30 on the dashboard (verbatim): *"- the dashboard must not receive the whole data at all. it should be lasy updated with the only the data visible on the browser page at that moment, with a strict rule of only one element branch expanded st any time, and the whole scroll handled loading new values below lazily and discarding those above. or even better with pagination all over. tabs must nopreserve content, they losd the content when they sre sekected. everything is ephemeral and loaded when it is displayed and only when must be visible. what is not visible is discared. everything must be handled by direct query to duckdb, handled lasily."*
+OWNER DIRECTIVE 2026-10-30 (verbatim), answering the open plan questions: *"decide yourself. base your deisions on verified facts. keep the memory as low as possible, no matter what. make sure to write all data ingested into duckdb database compressed tables, not keeping anything in memory. do not follow an exact rule. 2gb is indicative. but cpu core usages is also essential and must be kept below 100% per core. the system must never become unresponsive. so design well. you planned a lot last time. did you found some good solution? if not try again. but be sure to make certain that no process become too cpu consuming to prevent other processes."*
 
 ## PRINCIPLE
 
@@ -281,6 +285,7 @@ no-climb non-regression is verified here. Report:
 - 2026-10-16T11:13:16+0200 — column → human_review by main-agent@agentlenspro. owner ruling: supersede by 9VX3WTGU or reword; row 2
 - 2026-10-16T11:16:42+0200 — column → blocked by main-agent@agentlenspro. its NPTs 7RM5YW2T and FSMISF5K are unfinished (lint ORDER-NPT-VIOLATED); the owner ruling on supersede-by-9VX3WTGU or reword is also pending (triage row 2)
 - OWNER 2026-10-24 (verbatim, recorded on TRDD-735Q3JF4, copied here 2026-10-27): "the functionalities and the diagnostic power must remain the same, but everything should be done via duckdb sql and sql functions. this is the idea, of course you have to evaluate case by case if there are potential issues and if certain functionalities needs a little more code and allocation in addition to the sql of duckdb. but you must plan and execute this with the clear aim to make duckdb able to ingest and structure/breakdown the raw data and all the otel logs in a way that statistical analysis is fast and smart functions will diagnose any problem and find the root cause of any cost peak or cache break."
+- 2026-11-01T02:38:17+0100 — column → dev by user. owner directive 2026-10-30 answered the open plan questions: "decide yourself ... so design well"; PLAN v3 approved on it; blockers 7RM5YW2T (superseded by PLAN v3 steps 1 and 7) and FSMISF5K (title false in code, SpanWindow still a CoreState field) cleared on that directive Cleared blocked-by (--clear-blocker override).
 
 ## Notes and lessons learned
 
@@ -288,7 +293,7 @@ no-climb non-regression is verified here. Report:
 
 - This card's title says alcore keeps no resident data model. That is no longer true in the code, by a deliberate later decision: TRDD-9VX3WTGU (dev) plans a resident parsed card layer by name with a memory budget, and commit 4306a017 (its Phase C part 1) re-added `parsed: IndexMap<String, Arc<Value>>` to CardStore. Children completed on 2026-10-05 in the owner's stead: YILE6N3T and XTFDRTH2. Children still open: 7RM5YW2T (blocked), BLAV6W15 (todo). Whether this parent should be superseded by 9VX3WTGU or reworded was not decided.
 
-## PLAN v3 — 2026-10-30 (PROPOSED, code steps await owner approval)
+## PLAN v3 — 2026-10-30 (APPROVED 2026-10-30, owner said decide yourself)
 
 PLAN v3 for TRDD-7YPQWKPG (2026-10-30) — PROPOSED; reviewed twice (adversarial rounds 1 and 2, two MEASURE reports in reports_dev/7ypqwkpg/); code steps wait for owner approval; measurement steps S and A started 2026-10-30
 Rationale: nothing in alcore memory grows with the data; DuckDB on disk digests and answers, Rust allocates only the answer, so the whole process stays within 2 GB while digesting and 4 GB during a CLI diagnosis.
@@ -315,3 +320,19 @@ Owner question d: the current build caps only Rust allocator memory, so its whol
 Owner question e: SessionSummarySql, connect or delete.
 Review findings rejected: none. Partly rejected: one DuckDB instance is not needed: kept, because one instance with one limit bounds the DuckDB total by construction, which several independent limits do not; sequenced last.
 Owner question f: clear the blockers 7RM5YW2T (superseded by steps 1 and 7) and FSMISF5K (its title says the span window is deleted; the code still has it, lib.rs:202), so this card can leave blocked?
+Step 8 re-scoped 2026-10-30 after the ingest inventory: own design card TRDD-IPLPDD19 (15 gaps; the digest path has no transcript producers, has never run live, and nothing reads its database). Steps 1 to 7 do not depend on it.
+Decision a2 2026-10-30 (the owner said "decide yourself"; directive verbatim under WHY): the cap counts the whole process plus its children; 2 GB (4 GB while a diagnosis runs) is a target that drives throttling, never an exit at that number; only a machine-protecting signal exits. Reason: "2gb is indicative" and "the system must never become unresponsive"; the exit cap produced the 8-death crash loop and the DISABLED file.
+Decision b 2026-10-30: the body-dedup tables move into the one database, collected in-process, because DuckDB allows one process per database file; step S confirmed it (a second process cannot open the file at all, read-only included, while one holds it read-write).
+Decision d 2026-10-30: the collector stays disabled until the plan lands; the DISABLED file belongs to the owner.
+Decision e 2026-10-30: SessionSummarySql is kept; it is the half-built OTEL-sessions-as-SQL query (TRDD-IPLPDD19 gap 3) and is wired when the span tables exist.
+Decision f 2026-10-30: the blockers 7RM5YW2T and FSMISF5K are cleared with the directive as the reason (7RM5YW2T is superseded by steps 1 and 7; the FSMISF5K title is false in code, SpanWindow is still a CoreState field at lib.rs:202); this card moves to dev.
+New constraint 2026-10-30 (CPU): no core at 100 percent, no process starves others, the system never becomes unresponsive. Every pool is bounded to a fraction of the cores, DuckDB threads are capped at every open site, ingest, scan and digest threads run at background QoS, HTTP handlers at default. The all-cores goal of TRDD-HFV4AIT7 is superseded.
+Ingest end state 2026-10-30: every ingested record lands in compressed native DuckDB tables in bounded batches (compression needs the storage version of amendment c); nothing is kept in memory beyond the batch in flight.
+Step S result 2026-10-30 (reports_dev/7ypqwkpg/20261030_034335+0100-stepS-duckdb-bound.md; DuckDB v1.5.6, file-backed, 74,730 real cards): the bound does not hold in general, because memory_limit does not bound the process; the query shape decides the footprint. Aggregates over typed columns 18-26 MB, typed-column session pages 51-54 MB, no run spilled to temp, one page query stalled about 1.3 s during an insert (commit or checkpoint).
+Step S amendment a (steps 3 and 5): every page pages keys from typed columns, then fetches card text by primary key; never sort with card text in the select list (card text in a sorted select reached 711-828 MB and ratcheted; key-first pages held 161-177 MB over 10 passes).
+Step S amendment b (step 8 and decision b): no PRIMARY KEY or ART index for dedup (1,297-1,400 MB under a 1 GB limit, out of memory under 512 MB, about 474 MB of index resident once probed); key-sorted tables with an anti-join insert instead (stayed within 512 MB + 300 MB; lookups 0.4-1.4 ms).
+Step S amendment c (new step): database files use STORAGE_VERSION v1.2.0 or later with zstd on text columns (owner: compressed tables). In the default storage version the card JSON is stored uncompressed (120 MiB for 125 MB) and forcing zstd does nothing; with v1.2.0 plus zstd it is 14.2 MiB (8.8x smaller); typed columns compress by default. cards.duckdb is migrated by copy.
+Step S amendment d (steps 1b and 9): CPU is bounded by background QoS on DuckDB and ingest threads plus bounded batch size and a duty cycle, not by the threads setting (threads=2 still gave 185 percent average and 277 percent peak; one DuckDB thread holds a core near 100 percent for most of an insert).
+Step S amendment e (TRDD-IPLPDD19 gap 9, topology): in-process collect is confirmed by the lock rule; one process owns the database file.
+Step S amendment f (step 9): per-shape memory budgets are tested, and the whole-process metric is the target that throttles, because footprint does not come back down after a query (DuckDB uses the system malloc on macOS; SET memory_limit and malloc_zone_pressure_relief released nothing for card workloads).
+Step A result 2026-11-01 (data in reports_dev/7ypqwkpg/stepA/ and the arm-c samples on the frozen copy): peak footprint arm a (default warm) 2477 MB at 243 s, arm b (no log scan) 2186 MB at 84 s, arm c (bodies moved out) 1786 MB at 65 s; arm c ran 46.8 h unattended after its fork died (its sampler had no duration bound) and held 1062-1533 MB footprint after the first hour with no crash; arm d (cold) never ran; the arm report is still to be written.

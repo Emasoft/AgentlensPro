@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-10-16T17:07:34+0200
+updated: 2026-11-01T02:38:46+0100
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -483,6 +483,7 @@ The reason the Rust rewrite exists at all (USER, same day): *"the typescript was
 system."* So this is not a nice-to-have benchmark; it is the acceptance test of the migration's
 purpose.
 2026-10-16: correction to the triage note above: the card's column is now todo; the phrase 'the column still says testing' described it before the move.
+2026-11-01: the all-cores goal of this card is superseded by the owner directive of 2026-10-30 (verbatim in TRDD-7YPQWKPG WHY): CPU must stay below 100 percent per core and no process may starve others, so ingest runs on bounded pools at background QoS (TRDD-7YPQWKPG PLAN v3 step 1b and step S amendment d); the acceptance box asking for (cores - 2) busy cores no longer applies.
 
 ## What to measure (not infer)
 
