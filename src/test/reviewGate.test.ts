@@ -727,33 +727,32 @@ suite('reviewGate — declaredRole: the marker must be the prompt\'s literal fir
   })
 })
 
-// ── declaredRoleOwnTranscript: the SELF-EXEMPTION predicate, deliberately NOT first-line-anchored ───
+// ── declaredRoleOwnTranscript: the SELF-EXEMPTION predicate, anchored to the first non-blank line ───
 //
-// This reads the SPAWNED agent's own first transcript entry, not the parent's raw `input.prompt` --
-// per TRDD-3U8AIHXK it may arrive with harness-added preamble ahead of the marker, so anchoring it
-// to the first line (the `declaredRole` fix above) risks falsely de-exempting every real REVIEW/
-// MEASURE fork and deadlocking the gate (each fork's own SubagentStop would then demand it spawn a
-// reviewer of itself). Left loose deliberately (owner direction, 2026-09-24): TRDD-BA0DCW98's
-// self-exemption residual therefore stays OPEN on this specific predicate pending a real measurement
-// of the harness-wrapped shape -- these tests lock the CURRENT (unchanged) behaviour so nobody
-// "fixes" it here without reading why.
-suite('reviewGate — declaredRoleOwnTranscript: self-exemption, unanchored by design (BA0DCW98 residual)', () => {
-  test('the marker anywhere in the prompt still exempts, trailing whitespace or \\r tolerated', () => {
+// Reads the SPAWNED agent's own first transcript entry. Shapes measured 2026-11-01 (TRDD-8YM21R5X):
+// a fresh non-fork worker's entry is the brief verbatim (plain string, no preamble); forks and resumed
+// agents never reach this predicate with a role line. So it anchors exactly like `declaredRole`.
+suite('reviewGate — declaredRoleOwnTranscript: self-exemption anchored to the first non-blank line', () => {
+  test('a plain brief whose first line is the marker exempts, trailing whitespace or \\r tolerated', () => {
+    assert.strictEqual(declaredRoleOwnTranscript('ROLE: REVIEW\nAttack the proposal.'), 'review')
     assert.strictEqual(declaredRoleOwnTranscript('ROLE: MEASURE'), 'measure')
     assert.strictEqual(declaredRoleOwnTranscript('ROLE: REVIEW \r\ndo the thing'), 'review')
-    assert.strictEqual(declaredRoleOwnTranscript('<fork-boilerplate>\nROLE: REVIEW\nAttack the proposal.'), 'review', 'harness-prepended boilerplate must not defeat a real fork\'s exemption')
   })
 
-  test('BA0DCW98 residual: a marker quoted after preceding text still exempts (not fixed on this predicate, by design)', () => {
-    assert.strictEqual(declaredRoleOwnTranscript('Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.'), 'review')
+  test('BA0DCW98 residual closed: a marker line after other text does NOT exempt', () => {
+    assert.strictEqual(declaredRoleOwnTranscript('Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.'), null)
+  })
+
+  test('a resumed agent whose first entry is a system notification with a later ROLE line does NOT exempt', () => {
+    assert.strictEqual(declaredRoleOwnTranscript('[SYSTEM NOTIFICATION - NOT USER INPUT]\nresumed\nROLE: REVIEW\n'), null)
   })
 
   test('trailing prose on the marker line still does NOT exempt -- the fixture K fix is unaffected', () => {
     assert.strictEqual(declaredRoleOwnTranscript('ROLE: REVIEW the following diff and then edit it'), null)
   })
 
-  test('both markers, or neither, exempts neither', () => {
-    assert.strictEqual(declaredRoleOwnTranscript('ROLE: MEASURE\nROLE: REVIEW\n'), null)
+  test('a second marker on a later line is ignored (first line wins); no marker exempts nothing', () => {
+    assert.strictEqual(declaredRoleOwnTranscript('ROLE: MEASURE\nROLE: REVIEW\n'), 'measure')
     assert.strictEqual(declaredRoleOwnTranscript('just a plain prompt'), null)
   })
 })
@@ -1235,13 +1234,44 @@ suite('reviewGate — runSubagentGate: own sidechain entries are scanned (TRDD-L
     assert.strictEqual(await stop(t), null)
   })
 
-  test('`ROLE: MEASURE` mid-sentence does not exempt a worker; as a whole line it does (existing declaredRoleOwnTranscript behaviour)', async () => {
+  test('`ROLE: MEASURE` mid-sentence or buried after other text does not exempt a worker; as the first line it does (declaredRoleOwnTranscript anchored, TRDD-8YM21R5X)', async () => {
     const mid = mkTranscript([scUser('w1', 'Explain how ROLE: MEASURE works in the gate'), scAssistant('w1', [writeBlock])])
     assert.ok(await stop(mid) !== null, 'a mid-sentence mention must not exempt')
-    const whole = mkTranscript([scUser('w1', 'preamble\nROLE: MEASURE\nmeasure it'), scAssistant('w1', [writeBlock])])
-    assert.strictEqual(await stop(whole), null, 'a whole-line marker anywhere in the brief self-exempts (unanchored by design)')
+    const buried = mkTranscript([scUser('w1', 'preamble\nROLE: MEASURE\nmeasure it'), scAssistant('w1', [writeBlock])])
+    assert.ok(await stop(buried) !== null, 'a marker buried after other text must not exempt')
+    const first = mkTranscript([scUser('w1', 'ROLE: MEASURE\nmeasure it'), scAssistant('w1', [writeBlock])])
+    assert.strictEqual(await stop(first), null, 'a first-line marker self-exempts')
   })
 
+  // Shape measured on Claude Code 2.1.316, 2026-11-01 (TRDD-8YM21R5X): a non-fork worker's first
+  // transcript entry, key structure copied from a real subagent file; every id, uuid, path and
+  // session value is a visibly fake placeholder.
+  const realShapeFirstEntry = (brief: string): string => JSON.stringify({
+    parentUuid: null,
+    isSidechain: true,
+    promptId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    agentId: 'aaaaaaaaaaaaaaaaa',
+    type: 'user',
+    message: { role: 'user', content: brief },
+    uuid: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    timestamp: '2000-01-01T00:00:00.000Z',
+    userType: 'external',
+    entrypoint: 'cli',
+    cwd: '/fake/project',
+    sessionId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    version: '2.1.316',
+    gitBranch: 'main',
+  })
+
+  test('a real-shape first entry whose plain-string brief starts `ROLE: REVIEW` yields ownRole review', () => {
+    const scan = scanTranscriptLines([realShapeFirstEntry('ROLE: REVIEW\nAttack the proposal.')], CWD, 'aaaaaaaaaaaaaaaaa')
+    assert.strictEqual(scan.ownRole, 'review')
+  })
+
+  test('the same real-shape first entry with the ROLE line second yields no ownRole', () => {
+    const scan = scanTranscriptLines([realShapeFirstEntry('Context first.\nROLE: REVIEW\nAttack the proposal.')], CWD, 'aaaaaaaaaaaaaaaaa')
+    assert.strictEqual(scan.ownRole, null)
+  })
   test('the MAIN Stop gate still ignores a transcript whose only write is a sidechain entry', async () => {
     const t = mkTranscript([scUser('w1', 'x'), scAssistant('w1', [writeBlock])])
     assert.strictEqual(await runMainGate({ transcript_path: t, cwd: CWD }), null)

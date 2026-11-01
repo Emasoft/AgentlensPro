@@ -88,12 +88,9 @@ export type Role = 'measure' | 'review'
  *  "ROLE: REVIEW is the marker…"); first-line anchoring (added here) is what BA0DCW98 needs — the
  *  two are independent and both required.
  *
- *  NOT used for `ownRole` (the self-exemption check, below): that reads a DIFFERENT string — the
- *  first user entry of the SPAWNED agent's own transcript, which per `declaredRoleOwnTranscript`'s
- *  own doc comment may arrive with harness-added preamble ahead of the marker line, so anchoring
- *  THIS function's position rule onto that read would falsely de-exempt every real REVIEW/MEASURE
- *  fork and deadlock the gate (each fork's own SubagentStop would then demand it spawn a reviewer
- *  of itself). Keep the two predicates separate; do not unify them. */
+ *  Since TRDD-8YM21R5X this ALSO feeds `ownRole` through `declaredRoleOwnTranscript` (the spawned
+ *  agent's self-exemption), so editing it changes self-exemption too. These are not the only role
+ *  readers: the worker-write scan (`workerDeclaredRole`) reads `Your directive: ` lines separately. */
 export function declaredRole(prompt: string): Role | null {
   let firstLine: string | undefined
   for (const line of prompt.split('\n')) {
@@ -105,24 +102,21 @@ export function declaredRole(prompt: string): Role | null {
   return m === r ? null : (m ? 'measure' : 'review')
 }
 
-/** Role claimed by the SPAWNED agent's OWN first transcript entry — its spawning brief as Claude
- *  Code actually delivered and recorded it, which (per a prior measurement, TRDD-3U8AIHXK) may
- *  carry harness-added preamble ahead of the `ROLE: …` line, unlike the parent's raw `input.prompt`
- *  string `declaredRole` reads above. Feeds ONLY `ownRole` (self-exemption from the agent's own
- *  SubagentStop gate) — NOT anchored to the first line, so this predicate still carries the
- *  BA0DCW98 residual: untrusted text quoted early in a spawned agent's own brief that happens to
- *  contain a bare marker line self-exempts that agent. Left open deliberately (orchestrator
- *  decision, 2026-09-24, pending a measurement of the wrapped shape): anchoring it requires
- *  knowing the actual harness-wrapped shape, which is
- *  unmeasured here, and a wrong anchor point deadlocks every real role fork — worse than the
- *  residual it would close. Whole-line equality with trailing-whitespace tolerance (the fixture K
- *  fix) still applies, so a marker with trailing prose does not exempt. Follow-up: measure the
- *  real wrapped shape (a MEASURE agent's own first transcript entry) and anchor this predicate the
- *  same way once that shape is known. */
+/** Role claimed by the SPAWNED agent's OWN first transcript entry (feeds ONLY `ownRole`, the
+ *  self-exemption from the agent's own SubagentStop gate). Anchored exactly like `declaredRole`: the
+ *  marker must be the FIRST NON-BLANK line, whole-line equality, trailing whitespace tolerated.
+ *  WHY (TRDD-8YM21R5X, shapes measured 2026-11-01, Claude Code 2.1.316): a freshly spawned non-fork
+ *  worker's first user entry is a plain string holding the brief verbatim, no harness preamble, so the
+ *  brief's first line IS the entry's first line. A fork's first entry is [tool_result, text]; userPromptText
+ *  returns '' for it, so this predicate never sees a fork (forks are exempted by the separate review-fork
+ *  rule). An agent resumed into a new session file starts with a tool_result or a "[SYSTEM NOTIFICATION…"
+ *  string, so it declares no role. Unanchored matching let a bare marker line buried in untrusted quoted
+ *  text self-exempt the agent (TRDD-BA0DCW98); anchoring closes that. No non-fork role agent was
+ *  measured, and under the gate's current rules role agents are forks. If a future Claude Code or a
+ *  SubagentStart hook puts a line ahead of a non-fork brief, non-fork role agents lose self-exemption
+ *  (the gate gets stricter, never looser). */
 export function declaredRoleOwnTranscript(prompt: string): Role | null {
-  const m = /^ROLE: MEASURE\s*$/m.test(prompt)
-  const r = /^ROLE: REVIEW\s*$/m.test(prompt)
-  return m === r ? null : (m ? 'measure' : 'review')
+  return declaredRole(prompt)
 }
 
 /** A declared role for the worker-write scan. `investigate` relaxes that scan only; it never credits a gate role
