@@ -192,13 +192,14 @@ WHAT ARMS IT (owner order 2026-09-15):
 WHAT NEVER ARMS IT: plain prose, status lines, read-only commands, files changed on disk by someone
 else (there is no mtime walk), a janitor heartbeat prompt (\`[janitor-heartbeat]\`) or a user interrupt (Esc / Ctrl-C,
 \`[Request interrupted by user…]\`) — each is a FLOOR: nothing before it is ever demanded, while a
-write the main agent makes AFTER it still arms — a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
-an agent whose OWN first transcript entry carries \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as a whole line
-by itself and as the first non-blank line of that entry (self-exemption; TRDD-8YM21R5X).
-This is DIFFERENT from what credits YOUR spawn to the gate scanning YOU (below): a spawn
-you make is only credited when the marker is the literal FIRST non-blank line of the prompt you
-wrote for it (TRDD-BA0DCW98: a marker buried later in the prompt you wrote, e.g. quoted from
-untrusted third-party text, no longer credits it).
+write the main agent makes AFTER it still arms — a janitor subagent (\`ai-maestro-janitor:*\`), any fork
+(\`subagent_type: "fork"\`: REVIEW and MEASURE forks alike, exempt by agent type), or a non-fork agent whose OWN
+first transcript entry has \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as its first non-blank line, that line whole by itself
+(self-exemption; TRDD-8YM21R5X).
+Self-exemption and crediting use the same first-line anchoring and differ in whose text is read and what it unlocks:
+self-exemption reads the first entry of the spawned agent itself and exempts that agent; crediting reads the prompt
+you wrote and credits your spawn to the gate scanning YOU (below). A marker buried later in the prompt you wrote,
+e.g. quoted from untrusted third-party text, credits nothing (TRDD-BA0DCW98).
 
 THE AGENTS:
 - REVIEW: the Agent tool, \`subagent_type: "fork"\`, with NO \`isolation\` parameter. Its prompt states what you did this turn and

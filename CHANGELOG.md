@@ -147,6 +147,8 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **The review gate self-exemption now requires the role marker on the first line of a non-fork agent brief.** A `ROLE` line buried in quoted text no longer exempts the agent, and a brief with `ROLE: MEASURE` first and `ROLE: REVIEW` later now resolves to measure (TRDD-8YM21R5X).
+
 - **Haiku 5.5 calls priced at zero are now priced.** Calls on claude-haiku-5-5 (Haiku 5.5 subagent sessions, including the [1m] alias) matched no rate-table key, so they were priced at $0 or reported as unpriced. The rate table now carries the entry with the two prompt-length tiers from the Anthropic pricing page: a call whose total input is over 100,000 tokens bills every bucket, output included, at the over-100,000 rates. (TRDD-KQ549VCQ)
 
 - **get_account_status --all review fixes.** A cached key row keeps its last check's verdict and date and says when its next check is allowed; the "Exception" sentence counts only readings a key actually took, and the archive warning names the rows that no working key refreshes; a corrupt key stamp names its file; the usage cache and cooldown files are written atomically; the usage-fetch lock reclaims a stale lock (older than three request timeouts) through the exclusive create and releases only its own lock. (TRDD-HO94JMKD)
