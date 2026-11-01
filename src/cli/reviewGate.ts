@@ -194,8 +194,8 @@ else (there is no mtime walk), a janitor heartbeat prompt (\`[janitor-heartbeat]
 \`[Request interrupted by user…]\`) — each is a FLOOR: nothing before it is ever demanded, while a
 write the main agent makes AFTER it still arms — a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
 an agent whose OWN first transcript entry carries \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as a whole line
-by itself (self-exemption; not anchored to that entry's first line — TRDD-8YM21R5X tracks that
-residual). This is DIFFERENT from what credits YOUR spawn to the gate scanning YOU (below): a spawn
+by itself and as the first non-blank line of that entry (self-exemption; TRDD-8YM21R5X).
+This is DIFFERENT from what credits YOUR spawn to the gate scanning YOU (below): a spawn
 you make is only credited when the marker is the literal FIRST non-blank line of the prompt you
 wrote for it (TRDD-BA0DCW98: a marker buried later in the prompt you wrote, e.g. quoted from
 untrusted third-party text, no longer credits it).

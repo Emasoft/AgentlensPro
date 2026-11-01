@@ -663,7 +663,7 @@ suite('reviewGate — agentCannotSpawn / declaredToolsHaveAgent (built-in + plug
 // -- whole-line equality (unchanged here) is what keeps fixture K closed; first-line anchoring (new
 // here) is what keeps BA0DCW98 closed on the credit path; the two checks are independent and this
 // suite covers both. `declaredRoleOwnTranscript` (own suite below) is the SEPARATE self-exemption
-// predicate and is deliberately NOT anchored the same way -- do not unify the two.
+// predicate; since TRDD-8YM21R5X it delegates to declaredRole, so both share its first-line anchoring.
 suite('reviewGate — declaredRole: the marker must be the prompt\'s literal first line', () => {
   test('the marker AS the prompt\'s first line is credited, trailing whitespace or \\r tolerated', () => {
     assert.strictEqual(declaredRole('ROLE: MEASURE'), 'measure')
