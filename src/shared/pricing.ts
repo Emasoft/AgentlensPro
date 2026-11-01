@@ -45,9 +45,8 @@ export interface ModelRates {
   //   - Anthropic (historical Sonnet 4 1M beta): premium keyed on requests exceeding 200K input
   //     tokens. Current Claude models have NO surcharge, except claude-haiku-5-5 (a whole-request
   //     step at 100,000 input tokens; see its RATES row): "Claude 4.6 and later models (except
-  //     Claude Haiku 5.5) include the
-  //     full 1M token context window at standard pricing. (A 900k-token request is billed at the
-  //     same per-token rate as a 9k-token request.)"
+  //     Claude Haiku 5.5) ... include the full 1M token context window at standard pricing. (A
+  //     900k-token request is billed at the same per-token rate as a 9k-token request.)"
   //     (platform.claude.com/docs/en/about-claude/pricing#long-context-pricing)
   // Field names keep the historical "Above200k" spelling for 1:1 Rust field mapping; the actual
   // threshold is `surchargeThresholdTokens` (default 200_000 when absent).
