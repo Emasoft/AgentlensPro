@@ -1,14 +1,16 @@
 ---
 trdd-id: 7FA3NIXU
 title: The review gate charges every answering turn a fork because its scan is anchored at the window
-column: backburner
+column: superseded
 created: 2026-09-08T12:36:26+0200
-updated: 2026-09-08T12:36:26+0200
+updated: 2026-11-01T11:17:41+0100
 current-owner: main-session
 task-type: refactor
 scope: project
 min-approval-requirement: none
 parent-trdd: DRH4ZRGB
+status: archived
+superseded-by: [QQ2XIIZ6]
 ---
 
 # The review gate charges every answering turn a fork because its scan is anchored at the window
@@ -18,6 +20,7 @@ parent-trdd: DRH4ZRGB
 Split out of TRDD-DRH4ZRGB, which had accumulated it as a section with no acceptance criteria —
 it would have been frozen inside that card when its message boxes ticked. NEXT ACTION: the owner
 decides whether to change the anchor at all. Nothing has been edited in the gate.
+2026-11-01: superseded by TRDD-QQ2XIIZ6 — the gate now scans only the turn that just ended (9105ecde, isTurnStart in src/cli/reviewGate.ts), and plain prose never arms it, so narrating a finished review in a later turn is no longer charged as work.
 
 ## The property
 
@@ -85,3 +88,7 @@ review.
       card is updated with the result.
 - [ ] Both owner orders are demonstrably intact (2026-09-03 never bypassed; 2026-09-07 a proposal
       is work).
+
+## Approval log
+
+- 2026-11-01T11:17:41+0100 — SUPERSEDED by main-agent@agentlenspro. the window anchor was replaced by the per-turn scan of QQ2XIIZ6.

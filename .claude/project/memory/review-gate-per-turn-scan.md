@@ -2,7 +2,7 @@
 name: review-gate-per-turn-scan
 description: "review gate demands a review for an old command / review hook reads a 4MB transcript tail / review gate re-arms every turn / unreviewed write from an earlier turn blocks a later turn / stop hook asks for review again / long turn falls outside the 4MB window / what is per-turn review / readTranscriptTail 4 MB default / carry-over stops at a heartbeat or user interrupt floor / is the review carry-over unlimited / owner quote about per-turn review misattributed / review scan wastes work on earlier turns / TRDD-QQ2XIIZ6 per-turn scan / review gate scans the whole transcript / why does the review hook read 4MB"
 ocd: 2026-10-14
-lmd: 2026-10-14
+lmd: 2026-11-01
 metadata:
   node_type: memory
   type: project
@@ -16,6 +16,11 @@ publish-globally: false
 
 ^ATOM-RJ09-3G22 [desc: "the Stop review gate reads only the current turn back to its start (readCurrentTurn); the 4 MB tail is delegateGate-only; the supervisor judges the last completed turn", keywords: review_gate_demands_review_for_an_old_command review_hook_reads_4MB readTranscriptTail review_gate_re-arms_every_turn unreviewed_write_from_an_earlier_turn stop_hook_asks_for_review_again long_turn_falls_outside_4MB_window review_gate_scans_whole_transcript reviewGate.ts_readTranscriptTail review_gate_blocks_a_later_turn, trdd: TRDD-QQ2XIIZ6, ocd: 2026-10-14, lmd: 2026-10-14]
 The Stop review gate reads only the current turn: readCurrentTurn reads backward from the end of the transcript to the start of the current turn, a non-sidechain user entry with an object turnPosition. The 4 MB tail (readTranscriptTail) remains only for delegateGate. The supervisor judges the last completed turn. Carry-over across turns was bounded by floors (a heartbeat prompt or a user interrupt resets the window), and whether the heartbeat floor fires on isMeta user heartbeat entries is unverified. The owner objection, verbatim: "but it is called per-turn review. it should only review the last turn actions. why it is extracting info from 4MB of history?" Deployed in commit 9105ecde, live via the npm link; the report-marker rename is uncommitted.
+
+
+^ATOM-Z5VP-6JOJ [desc: "to satisfy the review gate put the ROLE-marked non-isolated fork spawn after the turn's last write or proposal; plain text after it is free, another write re-arms", keywords: review_gate_keeps_blocking_after_I_spawned_a_reviewer review_fork_spawned_but_gate_still_fires where_to_put_the_review_fork_in_the_response positional_exit_lastFork_at_or_after_lastWork text_after_the_fork_re-arms_the_gate review_gate_satisfiable_by_a_turn_that_answers_the_user spawn_the_fork_last write_after_the_fork_re-arms_the_review_gate split_text_and_fork_across_two_responses fork_prompt_first_line_ROLE_REVIEW_credits, trdd: TRDD-DRH4ZRGB, ocd: 2026-11-01, lmd: 2026-11-01]
+
+The gate releases when the credited REVIEW spawn sits at or after the turn's last write or proposal line (a positional comparison of transcript indexes; for a proposal the MEASURE spawn must also sit at or after the last proposal line). Put the fork Agent tool_use after the turn's last write, write-shaped command or proposal; plain text after the spawn is free, and plain prose never arms the gate at all, but another write or proposal after the spawn re-arms it. The credit goes to a subagent_type fork with no isolation parameter whose prompt's FIRST line is exactly the ROLE marker; the same marker buried later in the prompt credits nothing. This is the directive printed by agentlenspro review-gate --directive, verified 2026-11-01 (TRDD-QQ2XIIZ6 per-turn scan). It replaces the pre-QQ2XIIZ6 belief that any text after the fork was fatal and that text and fork had to share one response.
 
 ## Governed by
 

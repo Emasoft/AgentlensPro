@@ -1,21 +1,24 @@
 ---
 trdd-id: DRH4ZRGB
 title: The review-gate block message omits the positional rule its own instruction violates
-column: blocked
+column: complete
 created: 2026-09-08T11:37:44+0200
-updated: 2026-10-16T17:07:17+0200
+updated: 2026-11-01T11:20:21+0100
 current-owner: main-session
 task-type: bugfix
 scope: project
 min-approval-requirement: none
 implementation-commits: [e7d1d3c7, 4521dea7, a18ff9f1, f9ec0ecc]
 eht: [7FA3NIXU]
-blocked-by: [7FA3NIXU]
-status: tasked
-pre-block-column: testing
-unblock-when: [trdd:7FA3NIXU terminal]
-blocker-probe: [trddgrep, why, DRH4ZRGB]
-blocker-holds-if: not-match:READY
+blocked-by: []
+status: archived
+pre-block-column: 
+unblock-when: 
+blocker-probe: 
+blocker-holds-if: 
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-01T11:20:04+0100
 ---
 
 # The review-gate block message omits the positional rule its own instruction violates
@@ -38,6 +41,7 @@ criterion says the predicate is unchanged. Disclosing a rule the gate already en
 never-bypass order (2026-09-03); it does not revise it. Tier 0. The test that catches it is the
 one already applied to the sibling card and then not applied here — metadata inheritance across
 a card split is the trap, and this card is where it bit twice.
+2026-11-01 — SPLIT DONE. Blocker 7FA3NIXU is terminal (superseded by QQ2XIIZ6), cleared; column testing. Row 1 (§The passing shape exists) landed as atom ATOM-Z5VP-6JOJ in the PROJECT page review-gate-per-turn-scan, rewritten for the per-turn gate: the old claim that text after the fork is fatal and that text and fork must share one response is SUPERSEDED (plain prose never arms the gate now); the entry-per-block question is moot; fork credit and isolation were already in review-gate-credit-and-isolation. Row 2 (§The loop, and who drives it) folded into the LOCAL card T2N1GOZ2 as a new section. Row 3 (§A cost property) was already split out as 7FA3NIXU.
 
 ## Review verdict — 2026-09-10 14:24 (combined `ai_review` of e7d1d3c7 + 4521dea7 + a18ff9f1)
 
@@ -305,3 +309,5 @@ Commit 847dc5c4 endorses column testing (accurate — the message work is done),
 ## Approval log
 
 - 2026-10-16T11:13:32+0200 — column → blocked by main-agent@agentlenspro. its eht 7FA3NIXU is backburner, not terminal; triage row 11
+- 2026-11-01T11:20:04+0100 — column → testing by main-agent@agentlenspro. blocker 7FA3NIXU is terminal (superseded by QQ2XIIZ6) Cleared blocked-by (--clear-blocker override).
+- 2026-11-01T11:20:21+0100 — COMPLETE by main-agent@agentlenspro. split done: passing shape to wikimem atom ATOM-Z5VP-6JOJ, loop lesson to local card, cost property to 7FA3NIXU (superseded).
