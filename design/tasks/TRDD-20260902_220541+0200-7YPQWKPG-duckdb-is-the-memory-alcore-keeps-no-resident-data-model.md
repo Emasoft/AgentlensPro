@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-11-01T05:01:51+0100
+updated: 2026-11-01T09:50:39+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -22,6 +22,7 @@ blocker-holds-if: not-match:READY
 approved: true
 approval-judge: user
 approval-datetime: 2026-11-01T02:38:17+0100
+implementation-commits: [6c50142a, 4b408081]
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-01T02:36:38+0100
@@ -70,6 +71,15 @@ FSMISF5K), XTFDRTH2 ai_review (merged ac289d8d), GR6WHHK5 testing (merged c89148
 footprint AND RSS; expect peak ≤ 3 GB and CPU ≤ 15%. If RSS still carries MADV_FREE residue,
 evaluate `MIMALLOC_PURGE_DELAY=0` / eager decommit as a one-line knob card, not a refactor.
 2026-10-16: correction to commit e5cd319d's message: its BLOCKED-WITHOUT-PROBE finding came from this triage (unblock-when alone does not satisfy the rule), not from before it; blocker-probe was added afterwards.
+- 2026-11-01, Step 2 (32 typed card columns, schema v2 in place, batch-halving SQL backfill) committed 6c50142a, merged into feat/duckdb-is-the-memory as 4b408081. Post-merge checks (core_cap_guard, card_store tests, clippy on the merged head) not yet run.
+- 2026-11-01, DEPLOY GATE: step 2 deploys with or after step 9a, never before (first-boot backfill retained +335 MB on the backfill alone; whether it adds to the resident load is unmeasured; today's build exits at the 2 GB cap).
+- 2026-11-01, OWED after the merge: run typed_open_footprint_on_a_real_corpus (whole first open: migration plus backfill plus resident load) per the step 2 review-fixes report procedure. The 74,730-row / 6.7 s / 406 MB figures are from round 1, before round 2 changed the backfill; re-measure.
+- 2026-11-01, NPT for the step that removes the resident layer: put_arc decides insert-or-update from the resident layer and panics on a divergence; when the layer goes, the existence test must become a primary-key probe (SELECT on session_id), never ON CONFLICT DO UPDATE (with 39 columns that held about 1 MB per statement until COMMIT and ran out of memory after 239 statements).
+- 2026-11-01, at the step 1a merge, re-read put_arc together with step 1a's card_store.rs hunk (both change card_store.rs).
+- 2026-11-01, the next CARD_SCHEMA_VERSION bump rebuilds every v2 file from the snapshot unless an in-place step is added beside migrate_v1.
+- 2026-11-01, known residual: a single card that cannot be typed even at the 1024 MiB rebuild limit panics in finish_swap on every boot (crash loop); largest cards measured are 314 KB and 2.8 MB.
+- 2026-11-01, step 2 review findings rejected, with reasons: mapping a one-row out-of-memory to NotEligible (it rebuilt the store empty in a_wal_is_carried_into_the_rewrite; the rewrite is the recovery for WAL replay); generalising the in-place migration beyond v1 (a v3's changes are unknown); "the rewrite cannot help an out-of-memory backfill" (it is the WAL-replay recovery and raises the limit).
+- 2026-11-01, after all steps merge: remove the 7yp-step2 worktree and its merged branch.
 
 ## WHY
 
