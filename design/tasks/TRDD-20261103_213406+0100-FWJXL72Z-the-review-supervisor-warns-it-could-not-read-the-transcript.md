@@ -4,7 +4,7 @@ title: The review supervisor warns it could not read the transcript on a session
 column: testing
 status: tasked
 created: 2026-11-03T21:34:06+0100
-updated: 2026-11-03T22:17:06+0100
+updated: 2026-11-03T22:20:35+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -48,3 +48,4 @@ Not covered: one mid-session warning (session ff701ebd, 2026-11-03T19:05:26Z) on
 Fix: on UserPromptSubmit, a non-empty path to a missing file means no completed turn (lines = []). Stop, SubagentStop and an empty path still warn. Trade-off (review): a wrong or stale path mid-session is no longer flagged at prompt time, only at Stop.
 Follow-up: the env-gated probe (log transcript_path, its type, existsSync, and the readCurrentTurn null reason) would separate the empty-path branch from the missing-file branch and explain the mid-session case.
 Live check: passive. After the bundle rebuild at 2026-11-03T21:14:03Z, count first-prompt warnings in transcripts born after that time. Baseline about 5 a day (24 in 5 days); 0 over a day confirms the fix.
+Correction (review of 797fe357): the "over 5 days" window and the "about 5 a day" baseline above are wrong; they came from a file-modification filter, and the 24 hits span about 40 days. Measured instead: 58 of 254 main sessions born from 2026-10-20 to the rebuild got the first-prompt warning (p about 0.23). Live check: confirmed when at least 15 sessions born after 2026-11-03T21:14:03Z show 0 first-prompt warnings (0.77^15 is about 0.02), with the supervisor shown to still run in them. The registered hook command `agentlenspro review-supervisor` was run directly on 2026-11-03: it printed nothing for UserPromptSubmit with a missing transcript, and the UNVERIFIED warning for Stop (the liveness control). Minor: the worker measured 0.0-6.4 s (the code comment says 0.5-6.4 s), and the full 3345-test mocha run predates the comment-only follow-up.
