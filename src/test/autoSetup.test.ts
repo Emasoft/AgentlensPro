@@ -713,7 +713,9 @@ suite('enable — the telemetry verdict comes first, then the restore, then the 
     let code: number
     try { code = await runEnableCli(false, { ctx: f.ctx, repair: r.repair, stderr: lines().say }) } finally { console.log = log }
     assert.strictEqual(code, EXIT.OK)
-    assert.deepStrictEqual(r.calls, ['otel-env', 'skill'], 'the telemetry repair is the FIRST action')
+    // The telemetry repair is the FIRST action; the trailing one is the converge after the lift, which writes the
+    // raw-body key the pre-lift converge held absent (TRDD-RBBEX59R: every lift is followed by one telemetry converge).
+    assert.deepStrictEqual(r.calls, ['otel-env', 'skill', 'otel-env'], 'the telemetry repair is the FIRST action')
     assert.ok(!agentlensDisabled(), 'switch disarmed')
     assert.strictEqual(readSettings(f).env!.OTEL_LOGS_EXPORT_INTERVAL, '5000')
     for (const name of SKILL_NAMES) assert.ok(fs.existsSync(path.join(f.skillsDir, name, 'SKILL.md')), `${name} restored`)

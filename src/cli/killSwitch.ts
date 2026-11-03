@@ -139,33 +139,11 @@ export function agentlensDisabled(dir: string = dataDir()): boolean {
   return killSwitchHalf(dir) !== null
 }
 
-/** The `Reason:` an automatic disable records when ANOTHER telemetry pipeline is configured. Lives here, beside the
- *  flag, so the raw-body decision below can read it without importing foreignTelemetry.ts (which imports
- *  telemetryConfig.ts, which needs this decision: a cycle). foreignTelemetry.ts re-exports it. */
-export const FOREIGN_REASON = 'foreign telemetry configuration present — run with --force-install-telemetry'
-
-/**
- * Must OTEL_LOG_RAW_API_BODIES be ABSENT from settings.json right now? True while the off switch is armed BY THE
- * OPERATOR: the env half, or the flag file with any reason except FOREIGN_REASON.
- * WHY (owner rule 2026-11-03, TRDD-RBBEX59R): "the disabled mode should ONLY stop the collection of the telemetry
- * logs and raw bodies" — so the raw-body key is the one owned key whose convergence target flips to ABSENT, and
- * setup / auto-repair / --install-otel must never write it back while the switch stands (setup must not undo the
- * disable verb, which strips it). A FOREIGN-armed switch is exempt: agentlenspro armed it itself, the disable verb
- * never stripped the key, and the very run that converges telemetry also lifts that switch (stepOtel ->
- * enableIfForeign, ensureInstalled launch) — keeping the key absent there would leave a lifted install without it.
- * `dir` is explicit at every setup call site: the flag of the data dir being converged, never the env default.
- * An unreadable flag reads as operator-armed (absent key): the failure direction is "no raw-body collection".
- */
-export function rawBodiesCaptureOff(dir: string = dataDir()): boolean {
-  const half = killSwitchHalf(dir)
-  if (half === 'env') return true
-  if (half !== 'file') return false
-  try { return !fs.readFileSync(killSwitchPath(dir), 'utf8').includes(`Reason: ${FOREIGN_REASON}`) } catch { return true }
-}
-
 /** Arm the global kill-switch. Idempotent. Returns the flag path. */
-export function armKillSwitch(reason?: string): string {
-  const p = killSwitchPath()
+export function armKillSwitch(reason?: string, dir: string = dataDir()): string {
+  // `dir` (TRDD-RBBEX59R): the arm and the check must hit the SAME file. setup's foreign check reads ctx.dataDir's flag,
+  // so the writer takes that dir too — on the env default it armed a different dir's flag than the one later checked.
+  const p = killSwitchPath(dir)
   fs.mkdirSync(path.dirname(p), { recursive: true })
   // The body is a human note, never parsed — an operator who finds this file months later must be
   // able to tell WHY it is there and how to undo it without reading our source.
@@ -191,8 +169,10 @@ export function armKillSwitch(reason?: string): string {
 /** Disarm the global kill-switch. Idempotent — a missing flag is success, not an error. Any OTHER
  *  unlink failure (EACCES, EPERM, EBUSY) is thrown: swallowing it let `agentlenspro enable` print
  *  "now ENABLED" while the flag stayed on disk and the hooks kept no-op'ing. */
-export function disarmKillSwitch(): boolean {
-  const p = killSwitchPath()
+export function disarmKillSwitch(dir: string = dataDir()): boolean {
+  // `dir` (TRDD-RBBEX59R): removal must hit the file the foreign check read (ctx.dataDir), never the env default's flag,
+  // and the keep-status-line marker beside it in that same dir.
+  const p = killSwitchPath(dir)
   // The FLAG goes first. A marker that cannot be deleted still throws, but only after the flag is already
   // gone: AgentlensPro is left enabled (the marker is inert without the flag), not disabled with the flag
   // still on disk. The throw still reaches `enable`, which stops before restoring the parked skills.
@@ -203,7 +183,7 @@ export function disarmKillSwitch(): boolean {
   }
   // The keep-status-line marker only means something beside the flag (owner request 2026-10-27), so
   // it goes with it: a stale marker would resurrect status-line-only capture at the next `disable`.
-  try { fs.unlinkSync(keepStatuslinePath()) } catch (e) {
+  try { fs.unlinkSync(keepStatuslinePath(dir)) } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
   }
   return existed

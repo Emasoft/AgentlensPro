@@ -1,33 +1,42 @@
-// TRDD-RBBEX59R increment (b): while the operator's off switch is armed, setup / auto-repair / the spool migration
-// must never write OTEL_LOG_RAW_API_BODIES back into settings.json — the disable verb strips it, and disabled mode
-// stops raw-body collection (owner rule 2026-11-03). Every test runs against a temp HOME + DATA_DIR; the switch is
-// armed by writing <tmpDataDir>/DISABLED directly (armKillSwitch has no dir parameter and would write the real one).
-// No test starts a server: the enable case drives ensureInstalled with stubbed non-telemetry repairs.
+// TRDD-RBBEX59R increment (b): while ANY half of the off switch is armed (whatever the recorded reason), setup /
+// auto-repair / the spool migration / the forced install must never write OTEL_LOG_RAW_API_BODIES into settings.json —
+// the disable verb strips it, and disabled mode stops raw-body collection (owner rule 2026-11-03). Every lift (enable,
+// both foreign lifts, the forced install) is followed by one telemetry converge, so the key comes back in that run.
+// Every test runs against a temp HOME + data dir; AGENTLENS_DATA_DIR points at it, so the default-dir helpers the enable
+// verb uses (agentlensDisabled(), enableAgentlensSurfaces()) and ctx.dataDir name the SAME flag. No test starts a
+// server: ensureInstalled runs with stubbed non-telemetry repairs.
 import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { Ctx, REPAIR_STEPS, SpoolMigrationDeps, otelDrift, rawBodiesOffFor, runSpoolMigration } from '../cli/setup'
-import { ensureInstalled } from '../cli/autoSetup'
-import { FOREIGN_REASON } from '../cli/killSwitch'
+import { Ctx, REPAIR_STEPS, SpoolMigrationDeps, otelDrift, runSpoolMigration } from '../cli/setup'
+import { AutoSetupDeps, ensureInstalled, forceInstallTelemetry } from '../cli/autoSetup'
+import { runEnableCli } from '../cli/disableCli'
+import { FOREIGN_REASON } from '../cli/foreignTelemetry'
+import { agentlensDisabled, overrideKillSwitchEnv } from '../cli/killSwitch'
+import { EXIT } from '../cli/cliErrors'
 import { RAW_BODIES_KEY, effectiveBodiesDir } from '../captureConfig'
 import { ensureTelemetryConfig, ownedTelemetryKeys, removeTelemetryConfig } from '../telemetryConfig'
 
 const OTLP_PORT = 4318
 const SPOOL_VALUE = 'file:/Volumes/AgentLensSpool/otel-bodies'
+const ENV_KEYS = ['AGENTLENS_DISABLED', 'AGENTLENS_DATA_DIR', 'HOME'] as const
 
 suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
   let dir: string
   let ctx: Ctx
-  let savedEnvHalf: string | undefined
+  let saved: Record<string, string | undefined>
 
   setup(() => {
-    // The env half of the switch must not leak in from the shell running mocha: saved, deleted, restored.
-    savedEnvHalf = process.env.AGENTLENS_DISABLED
+    // The env half of the switch must not leak in from the shell running mocha; the data dir and HOME are pinned to
+    // the temp dir so the enable verb's default-dir helpers act on this test's flag. All saved and restored.
+    saved = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
     delete process.env.AGENTLENS_DISABLED
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-rawoff-'))
     const dataDir = path.join(dir, 'data')
     fs.mkdirSync(dataDir, { recursive: true })
+    process.env.AGENTLENS_DATA_DIR = dataDir
+    process.env.HOME = dir
     ctx = {
       dryRun: false, yes: true, forceInstall: false, telemetryProbe: { managedSettingsPaths: [], processEnv: {} },
       home: dir, dataDir, settingsPath: path.join(dir, 'settings.json'),
@@ -36,8 +45,11 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
     }
   })
   teardown(() => {
-    if (savedEnvHalf === undefined) delete process.env.AGENTLENS_DISABLED
-    else process.env.AGENTLENS_DISABLED = savedEnvHalf
+    overrideKillSwitchEnv(false) // module-level state: a forced-install test must not leak it into later tests
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
@@ -50,7 +62,22 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
   const marker = (): { keys: Record<string, { hadKey: boolean; priorValue: string | null }>; written?: Record<string, string[]> } =>
     JSON.parse(fs.readFileSync(markerPath(), 'utf8'))
   const ours = (): string => `file:${effectiveBodiesDir(ctx.dataDir)}`
+  const expected = (): Record<string, string> => ownedTelemetryKeys(effectiveBodiesDir(ctx.dataDir), OTLP_PORT)
   const runOtel = (c: Ctx = ctx) => REPAIR_STEPS['otel-env'].run(c)
+  // Only the telemetry step runs for real (with the ctx ensureInstalled built); nothing can start a server.
+  const deps = (stderr: string[] = []): AutoSetupDeps => ({
+    ctx, stderr: (line: string) => { stderr.push(line) },
+    repair: async (step, c) => step === 'otel-env'
+      ? { ok: (await REPAIR_STEPS[step].run(c)).result.verify === 'PASS', detail: 'otel' }
+      : { ok: true, detail: 'stubbed' },
+    fullSetup: async () => { throw new Error('full setup must not run') },
+  })
+  /** runEnableCli prints its summary with console.log; keep the test output clean. */
+  const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const log = console.log
+    console.log = (): void => { /* quiet */ }
+    try { return await fn() } finally { console.log = log }
+  }
 
   test('setup otel step under the switch writes every telemetry key except the raw-body key; without it, writes it as today', async () => {
     arm()
@@ -58,8 +85,7 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
     assert.strictEqual(armed.result.verify, 'PASS', armed.result.detail)
     const env = envOf()
     assert.ok(!(RAW_BODIES_KEY in env), 'raw-body key must stay absent under the switch')
-    const expected = ownedTelemetryKeys(effectiveBodiesDir(ctx.dataDir), OTLP_PORT)
-    for (const [k, v] of Object.entries(expected)) if (k !== RAW_BODIES_KEY) assert.strictEqual(env[k], v, k)
+    for (const [k, v] of Object.entries(expected())) if (k !== RAW_BODIES_KEY) assert.strictEqual(env[k], v, k)
     // Marker: the key stays OWNED (prior state recorded for uninstall), but nothing was written for it.
     assert.deepStrictEqual(marker().keys[RAW_BODIES_KEY], { hadKey: false, priorValue: null })
     assert.strictEqual(marker().written?.[RAW_BODIES_KEY], undefined)
@@ -119,38 +145,114 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
     assert.strictEqual(envOf()[RAW_BODIES_KEY], ours())
   })
 
-  test('the enable trigger converges before the lift and writes the raw-body key back; the env half still keeps it absent', async () => {
+  test('the enable verb: the converge before the lift removes the key and says so, the converge after it writes it back', async () => {
+    await runOtel() // enabled install, key present
     arm()
-    const deps = {
-      ctx, stderr: () => { /* quiet */ },
-      // Only the telemetry step runs for real (with the ctx ensureInstalled built); nothing can start a server.
-      repair: async (step: keyof typeof REPAIR_STEPS, c: Ctx) => step === 'otel-env'
-        ? { ok: (await REPAIR_STEPS[step].run(c)).result.verify === 'PASS', detail: 'otel' }
-        : { ok: true, detail: 'stubbed' },
-      fullSetup: async () => { throw new Error('full setup must not run') },
-    }
-    assert.strictEqual(await ensureInstalled('enable', 'enable', deps), null)
-    assert.strictEqual(envOf()[RAW_BODIES_KEY], ours())
-    disarm() // what the enable verb does next: the converged state needs no further write
+    const lines: string[] = []
+    assert.strictEqual(await quietly(() => runEnableCli(false, deps(lines))), EXIT.OK)
+    assert.ok(!fs.existsSync(flag()), 'flag lifted')
+    assert.strictEqual(envOf()[RAW_BODIES_KEY], ours(), 'key written back in the same run')
+    // R5: the pre-lift converge REMOVED the key; the line must say so, not "converged".
+    assert.ok(lines.includes(`agentlenspro: removed ${RAW_BODIES_KEY} (off switch armed)`), lines.join('|'))
     const after = otelDrift(ctx)
     assert.ok(after !== 'unparseable' && after.converged)
-
-    fs.rmSync(ctx.settingsPath)
-    process.env.AGENTLENS_DISABLED = '1' // env half: deleting the file cannot lift it, so the key stays absent
-    assert.strictEqual(await ensureInstalled('enable', 'enable', deps), null)
-    assert.ok(!(RAW_BODIES_KEY in envOf()))
   })
 
-  test('a FOREIGN-armed switch does not hold the key absent (the converging run lifts it)', async () => {
+  test('the enable verb under the env half lifts the flag file but keeps the key absent', async () => {
+    arm()
+    process.env.AGENTLENS_DISABLED = '1' // env half: deleting the file cannot lift it
+    assert.strictEqual(await quietly(() => runEnableCli(false, deps())), EXIT.UNKNOWN)
+    assert.ok(!fs.existsSync(flag()), 'flag file removed')
+    assert.ok(!(RAW_BODIES_KEY in envOf()), 'raw-body key stays absent while AGENTLENS_DISABLED=1')
+  })
+
+  test('a FOREIGN-armed switch holds the key absent too; the setup step lifts it and converges once more', async () => {
     arm(FOREIGN_REASON)
-    assert.strictEqual(rawBodiesOffFor(ctx), false)
     const r = await runOtel()
     assert.strictEqual(r.result.verify, 'PASS', r.result.detail)
+    assert.ok(!fs.existsSync(flag()), 'foreign flag lifted')
+    assert.strictEqual(envOf().OTEL_EXPORTER_OTLP_ENDPOINT, expected().OTEL_EXPORTER_OTLP_ENDPOINT, 'endpoint is ours')
+    assert.strictEqual(envOf()[RAW_BODIES_KEY], ours(), 'key written by the converge after the lift')
+  })
+
+  test('a foreign lift for ctx removes ctx.dataDir flag, never the env-default dir operator flag', async () => {
+    // TRDD-RBBEX59R: the check (enableIfForeign on dirs.dataDir) and the removal (disarmKillSwitch) must hit the SAME file.
+    // Dir A is the env default and holds an OPERATOR flag; ctx's own data dir B holds a FOREIGN flag; no foreign config.
+    const a = path.join(dir, 'env-default-data')
+    fs.mkdirSync(a, { recursive: true })
+    process.env.AGENTLENS_DATA_DIR = a
+    const aFlag = path.join(a, 'DISABLED')
+    fs.writeFileSync(aFlag, 'AgentlensPro is DISABLED.\nReason: operator test\n')
+    const aBytes = fs.readFileSync(aFlag)
+    arm(FOREIGN_REASON) // ctx.dataDir (B)
+    const r = await runOtel()
+    assert.strictEqual(r.result.verify, 'PASS', r.result.detail)
+    assert.ok(!fs.existsSync(flag()), 'B foreign flag lifted')
+    assert.ok(fs.existsSync(aFlag), 'A operator flag still present')
+    assert.ok(fs.readFileSync(aFlag).equals(aBytes), 'A operator flag byte-identical')
+    assert.strictEqual(envOf()[RAW_BODIES_KEY], ours(), 'raw-body key written for B')
+  })
+
+  test('a launch that lifts a FOREIGN switch (telemetry otherwise current) converges once more and writes the key', async () => {
+    const { [RAW_BODIES_KEY]: _raw, ...rest } = expected()
+    void _raw
+    writeEnv(rest)
+    arm(FOREIGN_REASON)
+    const pre = otelDrift(ctx)
+    assert.ok(pre !== 'unparseable' && pre.converged, 'under the switch an absent key is converged: no otel repair before the lift')
+    const lines: string[] = []
+    assert.strictEqual(await ensureInstalled('launch', 'budget', deps(lines)), null)
+    assert.ok(!fs.existsSync(flag()), 'foreign flag lifted')
+    assert.strictEqual(envOf().OTEL_EXPORTER_OTLP_ENDPOINT, expected().OTEL_EXPORTER_OTLP_ENDPOINT, 'endpoint is ours')
+    assert.strictEqual(envOf()[RAW_BODIES_KEY], ours(), lines.join('|'))
+  })
+
+  test('round trip: a prior value of ours, install under the switch, enable, re-converge, uninstall restores the prior value', async () => {
+    writeEnv({ [RAW_BODIES_KEY]: SPOOL_VALUE, KEEP_ME: 'x' }) // the legacy spool value: owned by value, not by marker
+    arm() // armed FIRST, then the first install (R3)
+    const drift = otelDrift(ctx)
+    assert.ok(drift !== 'unparseable')
+    // R2: an owned value under the switch reads "will be removed" — never a write text, never FOREIGN.
+    const row = drift.rows.find(x => x.scope === 'user' && x.key === RAW_BODIES_KEY)
+    assert.ok(row && row.state === 'CONVERGE' && row.detail.includes('will be removed') && !row.detail.includes('wants'), JSON.stringify(row))
+    const first = await runOtel()
+    assert.strictEqual(first.result.verify, 'PASS', first.result.detail)
+    assert.ok(!(RAW_BODIES_KEY in envOf()))
+    assert.deepStrictEqual(marker().keys[RAW_BODIES_KEY], { hadKey: true, priorValue: SPOOL_VALUE })
+
+    assert.strictEqual(await quietly(() => runEnableCli(false, deps())), EXIT.OK)
+    assert.strictEqual(envOf()[RAW_BODIES_KEY], ours())
+    const second = await runOtel()
+    assert.strictEqual(second.result.verify, 'PASS', second.result.detail)
+    assert.deepStrictEqual(marker().keys[RAW_BODIES_KEY], { hadKey: true, priorValue: SPOOL_VALUE }, 'prior state recorded once, never overwritten')
+
+    await removeTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath: markerPath(), dataDir: ctx.dataDir })
+    assert.deepStrictEqual(envOf(), { [RAW_BODIES_KEY]: SPOOL_VALUE, KEEP_ME: 'x' })
+  })
+
+  test('first install under the switch with every other key already equal still records the raw-body prior state (R3)', async () => {
+    const { [RAW_BODIES_KEY]: _raw, ...rest } = expected()
+    void _raw
+    writeEnv(rest)
+    const bytes = fs.readFileSync(ctx.settingsPath, 'utf8')
+    arm()
+    const r = await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath: markerPath(), dataDir: ctx.dataDir, otlpPort: OTLP_PORT, managedSettingsPaths: [], processEnv: {} })
+    assert.strictEqual(r.changed, false)
+    assert.strictEqual(fs.readFileSync(ctx.settingsPath, 'utf8'), bytes, 'settings untouched')
+    assert.deepStrictEqual(marker().keys[RAW_BODIES_KEY], { hadKey: false, priorValue: null })
+  })
+
+  test('--force-install-telemetry under AGENTLENS_DISABLED=1 and an armed flag writes the key (R4)', async () => {
+    arm()
+    process.env.AGENTLENS_DISABLED = '1'
+    assert.strictEqual(await forceInstallTelemetry('budget', deps()), null)
+    assert.ok(!fs.existsSync(flag()), 'flag lifted')
+    assert.strictEqual(agentlensDisabled(ctx.dataDir), false, 'the env half is overridden for this process')
     assert.strictEqual(envOf()[RAW_BODIES_KEY], ours())
   })
 
   test('spool migration ACT 3 removes a spool-pointing raw-body key under the switch, re-points it without', async () => {
-    const deps: SpoolMigrationDeps = {
+    const spoolDeps: SpoolMigrationDeps = {
       volumeMounted: () => false,
       detachVolume: () => { throw new Error('no volume') },
       drain: async () => { throw new Error('no drain') },
@@ -161,14 +263,14 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
     }
     writeEnv({ [RAW_BODIES_KEY]: SPOOL_VALUE, KEEP_ME: 'x' })
     arm()
-    const armed = await runSpoolMigration(ctx, deps)
+    const armed = await runSpoolMigration(ctx, spoolDeps)
     assert.strictEqual(armed.result.verify, 'PASS', armed.result.detail)
     assert.ok(armed.result.action.includes('removed the raw-body key'), armed.result.action)
     assert.deepStrictEqual(envOf(), { KEEP_ME: 'x' })
 
     disarm()
     writeEnv({ [RAW_BODIES_KEY]: SPOOL_VALUE, KEEP_ME: 'x' })
-    const free = await runSpoolMigration(ctx, deps)
+    const free = await runSpoolMigration(ctx, spoolDeps)
     assert.strictEqual(free.result.verify, 'PASS', free.result.detail)
     assert.deepStrictEqual(envOf(), { [RAW_BODIES_KEY]: ours(), KEEP_ME: 'x' })
   })

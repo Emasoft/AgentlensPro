@@ -10,11 +10,11 @@
 import * as fs from "fs"
 import { detectTelemetryConflicts } from "../telemetryConfig"
 import { EXIT } from "./cliErrors"
-import { FOREIGN_REASON, killSwitchHalf, killSwitchPath } from "./killSwitch"
+import { dataDir } from "./cliCore"
+import { killSwitchHalf, killSwitchPath } from "./killSwitch"
 import { SurfaceDirs, defaultSurfaceDirs, disableAgentlensSurfaces, enableAgentlensSurfaces } from "./surfaces"
 
-// The constant lives in killSwitch.ts (the raw-body decision there needs it and must not import this module: cycle).
-export { FOREIGN_REASON }
+export const FOREIGN_REASON = "foreign telemetry configuration present — run with --force-install-telemetry"
 
 /** Verbs Claude Code runs inside a turn under a timeout. hook, gate and statusline stay SILENT no-ops while disabled (a message
  *  there would land inside the session). review-gate and review-supervisor ignore the switch (killSwitch.ts). None of them is auto-repaired (a repair would blow their deadline). */
@@ -47,24 +47,28 @@ export function isAllAccountsStatus(argv: string[]): boolean {
   return argv[0] === "get_account_status" && argv.includes("--all")
 }
 
-/** Is the kill-switch armed, and for THIS reason? (A missing/unreadable flag reads as no.) */
-export function killSwitchArmedForForeign(): boolean {
-  try { return fs.readFileSync(killSwitchPath(), "utf8").includes(`Reason: ${FOREIGN_REASON}`) } catch { return false }
+/** Is the kill-switch of `dir` armed, and for THIS reason? (A missing/unreadable flag reads as no.)
+ *  WHY `dir` (TRDD-RBBEX59R R1): setup and auto-repair converge ctx.dataDir, which can differ from the env default; the
+ *  foreign check must read the flag of the dir being converged. One `Reason:` parser (recordedReason) for both readers. */
+export function killSwitchArmedForForeign(dir: string = dataDir()): boolean {
+  return recordedReason(dir) === FOREIGN_REASON
 }
 
 export function disableForForeignTelemetry(dirs: SurfaceDirs = defaultSurfaceDirs()): string[] {
   return disableAgentlensSurfaces(FOREIGN_REASON, dirs).moved
 }
 
-/** Re-enable ONLY a switch this module armed. Returns whether anything was re-enabled. */
+/** Re-enable ONLY a switch this module armed — the one in dirs.dataDir (TRDD-RBBEX59R R1). Returns whether anything
+ *  was re-enabled. A caller that gets true must converge telemetry once more: the raw-body key was held absent while
+ *  the switch stood, and only the next converge writes it (TRDD-RBBEX59R). */
 export function enableIfForeign(dirs: SurfaceDirs = defaultSurfaceDirs()): boolean {
-  return killSwitchArmedForForeign() ? enableAgentlensSurfaces(dirs).disarmed : false
+  return killSwitchArmedForForeign(dirs.dataDir) ? enableAgentlensSurfaces(dirs).disarmed : false
 }
 
-/** The `Reason:` line `armKillSwitch` recorded, or null. */
-function recordedReason(): string | null {
+/** The `Reason:` line `armKillSwitch` recorded in `dir`'s flag, or null. */
+function recordedReason(dir: string = dataDir()): string | null {
   try {
-    const m = /^Reason: (.*)$/m.exec(fs.readFileSync(killSwitchPath(), "utf8"))
+    const m = /^Reason: (.*)$/m.exec(fs.readFileSync(killSwitchPath(dir), "utf8"))
     return m ? m[1] : null
   } catch { return null }
 }

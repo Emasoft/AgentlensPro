@@ -92,17 +92,25 @@ export async function runEnableCli(forceInstall = false, deps: AutoSetupDeps = {
     console.log('AgentlensPro is already enabled (no kill-switch flag present).')
     return EXIT.OK
   }
+  // WHY (TRDD-RBBEX59R): the converge above ran while the switch stood, so it held the raw-body key ABSENT
+  // (rawBodiesHeldAbsent); every lift is followed by ONE telemetry converge, which writes the key back once no switch
+  // half is armed (under the env half it stays absent, as the owner rule requires).
+  const reconverge = (): Promise<number | null> => ensureInstalled('enable', 'enable', { ...deps, forceInstall })
   // An env-set AGENTLENS_DISABLED cannot be cleared by deleting a file — say so, and return non-zero
   // (cannot-answer) rather than claim a success the user will not observe: the flag is gone but every
   // process inheriting the env stays disabled, so "enable" did not achieve what was asked.
   if (process.env.AGENTLENS_DISABLED === '1') {
     enableAgentlensSurfaces()
+    const again = await reconverge()
+    if (again !== null) return again
     console.log('Removed the kill-switch flag, but AGENTLENS_DISABLED=1 is set in this environment —')
     console.log('AgentlensPro stays disabled for any process that inherits it. Unset it to re-enable.')
     return EXIT.UNKNOWN
   }
   // Disarm AND put the parked skills back — the mirror of disableAgentlensSurfaces.
   const { restored } = enableAgentlensSurfaces()
+  const again = await reconverge()
+  if (again !== null) return again
   console.log('AgentlensPro is now ENABLED.')
   console.log(`  removed: ${killSwitchPath()}`)
   if (restored.length > 0) console.log(`  skills:  ${restored.length} restored to their place`)

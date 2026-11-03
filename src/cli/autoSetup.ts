@@ -22,7 +22,8 @@
 //       non-zero, write nothing;
 //   2b. ABSENT or OURS -> write the missing telemetry keys FIRST, then restore skills/agents/hooks, then
 //       lift the kill-switch (launch: only one armed for the foreign reason; enable: the caller does), then
-//       the verb runs.
+//       the verb runs. While any switch half stands the raw-body key is held ABSENT (rawBodiesHeldAbsent,
+//       TRDD-RBBEX59R), so every lift is followed by one more telemetry converge, which writes it.
 //
 // FOREIGN TELEMETRY (owner orders 2026-10-02): another telemetry setup in place (company gateway,
 // managed settings, shell export) makes agentlenspro non-functional and it will not touch it. Without
@@ -41,7 +42,8 @@ import { agentlensDisabled, overrideKillSwitchEnv } from "./killSwitch"
 import { pushNotice } from "./launchNotices"
 import { SurfaceDirs, enableAgentlensSurfaces } from "./surfaces"
 import { Ctx, REPAIR_STEPS, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
-import { TelemetryConflict, TelemetryVerdictRow, formatTelemetryConflicts } from "../telemetryConfig"
+import { TelemetryConflict, TelemetryVerdictRow, formatTelemetryConflicts, rawBodiesHeldAbsent } from "../telemetryConfig"
+import { RAW_BODIES_KEY } from "../captureConfig"
 
 // WHY excluded: hook-path verbs run inside Claude Code turns under a timeout (a repair would blow
 // the deadline, and its verify step execs the registered hooks — recursion) and must never be blocked;
@@ -236,16 +238,14 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
   const say = deps.stderr ?? ((line: string) => { process.stderr.write(`${line}\n`) })
   try {
     const base = deps.ctx ?? resolveCtx({ log: () => { /* quiet */ } })
-    // The enable trigger converges BEFORE its caller lifts the off switch (runEnableCli, forceInstallTelemetry), so it
-    // tells the telemetry step to write the raw-body key as for an enabled install; every other trigger leaves it
-    // absent while the operator's switch stands (setup.ts rawBodiesOffFor, TRDD-RBBEX59R).
-    const ctx: Ctx = { ...base, forceInstall: deps.forceInstall ?? base.forceInstall, ...(trigger === "enable" ? { liftsKillSwitch: true } : {}) }
+    const ctx: Ctx = { ...base, forceInstall: deps.forceInstall ?? base.forceInstall }
     const dirs: SurfaceDirs = { dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, ".claude", "rules") }
     // A kill-switch an operator armed (or AGENTLENS_DISABLED) is theirs: a launch never repairs around it.
     // `enable` IS the operator's explicit lift, so it goes on to the verdict.
     // A server start never repairs around ANY armed switch, operator- or foreign-armed: lifting a switch is a
     // launch's or `enable`'s decision, never a side effect of starting the collector.
-    if (trigger !== "enable" && agentlensDisabled() && (trigger === "server" || !killSwitchArmedForForeign())) return null
+    // Both reads take ctx.dataDir, the dir being converged, never the env default (TRDD-RBBEX59R R1).
+    if (trigger !== "enable" && agentlensDisabled(ctx.dataDir) && (trigger === "server" || !killSwitchArmedForForeign(ctx.dataDir))) return null
 
     // STEP 1 — the telemetry verdict, before any other action.
     const first = detectDrift(ctx)
@@ -266,13 +266,13 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       if (!ctx.forceInstall || shell) {
         // STEP 2a — FOREIGN and no (usable) --force-install-telemetry: disable AGAIN (even if `enable` was just
         // run), write nothing, print the remedies, stop.
-        const wasArmed = killSwitchArmedForForeign()
+        const wasArmed = killSwitchArmedForForeign(ctx.dataDir)
         const moved = wasArmed ? [] : disableForForeignTelemetry(dirs)
         say(`${formatTelemetryConflicts(first.conflicts, verb)}\nEvery agentlenspro hook except the review gate and the review supervisor is now a no-op`
           + `${moved.length ? ` and ${moved.length} skill(s) were moved to ${path.join(ctx.dataDir, "disabled-surfaces")}` : ""}; its agents stay installed.`)
         return EXIT.CONFIG
       }
-    } else if (first.drifts.length === 0 && !killSwitchArmedForForeign()) {
+    } else if (first.drifts.length === 0 && !killSwitchArmedForForeign(ctx.dataDir)) {
       return null // the fast path
     }
 
@@ -312,7 +312,9 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
         if (!r) { r = await repair(d.step, ctx); outcomes.set(d.step, r) }
         allOk &&= r.ok
         if (r.ok && d.step === "otel-env") {
-          for (const key of converged) say(`agentlenspro: converged ${key}`)
+          // R5 (TRDD-RBBEX59R): while the off switch stands the raw-body row was converged by REMOVING the key, so say so.
+          const rawRemoved = rawBodiesHeldAbsent(ctx.dataDir)
+          for (const key of converged) say(key === RAW_BODIES_KEY && rawRemoved ? `agentlenspro: removed ${key} (off switch armed)` : `agentlenspro: converged ${key}`)
           for (const key of overridden) {
             say(`agentlenspro: WARNING — ${key} was explicitly set to ${String(oldEnv[key])} in settings.json; it has been changed to 1.\n`
               + "  agentlenspro requires full content capture (prompts, tool details/content, assistant responses, raw API bodies).\n"
@@ -325,7 +327,13 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       }
       // Whatever foreign setup disabled us is gone (removed by hand, or overwritten just now): switch back
       // on — only a switch armed for that reason, never an operator's. (`enable` lifts its own in the caller.)
-      if (trigger === "launch" && allOk && enableIfForeign(dirs)) say("agentlenspro: the foreign telemetry setup is gone — hooks and skills re-enabled")
+      if (trigger === "launch" && allOk && enableIfForeign(dirs)) {
+        say("agentlenspro: the foreign telemetry setup is gone — hooks and skills re-enabled")
+        // WHY (TRDD-RBBEX59R): the repairs above held the raw-body key absent while the switch stood; every lift is
+        // followed by one telemetry converge, so the key is written in this same run.
+        const r = await repair("otel-env", ctx)
+        if (!r.ok) say(`agentlenspro: could not restore telemetry env after the lift (${r.detail}) — run \`agentlenspro setup\``)
+      }
     } finally { release() }
     return null
   } catch (e) {
@@ -336,9 +344,10 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
 
 /** `--force-install-telemetry` (owner orders 2026-10-02): `enable` + overwrite + full restore in ONE invocation.
  *  The only path that ever overwrites a FOREIGN telemetry value (user settings.json, and the managed-settings
- *  file when this user can write it — backups reported). It then writes every missing key (raw body dumps
- *  included) and restores skills, agents and hooks, and lifts the kill-switch WHATEVER its recorded reason
- *  (an explicit command, like `enable`; the automatic repair never lifts an operator's).
+ *  file when this user can write it — backups reported). It then writes every missing key and restores skills,
+ *  agents and hooks, lifts the kill-switch WHATEVER its recorded reason (an explicit command, like `enable`; the
+ *  automatic repair never lifts an operator's), and converges once more, which writes the raw-body key: it is held
+ *  absent while any switch half stands (rawBodiesHeldAbsent, TRDD-RBBEX59R).
  *
  *  It also overrides the ENVIRONMENT, for this invocation only: AGENTLENS_DISABLED is ignored (an in-process
  *  flag, killSwitch.ts — process.env is not mutated) and conflicting OTEL_* shell exports are left out of the
@@ -357,6 +366,10 @@ export async function forceInstallTelemetry(verb: string, deps: AutoSetupDeps = 
   const code = await ensureInstalled("enable", verb, { ...deps, ctx, forceInstall: true })
   if (code !== null) return code
   const { restored } = enableAgentlensSurfaces({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, ".claude", "rules") })
+  // WHY (TRDD-RBBEX59R): the converge above held the raw-body key absent while the flag file stood; every lift is
+  // followed by one telemetry converge, so the key is written in this same run (the env half stays overridden).
+  const again = await ensureInstalled("enable", verb, { ...deps, ctx, forceInstall: true })
+  if (again !== null) return again
   if (overridden.length > 0) {
     say(`agentlenspro: --force-install-telemetry overrode ${overridden.join(", ")} for THIS run only; without the flag the next run sees ${overridden.length > 1 ? "them" : "it"} again and agentlenspro will be disabled/refuse again (a child process cannot change your shell's environment).`)
   }

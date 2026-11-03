@@ -49,7 +49,9 @@ function move(src: string, dest: string): void {
 /** Arm the kill-switch (with `reason`) and park agentlenspro's skills/rules in <dataDir>/disabled-surfaces/.
  *  Idempotent. Returns the flag path and what moved. */
 export function disableAgentlensSurfaces(reason?: string, dirs: SurfaceDirs = defaultSurfaceDirs()): { flag: string; moved: string[] } {
-  const flag = armKillSwitch(reason)
+  // dirs.dataDir, not the env default (TRDD-RBBEX59R): the flag is armed in the dir the skills are parked under and the
+  // foreign check reads, so the check and the later removal hit the same file.
+  const flag = armKillSwitch(reason, dirs.dataDir)
   const moved: string[] = []
   for (const { names, live, parked } of KINDS(dirs)) {
     for (const name of names) {
@@ -68,7 +70,9 @@ export function disableAgentlensSurfaces(reason?: string, dirs: SurfaceDirs = de
  *  meanwhile) is left alone and its parked copy stays. Returns whether a flag was removed and what
  *  came back. */
 export function enableAgentlensSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()): { disarmed: boolean; restored: string[] } {
-  const disarmed = disarmKillSwitch()
+  // dirs.dataDir, not the env default (TRDD-RBBEX59R): a foreign lift for ctx must remove ctx's flag — on the default it
+  // removed another dir's flag (possibly the operator's) while ctx's foreign flag stayed.
+  const disarmed = disarmKillSwitch(dirs.dataDir)
   const restored: string[] = []
   for (const { names, live, parked } of KINDS(dirs)) {
     for (const name of names) {
