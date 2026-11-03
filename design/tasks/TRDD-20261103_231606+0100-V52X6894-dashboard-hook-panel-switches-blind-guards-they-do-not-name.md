@@ -4,7 +4,7 @@ title: Dashboard hook panel switches blind guards they do not name
 column: todo
 status: tasked
 created: 2026-11-03T23:16:06+0100
-updated: 2026-11-03T23:40:00+0100
+updated: 2026-11-03T23:42:57+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,8 +29,10 @@ Not decided: whether to fix either, and how. TRDD-RBBEX59R question 3 (hook even
 ## Approval log
 
 - 2026-11-03T23:16:06+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-03T23:40:00+0100 — APPROVED by the owner: «write down all those bugs. then fix them.» (the earlier MANDATE line predates this decision).
 
 ## Owner decision
 
 Owner decision needed before this card leaves backburner: whether either item is a defect to fix. Item 2 is a POSSIBLE defect: the comment at rust-core/crates/agentlens-core/src/ui.rs:2133-2136 only protects the burn gate from the cache-guard switch, and whether Burn gate is meant as a master switch is unknown.
 Owner, 2026-11-03: «write down all those bugs. then fix them.» Both items are to be fixed (bugs B7 and B8 on TRDD-RBBEX59R). Item 1 fix: the ring push no longer depends on captureEnabled; only the disk append does. Item 2 fix: the image cache-guard is governed by its own cacheGuardEnabled switch, not by Burn gate.
+Resolved 2026-11-03 by the owner line above: the "Not decided" and "Owner decision needed" lines are superseded, and item 2 is to be fixed. That «those bugs» covers both items is the agent's reading of the directive. DEPLOY GATE: both fixes change alcore; any alcore built from branch fix/setup-agent-preflight carries TRDD-2HRA270Y step 4 and must not be deployed until the TRDD-12FGMAEP whole-process memory backstop lands or the owner records a waiver on TRDD-12FGMAEP. Item 1 is done inside TRDD-RBBEX59R increment (c), which rewrites the same code (hook_events.rs:270-292); item 2 adds a panel toggle for the image cache-guard, so the guard keeps a panel switch.
