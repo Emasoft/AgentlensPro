@@ -147,6 +147,8 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **The review gate ignores the kill-switch now.** Setting the `DISABLED` flag file or `AGENTLENS_DISABLED=1` used to make `agentlenspro review-gate` allow every stop unreviewed, so no adversarial review was demanded while the switch was set. The gate has no side effects (it reads the transcript and prints to stdout), so the switch no longer reaches it. Its brake is now a sequence: `agentlenspro enable`, `agentlenspro --uninstall-hooks`, then `agentlenspro disable` again (a disabled AgentlensPro refuses `--uninstall-hooks`, and an enabled one re-registers its hooks on the next CLI launch). Removing the `review-gate` entries from `settings.json` by hand also works. Either way each running session keeps the hook until it restarts; the in-band exit is the gate's NO-REVIEW sentinel. (TRDD-8D26QVBC).
+
 - **The review gate self-exemption now requires the role marker on the first line of a non-fork agent brief.** A `ROLE` line buried in quoted text no longer exempts the agent, and a brief with `ROLE: MEASURE` first and `ROLE: REVIEW` later now resolves to measure (TRDD-8YM21R5X).
 
 - **Haiku 5.5 calls priced at zero are now priced.** Calls on claude-haiku-5-5 (Haiku 5.5 subagent sessions, including the [1m] alias) matched no rate-table key, so they were priced at $0 or reported as unpriced. The rate table now carries the entry with the two prompt-length tiers from the Anthropic pricing page: a call whose total input is over 100,000 tokens bills every bucket, output included, at the over-100,000 rates. (TRDD-KQ549VCQ)

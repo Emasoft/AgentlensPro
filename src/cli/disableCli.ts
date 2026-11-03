@@ -69,8 +69,10 @@ export async function runDisableCli(args: string[]): Promise<number> {
   console.log(`  capture: ${capture}`)
   console.log(`  skills:  ${moved.length ? `${moved.length} moved to ${path.join(dataDir(), 'disabled-surfaces')} (agents stay installed)` : 'none were installed'}`)
   console.log('')
-  console.log('  Every hook, the burn-gate, auto-revive and background ingestion are OFF —')
-  console.log('  in every Claude session already running, from its next hook fire. No restart needed.')
+  console.log('  Every AgentlensPro hook is OFF except the review gate and the review supervisor (read-only).')
+  console.log('  Off: lifecycle capture (agentlenspro hook), the burn-gate and the image cache-guard (agentlenspro gate),')
+  console.log('  server auto-revive, background ingestion, and status-line capture (kept only by --keep-statusline).')
+  console.log('  Takes effect in every Claude session already running, from its next hook fire. No restart needed.')
   console.log('')
   console.log('  Re-enable with:  agentlenspro enable')
   // The flag is armed either way (the brake IS on for AgentlensPro's own hooks), but if we could not

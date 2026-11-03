@@ -265,7 +265,7 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
         // run), write nothing, print the remedies, stop.
         const wasArmed = killSwitchArmedForForeign()
         const moved = wasArmed ? [] : disableForForeignTelemetry(dirs)
-        say(`${formatTelemetryConflicts(first.conflicts, verb)}\nEvery agentlenspro hook is now a no-op`
+        say(`${formatTelemetryConflicts(first.conflicts, verb)}\nEvery agentlenspro hook except the review gate and the review supervisor is now a no-op`
           + `${moved.length ? ` and ${moved.length} skill(s) were moved to ${path.join(ctx.dataDir, "disabled-surfaces")}` : ""}; its agents stay installed.`)
         return EXIT.CONFIG
       }

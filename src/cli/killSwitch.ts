@@ -4,8 +4,11 @@ import { dataDir } from './cliCore'
 import { NO_REVIVE_FILE } from '../dataDir'
 
 /**
- * The GLOBAL kill-switch — one flag file that disarms every AgentlensPro side-effect running inside
- * every Claude Code session on this machine (hooks, the burn-gate, server revive, spooling, cron).
+ * The GLOBAL kill-switch — one flag file that disarms AgentlensPro's side-effects inside every Claude Code
+ * session on this machine. Every AgentlensPro hook is OFF except the review gate and the review supervisor,
+ * which only read transcripts. Off: lifecycle capture (`agentlenspro hook`), the burn-gate and the image
+ * cache-guard (`agentlenspro gate`), server auto-revive, background ingestion, and status-line capture
+ * (kept only by `agentlenspro disable --keep-statusline`).
  *
  * WHY A FILE, AND WHY GLOBAL (this is the lesson of the 2026-07-14 SSD incident, TRDD-K3WDPR7M):
  *
@@ -108,9 +111,8 @@ export function reviveBraked(dir: string = dataDir()): boolean {
 
 /**
  * WHICH half of the global kill-switch is armed, or `null` if neither is. ONE definition shared by
- * `agentlensDisabled()` and the review gate's stderr line (`reviewGate.ts::runReviewGate`) — those
- * two used to each spell out `AGENTLENS_DISABLED === '1'` on their own, which is exactly the kind
- * of duplicated condition that drifts the moment one side changes and the other doesn't.
+ * `agentlensDisabled()` and `disabledNotice()` (`foreignTelemetry.ts`): the two cannot disagree about
+ * which half is armed, and the notice names the half that fired.
  *
  * `AGENTLENS_DISABLED=1` is honored too, for the cases where env DOES reach the process (tests,
  * a supervisor that spawns the server directly). The FILE is the one that reaches running agents.
@@ -146,8 +148,11 @@ export function armKillSwitch(reason?: string): string {
   fs.writeFileSync(p, [
     `AgentlensPro is DISABLED.`,
     ``,
-    `Every hook, the burn-gate, server auto-revive and all background ingestion are OFF while`,
-    `this file exists. It takes effect on the NEXT hook fire in EVERY running Claude session —`,
+    `Every AgentlensPro hook is OFF while this file exists, except the review gate and the review`,
+    `supervisor, which only read transcripts. Off: lifecycle capture (agentlenspro hook), the burn-gate`,
+    `and the image cache-guard (agentlenspro gate), server auto-revive, background ingestion, and`,
+    `status-line capture (kept only by agentlenspro disable --keep-statusline).`,
+    `It takes effect on the NEXT hook fire in EVERY running Claude session —`,
     `no restart needed.`,
     ``,
     `Armed: ${new Date().toISOString()}`,
@@ -161,7 +166,7 @@ export function armKillSwitch(reason?: string): string {
 
 /** Disarm the global kill-switch. Idempotent — a missing flag is success, not an error. Any OTHER
  *  unlink failure (EACCES, EPERM, EBUSY) is thrown: swallowing it let `agentlenspro enable` print
- *  "now ENABLED" while the flag stayed on disk and every hook kept no-op'ing. */
+ *  "now ENABLED" while the flag stayed on disk and the hooks kept no-op'ing. */
 export function disarmKillSwitch(): boolean {
   const p = killSwitchPath()
   // The FLAG goes first. A marker that cannot be deleted still throws, but only after the flag is already

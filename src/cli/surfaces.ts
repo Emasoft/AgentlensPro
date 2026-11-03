@@ -2,7 +2,7 @@
 // 2026-10-02, TRDD-AGZ0XZKW): "if agentlenspro is disabled, it must automatically disable both rules
 // and skills. only the agents can be still left, since they are independent from the agentlenspro cli."
 //
-// Disabled = the global kill-switch armed (every hook is a no-op) AND the skills (and rules) agentlenspro
+// Disabled = the global kill-switch armed (every hook except the review gate and the review supervisor is a no-op) AND the skills (and rules) agentlenspro
 // installed moved out of ~/.claude into <dataDir>/disabled-surfaces/ (NOT `disabled/`: on a case-insensitive filesystem — macOS, Windows — that name is the
 // `DISABLED` kill-switch flag file, and the mkdir fails ENOTDIR) — a MOVE, never a delete, so `enable` can put
 // them back byte-identical. The agents stay: they do not depend on the CLI.

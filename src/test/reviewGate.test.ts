@@ -2,6 +2,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { Readable } from 'stream'
 import {
   scanTranscriptLines, decideGate, subagentExempt, JANITOR_AGENT_RE,
   isFloorPrompt, userPromptText, HEARTBEAT_PREFIX, INTERRUPT_PREFIX,
@@ -15,6 +16,7 @@ import { PROPOSAL_MARKER, commandWriteReasons } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
 import { DELEGATE_DENY_REASON } from '../cli/delegateGate'
 import { MEASURE_HEADING, REVIEW_HEADING } from '../cli/reviewLoop'
+import { killSwitchHalf } from '../cli/killSwitch'
 
 // `agentlenspro review-gate` — pure decision-function tests (owner order 2026-09-15 rewrite: ONE
 // shared scan/decide pair, `scanTranscriptLines` / `decideGate`, replaces the separate main/subagent
@@ -757,28 +759,90 @@ suite('reviewGate — declaredRoleOwnTranscript: self-exemption anchored to the 
   })
 })
 
-// ── KEPT VERBATIM — runReviewGate: the global kill-switch stderr line ───────────────────────────────
-suite('reviewGate — runReviewGate: the global kill-switch stderr line', () => {
-  test('AGENTLENS_DISABLED=1 allows the stop AND names which half of the switch fired', async () => {
-    const savedEnv = process.env.AGENTLENS_DISABLED
-    const writes: string[] = []
-    const originalWrite = process.stderr.write.bind(process.stderr)
-    process.stderr.write = ((chunk: unknown): boolean => {
-      writes.push(String(chunk))
-      return true
-    }) as typeof process.stderr.write
+// ── runReviewGate: the global kill-switch does NOT silence the gate (owner order 2026-09-03; directive 2026-11-03) ──
+suite('reviewGate — runReviewGate: the global kill-switch does not silence the gate', () => {
+  // A turn start: a non-sidechain user entry with an object `turnPosition`, the shape isTurnStart reads.
+  const turnStart = JSON.stringify({
+    type: 'user', isSidechain: false, message: { role: 'user', content: 'make the change' },
+    turnOrigin: 'human', turnPosition: { promptIndex: 1, turnIndex: 1 }, userType: 'external',
+  })
+  // Arms one half of the switch or both, writes `lines` to a transcript, and runs runReviewGate([]) with the payload on a
+  // replaced stdin. 'env' sets AGENTLENS_DISABLED=1 and writes no file. 'file' writes the DISABLED file and deletes
+  // AGENTLENS_DISABLED, so an inherited value cannot stand in for it. 'both' arms each. The precondition pins which half
+  // killSwitchHalf reports: the env half wins whenever it is set.
+  const runGateWhileDisabled = async (
+    arm: 'env' | 'file' | 'both',
+    lines: string[],
+    payloadFor: (transcriptPath: string, cwd: string) => Record<string, unknown>,
+  ): Promise<{ code: number; stdout: string; stderr: string }> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-killswitch-'))
+    const transcriptPath = path.join(dir, 'transcript.jsonl')
+    fs.writeFileSync(transcriptPath, lines.join('\n') + '\n')
+    if (arm !== 'env') fs.writeFileSync(path.join(dir, 'DISABLED'), 'test')
+    const savedDisabled = process.env.AGENTLENS_DISABLED
+    const savedDataDir = process.env.AGENTLENS_DATA_DIR
+    const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin')
+    const realStdout = process.stdout.write
+    const realStderr = process.stderr.write
+    const stdout: string[] = []
+    const stderr: string[] = []
     try {
-      process.env.AGENTLENS_DISABLED = '1'
+      if (arm === 'file') delete process.env.AGENTLENS_DISABLED
+      else process.env.AGENTLENS_DISABLED = '1'
+      process.env.AGENTLENS_DATA_DIR = dir
+      assert.strictEqual(killSwitchHalf(), arm === 'file' ? 'file' : 'env', `precondition: the ${arm} switch is armed`)
+      const payload = JSON.stringify(payloadFor(transcriptPath, dir))
+      Object.defineProperty(process, 'stdin', { configurable: true, value: Readable.from([Buffer.from(payload)]) })
+      process.stdout.write = ((chunk: unknown): boolean => { stdout.push(String(chunk)); return true }) as typeof process.stdout.write
+      process.stderr.write = ((chunk: unknown): boolean => { stderr.push(String(chunk)); return true }) as typeof process.stderr.write
       const code = await runReviewGate([])
-      assert.strictEqual(code, 0)
+      return { code, stdout: stdout.join(''), stderr: stderr.join('') }
     } finally {
-      process.stderr.write = originalWrite
-      if (savedEnv === undefined) delete process.env.AGENTLENS_DISABLED
-      else process.env.AGENTLENS_DISABLED = savedEnv
+      process.stdout.write = realStdout
+      process.stderr.write = realStderr
+      if (realStdin !== undefined) Object.defineProperty(process, 'stdin', realStdin)
+      if (savedDisabled === undefined) delete process.env.AGENTLENS_DISABLED
+      else process.env.AGENTLENS_DISABLED = savedDisabled
+      if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
+      else process.env.AGENTLENS_DATA_DIR = savedDataDir
+      fs.rmSync(dir, { recursive: true, force: true })
     }
-    const joined = writes.join('')
-    assert.ok(/\[review-gate\]/.test(joined), `no kill-switch line was written: ${JSON.stringify(writes)}`)
-    assert.ok(joined.includes('AGENTLENS_DISABLED=1'), `the line must name the env half, not "disabled by the owner": ${joined}`)
+  }
+  // The JSON block the gate printed, picked by its leading brace because mocha may write to stdout too.
+  const blockOf = (r: { stdout: string; stderr: string }): { decision: string; reason: string } => {
+    const line = r.stdout.split('\n').find((l) => l.startsWith('{'))
+    assert.ok(line !== undefined, `no block on stdout: stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`)
+    return JSON.parse(line) as { decision: string; reason: string }
+  }
+
+  test('a Stop with an unreviewed edit still BLOCKS while both halves of the switch are armed', async () => {
+    const r = await runGateWhileDisabled('both', [turnStart, assistantLine([editBlock])], (transcript_path, cwd) => ({ hook_event_name: 'Stop', transcript_path, cwd }))
+    assert.strictEqual(r.code, 0)
+    const block = blockOf(r)
+    assert.strictEqual(block.decision, 'block', `stderr=${JSON.stringify(r.stderr)}`)
+    assert.ok(block.reason.includes('edited a file'))
+  })
+
+  test('a Stop with an unreviewed edit still BLOCKS while only AGENTLENS_DISABLED=1 is set (no DISABLED file)', async () => {
+    const r = await runGateWhileDisabled('env', [turnStart, assistantLine([editBlock])], (transcript_path, cwd) => ({ hook_event_name: 'Stop', transcript_path, cwd }))
+    assert.strictEqual(r.code, 0)
+    const block = blockOf(r)
+    assert.strictEqual(block.decision, 'block', `stderr=${JSON.stringify(r.stderr)}`)
+    assert.ok(block.reason.includes('edited a file'))
+  })
+
+  test('a Stop with an unreviewed edit still BLOCKS while only the DISABLED file is armed (AGENTLENS_DISABLED unset)', async () => {
+    const r = await runGateWhileDisabled('file', [turnStart, assistantLine([editBlock])], (transcript_path, cwd) => ({ hook_event_name: 'Stop', transcript_path, cwd }))
+    assert.strictEqual(r.code, 0)
+    const block = blockOf(r)
+    assert.strictEqual(block.decision, 'block', `stderr=${JSON.stringify(r.stderr)}`)
+    assert.ok(block.reason.includes('edited a file'))
+  })
+
+  test('a SubagentStop of general-purpose (it has the Agent tool, so it is demanded) with an unreviewed edit still BLOCKS while both halves of the switch are armed', async () => {
+    const r = await runGateWhileDisabled('both', [assistantLine([editBlock])], (agent_transcript_path, cwd) => ({ hook_event_name: 'SubagentStop', agent_type: 'general-purpose', agent_transcript_path, cwd }))
+    assert.strictEqual(r.code, 0)
+    assert.strictEqual(blockOf(r).decision, 'block', `stderr=${JSON.stringify(r.stderr)}`)
   })
 })
 

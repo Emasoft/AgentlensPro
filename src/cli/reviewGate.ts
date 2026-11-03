@@ -25,7 +25,6 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { agentlensDisabled, killSwitchHalf, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
 import { DELEGATE_DENY_REASON } from './delegateGate'
 import {
@@ -1099,16 +1098,16 @@ export async function runReviewGate(argv: string[]): Promise<number> {
     process.stdout.write(REVIEW_GATE_DIRECTIVE)
     return 0
   }
-  // GLOBAL kill-switch, before stdin — mirrors runHookCommand('gate'): a disabled AgentlensPro
-  // must never block the user's work. Named on stderr, matching the other silent-allow lines in
-  // this file — a silent bypass is exactly the failure class this gate exists to close.
-  if (agentlensDisabled()) {
-    const half = killSwitchHalf() === 'env'
-      ? 'env AGENTLENS_DISABLED=1'
-      : `the kill-switch flag file (${killSwitchPath()})`
-    process.stderr.write(`[review-gate] allowing UNREVIEWED: ${half} is set.\n`)
-    return 0
-  }
+  // NO KILL-SWITCH CHECK HERE, on purpose. The global switch (the DISABLED flag file, or AGENTLENS_DISABLED=1)
+  // exists to stop side-effects: disk writes and server revive. This gate has none: it reads the transcript
+  // and prints a block to stdout. While the switch silenced it, every stop was allowed UNREVIEWED and no
+  // adversarial review was demanded (owner order 2026-09-03: never stopped or bypassed; owner directive
+  // 2026-11-03: the review must work at every turn and for every agent). The brake is a sequence:
+  // `agentlenspro enable`, then `agentlenspro --uninstall-hooks` (refused by `disabledNotice` in
+  // foreignTelemetry.ts while the switch is armed), then `agentlenspro disable` again. Each running
+  // session keeps the hook until it restarts; the next launch of a verb outside
+  // `AUTOSETUP_EXCLUDED_VERBS` (autoSetup.ts) re-registers it through `ensureInstalled` unless the
+  // switch is armed afterwards.
   const payload = await readStdin(process.stdin)
   // THE ENV KILL-SWITCH IS GONE (owner order, 2026-09-03: "it must NEVER BE STOPPED OR BYPASSED, no
   // matter what"). `AGENTLENS_REVIEW_FORK=off` is ignored: an env var is settable by anything in the

@@ -319,10 +319,11 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
       await (deps.diagnostics ?? runDiagnosticsCli)(argv)
       return 0
     case 'disable':
-      // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms every hook, the burn-gate, server
-      // auto-revive and all background ingestion — in EVERY Claude session already running, on its
-      // next hook fire. This is the only channel that reaches an agent whose env and settings were
-      // fixed at launch; a settings edit reaches nothing that is already running (see killSwitch.ts).
+      // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms server auto-revive, all background
+      // ingestion and every hook except the review gate and the review supervisor — in EVERY Claude
+      // session already running, on its next hook fire. This is the only channel that reaches an
+      // agent whose env and settings were fixed at launch; a settings edit reaches nothing that is
+      // already running (see killSwitch.ts).
       return runDisableCli(argv.slice(1))
     case 'enable':
       return runEnableCli(forceInstall)
