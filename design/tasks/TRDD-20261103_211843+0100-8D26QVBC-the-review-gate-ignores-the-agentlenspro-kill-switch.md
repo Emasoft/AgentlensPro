@@ -1,10 +1,10 @@
 ---
 trdd-id: 8D26QVBC
 title: The review gate ignores the AgentlensPro kill-switch
-column: ai_review
+column: human_review
 status: tasked
 created: 2026-11-03T21:18:43+0100
-updated: 2026-11-03T21:18:43+0100
+updated: 2026-11-03T21:33:10+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-03T21:18:43+0100
+implementation-commits: [e09151d0]
 ---
 
 # The review gate ignores the AgentlensPro kill-switch
@@ -46,3 +47,8 @@ The live DISABLED flag file under ~/.agentlens still carries the stale text writ
 ## Approval log
 
 - 2026-11-03T21:18:43+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Evidence basis
+
+The commit message's claim that the new kill-switch tests fail on the old code rests on code reading (the old runReviewGate returned before reading stdin under either half of the switch), not on a mutation run. To measure it: check out 031a416f in a scratch worktree, copy in the new src/test/reviewGate.test.ts, run compile-tests and mocha, and expect the four kill-switch tests red.
+Declined nit: the README 'Emergency stop' sentence has no comma before 'in every Claude Code session already running'; the bold span keeps it parseable.
