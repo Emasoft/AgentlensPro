@@ -139,6 +139,30 @@ export function agentlensDisabled(dir: string = dataDir()): boolean {
   return killSwitchHalf(dir) !== null
 }
 
+/** The `Reason:` an automatic disable records when ANOTHER telemetry pipeline is configured. Lives here, beside the
+ *  flag, so the raw-body decision below can read it without importing foreignTelemetry.ts (which imports
+ *  telemetryConfig.ts, which needs this decision: a cycle). foreignTelemetry.ts re-exports it. */
+export const FOREIGN_REASON = 'foreign telemetry configuration present — run with --force-install-telemetry'
+
+/**
+ * Must OTEL_LOG_RAW_API_BODIES be ABSENT from settings.json right now? True while the off switch is armed BY THE
+ * OPERATOR: the env half, or the flag file with any reason except FOREIGN_REASON.
+ * WHY (owner rule 2026-11-03, TRDD-RBBEX59R): "the disabled mode should ONLY stop the collection of the telemetry
+ * logs and raw bodies" — so the raw-body key is the one owned key whose convergence target flips to ABSENT, and
+ * setup / auto-repair / --install-otel must never write it back while the switch stands (setup must not undo the
+ * disable verb, which strips it). A FOREIGN-armed switch is exempt: agentlenspro armed it itself, the disable verb
+ * never stripped the key, and the very run that converges telemetry also lifts that switch (stepOtel ->
+ * enableIfForeign, ensureInstalled launch) — keeping the key absent there would leave a lifted install without it.
+ * `dir` is explicit at every setup call site: the flag of the data dir being converged, never the env default.
+ * An unreadable flag reads as operator-armed (absent key): the failure direction is "no raw-body collection".
+ */
+export function rawBodiesCaptureOff(dir: string = dataDir()): boolean {
+  const half = killSwitchHalf(dir)
+  if (half === 'env') return true
+  if (half !== 'file') return false
+  try { return !fs.readFileSync(killSwitchPath(dir), 'utf8').includes(`Reason: ${FOREIGN_REASON}`) } catch { return true }
+}
+
 /** Arm the global kill-switch. Idempotent. Returns the flag path. */
 export function armKillSwitch(reason?: string): string {
   const p = killSwitchPath()

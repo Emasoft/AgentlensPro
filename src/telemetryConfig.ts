@@ -26,6 +26,7 @@ import * as fsSync from 'fs'
 import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from './captureConfig'
 import { envPort } from './cli/cliCore'
+import { rawBodiesCaptureOff } from './cli/killSwitch'
 
 export interface TelemetryConfigOptions {
   /** settings.json to manage. Default: ~/.claude/settings.json */
@@ -46,6 +47,10 @@ export interface TelemetryConfigOptions {
   /** `--force-install-telemetry`: replace foreign keys in the USER settings.json (one transaction, backup
    *  kept) instead of refusing. Managed settings are replaced separately (forceInstallManagedTelemetry). */
   forceInstall?: boolean
+  /** OTEL_LOG_RAW_API_BODIES must stay ABSENT (the off switch is armed by the operator): never write it, remove it
+   *  when present. Default: rawBodiesCaptureOff(dataDir) (killSwitch.ts). setup passes its own decision, because the
+   *  enable path converges BEFORE it lifts the switch and must write the key (TRDD-RBBEX59R). */
+  rawBodiesOff?: boolean
 }
 
 /**
@@ -102,6 +107,8 @@ function resolveOptions(options: TelemetryConfigOptions): {
   /** Every `file:` value agentlenspro itself could have written to OTEL_LOG_RAW_API_BODIES — the
    *  ownership evidence the foreign-pipeline guard compares against (detectTelemetryConflicts). */
   ownedBodyValues: string[]
+  /** see TelemetryConfigOptions.rawBodiesOff */
+  rawBodiesOff: boolean
 } {
   const home = os.homedir()
   const dataDir = options.dataDir ?? path.join(home, '.agentlens')
@@ -117,6 +124,9 @@ function resolveOptions(options: TelemetryConfigOptions): {
     // TRDD-Z53IJFE9 still has `file:/Volumes/AgentLensSpool/otel-bodies` in settings.json — a value
     // agentlenspro wrote itself, so it is OURS to converge, not a foreign pipeline.
     ownedBodyValues: [...new Set([bodiesDir, effectiveBodiesDir(dataDir), '/Volumes/AgentLensSpool/otel-bodies'])].map(d => `file:${d}`),
+    // The flag of the GIVEN data dir (options.dataDir), else killSwitch's own env resolution — never the
+    // homedir literal above, which is wrong whenever AGENTLENS_DATA_DIR/DATA_DIR is set.
+    rawBodiesOff: options.rawBodiesOff ?? rawBodiesCaptureOff(options.dataDir),
   }
 }
 
@@ -134,7 +144,11 @@ function resolveOptions(options: TelemetryConfigOptions): {
  * to disk on every request (~35 GB/day); that cost is ACCEPTED and bounded by the store's retention:
  * live bodies are archived oldest-first past `bodiesMaxGb` (AGENTLENS_BODIES_MAX_GB, default 8) and
  * archives are deleted after `bodiesRetentionDays` (AGENTLENS_BODIES_RETENTION_DAYS, default 31) —
- * src/retentionConfig.ts. There is no opt-out and no delete path.
+ * src/retentionConfig.ts. There is no opt-out knob — with ONE exception, the operator's off switch: while it is
+ * armed (rawBodiesCaptureOff, killSwitch.ts) the raw-body key stays OWNED (drift, verify, uninstall and the marker
+ * still treat a leftover value as ours) but its convergence target is ABSENT: ensureTelemetryConfig never writes
+ * it and removes it when present. WHY (owner rule 2026-11-03, TRDD-RBBEX59R): disabled mode stops raw-body
+ * collection, and setup / auto-repair must not undo the disable verb, which strips the key.
  */
 function ownedKeys(bodiesDir: string, otlpPort: number): Record<string, string> {
   return {
@@ -315,7 +329,7 @@ const sameValue = sameTelemetryValue
  *  is a stale snapshot (restart Claude Code), never a reason to disable. Keys agentlenspro neither manages
  *  nor routes with (OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME, ...) are never looked at. */
 export function telemetryVerdict(options: TelemetryConfigOptions = {}): TelemetryVerdictRow[] {
-  const { settingsPath, markerPath, bodiesDir, otlpPort, ownedBodyValues } = resolveOptions(options)
+  const { settingsPath, markerPath, bodiesDir, otlpPort, ownedBodyValues, rawBodiesOff } = resolveOptions(options)
   const owned = ownedKeys(bodiesDir, otlpPort)
   const marker = readMarkerSync(markerPath)
   const procEnv = options.processEnv ?? process.env
@@ -332,6 +346,15 @@ export function telemetryVerdict(options: TelemetryConfigOptions = {}): Telemetr
   const userEnv = readEnvSync(settingsPath)
   for (const [key, want] of Object.entries(owned)) {
     const raw = userEnv[key]
+    // WHY (TRDD-RBBEX59R): under the operator's off switch the raw-body key's target is ABSENT, so an absent key is
+    // converged (never "will be written": the dry run must not promise to re-enable raw-body collection) and a value
+    // of ours is converged by REMOVING it. A value agentlenspro never wrote falls through to the rules below and
+    // stays FOREIGN, exactly as without the switch — the foreign-pipeline guard is not weakened.
+    if (key === RAW_BODIES_KEY && rawBodiesOff) {
+      if (raw === undefined) { push(key, settingsPath, 'user', 'OURS', 'absent, as the off switch requires — raw-body capture stays off; not written'); continue }
+      const cur = String(raw)
+      if (sameValue(key, cur, want) || byMarker(key, cur)) { push(key, settingsPath, 'user', 'CONVERGE', `found ${shown(key, cur)} — the off switch is armed: will be removed`); continue }
+    }
     if (raw === undefined) { push(key, settingsPath, 'user', 'ABSENT', `will be written: ${shown(key, want)}`); continue }
     const v = String(raw)
     if (sameValue(key, v, want)) { push(key, settingsPath, 'user', 'OURS', 'equal'); continue }
@@ -484,7 +507,7 @@ async function readMarker(markerPath: string): Promise<TelemetryMarker | null> {
  * so a later uninstall can restore it exactly.
  */
 export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}): Promise<EnsureResult> {
-  const { settingsPath, markerPath, bodiesDir, otlpPort } = resolveOptions(options)
+  const { settingsPath, markerPath, bodiesDir, otlpPort, rawBodiesOff } = resolveOptions(options)
   const owned = ownedKeys(bodiesDir, otlpPort)
 
   const { settings } = await readSettingsOrThrow(settingsPath)
@@ -506,11 +529,19 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
 
   const ops: SafeEditOp[] = []
   for (const [key, value] of Object.entries(owned)) {
+    // WHY (TRDD-RBBEX59R): while the operator's off switch is armed the raw-body key stays OWNED (its first-seen prior
+    // state is recorded like any other, so uninstall restores it exactly) but is never written: it is removed when
+    // present — the same edit the disable verb makes (removeRawBodiesKey) — so setup and auto-repair cannot undo it.
+    const off = key === RAW_BODIES_KEY && rawBodiesOff
     if (!(key in markerKeys)) {
       const hadKey = Object.prototype.hasOwnProperty.call(env, key)
       markerKeys[key] = { hadKey, priorValue: hadKey ? String(env[key]) : null }
-      if (!hadKey) added.push(key)
-      else if (String(env[key]) !== value) overrode.push(key)
+      if (!off && !hadKey) added.push(key)
+      else if (!off && String(env[key]) !== value) overrode.push(key)
+    }
+    if (off) {
+      if (Object.prototype.hasOwnProperty.call(env, key)) { ops.push({ op: 'delete', path: ['env', key] }); changed = true }
+      continue
     }
     if (env[key] !== value) { ops.push({ op: 'set', path: ['env', key], value }); changed = true }
   }
@@ -529,6 +560,8 @@ export async function ensureTelemetryConfig(options: TelemetryConfigOptions = {}
   // managed keys' current values is deliberately NOT done: only values written by this code count.
   const written: Record<string, string[]> = { ...(existingMarker?.written ?? {}) }
   for (const [key, value] of Object.entries(owned)) {
+    // The ownership evidence lists only values WE wrote: under the off switch nothing is written for the raw-body key.
+    if (key === RAW_BODIES_KEY && rawBodiesOff) continue
     const list = written[key] ?? []
     if (!list.includes(value)) written[key] = [...list, value].slice(-8)
   }
@@ -579,7 +612,7 @@ export class ManagedSettingsNotWritableError extends Error {
 export async function forceInstallManagedTelemetry(
   conflicts: TelemetryConflict[], options: TelemetryConfigOptions = {},
 ): Promise<Array<{ file: string; backupPath: string | null }>> {
-  const { bodiesDir, otlpPort } = resolveOptions(options)
+  const { bodiesDir, otlpPort, rawBodiesOff } = resolveOptions(options)
   const owned = ownedKeys(bodiesDir, otlpPort)
   const byFile = new Map<string, TelemetryConflict[]>()
   for (const c of conflicts.filter(c => c.scope === 'managed')) byFile.set(c.source, [...(byFile.get(c.source) ?? []), c])
@@ -588,7 +621,8 @@ export async function forceInstallManagedTelemetry(
     for (const target of [file, path.dirname(file)]) {
       try { fsSync.accessSync(target, fsSync.constants.W_OK) } catch (e) { throw new ManagedSettingsNotWritableError(file, `${path.basename(target) === path.basename(file) ? 'file' : 'directory'} not writable: ${(e as NodeJS.ErrnoException).code}`) }
     }
-    const ops: SafeEditOp[] = list.map(c => c.key in owned
+    // Under the operator's off switch the raw-body key is REMOVED, never set (TRDD-RBBEX59R: no writer re-enables it).
+    const ops: SafeEditOp[] = list.map(c => c.key in owned && !(c.key === RAW_BODIES_KEY && rawBodiesOff)
       ? { op: 'set' as const, path: ['env', c.key], value: owned[c.key] }
       : { op: 'delete' as const, path: ['env', c.key] })
     const r = await safeConfigEdit(file, 'json', ops)
@@ -598,9 +632,10 @@ export async function forceInstallManagedTelemetry(
 }
 
 /**
- * Delete OTEL_LOG_RAW_API_BODIES from settings.json — ONLY for `agentlenspro disable` (the global
- * emergency brake). Raw capture is mandatory for an enabled install, so this is the one deliberate
- * strip, undone by `enable` (ensureTelemetryConfig re-converges it). Goes through safeConfigEdit
+ * Delete OTEL_LOG_RAW_API_BODIES from settings.json — the disable verb's strip (the global emergency brake). Raw
+ * capture is mandatory for an enabled install; while the operator's off switch stands, ensureTelemetryConfig makes
+ * this SAME delete itself, so setup and auto-repair keep the key absent (TRDD-RBBEX59R). Undone by the enable
+ * verb (ensureTelemetryConfig re-converges it once the switch is lifted). Goes through safeConfigEdit
  * like every settings.json write; returns false when the key was not there.
  */
 export async function removeRawBodiesKey(options: TelemetryConfigOptions = {}): Promise<boolean> {

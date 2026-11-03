@@ -10,10 +10,11 @@
 import * as fs from "fs"
 import { detectTelemetryConflicts } from "../telemetryConfig"
 import { EXIT } from "./cliErrors"
-import { killSwitchHalf, killSwitchPath } from "./killSwitch"
+import { FOREIGN_REASON, killSwitchHalf, killSwitchPath } from "./killSwitch"
 import { SurfaceDirs, defaultSurfaceDirs, disableAgentlensSurfaces, enableAgentlensSurfaces } from "./surfaces"
 
-export const FOREIGN_REASON = "foreign telemetry configuration present — run with --force-install-telemetry"
+// The constant lives in killSwitch.ts (the raw-body decision there needs it and must not import this module: cycle).
+export { FOREIGN_REASON }
 
 /** Verbs Claude Code runs inside a turn under a timeout. hook, gate and statusline stay SILENT no-ops while disabled (a message
  *  there would land inside the session). review-gate and review-supervisor ignore the switch (killSwitch.ts). None of them is auto-repaired (a repair would blow their deadline). */

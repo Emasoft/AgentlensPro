@@ -21,7 +21,7 @@
 import { spawn, spawnSync, execFileSync } from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
-import { agentlensDisabled, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
+import { agentlensDisabled, killSwitchHalf, noRevivePath, rawBodiesCaptureOff, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 import { EXIT, UsageError } from './cliErrors'
 import * as http from 'http'
 import * as os from 'os'
@@ -36,7 +36,7 @@ import {
 import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
 import { alstoreBin as resolveAlstoreBin, rustIngestPass, type RustPassResult } from '../rustStorePass'
-import { safeConfigEdit } from '../safeConfigEdit'
+import { safeConfigEdit, type SafeEditOp } from '../safeConfigEdit'
 import { DEFAULT_MAX_BYTES_PER_PASS } from '../store/ingestPass'
 import { envPort, sleep } from './cliCore'
 import { dataDirFrom } from '../dataDir'
@@ -111,6 +111,10 @@ export interface Ctx {
   otlpPort: number
   pathEnv: string
   log: (line: string) => void
+  /** Set by ensureInstalled for the enable trigger (the enable verb and --force-install-telemetry), which converge
+   *  BEFORE they lift the off switch: the raw-body key must then be written as for an enabled install, not kept
+   *  absent as the still-armed flag file would say (TRDD-RBBEX59R). Absent everywhere else. */
+  liftsKillSwitch?: boolean
   serverPid: number | null
 }
 
@@ -585,6 +589,8 @@ function detectLegacySpoolWith(deps: SpoolMigrationDeps, settingsPath: string): 
  *  a starved writer — before the detach. */
 export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Promise<{ result: StepResult; acted: boolean }> {
   const detected = detectLegacySpoolWith(deps, ctx.settingsPath)
+  // Under the operator's off switch ACT 3 REMOVES the raw-body key instead of re-pointing it (TRDD-RBBEX59R).
+  const rawOff = rawBodiesOffFor(ctx)
   const artifacts = [
     detected.volumeMounted && 'RAM disk mounted',
     detected.settingsPathPointsAtSpool && 'settings path points at the spool',
@@ -598,7 +604,7 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
     return {
       result: {
         step: 'spool-migration', found: artifacts,
-        action: 'would: drain spool bodies (the legacy 72h/8GB limits do not apply by default — this one-shot drain ingests regardless of age) → detach RAM disk → rewrite settings path via safeConfigEdit → bootout + set aside the plist',
+        action: `would: drain spool bodies (the legacy 72h/8GB limits do not apply by default — this one-shot drain ingests regardless of age) → detach RAM disk → ${rawOff ? 'remove the raw-body key via safeConfigEdit (off switch armed)' : 'rewrite settings path via safeConfigEdit'} → bootout + set aside the plist`,
         verify: 'SKIP', detail: 'dry-run',
       },
       acted: false,
@@ -688,10 +694,14 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
   }
 
   // ACT 3 — REWRITE THE SETTINGS PATH via safeConfigEdit. Only the key's VALUE moves, to the one
-  // bodies dir (raw capture is mandatory since 2026-10-02 — there is no off state to preserve).
+  // bodies dir (raw capture is mandatory since 2026-10-02) — except under the operator's off switch, where the key is
+  // REMOVED instead: disabled mode stops raw-body collection and setup must not undo the disable verb's strip
+  // (owner rule 2026-11-03, TRDD-RBBEX59R). The VERIFY below holds either way: no value points at the spool.
   let settingsRewritten = false
   if (detected.settingsPathPointsAtSpool) {
-    const ops = [{ op: 'set' as const, path: ['env', RAW_BODIES_KEY], value: `file:${effectiveBodiesDir(ctx.dataDir)}` }]
+    const ops: SafeEditOp[] = rawOff
+      ? [{ op: 'delete', path: ['env', RAW_BODIES_KEY] }]
+      : [{ op: 'set', path: ['env', RAW_BODIES_KEY], value: `file:${effectiveBodiesDir(ctx.dataDir)}` }]
     await safeConfigEdit(ctx.settingsPath, 'json', ops, { createIfMissing: true })
     settingsRewritten = true
   }
@@ -735,7 +745,7 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
       action: [
         drained && 'drained spool bodies into the store (stranded bodies relocated to the SSD dir)',
         detected.volumeMounted && drained && 'detached RAM disk',
-        settingsRewritten && 'rewrote settings path via safeConfigEdit',
+        settingsRewritten && (rawOff ? 'removed the raw-body key via safeConfigEdit (off switch armed)' : 'rewrote settings path via safeConfigEdit'),
         agentTornDown && 'booted out the agent + moved its plist aside',
       ].filter(Boolean).join(', ') || 'none',
       verify: residue ? 'FAIL' : 'PASS',
@@ -1164,24 +1174,35 @@ const stepSkill: StepDef = {
   },
 }
 
+/** Must the raw-body key stay ABSENT for THIS run? The switch of ctx.dataDir (the dir being converged, never the env
+ *  default, TRDD-TYOQA14F), as rawBodiesCaptureOff decides it — except on the enable trigger, which lifts the file
+ *  half right after converging and so must write the key; an env half (AGENTLENS_DISABLED=1) still stands then, and
+ *  keeps it absent. WHY (owner rule 2026-11-03, TRDD-RBBEX59R): disabled mode stops raw-body collection, so setup
+ *  and auto-repair must not undo the disable verb's strip. */
+export function rawBodiesOffFor(ctx: Ctx): boolean {
+  return ctx.liftsKillSwitch ? killSwitchHalf(ctx.dataDir) === 'env' : rawBodiesCaptureOff(ctx.dataDir)
+}
+
 /** Read-only telemetry-env drift check shared by stepOtel and the auto-launch repair path, so the two
  *  can never disagree on what "converged" means. 'unparseable' = settings.json cannot be read.
  *  `conflicts` non-empty = ANOTHER telemetry pipeline is
  *  configured (company gateway / managed settings / shell env): nothing may be written. */
 export function otelDrift(ctx: Ctx): 'unparseable' | {
   bodiesDir: string; expected: Record<string, string>; converged: boolean; found: string; conflicts: TelemetryConflict[]
-  rows: TelemetryVerdictRow[]; converge: string[]; staleEnv: TelemetryVerdictRow[]
+  rows: TelemetryVerdictRow[]; converge: string[]; staleEnv: TelemetryVerdictRow[]; rawBodiesOff: boolean
 } {
-  // Raw-body capture is MANDATORY (owner reversal 2026-10-02, TRDD-AGZ0XZKW): the key is always owned.
+  // Raw-body capture is MANDATORY (owner reversal 2026-10-02, TRDD-AGZ0XZKW): the key is always owned — but under the
+  // operator's off switch its target is ABSENT (rawBodiesOffFor), and the verdict below judges it that way.
   const bodiesDir = effectiveBodiesDir(ctx.dataDir)
   const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort)
+  const rawBodiesOff = rawBodiesOffFor(ctx)
   const state = readSettingsFresh(ctx.settingsPath)
   if (state === 'unparseable') return 'unparseable'
   // The verdict (telemetryConfig.ts) is the ONE judge: ABSENT/CONVERGE rows are repaired, FOREIGN rows block,
   // STALE-ENV rows (a Claude Code session's inherited snapshot) only warn.
   const rows = telemetryVerdict({
     settingsPath: ctx.settingsPath, markerPath: path.join(ctx.dataDir, 'telemetry-managed.json'),
-    bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, ...ctx.telemetryProbe,
+    bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, rawBodiesOff, ...ctx.telemetryProbe,
   })
   const conflicts = detectConflictsFromRows(rows)
   const userRows = rows.filter(r => r.scope === 'user')
@@ -1192,7 +1213,7 @@ export function otelDrift(ctx: Ctx): 'unparseable' | {
   const found = conflicts.length > 0
     ? `${conflicts.length} conflicting key(s) — another telemetry pipeline is configured`
     : converged ? 'telemetry env current' : `${missing} missing, ${converge.length} to converge`
-  return { bodiesDir, expected, converged, found, conflicts, rows, converge, staleEnv }
+  return { bodiesDir, expected, converged, found, conflicts, rows, converge, staleEnv, rawBodiesOff }
 }
 
 const stepOtel: StepDef = {
@@ -1203,7 +1224,7 @@ const stepOtel: StepDef = {
     if (drift === 'unparseable') {
       return { result: { step: this.name, found: 'settings.json unparseable', action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup' }, acted: false }
     }
-    const { bodiesDir, expected, converged, found, conflicts, rows } = drift
+    const { bodiesDir, expected, converged, found, conflicts, rows, rawBodiesOff } = drift
     // A foreign pipeline (owner order 2026-10-02): refuse and write NOTHING unless --force-install-telemetry
     // was given. A conflicting SHELL export can never be fixed by a settings edit, so it refuses even then.
     if (conflicts.length > 0 && (!ctx.forceInstall || conflicts.some(c => c.scope === 'shell'))) {
@@ -1221,7 +1242,7 @@ const stepOtel: StepDef = {
       // The organisation's managed-settings file: overwrite through safeConfigEdit when this user can
       // write it; otherwise exit with the administrator message (never escalate).
       try {
-        for (const m of await forceInstallManagedTelemetry(conflicts, { bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, ...ctx.telemetryProbe })) {
+        for (const m of await forceInstallManagedTelemetry(conflicts, { bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, rawBodiesOff, ...ctx.telemetryProbe })) {
           backup += `; managed ${m.file}${m.backupPath ? ` backup ${m.backupPath}` : ''}`
         }
       } catch (e) {
@@ -1230,7 +1251,8 @@ const stepOtel: StepDef = {
       acted = true
     }
     if (!converged) {
-      const r = await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, forceInstall: ctx.forceInstall, ...ctx.telemetryProbe })
+      // rawBodiesOff is the SAME decision otelDrift judged with, so the write and the verdict cannot disagree.
+      const r = await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, forceInstall: ctx.forceInstall, rawBodiesOff, ...ctx.telemetryProbe })
       if (r.backupPath) backup += `; backup ${r.backupPath}`
       acted = true
     }
@@ -1240,7 +1262,12 @@ const stepOtel: StepDef = {
       return { result: { step: this.name, found, action: acted ? 'wired' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
     }
     const envAfter = (after.env && typeof after.env === 'object' ? after.env : {}) as Record<string, unknown>
-    const bad = Object.keys(expected).find(k => envAfter[k] === undefined || !sameTelemetryValue(k, String(envAfter[k]), expected[k]))
+    // Under the operator's off switch the raw-body key must be ABSENT (TRDD-RBBEX59R): a present one FAILS verify, so a
+    // writer that re-enabled raw-body collection cannot pass as converged.
+    const offRaw = (k: string): boolean => rawBodiesOff && k === RAW_BODIES_KEY
+    const bad = Object.keys(expected).find(k => offRaw(k)
+      ? envAfter[k] !== undefined
+      : envAfter[k] === undefined || !sameTelemetryValue(k, String(envAfter[k]), expected[k]))
     // Our telemetry is in place and nothing foreign remains: a kill-switch armed for the foreign-telemetry
     // reason has no more reason to stand (an operator-armed one is never touched).
     if (!bad) enableIfForeign({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') })
@@ -1249,8 +1276,8 @@ const stepOtel: StepDef = {
         step: this.name, found, action: acted ? 'wired' : 'none',
         verify: bad ? 'FAIL' : 'PASS',
         detail: bad
-          ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${JSON.stringify(expected[bad])})`
-          : `${Object.keys(expected).length} key(s) exact${backup}`,
+          ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${offRaw(bad) ? 'absent: the off switch is armed' : JSON.stringify(expected[bad])})`
+          : `${Object.keys(expected).length - (rawBodiesOff ? 1 : 0)} key(s) exact${rawBodiesOff ? `, ${RAW_BODIES_KEY} absent (off switch armed)` : ''}${backup}`,
       },
       acted,
     }
@@ -1718,7 +1745,8 @@ function verdictDocument(ctx: Ctx): unknown {
   return d.rows.map(r => ({
     key: r.key, verdict: r.state, scope: r.scope, source: r.source, detail: r.detail,
     fileValue: val(fileEnv[r.key], r.key), envValue: val(procEnv[r.key], r.key),
-    wouldWrite: r.scope === 'user' && (r.state === 'ABSENT' || r.state === 'CONVERGE') ? shownValue(r.key, d.expected[r.key] ?? '') : null,
+    // Under the operator's off switch a CONVERGE raw-body row is a REMOVAL (TRDD-RBBEX59R): it writes nothing.
+    wouldWrite: r.scope === 'user' && (r.state === 'ABSENT' || r.state === 'CONVERGE') && !(d.rawBodiesOff && r.key === RAW_BODIES_KEY) ? shownValue(r.key, d.expected[r.key] ?? '') : null,
   }))
 }
 

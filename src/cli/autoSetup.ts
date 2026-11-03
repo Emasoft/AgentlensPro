@@ -236,7 +236,10 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
   const say = deps.stderr ?? ((line: string) => { process.stderr.write(`${line}\n`) })
   try {
     const base = deps.ctx ?? resolveCtx({ log: () => { /* quiet */ } })
-    const ctx: Ctx = { ...base, forceInstall: deps.forceInstall ?? base.forceInstall }
+    // The enable trigger converges BEFORE its caller lifts the off switch (runEnableCli, forceInstallTelemetry), so it
+    // tells the telemetry step to write the raw-body key as for an enabled install; every other trigger leaves it
+    // absent while the operator's switch stands (setup.ts rawBodiesOffFor, TRDD-RBBEX59R).
+    const ctx: Ctx = { ...base, forceInstall: deps.forceInstall ?? base.forceInstall, ...(trigger === "enable" ? { liftsKillSwitch: true } : {}) }
     const dirs: SurfaceDirs = { dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, ".claude", "rules") }
     // A kill-switch an operator armed (or AGENTLENS_DISABLED) is theirs: a launch never repairs around it.
     // `enable` IS the operator's explicit lift, so it goes on to the verdict.
