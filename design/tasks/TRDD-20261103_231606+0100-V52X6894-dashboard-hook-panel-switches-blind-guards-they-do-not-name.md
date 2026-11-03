@@ -4,7 +4,7 @@ title: Dashboard hook panel switches blind guards they do not name
 column: backburner
 status: tasked
 created: 2026-11-03T23:16:06+0100
-updated: 2026-11-03T23:16:06+0100
+updated: 2026-11-03T23:31:49+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -12,7 +12,7 @@ min-approval-requirement: none
 assignee: main-agent@agentlenspro
 mandate: true
 mandated-by: none
-approved: true
+approved: false
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-03T23:16:06+0100
 ---
@@ -29,3 +29,7 @@ Not decided: whether to fix either, and how. TRDD-RBBEX59R question 3 (hook even
 ## Approval log
 
 - 2026-11-03T23:16:06+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Owner decision
+
+Owner decision needed before this card leaves backburner: whether either item is a defect to fix. Item 2 is a POSSIBLE defect: the comment at rust-core/crates/agentlens-core/src/ui.rs:2133-2136 only protects the burn gate from the cache-guard switch, and whether Burn gate is meant as a master switch is unknown.
