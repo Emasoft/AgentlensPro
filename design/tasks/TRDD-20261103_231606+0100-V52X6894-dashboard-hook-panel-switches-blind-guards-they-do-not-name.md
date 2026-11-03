@@ -1,10 +1,10 @@
 ---
 trdd-id: V52X6894
 title: Dashboard hook panel switches blind guards they do not name
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-03T23:16:06+0100
-updated: 2026-11-03T23:31:49+0100
+updated: 2026-11-03T23:40:00+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -12,7 +12,7 @@ min-approval-requirement: none
 assignee: main-agent@agentlenspro
 mandate: true
 mandated-by: none
-approved: false
+approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-03T23:16:06+0100
 ---
@@ -33,3 +33,4 @@ Not decided: whether to fix either, and how. TRDD-RBBEX59R question 3 (hook even
 ## Owner decision
 
 Owner decision needed before this card leaves backburner: whether either item is a defect to fix. Item 2 is a POSSIBLE defect: the comment at rust-core/crates/agentlens-core/src/ui.rs:2133-2136 only protects the burn gate from the cache-guard switch, and whether Burn gate is meant as a master switch is unknown.
+Owner, 2026-11-03: «write down all those bugs. then fix them.» Both items are to be fixed (bugs B7 and B8 on TRDD-RBBEX59R). Item 1 fix: the ring push no longer depends on captureEnabled; only the disk append does. Item 2 fix: the image cache-guard is governed by its own cacheGuardEnabled switch, not by Burn gate.

@@ -4,7 +4,7 @@ title: Disabled mode stops only telemetry and raw-body collection and nothing el
 column: design
 status: tasked
 created: 2026-11-03T22:46:18+0100
-updated: 2026-11-03T23:31:47+0100
+updated: 2026-11-03T23:39:59+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -33,6 +33,16 @@ approval-datetime: 2026-11-03T22:46:18+0100
 - Gotchas: a Bash command whose text contains `agentlenspro disable`, `agentlenspro enable` or `agentlenspro --uninstall-hooks` is denied by the review loop (src/cli/reviewLoop.ts:129), so tests drive those verbs through node in an isolated DATA_DIR. A Rust deploy needs `codesign -s - --force` on the binary, or it exits 137.
 - BLOCKERS and hazards (review of 9df11ec4): (c) must NOT be deployed to the live collector until the TRDD-12FGMAEP whole-process memory backstop lands or the owner records a waiver on TRDD-12FGMAEP, because this branch carries TRDD-2HRA270Y step 4, which removes the only whole-process memory guard (2HRA270Y STATE), and the crash loop TRDD-2JOIAH2G is still open. (d) touches the review gate brake: src/cli/reviewGate.ts:1100-1108 documents that `--uninstall-hooks` is refused by disabledNotice while the switch is armed, so decide that verb under the switch before removing the refusal, and update the comment. (b) has a second raw-body writer, the spool migration ACT 3 at src/cli/setup.ts:694 (? INFERRED, worker report), to gate too; REPAIR_STEPS (setup.ts:1685) reuse stepOtel, so the test covers setup and repair; the removal keeps the ownership marker telemetry-managed.json consistent. The P5 calibration runs inside the Ok arm of append_hook_event (rust-core/crates/agentlens-core/src/hook_events.rs:275-292), so the ring-only split must keep it.
 - Confidence: decisions 3, 4 and 6 are judgements, not verified facts. Decision 4 reads «telemetry logs» as OTEL logs; the log sweep memory cost is unmeasured (TRDD-2HRA270Y measured with --no-log-scan). Decision 6 rests on the 2026-09-03 order; directive 1 only supports it. Commit 9df11ec4 said "each with the verified fact behind it", which overstates these three.
+- Owner, 2026-11-03: «write down all those bugs. then fix them.» The bugs, each with where it is fixed:
+- B1: under the switch, `agentlenspro setup` and auto-repair write OTEL_LOG_RAW_API_BODIES back into settings.json (stepOtel, src/cli/setup.ts:1198, to ensureTelemetryConfig, src/telemetryConfig.ts:486). Fix: increment (b).
+- B2: the spool migration ACT 3 (src/cli/setup.ts:694) can also set the raw-body key under the switch. Fix: increment (b).
+- B3: under the switch the burn gate and image cache-guard allow everything, because `agentlenspro gate` returns at once (src/cli/hookHandlers.ts:497). Fix: increment (d).
+- B4: the switch refuses most CLI verbs (disabledNotice, exit 69), skips repair (src/cli/autoSetup.ts:245), moves the skills away (src/cli/surfaces.ts:50-63) and refuses every server start (src/cli/serverControl.ts:295,916,1139; src/cli/setup.ts:1375). Fix: increment (d).
+- B5: alcore honours only the file half of the switch, not AGENTLENS_DISABLED=1 (rust-core/crates/agentlens-core/src/bin/alcore.rs:212-224). Fix: increment (c).
+- B6: once hook events stop reaching disk, last-compact would report an old compaction as the latest. Fix: increment (e).
+- B7: the panel Lifecycle capture toggle off drops hook events before the in-memory ring, blinding the spawn guards (rust-core/crates/agentlens-core/src/hook_events.rs:270). Fix: TRDD-V52X6894 item 1.
+- B8: the panel Burn gate toggle off also silences the image cache-guard (rust-core/crates/agentlens-core/src/ui.rs:2129). Fix: TRDD-V52X6894 item 2.
+- B9: the review-gate brake described at src/cli/reviewGate.ts:1100-1108 depends on the CLI refusal that B4 removes. Fix: increment (d) decides `--uninstall-hooks` under the switch and updates the comment.
 - SUPERSEDED: the open-question list ("Still open for the owner, in dependency order") and the decided/inferred wording of the lines starting "Decided by the owner", "✓ VERIFIED leak", "The spawn guards" and "? INFERRED (worker report" are superseded by this block and by the Corrections section. Line numbers cited in the Corrections section count from before this block was inserted: add 15.
 
 ## Owner directives (verbatim, 2026-11-03)
@@ -40,6 +50,7 @@ approval-datetime: 2026-11-03T22:46:18+0100
 - «to be clear: the disabled mode should ONLY stop the collection of the telemetry logs and raw bodies! it should not do anything else!»
 - «to be precise, it should also stop the event logging of the hooks monitoring the claude code events, except for the statusline hook that collect the realtime data. it should not stop the hook for the adversarial review or other hooks or the rate-limiting guard hooks, for example the hooks alerting or blocking the spawn of more than 5 agents simultaneously. or the others set via the dashboard right panel. these should stay, and only activated or deactivated via the dashboard right panel.»
 - «do as you think is best. base your decisions on verified facts. consult the advisor.»
+- «write down all those bugs. then fix them.»
 
 ## Current state
 The off switch (~/.agentlens/DISABLED, or AGENTLENS_DISABLED=1) is documented as "global: every side-effect off" (src/cli/killSwitch.ts:28). About 10 modules check it, including main.ts (most CLI verbs refuse to run), autoSetup.ts (no repair), setup.ts (no server start), disableCli.ts, statuslineCapture.ts and hookHandlers.ts. The review gate and supervisor already ignore it (e09151d0).
