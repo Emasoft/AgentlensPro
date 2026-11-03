@@ -4,7 +4,7 @@ title: The review gate ignores the AgentlensPro kill-switch
 column: human_review
 status: tasked
 created: 2026-11-03T21:18:43+0100
-updated: 2026-11-03T21:33:10+0100
+updated: 2026-11-03T22:45:46+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -47,6 +47,7 @@ The live DISABLED flag file under ~/.agentlens still carries the stale text writ
 ## Approval log
 
 - 2026-11-03T21:18:43+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-03 — OWNER RULE, verbatim: «the disabled state should never disable the adversarial review hook!» This confirms the direction of e09151d0 (the gate and supervisor ignore both halves of the off switch). Not yet covered: re-installing a missing review hook while the switch is set.
 
 ## Evidence basis
 
