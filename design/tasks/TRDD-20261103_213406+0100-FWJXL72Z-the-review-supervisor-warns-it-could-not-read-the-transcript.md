@@ -4,7 +4,7 @@ title: The review supervisor warns it could not read the transcript on a session
 column: todo
 status: tasked
 created: 2026-11-03T21:34:06+0100
-updated: 2026-11-03T21:40:34+0100
+updated: 2026-11-03T22:14:48+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,3 +37,13 @@ Found while working TRDD-8D26QVBC (the review gate ignores the AgentlensPro kill
 ## Approval log
 
 - 2026-11-03T21:34:06+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Findings 2026-11-03
+
+✓ VERIFIED: the warning's only producer is judge() (reviewSupervisor.ts:143), reached when lines is null. Four null branches: empty transcript_path, missing file, open failure (reviewGate.ts:708), read failure (reviewGate.ts:722-723).
+Measured: in 24 of 25 first-prompt warnings over 5 days the transcript file was born 0.5-6.4 s after the warning (three re-measured by the orchestrator). So the hook ran before the file existed.
+Not separated: transcripts cannot tell the empty-path branch from the missing-file branch. The fix covers only the missing-file branch.
+Not covered: one mid-session warning (session ff701ebd, 2026-11-03T19:05:26Z) on a file that had existed for days. Its cause is an empty path or an open/read failure; it still warns, by design.
+Fix: on UserPromptSubmit, a non-empty path to a missing file means no completed turn (lines = []). Stop, SubagentStop and an empty path still warn. Trade-off (review): a wrong or stale path mid-session is no longer flagged at prompt time, only at Stop.
+Follow-up: the env-gated probe (log transcript_path, its type, existsSync, and the readCurrentTurn null reason) would separate the empty-path branch from the missing-file branch and explain the mid-session case.
+Live check: passive. After the bundle rebuild at 2026-11-03T21:14:03Z, count first-prompt warnings in transcripts born after that time. Baseline about 5 a day (24 in 5 days); 0 over a day confirms the fix.

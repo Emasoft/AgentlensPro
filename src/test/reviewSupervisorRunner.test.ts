@@ -205,3 +205,84 @@ suite('review-supervisor — real CLI runner (end-to-end)', () => {
     } finally { f.cleanup() }
   })
 })
+
+suite('review-supervisor — a missing transcript on a first prompt (TRDD-FWJXL72Z)', () => {
+  // Drives the COMPILED runner (out/test/cli/reviewSupervisor.js, emitted by compile-tests from the source under
+  // test), not standalone/cli.js: the bundle is rebuilt only by node esbuild.js, so spawning it would run the code
+  // from before the change. HOME points at an empty fixture dir so the owner's real settings.json cannot decide the
+  // gate-registered probe.
+  // Only the first test proves the fix (it fails without it); the other three pass on the old code too and guard against widening the silence or adding an early return.
+  const SUPERVISOR_JS = path.join(REPO_ROOT, 'out', 'test', 'cli', 'reviewSupervisor.js')
+  const DRIVER = 'require(' + JSON.stringify(SUPERVISOR_JS) + ').runReviewSupervisor().then((c) => { process.exitCode = c })'
+  const MISSING = 'transcript-not-yet-created.jsonl'
+
+  function runFromSource(cwd: string, home: string, stdinPayload: string): Promise<RunResult> {
+    return new Promise((resolve) => {
+      const child = spawn(process.execPath, ['-e', DRIVER], { cwd, env: { ...process.env, HOME: home } })
+      let stdout = ''; let stderr = ''
+      child.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
+      child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+      child.on('close', (code) => resolve({ code, stdout, stderr }))
+      child.stdin.write(stdinPayload)
+      child.stdin.end()
+    })
+  }
+
+  /** Runs body in a fresh project cwd and an empty HOME. The cwd settings register the gate on Stop only when gateRegistered. */
+  async function withFixture(gateRegistered: boolean, body: (cwd: string, home: string) => Promise<void>): Promise<void> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'al-supervisor-first-'))
+    try {
+      const cwd = path.join(root, 'project')
+      const home = path.join(root, 'home')
+      fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+      const settings = gateRegistered ? { hooks: { Stop: [{ hooks: [{ command: 'agentlenspro review-gate' }] }] } } : {}
+      fs.writeFileSync(path.join(cwd, '.claude', 'settings.json'), JSON.stringify(settings))
+      await body(cwd, home)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  test('a first prompt whose transcript does not exist yet prints nothing when the gate is registered', async function () {
+    this.timeout(20_000)
+    await withFixture(true, async (cwd, home) => {
+      const payload = JSON.stringify({ transcript_path: path.join(cwd, MISSING), hook_event_name: 'UserPromptSubmit' })
+      const r = await runFromSource(cwd, home, payload)
+      assert.strictEqual(r.code, 0, r.stderr)
+      assert.strictEqual(r.stdout, '', 'no completed turn yet is not an unreadable transcript, so nothing is warned')
+    })
+  })
+
+  test('Stop with a missing transcript still reports the review as UNVERIFIED', async function () {
+    this.timeout(20_000)
+    await withFixture(true, async (cwd, home) => {
+      const payload = JSON.stringify({ transcript_path: path.join(cwd, MISSING), hook_event_name: 'Stop' })
+      const r = await runFromSource(cwd, home, payload)
+      assert.strictEqual(r.code, 0, r.stderr)
+      const out = JSON.parse(r.stdout) as { systemMessage: string }
+      assert.ok(out.systemMessage.includes('could not read the transcript'), r.stdout)
+    })
+  })
+
+  test('a first prompt with an empty transcript_path still reports the transcript as unreadable', async function () {
+    this.timeout(20_000)
+    await withFixture(true, async (cwd, home) => {
+      const r = await runFromSource(cwd, home, JSON.stringify({ transcript_path: '', hook_event_name: 'UserPromptSubmit' }))
+      assert.strictEqual(r.code, 0, r.stderr)
+      const out = JSON.parse(r.stdout) as { systemMessage: string }
+      assert.ok(out.systemMessage.includes('could not read the transcript'), r.stdout)
+    })
+  })
+
+  test('a first prompt with a missing transcript and no registered gate still prints the NOT REGISTERED alarm', async function () {
+    this.timeout(20_000)
+    await withFixture(false, async (cwd, home) => {
+      const payload = JSON.stringify({ transcript_path: path.join(cwd, MISSING), hook_event_name: 'UserPromptSubmit' })
+      const r = await runFromSource(cwd, home, payload)
+      assert.strictEqual(r.code, 0, r.stderr)
+      const out = JSON.parse(r.stdout) as { systemMessage: string }
+      assert.ok(out.systemMessage.includes('THE REVIEW GATE IS NOT REGISTERED'), r.stdout)
+    })
+  })
+})

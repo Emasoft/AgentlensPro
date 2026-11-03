@@ -219,14 +219,24 @@ export async function runReviewSupervisor(): Promise<number> {
   let input: SupervisorInput = {}
   try { input = JSON.parse((await readStdin(process.stdin)).toString('utf8')) as SupervisorInput } catch { /* keep defaults */ }
   const transcript = typeof input?.transcript_path === 'string' ? input.transcript_path : ''
+  const event = String(input?.hook_event_name ?? input?.hookEventName ?? '')
+  const transcriptExists = transcript !== '' && fs.existsSync(transcript)
   // The last COMPLETED turn, the same window the gate judges (owner ruling 2026-10-14). UserPromptSubmit can run
   // after the new prompt is already written, so an unanswered newest turn is skipped in favour of the turn before it.
-  const lines = transcript && fs.existsSync(transcript) ? readCurrentTurn(transcript, { skipUnstartedTurn: true, warnNoTurnStart: true }) : null
+  // WHY a missing transcript on UserPromptSubmit means no completed turn, not unreadable (TRDD-FWJXL72Z): a
+  // session's first prompt can run this hook BEFORE Claude Code creates the transcript file (measured on 24 first
+  // prompts: the file was born 0.5-6.4 s after the warning fired), so there is no completed turn to judge yet, and
+  // treating it as unreadable raised a false warning. Stop keeps the warning: by then the turn should have been
+  // written, so a missing file there is a real fault (expected, not measured). An empty transcript_path stays
+  // unreadable on every event. No early return: judge() must still run, so the gate-not-registered alarm fires on
+  // a first prompt too.
+  let lines: string[] | null = null
+  if (transcriptExists) lines = readCurrentTurn(transcript, { skipUnstartedTurn: true, warnNoTurnStart: true })
+  else if (transcript !== '' && event === 'UserPromptSubmit') lines = []
   const scan = lines ? scanSupervision(lines, hookCwd(input)) : { work: 0, forks: 0, unreviewed: 0 }
   const registered = gateIsRegistered(settingsCascade(process.cwd()), p => fs.readFileSync(p, 'utf8'))
   const verdict = judge(scan, registered, lines !== null)
   if (verdict.level === 'ok') return 0
-  const event = String(input?.hook_event_name ?? input?.hookEventName ?? '')
   // Silent ONLY where the gate will speak (its own Stop block repeats this warning). The gate lets a cannot-spawn
   // agent stop silently, so that case stays warned; a throw here answers false, so it never silences.
   const gateSpeaks = (ls: string[]): boolean => {
