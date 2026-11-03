@@ -1,10 +1,10 @@
 ---
 trdd-id: FWJXL72Z
 title: The review supervisor warns it could not read the transcript on a session's first prompt
-column: todo
+column: testing
 status: tasked
 created: 2026-11-03T21:34:06+0100
-updated: 2026-11-03T22:14:48+0100
+updated: 2026-11-03T22:17:06+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-03T21:34:06+0100
+implementation-commits: [78a5bd0f]
 ---
 
 # The review supervisor warns it could not read the transcript on a session's first prompt
