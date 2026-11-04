@@ -401,8 +401,9 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
     //  - old-package (setup.ts 'old-package' step): resolveOnPath('agentlens-dashboard', PATH) finds an executable
     //    file — then it runs `npm rm -g agentlens-dashboard` on the GLOBAL npm tree;
     //  - otel-env managed overwrite (telemetryConfig.ts managedSettingsPaths + managed-settings.d drop-ins): a foreign
-    //    value in one of those files — checked here as the directory being present at all — or a foreign OTEL_* in
-    //    the process env (every OTEL_* key is also deleted from the env below).
+    //    value in one of those files — checked here as the directory being present at all. legEnv() does not inherit
+    //    the process env, so no foreign OTEL_* key reaches setup; the loop below also strips any OTEL_* key that
+    //    `extra` passes.
     // The registered hooks run `agentlenspro` from PATH, so a shim in the leg dir puts THIS tree's bundle first —
     // otherwise the hook verify would exercise whatever agentlenspro the machine has installed.
     const leg = await makeLeg('setup'); legs.push(leg)
@@ -420,11 +421,14 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
       }
       return null
     }
-    const legSettings = path.join(leg.home, '.claude', 'settings.json')
+    // Preconditions the hazards rely on: setup resolves os.homedir() (the spool plist path) and its settings path from
+    // HOME, so setup must run with the leg HOME and that HOME must be empty. A spool plist or a pre-written settings.json
+    // there would trigger the spool migration. These replace two hazard entries that read a just-created HOME, which
+    // could never fire.
+    assert.strictEqual(env.HOME, leg.home, 'setup must run with the leg HOME')
+    assert.deepStrictEqual(fs.readdirSync(leg.home), [], `leg HOME ${leg.home} must be empty before setup`)
     const hazards = [
       isDir('/Volumes/AgentLensSpool/otel-bodies') && '/Volumes/AgentLensSpool/otel-bodies is mounted (spool migration would hdiutil detach it)',
-      fs.existsSync(path.join(leg.home, 'Library', 'LaunchAgents', 'com.agentlens.spool.plist')) && 'a spool LaunchAgent plist exists (launchctl bootout)',
-      fs.existsSync(legSettings) && `${legSettings} exists before setup (the HOME is not empty)`,
       onPath('agentlens-dashboard') && `agentlens-dashboard resolves on PATH at ${onPath('agentlens-dashboard')} (npm rm -g)`,
       isDir('/Library/Application Support/ClaudeCode') && '/Library/Application Support/ClaudeCode exists (managed-settings overwrite)',
       isDir('/etc/claude-code') && '/etc/claude-code exists (managed-settings overwrite)',
