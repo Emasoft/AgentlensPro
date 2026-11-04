@@ -137,6 +137,13 @@ pub struct Counters {
     /// `alcore.demoteColdError` degradation).
     pub demote_cold_errors: u64,
     pub spans_appended: u64,
+    /// TRDD-RBBEX59R D4: hook events ACCEPTED since boot (the write path and the ring-only path),
+    /// served as `hookEvents.receivedSinceBoot`. Not a PersistStats field: an accepted event under
+    /// no-collection or capture-off writes nothing, and PersistStats counts only bytes written.
+    pub hook_events_accepted: u64,
+    /// TRDD-RBBEX59R: how many times the P5 StopFailure calibration ran. In memory only and not on
+    /// the wire; it exists so a test can prove P5 still runs on the ring-only path.
+    pub stop_failure_calibrations: u64,
 }
 
 
@@ -348,6 +355,14 @@ pub struct CoreState {
     pub spool_tap: Option<Arc<spool_tap::SpoolTap>>,
     /// Why `spool_tap` is `None`, for `/api/ingest-status`.
     pub spool_tap_off_reason: String,
+    /// TRDD-RBBEX59R no-collection mode: set ONCE at boot (alcore `--no-collection`, or the
+    /// `<data>/DISABLED` file as a backstop) and never changed; a restart is the only transition.
+    /// While set the server stores no OTLP telemetry, no raw bodies and no hook-event log, but the
+    /// in-memory hook ring, the guards and status-line ingest keep running.
+    pub no_collection: bool,
+    /// The trimmed AGENTLENS_STARTED_BY alcore read at boot; `None` when unset or blank (never the
+    /// log line fallback text), so `/api/server-stats` `startedBy` can tell "no stamp" apart.
+    pub started_by: Option<String>,
 }
 
 impl CoreState {
@@ -843,6 +858,8 @@ impl CoreState {
             body_links: crate::delta_log::DeltaLog::new(data_dir, "body-links"),
             spool_tap: None,
             spool_tap_off_reason: "not configured: alcore serve was started without --ingest-manifest and --aldigest-bin".to_owned(),
+            no_collection: false,
+            started_by: None,
         }
     }
 
@@ -1303,6 +1320,7 @@ async fn handle(
     req: Request<Incoming>,
     state: Arc<Mutex<CoreState>>,
     tap: Option<Arc<spool_tap::SpoolTap>>,
+    no_collection: bool,
 ) -> Result<Response<Full<Bytes>>, String> {
     // The discovery probe matches the RAW url (path+query, no strip) — server.ts:4414 compares
     // req.url exactly, so a query string must NOT match.
@@ -1331,6 +1349,12 @@ async fn handle(
         }
     }
 
+    // TRDD-RBBEX59R no-collection mode: the body is read (so the exporter gets a normal response)
+    // and then DROPPED before the parse, the spool tap and the ingest. The port stays bound (D1):
+    // exporters keep their keys under the switch, and a closed port would error in every session.
+    if no_collection {
+        return Ok(Response::new(Full::new(Bytes::new())));
+    }
     // Parse on THIS worker thread, before the lock: N connections parse on N cores.
     //
     // THE COMMENT HERE USED TO SAY the lock "covers only the buffer append + window insert". That
@@ -1381,14 +1405,18 @@ pub async fn serve_otlp(
     // state lock, and taking the lock just to look at a field that never changes after boot would
     // add a lock wait to every POST of a server that has the tap off. `CoreState.spool_tap` stays
     // the single owner; this is a clone of its `Arc`.
-    let tap = state.lock_timed().spool_tap.clone();
+    // no_collection is read here for the same reason: it is set once at boot and never changes.
+    let (tap, no_collection) = {
+        let st = state.lock_timed();
+        (st.spool_tap.clone(), st.no_collection)
+    };
     loop {
         let (stream, _) = listener.accept().await?;
         let io = hyper_util::rt::TokioIo::new(stream);
         let state = state.clone();
         let tap = tap.clone();
         tokio::spawn(async move {
-            let svc = service_fn(move |req| handle(req, state.clone(), tap.clone()));
+            let svc = service_fn(move |req| handle(req, state.clone(), tap.clone(), no_collection));
             // An Err from the service aborts this connection — exactly the overflow contract.
             let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await;
         });

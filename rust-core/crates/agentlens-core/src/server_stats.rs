@@ -572,10 +572,14 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "live": { "files": live_files, "newestMs": live_newest_ms.map(num).unwrap_or(Value::Null) },
             // TRDD-U0L78B3Z: null = up, else the CLI prints `CAPTURE DOWN <N>m` (serverControl.ts
             // `bodiesCaptureLine`). Direct child of `bodies`, which is where the CLI reads it.
-            "captureDownSince": capture_down_since(
+            // TRDD-RBBEX59R item 7: forced null in no-collection mode, checked HERE at the caller so the
+            // pure 4-argument predicate keeps its contract. In the mode no body can ever arrive while
+            // status-line samples keep `last_ingest_activity_ms` fresh, so the predicate would report
+            // CAPTURE DOWN for a capture that was switched off on purpose.
+            "captureDownSince": if st.no_collection { None } else { capture_down_since(
                 now_ms, st.last_ingest_activity_ms,
                 live_newest_ms.map(|n| n as i64), st.started_at_ms,
-            ).map(Value::from).unwrap_or(Value::Null),
+            ) }.map(Value::from).unwrap_or(Value::Null),
             // Read, never probed here: the chore probes once per pass tick (chores.rs)
             // and this route reports its last reading — server.ts:2947 read a variable too.
             "sinkProblem": st.sink_problem.clone().map(Value::from).unwrap_or(Value::Null),
@@ -584,7 +588,9 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
                 None => Value::Null,
             },
         },
-        "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": p.hook_event_writes, "spooled": hook_spooled },
+        // TRDD-RBBEX59R D4: receivedSinceBoot = hook events ACCEPTED (the write path and the ring-only
+        // path). The write count stays in persistence.hookEventWrites; one meaning per field.
+        "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": st.counters.hook_events_accepted, "spooled": hook_spooled },
         "statusline": {
             "parts": sl["parts"], "partBytes": sl["partBytes"], "walBytes": sl["walBytes"],
             "bufferedRows": sl["bufferedRows"], "sealedParts": sl["sealedParts"],
@@ -635,6 +641,12 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "metricsPayloads": st.counters.metrics_payloads,
             "parseErrors": st.counters.parse_errors,
         },
+        // TRDD-RBBEX59R item 8, appended after the frozen keys (additive): `collection` says whether
+        // this process stores telemetry ("off" = no-collection mode), `startedBy` is the trimmed
+        // AGENTLENS_STARTED_BY read at boot, null when unset or blank. The CLI enable verb reads both
+        // to decide whether and how to restart a server that is still in the mode.
+        "collection": if st.no_collection { "off" } else { "on" },
+        "startedBy": st.started_by.clone().map(Value::from).unwrap_or(Value::Null),
     })
 }
 

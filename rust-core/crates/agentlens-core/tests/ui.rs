@@ -577,10 +577,16 @@ fn hook_events_ingest_read_and_lifecycle_mapping() {
     post(ui, "/api/hook-events", &ev("StopFailure", r#","error_type":"rate_limit"#).replace("rate_limit", r#"rate_limit""#));
     post(ui, "/api/hook-events", &ev("PreCompact", r#","trigger":"manual""#));
     post(ui, "/api/hook-events", r#"{"hook_event_name":"Notification"}"#);
-    // captureEnabled=false: accepted and DROPPED (a non-2xx would look like an outage).
+    // captureEnabled=false: accepted, NOT written to disk, but pushed to the in-memory ring the gate
+    // reads and counted as received (TRDD-RBBEX59R ring-only path; a non-2xx would look like an outage).
     post(ui, "/api/hook-config", r#"{"captureEnabled":false}"#);
     let r = post(ui, "/api/hook-events", &ev("SessionEnd", r#","reason":"exit""#));
     assert_eq!(body_of(&r), r#"{"ok":true,"dropped":"captureEnabled=false"}"#);
+    {
+        let st = state.lock().unwrap();
+        let last = st.recent_hook_events.last().expect("the ring holds the capture-off event");
+        assert_eq!(last["ev"], "SessionEnd", "capture off still feeds the ring");
+    }
     post(ui, "/api/hook-config", r#"{"captureEnabled":true}"#);
 
     // The persisted records: verbatim payload, `session` lifted, one daily bucket.
@@ -588,7 +594,7 @@ fn hook_events_ingest_read_and_lifecycle_mapping() {
     assert_eq!(buckets.len(), 1, "one UTC day bucket");
     let stats = get(ui, "/api/server-stats", "");
     let v: serde_json::Value = serde_json::from_str(body_of(&stats)).unwrap();
-    assert_eq!(v["hookEvents"]["receivedSinceBoot"], 5, "the statusline route, the 400s and the drop never counted");
+    assert_eq!(v["hookEvents"]["receivedSinceBoot"], 6, "the capture-off event counts as received; the statusline route and the 400s never counted");
     assert_eq!(v["hookEvents"]["files"], 1);
     assert_eq!(v["persistence"]["hookEventWrites"], 5);
     assert!(v["persistence"]["hookEventBytes"].as_u64().unwrap() > 0);

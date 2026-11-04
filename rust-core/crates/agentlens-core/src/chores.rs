@@ -523,10 +523,16 @@ fn clean_spill_dirs_except(data_dir: &Path, max_age: Option<Duration>, skip: &[&
 }
 
 pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
-    let (data_dir, tap) = {
+    let (data_dir, tap, no_collection) = {
         let st = state.lock_timed();
-        (st.data_dir.clone(), st.spool_tap.clone())
+        (st.data_dir.clone(), st.spool_tap.clone(), st.no_collection)
     };
+    // TRDD-RBBEX59R no-collection mode: no raw-body pass at all — no drain into the store and no
+    // tap.body call (this pass is its only caller). The boot call and the 60 s timer both land here.
+    // The burn-tick body scan (ui.rs) is a separate guard input and is not affected.
+    if no_collection {
+        return;
+    }
     // The ONE bodies dir, `<data>/otel-bodies` — capture writes straight to it (TRDD-Z53IJFE9
     // step D removed the RAM-disk spool that this chore used to drain alongside it, and with the
     // spool went the free-space back-pressure valve: it existed to relieve a 2GB RAM disk that
@@ -534,10 +540,11 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // below still guards it).
     let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir);
 
-    // WHY no capture switch here: raw-body capture is mandatory (owner order 2026-10-02), so the
-    // sink probe, the drain and the over-cap valve below run on every tick unconditionally. The
-    // old opt-in gated only this probe (never the drain), so a fresh install silently skipped the
-    // one check that says "the capture dir is not writable".
+    // WHY no capture switch here: raw-body capture is mandatory (owner order 2026-10-02), so outside
+    // no-collection mode the sink probe, the drain and the over-cap valve below run on every tick
+    // unconditionally. The old opt-in gated only this probe (never the drain), so a fresh install
+    // silently skipped the one check that says "the capture dir is not writable". The ONE exception
+    // is no-collection mode (TRDD-RBBEX59R), which returns before all of it, above.
     // server.ts:818-823 — the sink precondition, once per pass tick, warnings on TRANSITIONS
     // only (a per-tick repeat is filtered out by the day it matters). TRDD-U0L78B3Z.
     let problem = crate::server_stats::probe_sink(&crate::burn::guard::default_bodies_dir(&data_dir));
@@ -964,6 +971,17 @@ pub fn project_resident_blobs(engine_out: &Value) -> Vec<Value> {
 }
 
 /// Shared by the boot drain and the periodic tick (TRDD-L6V1UUW0) so the two report identically.
+/// TRDD-RBBEX59R: one hook-spool drain pass, run ONLY on the hook write path (mode off AND capture
+/// on); `None` = skipped. Both drain callers (boot and the periodic tick) go through here. Without
+/// the check the ring-only path would re-ingest every kept spool file on every tick: the drain keeps
+/// a file whose ingest appended nothing, so each tick would push it into the ring again with `ts`
+/// set to now, and the gate would count stale events as fresh.
+pub fn spool_drain_tick(st: &mut CoreState, now_ms: i64, max_files: usize) -> Option<crate::hook_events::SpoolDrain> {
+    if crate::hook_events::hook_ring_only_reason(st).is_some() {
+        return None;
+    }
+    Some(crate::hook_events::drain_hook_spool(st, now_ms, max_files))
+}
 fn log_spool_drain(d: &crate::hook_events::SpoolDrain) {
     if *d != crate::hook_events::SpoolDrain::default() {
         println!(
@@ -1422,8 +1440,9 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         let mut st = state.lock_timed();
         let now = crate::now_ms();
         // Boot pass has no lock contention yet — drain the whole backlog, unbounded.
-        let d = crate::hook_events::drain_hook_spool(&mut st, now, usize::MAX);
-        log_spool_drain(&d);
+        if let Some(d) = spool_drain_tick(&mut st, now, usize::MAX) {
+            log_spool_drain(&d);
+        }
     }
     // TRDD-RVKQDLRD: span_tick, purge_tick, bodies_pass and composition_tick run as ONE task on
     // `bg` (the background-QoS runtime built in alcore.rs), NOT inline before the listeners bind.
@@ -1643,8 +1662,11 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
             tick.tick().await;
             let mut st = s.lock_timed();
             let now = crate::now_ms();
-            let d = crate::hook_events::drain_hook_spool(&mut st, now, 200);
-            log_spool_drain(&d);
+            // TRDD-RBBEX59R: the write-path condition is re-checked on EVERY tick (capture can be
+            // toggled through POST /api/hook-config); spool_drain_tick skips the drain otherwise.
+            if let Some(d) = spool_drain_tick(&mut st, now, 200) {
+                log_spool_drain(&d);
+            }
         }
     });
 

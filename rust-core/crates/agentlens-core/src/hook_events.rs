@@ -267,10 +267,17 @@ pub fn ingest_hook_event(
         }
         return (200, json!({ "ok": true, "routed": "statusline" }), None);
     }
-    if !st.hook_runtime.capture_enabled {
-        // Switch off = accept and DROP: the hook script is a fire-and-forget dumb pipe, and a
-        // non-2xx would make disabled capture look like a server outage.
-        return (200, json!({ "ok": true, "dropped": "captureEnabled=false" }), None);
+    // TRDD-RBBEX59R: the RING-ONLY path — no-collection mode, or capture switched off. The event is
+    // still pushed to the in-memory ring the burn gate reads, counted as accepted, and P5 still runs,
+    // so the guards keep working; nothing is written to disk and nothing goes to the spool tap.
+    // (Before this, capture off was accept-and-DROP, so the gate went blind with the switch.)
+    if let Some(reason) = hook_ring_only_reason(st) {
+        let rec = build_hook_event_record(p, now_ms);
+        let rec_for_calibration = rec.clone();
+        push_recent_hook_event(&mut st.recent_hook_events, rec);
+        st.counters.hook_events_accepted += 1;
+        calibrate_on_stop_failure(st, ev, &rec_for_calibration, now_ms);
+        return (200, json!({ "ok": true, "dropped": reason }), None);
     }
     match append_hook_event(&st.data_dir.join("hook-events"), p, now_ms) {
         Ok((rec, bytes, pos, line)) => {
@@ -281,41 +288,63 @@ pub fn ingest_hook_event(
             if let Some(tap) = &st.spool_tap {
                 tap.hook(ev, raw);
             }
-            // Cloned before the ring takes ownership — the calibration branch below needs the
+            // Cloned before the ring takes ownership — the calibration below needs the
             // record's own ts/session/payload after this push.
             let rec_for_calibration = rec.clone();
             push_recent_hook_event(&mut st.recent_hook_events, rec);
             st.persist.hook_event_writes += 1;
             st.persist.hook_event_bytes += bytes;
-            // P5 auto-calibration: a rate-limit StopFailure is the ONE moment the undisclosed
-            // window cap is observable — snapshot the hot account's consumed figures into
-            // burn-config.json as observed capacity. Run AFTER the record is persisted/ringed
-            // (ingestion is the priority); `calibrate_from_stop_failure` never panics, so a bad
-            // calibration can never break hook ingestion.
-            if ev == "StopFailure" {
-                let sessions = st.build_session_summary(now_ms as f64);
-                let sessions = sessions.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now_ms as f64);
-                let current_account_uuid = st.burn.current_account(now_ms as f64).account_uuid;
-                let outcome = crate::burn_calibration::calibrate_from_stop_failure(
-                    &rec_for_calibration,
-                    &events,
-                    &sessions,
-                    current_account_uuid.as_deref(),
-                    &st.burn.vars,
-                    &st.burn.home_dir,
-                );
-                if outcome.calibrated {
-                    // Reload so the next burn tick + every budget read projects against the new cap.
-                    st.burn.config = crate::burn::monitor::load_burn_config(&st.burn.vars, &st.burn.home_dir);
-                    println!("{} [AgentlensPro] window capacity auto-calibrated: {}", crate::log_ts(), outcome.reason);
-                } else {
-                    println!("{} [AgentlensPro] capacity calibration skipped: {}", crate::log_ts(), outcome.reason);
-                }
-            }
+            st.counters.hook_events_accepted += 1;
+            calibrate_on_stop_failure(st, ev, &rec_for_calibration, now_ms);
             (200, json!({ "ok": true }), Some((pos, line)))
         }
+        // A failed append touches NOTHING else (no ring, no counter): the CLI spools the payload on
+        // a non-2xx and a later drain replays it, so counting it here would count it twice.
         Err(e) => (500, json!({ "error": e.to_string() }), None),
+    }
+}
+
+/// TRDD-RBBEX59R: why a hook event takes the ring-only path, or `None` for the write path (mode off
+/// AND capture on). ONE predicate shared by `ingest_hook_event` and the spool-drain chore
+/// (`chores::spool_drain_tick`), so the two can never disagree about when the disk log is written.
+pub fn hook_ring_only_reason(st: &crate::CoreState) -> Option<&'static str> {
+    if st.no_collection {
+        return Some("collection=off");
+    }
+    if !st.hook_runtime.capture_enabled {
+        return Some("captureEnabled=false");
+    }
+    None
+}
+
+/// P5 auto-calibration: a rate-limit StopFailure is the ONE moment the undisclosed window cap is
+/// observable — snapshot the hot account's consumed figures into burn-config.json as observed
+/// capacity. Runs AFTER the record is ringed (ingestion is the priority) on BOTH ingest paths, which
+/// is why it is one function: a copy per path would drift. `calibrate_from_stop_failure` never
+/// panics, so a bad calibration can never break hook ingestion.
+fn calibrate_on_stop_failure(st: &mut crate::CoreState, ev: &str, rec: &Value, now_ms: i64) {
+    if ev != "StopFailure" {
+        return;
+    }
+    st.counters.stop_failure_calibrations += 1;
+    let sessions = st.build_session_summary(now_ms as f64);
+    let sessions = sessions.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+    let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now_ms as f64);
+    let current_account_uuid = st.burn.current_account(now_ms as f64).account_uuid;
+    let outcome = crate::burn_calibration::calibrate_from_stop_failure(
+        rec,
+        &events,
+        &sessions,
+        current_account_uuid.as_deref(),
+        &st.burn.vars,
+        &st.burn.home_dir,
+    );
+    if outcome.calibrated {
+        // Reload so the next burn tick + every budget read projects against the new cap.
+        st.burn.config = crate::burn::monitor::load_burn_config(&st.burn.vars, &st.burn.home_dir);
+        println!("{} [AgentlensPro] window capacity auto-calibrated: {}", crate::log_ts(), outcome.reason);
+    } else {
+        println!("{} [AgentlensPro] capacity calibration skipped: {}", crate::log_ts(), outcome.reason);
     }
 }
 

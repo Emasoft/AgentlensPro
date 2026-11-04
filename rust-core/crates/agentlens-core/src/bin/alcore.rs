@@ -95,7 +95,7 @@ fn install_exit_on_panic() {
 }
 fn usage(msg: &str) -> ! {
     eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
-    eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
+    eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--no-collection] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
     exit(64);
 }
 
@@ -120,6 +120,9 @@ fn main() {
     let mut mcp_port: u16 = 4317;
     let mut bind = "127.0.0.1".to_owned();
     let mut log_scan = true;
+    // TRDD-RBBEX59R: no-collection mode, the authoritative input from the CLI spawn site
+    // (alcoreServeArgs pushes it while the kill switch is armed for this data dir).
+    let mut no_collection_flag = false;
     // The digest spool tap (spool_tap.rs): ON only when BOTH --ingest-manifest and --aldigest-bin
     // are given. --ingest-interval-secs is a hidden test knob (the seal + collect period).
     let mut ingest_manifest: Option<String> = None;
@@ -136,6 +139,7 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--no-log-scan" => log_scan = false,
+            "--no-collection" => no_collection_flag = true,
             "--panic-after-ready" => panic_after_ready = true,
             "--ingest-manifest" => {
                 i += 1;
@@ -202,26 +206,23 @@ fn main() {
     if !media_dir.join("index.html").is_file() {
         usage(&format!("--media-dir {}: no index.html there", media_dir.display()));
     }
-    // THE GLOBAL DISABLED GATE (TRDD-NZ9Z9ALO). Ported from the retired TS server (standalone/server.ts
-    // before 567fc5c2, lines 107-119) and dropped in the Rust port: with `<data_dir>/DISABLED` present
-    // alcore booted anyway, so a supervisor spawned under DISABLED got a live server.
+    // NO-COLLECTION MODE (TRDD-RBBEX59R step c), replacing the TRDD-NZ9Z9ALO exit-78 gate. Under the
+    // kill switch alcore now BOOTS and keeps the guards running (the hook ring, the burn gate, status-line
+    // ingest, the log sweeper) but stores no OTLP telemetry, no raw bodies and no hook-event log. The
+    // old gate kept the server down, which left `agentlenspro gate` allowing every agent launch.
     //
-    // It runs before any file, lock, key or listener is touched. Exit 78 (EX_CONFIG) is the code the
-    // supervisor treats as terminal (src/cli/serverControl.ts isTerminalExit), so it does not respawn.
-    //
-    // FILE ONLY, on purpose, like the old server: AGENTLENS_DISABLED=1 in the env is NOT honoured here,
-    // because --force-install-telemetry overrides the env half only in-process and its children inherit
-    // the variable (src/cli/killSwitch.ts:118-122). That is a known remaining gap. Path::exists reads an
-    // unreadable flag as absent, the same fail-open direction as killSwitch.ts. This covers new boots
-    // only; `agentlenspro disable` is what stops a running server.
+    // `--no-collection` is the authoritative input (the CLI decides, env half and file half alike).
+    // The `<data_dir>/DISABLED` file read is a BACKSTOP for an alcore started outside the CLI. Read once,
+    // here: a restart is the only transition in or out of the mode. Path::exists reads an unreadable
+    // flag as absent, the same fail-open direction as killSwitch.ts.
     let disabled_flag = std::path::Path::new(&data_dir).join("DISABLED");
-    if disabled_flag.exists() {
-        eprintln!(
-            "{} alcore: DISABLED flag present ({}) — refusing to boot. Re-enable with: agentlenspro enable",
+    let no_collection = no_collection_flag || disabled_flag.exists();
+    if no_collection {
+        println!(
+            "{} alcore: no-collection mode ({}) — telemetry, raw bodies and hook events are not stored; the guards keep running",
             agentlens_core::log_ts(),
-            disabled_flag.display()
+            if no_collection_flag { "--no-collection".to_owned() } else { format!("DISABLED flag {}", disabled_flag.display()) }
         );
-        exit(78);
     }
     // BOOT PROVENANCE + THE NO_REVIVE BRAKE WARN (TRDD-Q8ZW00CI, ported from standalone/server.ts
     // :293-307 as part of TRDD-1B98LCVR).
@@ -239,12 +240,17 @@ fn main() {
     // that operator "the starter did not honour it, clear the brake with `server start`" both
     // accuses the wrong party and advises the command that just ran. Provenance-blind wording is
     // the bug; the WARN stays verbatim for every other starter, where it is true and wanted.
+    // TRDD-RBBEX59R: the stamp is kept as an Option for /api/server-stats `startedBy` (null when unset
+    // or blank). The "unknown (...)" text below is for the log line only and must never reach the API,
+    // or a consumer could not tell a missing stamp from a real starter name.
+    let started_by_stamp: Option<String> = std::env::var("AGENTLENS_STARTED_BY").ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
     {
-        let started_by = std::env::var("AGENTLENS_STARTED_BY").ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| {
+        let started_by = started_by_stamp.clone().unwrap_or_else(|| {
             "unknown (no AGENTLENS_STARTED_BY — launched by hand, or by a spawner without the stamp)".to_owned()
         });
-        // NO_REVIVE only: the global DISABLED switch is refused above (exit 78) before we get here;
-        // NO_REVIVE is a pause whose stated scope is resurrection (killSwitch.ts:56), so it stays a warning only.
+        // NO_REVIVE only: the global DISABLED switch no longer stops a boot (it selects no-collection
+        // mode, above); NO_REVIVE is a pause whose stated scope is resurrection (killSwitch.ts:56), so it
+        // stays a warning only.
         let brake_present = std::path::Path::new(&data_dir).join("NO_REVIVE").exists();
         let brake = if brake_present { "PRESENT" } else { "absent" };
         println!(
@@ -362,6 +368,9 @@ fn main() {
         st.ports.ui = ui_port;
         st.ports.otlp = port;
         st.ports.mcp = mcp_port;
+        // TRDD-RBBEX59R: both set once here, before any listener or chore reads them.
+        st.no_collection = no_collection;
+        st.started_by = started_by_stamp.clone();
         let (segments, total_spans, _) = st.writer.stats();
         println!(
             "{} alcore: loaded {} span(s) (last {}h window) from {} — store holds {total_spans} span(s) across {segments} segment(s), nothing evicted",
