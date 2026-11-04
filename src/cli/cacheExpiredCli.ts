@@ -25,16 +25,26 @@ import { statuslineRoot } from './statuslineHistoryCli'
 import { dataDir } from '../dataDir'
 import { readHookEvents } from '../hookEventStore'
 import { toLifecycleEvent, type ResumeStaleness } from '../lifecycleEvents'
+import { hookCaptureStop } from './killSwitch'
 
 /** The harness's OWN resume-staleness verdict (CC 2.1.251 `SessionStart source=resume`) for one
  *  session — --json ONLY, never the one-word stdout contract those two fields feed. Reads the
  *  newest SessionStart hook record for this exact session id straight off disk (no server), the
- *  same store `last-compact` already reads without one. `null` covers three cases alike: no
- *  SessionStart on record, the newest one isn't a resume, or it predates 2.1.251 — all three mean
+ *  same store `last-compact` already reads without one. Walks the newest 20 SessionStart records newest-first and returns the first
+ *  one that carries a resume verdict (a newer non-resume SessionStart is skipped, an older resume still answers). `null` covers four cases alike: no
+ *  SessionStart on record, none of the 20 carries a resume verdict (pre-2.1.251, or not a resume), or the record reached first predates the armed
+ *  kill-switch (see below) — all four mean
  *  "nothing to add", not an error. */
 export function latestResumeStaleness(sessionId: string): ResumeStaleness | null {
   const recs = readHookEvents(path.join(dataDir(), 'hook-events'), { session: sessionId, ev: 'SessionStart', limit: 20 })
+  // B6 (TRDD-RBBEX59R e): under the kill-switch no SessionStart is stored, so a record stamped before the flag file's mtime may be only the
+  // last resume from BEFORE the switch (a later resume of this session would be missing). Records come newest-first and the FIRST one
+  // older than the arm time ends the walk with null, even when an older record would carry a resume verdict; a resume stamped at or after
+  // the arm time still resolves. Env half only: there is no arm time, so every record is untrusted and the result is null. Not knowable =
+  // nothing to add, the same null the no-data cases return.
+  const stopped = hookCaptureStop()
   for (const rec of recs) {
+    if (stopped && (stopped.armedAtMs === null || rec.ts < stopped.armedAtMs)) return null
     const ev = toLifecycleEvent(rec)
     if (ev?.resumeStaleness) return ev.resumeStaleness
   }

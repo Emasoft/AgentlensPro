@@ -107,15 +107,17 @@ let envHalfOverridden = false
 export function overrideKillSwitchEnv(on = true): void { envHalfOverridden = on }
 
 /** Is AGENTLENS_DISABLED=1 set in this process's environment, whether or not `--force-install-telemetry` overrode it for the
- *  rest of the run? Two callers: killSwitchHalf (which adds the override on top) and rawBodiesHeldAbsent (telemetryConfig.ts), the one
- *  caller that must NOT honour the override.
+ *  rest of the run? Callers: killSwitchHalf (which adds the override on top, unless told not to), hookCaptureStop (via killSwitchHalf with
+ *  the override ignored) and rawBodiesHeldAbsent (telemetryConfig.ts), which must NOT honour the override.
  *  WHY it ignores the override (TRDD-RBBEX59R B13, d2): the override lets a force install repair, restore and lift around the env
  *  half, but the switch stops COLLECTION (owner rule 2026-11-03) and OTEL_LOG_RAW_API_BODIES makes Claude Code dump every API body
  *  to disk. With the override honoured, a force install under AGENTLENS_DISABLED=1 and no flag file WROTE that key. */
 export function envHalfSet(): boolean { return process.env.AGENTLENS_DISABLED === '1' }
 
-export function killSwitchHalf(dir: string = dataDir()): 'env' | 'file' | null {
-  if (envHalfSet() && !envHalfOverridden) return 'env'
+/** `honourEnvOverride` (default true) lets the `--force-install-telemetry` override hide the env half; `hookCaptureStop` passes false
+ *  because a READER of the hook-event store must see the switch as the hooks of the running sessions see it. */
+export function killSwitchHalf(dir: string = dataDir(), honourEnvOverride = true): 'env' | 'file' | null {
+  if (envHalfSet() && !(honourEnvOverride && envHalfOverridden)) return 'env'
   try { return fs.existsSync(killSwitchPath(dir)) ? 'file' : null } catch { return null }
 }
 
@@ -126,6 +128,21 @@ export function killSwitchHalf(dir: string = dataDir()): 'env' | 'file' | null {
  */
 export function agentlensDisabled(dir: string = dataDir()): boolean {
   return killSwitchHalf(dir) !== null
+}
+
+/** What the kill-switch means for READING the hook-event store: `null` when capture is on; otherwise `armedAtMs`, the flag file's mtime
+ *  (arm time), or `null` there when only the env half is set (no arm time is knowable). TRDD-RBBEX59R (e), bug B6: while the switch is
+ *  armed no hook event is written, so the newest record on disk is merely the last one from BEFORE the switch, and a reader that
+ *  reports it as the latest gives a confident wrong answer. The file is checked first so a file+env pair still yields a usable time.
+ *  Armed regardless of the `--force-install-telemetry` env override (killSwitchHalf with honourEnvOverride=false): that override is an
+ *  in-process flag that stays set for the verb `agentlenspro --force-install-telemetry last-compact` runs right after the force install
+ *  (main.ts), and it changes what the force install may repair — not whether the hooks of the running sessions store events. */
+export interface HookCaptureStop { armedAtMs: number | null }
+export function hookCaptureStop(dir: string = dataDir()): HookCaptureStop | null {
+  // Armed-or-not comes from killSwitchHalf alone (one definition of "armed", so the two cannot diverge); the file is stat-ed ONLY to
+  // read the arm time. File + env both set: the file still supplies the time. Env only (or the file vanished between the two reads): unknowable.
+  if (killSwitchHalf(dir, false) === null) return null
+  try { return { armedAtMs: fs.statSync(killSwitchPath(dir)).mtimeMs } } catch { return { armedAtMs: null } }
 }
 
 /** Arm the global kill-switch. Idempotent. Returns the flag path. */

@@ -19,6 +19,7 @@ import { dataDir } from '../dataDir'
 import { findLastCompact, DEFAULT_COMPACT_WINDOW_DAYS, type CompactTrigger } from '../lastCompact'
 import { EXIT, UsageError } from './cliErrors'
 import { assertKnownFlags } from './argHelpers'
+import { envHalfSet, hookCaptureStop } from './killSwitch'
 
 export const LAST_COMPACT_USAGE = `agentlenspro last-compact [flags]
 
@@ -27,6 +28,10 @@ How long ago did THIS project's conversation compact? Prints the age of the most
 
 Sourced from the PreCompact lifecycle hook (the compaction itself, with its trigger), read straight
 off disk — so it answers with the server down.
+
+While the global kill-switch is armed no hook event is stored, so the newest record can only be a
+pre-switch one: if it predates the flag file (or AGENTLENS_DISABLED=1 is set in this CLI's OWN environment,
+which may differ from the hooks' — no arm time is knowable), this exits 2 with stdout EMPTY and says why on stderr.
 
 flags:
   --seconds            print the age as a bare integer number of seconds (for arithmetic)
@@ -37,7 +42,7 @@ flags:
   --json               the full record: timestamps, trigger, session, cwd, completion + duration
 
 exit:
-  0 = answered, stdout is the delta · 2 = no compaction on record (stdout EMPTY) · 64 = bad flags
+  0 = answered, stdout is the delta · 2 = no compaction on record, or none since the kill-switch was armed (stdout EMPTY) · 64 = bad flags
 
   A never-compacted project exits 2 and prints NOTHING — "no compaction" must never arrive as
   "0s ago", which is the opposite claim.
@@ -95,6 +100,18 @@ export function runLastCompactCli(argv: string[]): number {
     }
   }
 
+  // B6 (TRDD-RBBEX59R e): while the kill-switch is armed, hook events (PreCompact included) are no longer written, so an
+  // older record on disk would be reported as the latest compaction — a confident wrong answer. No arm time (env half only) means
+  // no record can be shown to postdate the switch: cannot answer, same shape as "no record" (exit 2, stdout EMPTY).
+  const stopped = hookCaptureStop()
+  if (stopped && stopped.armedAtMs === null) {
+    // No arm time: the env half alone (the OWN-environment line), or — envHalfSet() false — the flag file vanished between the arm check and its stat (a concurrent `enable`).
+    console.error(envHalfSet()
+      ? 'cannot answer: AGENTLENS_DISABLED=1 is set in the OWN environment of this CLI process (the hook processes may see a different one); while the kill-switch is armed hook events are not stored and, with no flag file, the arm time is unknown, so no recorded compaction can be shown to be the latest'
+      : 'cannot answer: the kill-switch flag file disappeared while it was being read (a concurrent `agentlenspro enable`), so the arm time is unknown; run the command again')
+    return EXIT.UNKNOWN
+  }
+
   const result = findLastCompact({
     dir: path.join(dataDir(), 'hook-events'),
     project,
@@ -102,6 +119,12 @@ export function runLastCompactCli(argv: string[]): number {
     trigger: (triggerRaw as CompactTrigger | undefined) ?? null,
     windowDays,
   })
+
+  // Armed via the flag file: only a record NEWER than the flag file's mtime can be trusted to be the latest. Older or none = no record.
+  if (stopped && stopped.armedAtMs !== null && (!result.found || result.atMs < stopped.armedAtMs)) {
+    console.error(`cannot answer: no compaction recorded since the kill-switch was armed at ${new Date(stopped.armedAtMs).toISOString()}; hook events are not stored while it is armed (collection resumes after \`agentlenspro enable\`; compactions made while it was armed stay unrecorded)`)
+    return EXIT.UNKNOWN
+  }
 
   if (!result.found) {
     // EX_UNKNOWN with stdout untouched. A caller doing `age=$(... --seconds)` gets an EMPTY string
