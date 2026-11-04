@@ -4,7 +4,7 @@ title: Dashboard hook panel switches blind guards they do not name
 column: blocked
 status: tasked
 created: 2026-11-03T23:16:06+0100
-updated: 2026-11-04T01:13:39+0100
+updated: 2026-11-04T01:19:50+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -17,6 +17,7 @@ approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-03T23:16:06+0100
 blocked-by: [RBBEX59R]
 pre-block-column: todo
+unblock-when: [trdd:RBBEX59R]
 ---
 
 # Dashboard hook panel switches blind guards they do not name
@@ -37,6 +38,7 @@ Not decided: whether to fix either, and how. TRDD-RBBEX59R question 3 (hook even
 - 2026-11-03T23:16:06+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-03T23:40:00+0100 — APPROVED by the owner: «write down all those bugs. then fix them.» (the earlier MANDATE line predates this decision).
 - 2026-11-04T01:13:39+0100 — column → blocked. items 1 and 2 are implemented under TRDD-RBBEX59R (B7 in its increment (c), B8 as its panel toggle); this card waits on them
+2026-11-04 — unblock-when set to trdd:RBBEX59R (agent decision, owner delegated 2026-11-03 «do as you think is best»): this card closes when RBBEX59R's B7 and B8 land and are deployed; until then it stays blocked so nobody pulls it from todo and does the work twice.
 
 ## Owner decision
 
