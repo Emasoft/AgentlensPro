@@ -8,8 +8,8 @@ import { NO_REVIVE_FILE } from '../dataDir'
  * session on this machine (TRDD-RBBEX59R): the server runs in no-collection mode — no telemetry, no raw API
  * bodies, no hook-event log — while `agentlenspro hook` keeps feeding its in-memory ring (never the CLI hook
  * spool) and `agentlenspro gate` keeps running, so the burn-gate and the image cache-guard stay ON, as do the
- * review gate and the review supervisor. Status-line capture is off unless `agentlenspro disable
- * --keep-statusline` armed it. The process itself is kept down only by the NO_REVIVE brake (below).
+ * review gate and the review supervisor. Status-line capture stays ON: it always POSTs to the server, which stores it
+ * even in no-collection mode. The process itself is kept down only by the NO_REVIVE brake (below).
  *
  * WHY A FILE, AND WHY GLOBAL (this is the lesson of the 2026-07-14 SSD incident, TRDD-K3WDPR7M):
  *
@@ -43,28 +43,6 @@ import { NO_REVIVE_FILE } from '../dataDir'
  *  start a server in (TRDD-TYOQA14F). */
 export function killSwitchPath(dir: string = dataDir()): string {
   return path.join(dir, 'DISABLED')
-}
-
-/** Marker beside the kill-switch flag: while BOTH exist, status-line capture still appends to disk
- *  (statuslineCapture.ts) — every other surface stays off.
- *  WHY: owner request 2026-10-27, verbatim: "stop everything except the statusline data collection, so the
- *  agentlenspro cli can still answer the basic questions about the session". */
-export function keepStatuslinePath(dir: string = dataDir()): string {
-  return path.join(dir, 'DISABLED-KEEP-STATUSLINE')
-}
-
-/** Is the disabled-but-keep-status-line marker present? Any stat error reads as absent: the failure
- *  direction is then "no capture", i.e. the plain disabled state the operator already had. */
-export function keepStatuslineArmed(dir: string = dataDir()): boolean {
-  try { fs.statSync(keepStatuslinePath(dir)); return true } catch { return false }
-}
-
-/** Arm the keep-status-line marker. Idempotent. Returns its path. */
-export function armKeepStatusline(): string {
-  const p = keepStatuslinePath()
-  fs.mkdirSync(path.dirname(p), { recursive: true })
-  fs.writeFileSync(p, 'Status-line capture stays ON while AgentlensPro is disabled. Removed by `agentlenspro enable`.\n')
-  return p
 }
 
 /** Env var every server spawner stamps on the child, naming the PATH that started it. The server
@@ -164,7 +142,7 @@ export function armKillSwitch(reason?: string, dir: string = dataDir()): string 
     `While this file exists AgentlensPro stores no telemetry, no raw API bodies and no hook-event`,
     `log: the server runs in no-collection mode. The burn-gate and the image cache-guard stay ON`,
     `(agentlenspro hook keeps feeding them, in memory only), and so do the review gate and the`,
-    `review supervisor. Status-line capture is off unless agentlenspro disable --keep-statusline.`,
+    `review supervisor. The status line is still captured: it keeps POSTing to the server.`,
     `To keep the server process DOWN as well:  agentlenspro server stop --stay-down`,
     `The hooks change on their NEXT fire in EVERY running Claude session — no restart needed;`,
     `a server that was already running enters the mode at its next restart.`,
@@ -182,21 +160,13 @@ export function armKillSwitch(reason?: string, dir: string = dataDir()): string 
  *  unlink failure (EACCES, EPERM, EBUSY) is thrown: swallowing it let `agentlenspro enable` print
  *  "now ENABLED" while the flag stayed on disk and the hooks kept no-op'ing. */
 export function disarmKillSwitch(dir: string = dataDir()): boolean {
-  // `dir` (TRDD-RBBEX59R): removal must hit the file the foreign check read (ctx.dataDir), never the env default's flag,
-  // and the keep-status-line marker beside it in that same dir.
+  // `dir` (TRDD-RBBEX59R): removal must hit the file the foreign check read (ctx.dataDir), never the env default's flag.
   const p = killSwitchPath(dir)
-  // The FLAG goes first. A marker that cannot be deleted still throws, but only after the flag is already
-  // gone: AgentlensPro is left enabled (the marker is inert without the flag), not disabled with the flag
-  // still on disk. The throw still reaches `enable`, which stops before restoring the parked skills.
+  // A flag that cannot be deleted (anything but ENOENT) throws, so `enable` stops before it restores the parked skills.
   let existed = true
   try { fs.unlinkSync(p) } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
     existed = false
-  }
-  // The keep-status-line marker only means something beside the flag (owner request 2026-10-27), so
-  // it goes with it: a stale marker would resurrect status-line-only capture at the next `disable`.
-  try { fs.unlinkSync(keepStatuslinePath(dir)) } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
   }
   return existed
 }

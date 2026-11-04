@@ -16,6 +16,7 @@ import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
 import { freePort } from './helpers/freePort'
+import { captureStatusline } from '../cli/statuslineCapture'
 
 const ENABLED = process.env.AGENTLENS_RBBEX59R_JOINT === '1'
 const REPO = path.resolve(__dirname, '..', '..', '..')
@@ -457,6 +458,29 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
     subagentStarts(leg, 'joint-setup', 1)
     assert.strictEqual(await postJson(leg.ports.otlp, '/v1/traces', span('joint-leg8')), 200, 'OTLP is answered (and dropped)')
     await assertNothingStored(leg, 0, 0, 'after setup under the switch')
+    const stop = cli(leg, ['server', 'stop'])
+    assert.strictEqual(stop.code, 0, stop.stderr)
+  })
+
+  test('leg 9 — TRDD-RBBEX59R d3: under the armed switch the status line POSTs and the real no-collection server STORES the sample', async () => {
+    const leg = await makeLeg('statusline'); legs.push(leg)
+    fs.writeFileSync(path.join(leg.data, 'DISABLED'), 'joint test leg 9\n')
+    const start = cli(leg, ['server', 'start'])
+    assert.strictEqual(start.code, 0, start.stderr + start.stdout)
+    const s = await waitStats(leg, () => true, 60_000)
+    assert.strictEqual(s?.collection, 'off')
+    assert.strictEqual((s?.statusline as { receivedSinceBoot?: unknown } | undefined)?.receivedSinceBoot, 0, 'nothing received before the sample')
+    // captureStatusline runs IN this process (current source, not the bundle) against the leg's UI port; the env is
+    // restored in the finally. setup.js pins AGENTLENS_NO_REVIVE=1, so a failed POST could not spawn a server.
+    const savedUrl = process.env.AGENTLENS_UI_URL
+    process.env.AGENTLENS_UI_URL = `http://127.0.0.1:${leg.ports.ui}`
+    try {
+      await captureStatusline(Buffer.from(JSON.stringify({ session_id: 'joint-statusline', cost: { total_cost_usd: 1 } })))
+    } finally {
+      if (savedUrl === undefined) delete process.env.AGENTLENS_UI_URL; else process.env.AGENTLENS_UI_URL = savedUrl
+    }
+    const after = await waitStats(leg, x => (x.statusline as { receivedSinceBoot?: unknown } | undefined)?.receivedSinceBoot === 1, CONTROL_WINDOW_MS)
+    assert.ok(after !== null, 'the no-collection server stored the status-line sample (statusline.receivedSinceBoot == 1)')
     const stop = cli(leg, ['server', 'stop'])
     assert.strictEqual(stop.code, 0, stop.stderr)
   })

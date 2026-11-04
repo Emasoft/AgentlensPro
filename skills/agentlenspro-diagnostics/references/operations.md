@@ -87,10 +87,10 @@ restart`.
 - `agentlenspro --uninstall-hooks` — removes the agentlens hook entries. A running session keeps its hooks until it restarts, and the next launch of a verb that self-heals the install registers them again (`AGENTLENS_NO_AUTOSETUP=1` stops that). The review gate and the review supervisor are never switchable.
 
 **The kill-switch stops only COLLECTION.** `agentlenspro disable [reason]` drops one flag file that stops storing telemetry, raw
-API bodies and hook events, plus the CLI hook spool and status-line capture (unless `disable --keep-statusline` was used), in
+API bodies and hook events, plus the CLI hook spool (the status line is not collection: it always POSTs to the server, which stores it), in
 **every** Claude Code session already running, on that session's next hook fire. No restart needed (a `settings.json` edit alone
 cannot reach a session that already loaded its config). `AGENTLENS_DISABLED=1` in the environment is the same switch for the
-process that sees it. The server runs in **no-collection mode** (answers, stores nothing). The switch refuses no command and
+process that sees it. The server runs in **no-collection mode** (answers, stores no telemetry, raw bodies or hook events; it still stores status-line samples). The switch refuses no command and
 parks no skill: every verb runs while it is armed, and the burn-gate, the image cache-guard, the in-band advisor, the review
 gate, the review supervisor and the dashboard switches stay as they were. `disable` stops a running server (its mode is read
 only at boot) and the next hook revives it in no-collection mode; `server stop --stay-down` keeps it down. `disable` also turns

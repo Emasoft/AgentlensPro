@@ -7,9 +7,8 @@
 // (a hook inherits CLAUDE's env, not the operator's). A flag FILE is the only channel that reaches
 // every already-running session, because every hook is a fresh process that re-reads the disk.
 import * as path from 'path'
-import * as fs from 'fs'
 import { execFileSync } from 'child_process'
-import { killSwitchPath, agentlensDisabled, armKeepStatusline, armKillSwitch, keepStatuslinePath, killSwitchHalf, noRevivePath, reviveBraked } from './killSwitch'
+import { killSwitchPath, agentlensDisabled, armKillSwitch, killSwitchHalf, noRevivePath, reviveBraked } from './killSwitch'
 import { enableAgentlensSurfaces, type SurfaceDirs } from './surfaces'
 import { AutoSetupDeps, ensureInstalled } from './autoSetup'
 import { ensureServer, findServerPid, statsOwnership, stopServer, SUPERVISE_MAX_BACKOFF_DEFAULT_MS } from './serverControl'
@@ -26,14 +25,6 @@ export async function runDisableCli(args: string[]): Promise<number> {
   // older `disable` parked come back at the next launch (restoreParkedSurfaces, autoSetup.ts) while the switch stays armed. The flag goes
   // in the env-default data dir, where the hooks look for it (killSwitch.ts).
   const p = armKillSwitch(reason)
-  // `--keep-statusline`: owner request 2026-10-27, verbatim: "stop everything except the statusline data
-  // collection, so the agentlenspro cli can still answer the basic questions about the session". The marker
-  // only lets statuslineCapture.ts keep appending to disk; nothing else changes: the server still runs in no-collection
-  // mode (stores nothing) and the hooks keep running (TRDD-RBBEX59R c2). A plain
-  // `disable` clears any marker left by an earlier `--keep-statusline`, so it turns status-line capture off too.
-  const keepStatusline = args.includes('--keep-statusline')
-  if (keepStatusline) armKeepStatusline()
-  else fs.rmSync(keepStatuslinePath(), { force: true })
 
   // The server reads its mode (collecting or no-collection) ONLY at boot (TRDD-RBBEX59R c2), so a server already
   // running in collecting mode would keep storing after the flag is armed — "disabled" would be a lie. Stop it: the next
@@ -70,15 +61,14 @@ export async function runDisableCli(args: string[]): Promise<number> {
 
   console.log('AgentlensPro is now DISABLED.')
   console.log(`  flag:    ${p}`)
-  if (keepStatusline) console.log(`  keep:    ${keepStatuslinePath()} (status-line capture stays ON, written straight to disk)`)
   console.log(`  server:  ${stopped}`)
   console.log(`  capture: ${capture}`)
   console.log('  skills:  not touched (agents stay installed); skills parked by a `disable` run before this version reappear at the next launch while the switch stays armed.')
   console.log('')
   // TRDD-RBBEX59R c2: the switch now means "store nothing", not "run nothing" — the text says so.
   console.log('  Off: storing telemetry, raw API bodies and hook events (the next server runs in no-collection mode),')
-  console.log('  the CLI hook spool, and status-line capture (kept only by --keep-statusline).')
-  console.log('  On: the burn-gate and the image cache-guard (fed in memory), the in-band advisor, the other dashboard-panel')
+  console.log('  the CLI hook spool.')
+  console.log('  On: the status line (it keeps POSTing to the server, which stores it), the burn-gate and the image cache-guard (fed in memory), the in-band advisor, the other dashboard-panel')
   console.log('  hook switches as you left them, the review gate and the review supervisor. Turn the guards on or off from')
   console.log('  the dashboard right panel.')
   console.log('  The next failed hook POST revives the server in that mode; `agentlenspro server stop --stay-down` keeps it down.')

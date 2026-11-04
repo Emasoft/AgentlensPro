@@ -38,11 +38,6 @@
 
 import { spawn } from 'child_process'
 import { forwardHookEvent, readStdin } from './hookHandlers'
-import * as fs from 'fs'
-import * as path from 'path'
-import { agentlensDisabled, keepStatuslineArmed } from './killSwitch'
-import { dataDir } from './cliCore'
-import { flattenSample, dayKey } from '../statuslineStore'
 
 /** The `ev` these samples are stored under. Deliberately NOT a real Claude Code hook event name:
  *  the server accepts any non-empty `hook_event_name`, so reusing the hook-event store gives us
@@ -121,37 +116,14 @@ export function toStatuslineRecord(payload: Buffer, ev: string = STATUSLINE_EV):
   }))
 }
 
-// At the enable edge the revived server seals this orphan WAL immediately. A session that read the flag
-// just before it was removed can append between the seal's read and delete, losing at most a sample or
-// two — accepted, since status-line samples are periodic and redundant.
-/** Append one sample as the server's exact NDJSON line (`flattenSample` + `ts`; the server also keeps
- *  the `hook_event_name`/`statusline_stream` stamps) to `<dataDir>/statusline/<stream>/<UTC day>/wal-cli.ndjson`.
- *  One appendFileSync = one O_APPEND write, no fsync. Throws on failure; the caller's catch is contract 2. */
-function appendSampleToDisk(record: Buffer | null): void {
-  if (!record) return
-  const flat = flattenSample(JSON.parse(record.toString('utf-8')) as Record<string, unknown>)
-  const ts = Date.now()
-  flat.ts = ts
-  const stream = flat.statusline_stream === 'subagent' ? 'subagent' : 'main'
-  const dir = path.join(dataDir(), 'statusline', stream, dayKey(ts))
-  fs.mkdirSync(dir, { recursive: true })
-  fs.appendFileSync(path.join(dir, 'wal-cli.ndjson'), JSON.stringify(flat) + '\n')
-}
-
 /** Forward one status-line payload to the server. Never throws, never writes to stdout, never
  *  reports failure: a telemetry sample that can break the status line would be worse than no
- *  telemetry at all. Delivery failures spool + revive inside forwardHookEvent, so a sample taken
- *  while the server is down is not lost. */
+ *  telemetry at all. It POSTS whether or not the kill switch is armed: the switch stops only the
+ *  collection of telemetry and raw bodies, and the server in no-collection mode still stores these
+ *  samples. Delivery is NOT spooled (spool false, see below): a sample taken while the server is
+ *  down is lost, and only the detached revive inside forwardHookEvent fires. */
 export async function captureStatusline(payload: Buffer, ev: string = STATUSLINE_EV): Promise<void> {
   try {
-    if (agentlensDisabled()) {
-      // Owner request 2026-10-27, verbatim: "stop everything except the statusline data collection, so the
-      // agentlenspro cli can still answer the basic questions about the session". With the server off,
-      // POSTing records nothing, so under the keep-statusline marker the sample goes straight to the
-      // store's own layout. The server's `maybe_seal` seals this orphan WAL (name != its pid) later.
-      if (keepStatuslineArmed()) appendSampleToDisk(toStatuslineRecord(payload, ev))
-      return // the global brake reaches sessions already running
-    }
     const record = toStatuslineRecord(payload, ev)
     if (!record) return
     await forwardHookEvent(record, {
