@@ -4,7 +4,7 @@ title: Dashboard hook panel switches blind guards they do not name
 column: todo
 status: tasked
 created: 2026-11-03T23:16:06+0100
-updated: 2026-11-03T23:42:57+0100
+updated: 2026-11-04T01:02:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -18,6 +18,10 @@ approval-datetime: 2026-11-03T23:16:06+0100
 ---
 
 # Dashboard hook panel switches blind guards they do not name
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-04
+
+DEPLOY GATE: no alcore built from branch fix/setup-agent-preflight is deployed until the TRDD-12FGMAEP whole-process memory backstop lands or the owner records a waiver on TRDD-12FGMAEP (the branch carries TRDD-2HRA270Y step 4). NEXT ACTION: not started; the work is as the body specifies (owner-approved 2026-11-03), scheduled after TRDD-RBBEX59R increment (c) and its B8 panel toggle. The body is current; this block adds only the deploy gate.
 
 Two current defects in the dashboard "Hook switches" panel, found while working TRDD-RBBEX59R (2026-11-03), out of that card's scope.
 
