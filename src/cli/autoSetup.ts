@@ -227,8 +227,14 @@ const SERVER_START_SUBVERBS: ReadonlySet<string> = new Set(["start", "restart"])
  *  `server|daemon start|restart` only, and main.ts runs it AFTER the verb resolves (once the server answers, or once
  *  the `--supervise` child is spawned), so it never delays the start. Same gates as a launch — AGENTLENS_NO_AUTOSETUP,
  *  a switch armed for a foreign setup (an operator switch no longer gates it: it stops only collection), and here also "Claude Code absent". Never throws and never blocks, delays or fails the start:
- *  it reports on stderr one line per piece it put back or repaired (measured 2026-11-04: a parked-skills restore plus a telemetry repair
- *  prints two lines, a skill and an agent repair prints two with no restore at all), and one line for a skip or a thrown failure. */
+ *  it reports on stderr, in this order (the third and fourth items repeat for each repaired piece, in repair order, so the converged lines come immediately before their own otel-env step line, not before every other piece's line):
+ *  - the stale-env warning, once, first: under Claude Code (CLAUDECODE=1) the shell value of a key whose settings.json value is ours differs from it (not gated on the trigger, so it fires for trigger "server"; it follows the D13 foreign-armed skip, so a server start under a foreign-armed flag never prints it);
+ *  - the put-back line: ONE line for all parked skills it put back, carrying the switch clause (and the left-parked clause when only some are blocked); with nothing restored, ONE "left parked" line
+ *    covering every skill a blocker holds back (a file or a non-directory symlink, dangling included);
+ *  - for a repaired otel-env step, BEFORE its step line, one line per CHANGED key in `converged` (detectDrift().converge, read under the lock; the loop `for (const key of converged)` is not gated on the trigger):
+ *    "converged <key>", or "removed <key> (off switch armed)" for the raw-body key under the switch; a key that was only missing adds no line;
+ *  - one line per repaired piece ("restored <piece> (...)") or failed piece ("could not restore <piece> ... run `agentlenspro setup`");
+ *  - one line for a skip or a thrown failure. */
 export async function autoSetupOnServerStart(argv: string[], deps: AutoSetupDeps = {}): Promise<void> {
   const [cmd, sub] = argv
   if ((cmd !== "server" && cmd !== "daemon") || !SERVER_START_SUBVERBS.has(sub ?? "")) return
@@ -331,9 +337,9 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
             : !agentlensDisabled(ctx.dataDir) ? "; no kill-switch is armed"
             : trigger === "launch" && killSwitchArmedForForeign(ctx.dataDir) ? "; the switch armed for the foreign setup is lifted once this launch's repairs succeed"
             : "; the kill-switch stays armed (collection stays off)"
-          // A file or a dangling/non-directory symlink at a live skill path is a LASTING state (the skill stays parked on every launch), so it is announced, never
-          // skipped silently. With nothing restored
-          // the line must not claim "put back 0", and the switch clause (which describes what happens after a restore) is dropped.
+          // A file or a dangling/non-directory symlink at a live skill path is a LASTING state (the skill stays parked on every launch), so it is
+          // announced, never skipped silently. With nothing restored the line must not claim "put back 0", and the switch clause (which
+          // describes what happens after a restore) is dropped.
           const skippedClause = skipped.length > 0 ? formatSkippedSurfaces(skipped) : ""
           say(back.length > 0
             ? `agentlenspro: put back ${back.length} parked skill(s) into ${ctx.skillsDir}${switchClause}${skippedClause ? `; ${skippedClause}` : ""}`

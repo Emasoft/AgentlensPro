@@ -113,9 +113,9 @@ export function reviveBraked(dir: string = dataDir()): boolean {
 
 /**
  * WHICH half of the global kill-switch is armed, or `null` if neither is. ONE definition behind `agentlensDisabled()` and
- * every other reader of the switch: they cannot disagree about which half is armed. The one deliberate exception is `envHalfSet()`:
- * it counts the env half even while `--force-install-telemetry` overrides it in-process, so that `rawBodiesHeldAbsent` never writes the
- * raw-body key under AGENTLENS_DISABLED=1 (bug B13, TRDD-RBBEX59R).
+ * every reader of the switch except `envHalfSet()`: they cannot disagree about which half is armed. `envHalfSet()` counts the env half
+ * even while `--force-install-telemetry` overrides it in-process, so that `rawBodiesHeldAbsent`
+ * never writes the raw-body key under AGENTLENS_DISABLED=1 (bug B13, TRDD-RBBEX59R).
  *
  * `AGENTLENS_DISABLED=1` is honored too, for the cases where env DOES reach the process (tests,
  * a supervisor that spawns the server directly). The FILE is the one that reaches running agents.

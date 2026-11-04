@@ -22,8 +22,8 @@ import { freePort } from './helpers/freePort'
 import { makeFakeAlcore, spawnCliModule, stopChild, waitFor } from './helpers/fakeAlcore'
 import { startMcpStub } from './helpers/mcpStub'
 import { RULE_NAMES, enableAgentlensSurfaces, parkAgentlensSurfaces, restoreParkedSurfaces } from '../cli/surfaces'
-import { TelemetryVerdictRow, ensureTelemetryConfig, rawBodiesHeldAbsent, telemetryVerdict } from '../telemetryConfig'
-import { RAW_BODIES_KEY } from '../captureConfig'
+import { TelemetryVerdictRow, ensureTelemetryConfig, ownedTelemetryKeys, rawBodiesHeldAbsent, telemetryVerdict } from '../telemetryConfig'
+import { RAW_BODIES_KEY, effectiveBodiesDir } from '../captureConfig'
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
 const MANAGED_FOREIGN = 'https://otel.corp.example/v1'
@@ -906,6 +906,11 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     assert.ok(!fs.existsSync(killSwitchPath(f.dataDir)), 'the foreign-armed flag is lifted')
     for (const name of SKILL_NAMES) assert.ok(fs.existsSync(path.join(f.skillsDir, name, 'SKILL.md')), `${name} restored`)
     assert.strictEqual(killSwitchHalf(f.dataDir), 'env', 'collection stays off through the env half')
+    // The put-back line under the env half: the flag stood as FOREIGN_REASON, so the launch promises the lift (collection itself stays off through the env half).
+    // PINNED pending the d3 card item on the foreign-lift wording under the env half: a d3 change to this wording is intended, not a regression.
+    const putBack = l.out.filter(x => x.includes('put back'))
+    assert.strictEqual(putBack.length, 1, l.out.join('|'))
+    assert.ok(putBack[0].includes("the switch armed for the foreign setup is lifted once this launch's repairs succeed") && !putBack[0].includes('stays armed'), putBack[0])
     assert.strictEqual(rawBodiesHeldAbsent(f.dataDir), true)
     assert.ok(!(RAW_BODIES_KEY in readSettings(f).env!), 'the raw-body key is absent under the env half')
   })
@@ -1146,6 +1151,8 @@ suite('the switch stops only collection — repair and restore run under it (TRD
         // ~/Library/LaunchAgents in setup.ts, the telemetryConfig defaults, the launchd plist path): os.homedir() reads $HOME on POSIX, so the
         // fixture home keeps a developer's real ~ out of the run. (POSIX only; CI runs ubuntu-latest, and publish.yml leaves win32 out.)
         process.env.HOME = fx.home
+        // Precondition guard: fails if `process.env.HOME = fx.home` above is removed, or if Node stops following $HOME for os.homedir().
+        assert.strictEqual(os.homedir(), fx.home, 'os.homedir() follows $HOME, so the real ~ is out of the run')
         if (how !== 'env half') armKillSwitch('ops', fx.dataDir)
         if (how !== 'operator flag') process.env.AGENTLENS_DISABLED = '1'; else delete process.env.AGENTLENS_DISABLED
         if (braked) fs.writeFileSync(noRevivePath(fx.dataDir), 'brake\n')
@@ -1626,6 +1633,63 @@ suite('server start — the install heals itself when the server is started (TRD
     assert.ok(agentlensDisabled())
   })
 
+  // Output contract of a server start: AT MOST one put-back line (it covers every parked skill) plus one line per repaired step, nothing else.
+  // Skills parked (a pre-d2 disable) under an operator flag, plus exactly one other drift: a missing agent. The 'restored agents' line is ensureInstalled's per-piece report for the drifted piece; the stubbed step (skill) prints nothing itself.
+  // The drift is an agent, not a telemetry key: a repaired otel-env step also prints one 'converged <key>' line per CHANGED key (a missing key prints none); the telemetry case is the sibling test.
+  test('a server start prints one put-back line for all parked skills plus one line per repaired step, nothing else', async () => {
+    const f = s.f()
+    armKillSwitch('ops', f.dataDir) // not foreign-armed: under a foreign-armed flag the D13 skip returns before anything prints
+    dropRawBodyKey(f) // as `disable` does, so the held-absent raw-body key is not a second, unrelated drift
+    parkAgentlensSurfaces(surfaceDirs(f))
+    fs.rmSync(path.join(f.agentsDir, `${AGENT_NAMES[0]}.md`))
+    const r = recorder(); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, ['skill'], 'only the agent drift is repaired; the skills came back by move')
+    for (const name of SKILL_NAMES) assert.ok(fs.existsSync(path.join(f.skillsDir, name, 'SKILL.md')), `${name} put back`)
+    assert.strictEqual(l.out.length, 2, l.out.join('|'))
+    assert.strictEqual(l.out.filter(x => x.startsWith('agentlenspro: put back ') && x.includes(`${SKILL_NAMES.length} parked skill(s)`)).length, 1, 'one put-back line, covering all skills: ' + l.out.join('|'))
+    assert.ok(l.out.some(x => x.startsWith('agentlenspro: put back ') && x.includes('; the kill-switch stays armed (collection stays off)')), 'the put-back line carries the server-trigger operator clause: ' + l.out.join('|'))
+    assert.strictEqual(l.out.filter(x => x.startsWith('agentlenspro: restored agents')).length, 1, 'one line for the repaired step: ' + l.out.join('|'))
+  })
+  // Telemetry counterpart: the same parked skills under the operator flag, plus exactly one telemetry drift: OTEL_LOGS_EXPORT_INTERVAL set to a different value (a CONVERGE row).
+  // The count is of lines under the recorder() stub: the otel-env repair itself is stubbed (it writes nothing and prints nothing of its own), so these are the lines
+  // autoSetupOnServerStart says, not what the real step adds. The converged loop reads detectDrift's list from BEFORE the repair, so the stub does not hide the converged line.
+  // A key that is only MISSING (deleted from settings env) is not in that list: it gives the put-back line and the step line, and no converged line.
+  test('a server start with parked skills and one converged telemetry key prints exactly a put-back line, a converged line and a step line', async () => {
+    const f = s.f()
+    armKillSwitch('ops', f.dataDir)
+    dropRawBodyKey(f)
+    const cfg = readSettings(f)
+    // Derived from the desired table, not hardcoded: any value other than the desired one is a CONVERGE row (a tuning key).
+    const desired = ownedTelemetryKeys(effectiveBodiesDir(f.dataDir), f.ctx.otlpPort).OTEL_LOGS_EXPORT_INTERVAL
+    cfg.env!.OTEL_LOGS_EXPORT_INTERVAL = String(Number(desired) + 1)
+    writeSettings(f, cfg)
+    parkAgentlensSurfaces(surfaceDirs(f))
+    const r = recorder(); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, ['otel-env'])
+    assert.strictEqual(l.out.length, 3, l.out.join('|'))
+    assert.ok(l.out[0].startsWith('agentlenspro: put back '), 'the put-back line comes first: ' + l.out.join('|'))
+    assert.strictEqual(l.out[1], 'agentlenspro: converged OTEL_LOGS_EXPORT_INTERVAL')
+    assert.ok(l.out[2].startsWith('agentlenspro: restored telemetry env'), 'the step line comes last: ' + l.out.join('|'))
+  })
+  // The missing-key leg of the test above: OTEL_LOGS_EXPORT_INTERVAL DELETED, not changed. A missing key is not in detectDrift's converge list, so there is no 'converged <key>' line; the drift
+  // still repairs through the otel-env step, and the step line's reason says '1 missing, 0 to converge'.
+  test('a server start with parked skills and one MISSING telemetry key prints exactly a put-back line and a step line, and no converged line', async () => {
+    const f = s.f()
+    armKillSwitch('ops', f.dataDir)
+    dropRawBodyKey(f)
+    const cfg = readSettings(f)
+    delete cfg.env!.OTEL_LOGS_EXPORT_INTERVAL
+    writeSettings(f, cfg)
+    parkAgentlensSurfaces(surfaceDirs(f))
+    const r = recorder(); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, ['otel-env'])
+    assert.strictEqual(l.out.length, 2, l.out.join('|'))
+    assert.ok(l.out[0].startsWith('agentlenspro: put back '), 'the put-back line comes first: ' + l.out.join('|'))
+    assert.ok(l.out[1].startsWith('agentlenspro: restored telemetry env (1 missing, 0 to converge)'), 'the step line comes last: ' + l.out.join('|'))
+  })
   test('foreign telemetry: a server start writes nothing, arms nothing, prints one line, and never refuses', async () => {
     const f = s.f()
     const cfg = readSettings(f)

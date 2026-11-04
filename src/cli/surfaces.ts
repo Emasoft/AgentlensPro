@@ -97,7 +97,7 @@ function sourceGone(p: string): boolean {
 
 /** What stands at `p` right now? lstat decides the kind (it does not follow links); a symlink is then followed with stat. Returns:
  *  "file" / "symlink": something that BLOCKS installSkill (a plain file, or a symlink that is dangling or does not resolve to a directory: installSkill mkdirs
- *  under the name and throws EEXIST), so the operator must clear it; "live": a directory, or a symlink resolving to one, which is a live skill ("already live
+ *  under the name and throws (observed: EEXIST for a file or a symlink to a file, ENOENT for a dangling symlink)), so the operator must clear it; "live": a directory, or a symlink resolving to one, which is a live skill ("already live
  *  again"); null: nothing there, or any lstat error, so the caller rethrows the rename error. */
 function occupant(p: string): SkippedSurface["what"] | "live" | null {
   try {
@@ -110,7 +110,7 @@ function occupant(p: string): SkippedSurface["what"] | "live" | null {
 }
 
 /** The operator-facing clause for parked skills left parked because a file or a non-directory symlink blocks their live path: names each path, what stands there,
- *  and the way out. Used by ensureInstalled (P1) only: the setup verb needs no clause, because the same blocker makes installSkill throw EEXIST there, and
+ *  and the way out. Used by ensureInstalled (P1) only: the setup verb needs no clause, because the same blocker makes installSkill throw there (observed: EEXIST for a file or a symlink to a file, ENOENT for a dangling symlink), and
  *  that failure is its loud report. */
 export function formatSkippedSurfaces(skipped: readonly SkippedSurface[]): string {
   return `${skipped.length} parked skill(s) left parked: ` + skipped.map(s => `${s.to} is occupied (a ${s.what} stands there, left untouched — move it away, then run agentlenspro setup)`).join("; ")
@@ -124,11 +124,11 @@ export interface SkippedSurface { to: string; what: "file" | "symlink" }
  *  because a BLOCKER stands at its live destination (`skipped`). A name already live again (reinstalled meanwhile, or put live by a concurrent
  *  restore: a directory, or a symlink resolving to one) is left alone SILENTLY and its parked copy stays; a timestamp-suffixed parked copy is never restored.
  *  WHY `skipped` is returned (TRDD-RBBEX59R d2 leftover): a plain file, or a symlink that is dangling or does not resolve to a directory, at
- *  ~/.claude/skills/<name> is a LASTING state - installSkill mkdirs under that name and throws EEXIST - so that skill stays parked on every
+ *  ~/.claude/skills/<name> is a LASTING state - installSkill mkdirs under that name and throws (observed: EEXIST for a file or a symlink to a file, ENOENT for a dangling symlink) - so that skill stays parked on every
  *  launch and only the user can clear it; a silent skip left nobody told. The launch (ensureInstalled P1) prints it; the setup verb fails loudly on the same
- *  blocker (installSkill throws EEXIST). A live DIRECTORY is not reported: it is a live
+ *  blocker (installSkill throws, as above). A live DIRECTORY is not reported: it is a live
  *  skill (the repair loop replaces a stale one by content), and telling the user to move away the real skill on every launch would be false.
- *  The other skip (ENOENT with the source gone) is not lasting - the repair loop reinstalls a missing live skill - so it is not reported either.
+ *  The other skip (ENOENT with the source gone) is not lasting - the repair loop reinstalls a missing live skill (detectDrift lists a skill with no SKILL.md under its live name as "missing", and the skill step then runs installSkill for it) - so it is not reported either.
  *  WHY a separate primitive (TRDD-RBBEX59R D7, D11): after d2 the operator switch parks nothing, so skills parked by a
  *  pre-d2 `disable` must come back at the next launch while the switch stays armed; restoring and lifting are two decisions
  *  (only enableAgentlensSurfaces does both). It is a MOVE, never a repair: a repair would install a second copy beside the parked one.
