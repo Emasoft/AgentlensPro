@@ -4,17 +4,23 @@ title: Shipped worker agents preload five skills and auto permission mode for ev
 column: proposal
 status: proposed
 created: 2026-11-04T19:25:29+0100
-updated: 2026-11-04T20:26:24+0100
+updated: 2026-11-04T21:03:34+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
 min-approval-requirement: user
 assignee: main-agent@agentlenspro
 approved: false
-implementation-commits: [a2ba6005, 18e6b49b]
+implementation-commits: [a2ba6005, 18e6b49b, 12ae0ed0]
 ---
 
 # Shipped worker agents preload five skills and auto permission mode for every user
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-04
+- Increment A (ship sonnet-worker and smart-worker) is committed as 12ae0ed0, local and unpushed. Its review found description defects to fold in one follow-up commit: sonnet-worker's description ships a dated local incident sentence and a machine-measured ~140k token figure; smart-worker's description hardcodes the model version and has no PICK IT WHEN line; sonnet-worker's body opens "You are a lean worker".
+- NEXT ACTION: fold the 12ae0ed0 review into the two agents (the incident sentence per the owner's answer); copy both into ~/.claude/agents/ and cmp them; then increment B (js-test-writer, python-test-writer).
+- Waiting on the owner: confirmation to hold merge-role-worker; keep or cut sonnet-worker's incident sentence; permissionMode auto; the lean-worker questions. To be proposed to the owner: back up a user's own same-name agent before installAgents overwrites it.
+- Do not push 12ae0ed0 before the owner rules on the incident sentence.
 
 Relocated from TRDD-RBBEX59R (line "Outside this card", handoff 2026-11-04T18:13), verbatim, so it is not lost. Owned elsewhere; every item awaits the owner.
 
@@ -30,6 +36,7 @@ Supersedes TRDD-CA5U48BA, which trddgrep new created with a default mandate (pre
 
 ## Approval log
 2026-11-04 — the owner decided the preload half (verbatim under Owner decisions); the card's other questions still await the owner, so the column stays proposal.
+2026-11-04 — the owner decided to ship sonnet-worker, smart-worker, merge-role-worker, js-test-writer and python-test-writer with agentlenspro (verbatim under Owner decisions); merge-role-worker is held: a departure from the owner's answer, flagged to the owner on 2026-11-04, awaiting their confirmation; the column stays proposal (permissionMode auto and the lean-worker questions still await the owner).
 
 ## Owner decisions
 
@@ -39,3 +46,7 @@ Supersedes TRDD-CA5U48BA, which trddgrep new created with a default mandate (pre
 - Agent's reading, not an owner decision: "(those installed by agentlenspro)" means the four workers above; agentlens-tldr-worker already conforms. Five user-scope agents not shipped by agentlenspro also preload skills (js-test-writer, python-test-writer, merge-role-worker, smart-worker, sonnet-worker); the owner was asked on 2026-11-04 whether to extend the change to them, no answer yet.
 - The implementation departs from the owner's example in two points: it does not copy the example's "Read with a tight offset/limit" paragraph, because these workers read with `tldr body` and the user's code-tools rule keeps the Read tool for images, PDFs and notebooks; and the example's own `tldr definition <symbol> <path>` line is broken (exits 2: tldr reads the second positional as a line number), so the workers and agents/agentlens-tldr-worker.md use `tldr definition --symbol <symbol> --file <file>`.
 - Implemented in a2ba6005 (cheap-worker, fast-worker, lean-worker, micro-worker: skills preload removed, commands inline; agentlens-tldr-worker definition line fixed) and in 18e6b49b (review fold: quicksilver skips gitignored paths, the tldr search comment, the CHANGELOG headline); installed into ~/.claude/agents on 2026-11-04 by a direct copy the owner chose, because `agentlenspro --install-skill` is refused (exit 69) while the kill-switch is armed.
+- 2026-11-04 — second owner decision, verbatim, answer to the question «Should they get the same change?» about sonnet-worker, smart-worker, merge-role-worker, js-test-writer and python-test-writer (user-scope agents agentlenspro did not install): «Ship them with agentlenspro». The option text the owner picked: «Add them to the repo's agents/ and the install list, then apply the same change. All users would get them on install.»
+- Agent plan for that decision (agent decision, advisor consulted): increment A, committed as 12ae0ed0, ships sonnet-worker and smart-worker (same family as cheap/fast/lean; same Tools block; their bodies' sibling names lean-worker fixed to their own names; smart-worker's broken tldr definition form and Read offset/limit bullet replaced). Increment B ships js-test-writer and python-test-writer as a separate commit and review, because their own MANDATORY tldr rule (G5) needs a repair, not a block paste. merge-role-worker is HELD, not shipped: its description and body bind it to scripts/distill/prompts of the corpus-merge pipeline, so for other agentlenspro users it would be dead weight in their Agent catalog; this departs from the owner's literal answer and needs their confirmation, and until then it is not shipped.
+- Increment B defects found 2026-11-04 (to fix in B): js-test-writer has a duplicate `permissionMode: auto` frontmatter key; its line 82 says the Edit tool is deliberately absent while `tools:` lists Edit (grep-verified 2026-11-04); its G5 rule lists `tldr definition <symbol> <path>` (exits 2), `tldr extract` and `tldr explain` (to verify against `tldr --help`); js-test-writer carries escaped backticks (114 lines with a backslash before a backtick, grep-counted 2026-11-04; python-test-writer's one match, line 758, is a Windows path ending in a backslash before a closing backtick, not an escape); js-test-writer line 1148 says tldr-code is preloaded, false once the preload is removed. Decide in B whether G5 points to the shared Tools block or keeps its own repaired list, one source either way.
+- Disclosures to the owner (2026-11-04): every shipped agent's description is paid by every user in every session in the Agent-tool catalog, while the preload saving accrues only per spawn; once shipped, `installAgents` overwrites these names on every run, so they are edited in the repo's agents/, not in ~/.claude/agents/; sonnet-worker's description carries a dated local incident sentence that would ship to every user (owner's call).
