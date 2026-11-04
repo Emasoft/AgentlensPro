@@ -118,7 +118,7 @@ character in string literal". Use `printf '%s'` if a variable is unavoidable.
 | your runner, driven by `budget --watch`'s exit code | **the only thing that can stop your batch.** AgentlensPro measures and decides; it does not own your process tree. `budget --watch` exits `1` at the abort point — wiring that to your kill path is the whole mechanism |
 | burn-gate at `gate=enforce` (the default; `agentlenspro --hooks` shows it) | DENIES agent launches matching the **four measured disaster signatures** — THRASH_ACTIVE, RUNAWAY_FANOUT, COLD_RESUME_FANOUT, FORK_STORM_FORMING. That is disaster prevention, **not** a window budget: it will never stop a well-behaved run that is simply too long |
 | `agentlenspro --hooks gate=warn` | the opposite of a brake — loosens the gate for a legitimate mass fan-out. Restore to `enforce` after |
-| `agentlenspro disable` | turns off AgentlensPro's hooks (the review gate and supervisor stay on), **not your burn** (see Emergency stop above) |
+| `agentlenspro disable` | stops AgentlensPro **storing** telemetry and hook events; the hooks and the burn-gate stay on, and it does **not** stop your burn (see Emergency stop above) |
 
 So a batch that must be able to abort itself needs the stop condition in **its own loop** — the
 snippet in step 3 is that loop; wire its non-zero exit to however your harness terminates.

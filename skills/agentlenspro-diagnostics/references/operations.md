@@ -79,17 +79,21 @@ restart`.
 
 ### Emergency stop: `agentlenspro disable [reason]` / `enable`
 
-The global brake **on AgentlensPro itself** — one flag file that turns off server auto-revive,
-background ingestion, status-line capture (unless `disable --keep-statusline` was used) and every
-AgentlensPro hook except the review gate and the review supervisor, in **every** Claude Code
-session already running, on that session's next hook fire. No restart needed (a `settings.json` edit
-alone cannot reach a session that already loaded its config). `disable` also stops a running server
-and turns raw-body capture off; `enable` clears the flag.
+The global brake on what AgentlensPro **stores** — one flag file that stops storing telemetry, raw
+API bodies and hook events, plus the CLI hook spool and status-line capture (unless
+`disable --keep-statusline` was used), in **every** Claude Code session already running, on that
+session's next hook fire. No restart needed (a `settings.json` edit alone cannot reach a session
+that already loaded its config). The server runs in **no-collection mode** (answers, stores
+nothing). The hooks keep running: the burn-gate, the image cache-guard, the in-band advisor, the
+review gate, the review supervisor and the other dashboard right-panel switches stay as they were.
+`disable` stops a running server (its mode is read only at boot) and the next hook revives it in
+no-collection mode; `server stop --stay-down` keeps it down. `disable` also turns raw-body capture
+off; `enable` clears the flag and restarts a server still in no-collection mode.
 
-⚠ **This is NOT how you stop a burning workload.** It stops the *measurement*, not the burn — it
-removes the gate that was denying disaster launches and blinds you exactly when the numbers matter
-most. Reach for it only to take AgentlensPro out of the picture (debugging its own overhead,
-handing the machine to someone else). To abort a run that is draining the window, see
+⚠ **This is NOT how you stop a burning workload.** It stops the *measurement*, not the burn — the
+guards stay on, but the stored numbers you would diagnose the burn from stop exactly when they
+matter most. Reach for it only to take AgentlensPro's storage out of the picture (debugging its own
+disk writes, handing the machine to someone else). To abort a run that is draining the window, see
 **Budgeting a timed run** below.
 
 ### `agentlenspro env` — environment / system detection

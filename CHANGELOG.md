@@ -6,6 +6,10 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`agentlenspro disable` now stops storing, not the guards (TRDD-RBBEX59R).** The kill-switch (the `DISABLED` flag file or `AGENTLENS_DISABLED=1`) used to turn off the hooks, the server auto-revive and ingestion, which also turned off the burn-gate that denies disaster agent launches. Now the server keeps running in **no-collection mode**: it answers exporters and hooks but stores no telemetry, no raw API bodies and no hook events, and the CLI hook spool is off. The hooks keep running, so the burn-gate, the image cache-guard, the in-band advisor, the review gate, the review supervisor and the other dashboard right-panel switches keep working. `disable` stops a running server (a server reads its mode only at boot) and the next hook revives it in no-collection mode; `agentlenspro server stop --stay-down` keeps it down. Status-line capture is off unless `disable --keep-statusline`. `agentlenspro enable` also restarts a server that still reports no-collection mode. The supervisor no longer refuses a disabled install, and the server no longer exits 78 under the switch (exit 78 stays the embed-key refusal); an exit 64 is respawned, and crash.log names the version skew when an older alcore rejects `--no-collection`.
+
 ### Added
 
 - **get_account_status --all reads the owner's long-lived OAuth keys.** Set CLAUDE_CODE_LONG_OAUTH_KEY_01 through _10 to '<email>|<token>' in the environment. Each valid key is probed with a max_tokens 0 claude-fable-5-1 message (about 33 input tokens, no output), at most once per 10 minutes per key; that message is billed, and on an idle account it probably opens a new 5-hour window. The reply's anthropic-ratelimit-unified headers become the 5-hour, 7-day and Fable windows, filed under the account whose email matches and cross-checked against the 7-day reset within 60 seconds (refused on a mismatch). The usage endpoint answers 403 oauth_scope_insufficient to these keys, which is why this path exists. --no-refresh reads the files only. Tokens are read only from the environment and are never printed or stored (TRDD-HO94JMKD, increment 2).
@@ -103,7 +107,7 @@ All notable changes to AgentlensPro are documented here.
   age pruning is not yet implemented (TRDD-Y1M56VMY).
 - **Foreign telemetry stops agentlenspro.** If settings.json, an enterprise managed-settings file or the
   shell already configures another telemetry pipeline (company gateway), agentlenspro writes nothing,
-  disables itself (kill-switch armed: hooks no-op; skills parked in `<data-dir>/disabled-surfaces/`;
+  disables itself (kill-switch armed: nothing is stored, the server runs in no-collection mode and the guards keep running; skills parked in `<data-dir>/disabled-surfaces/`;
   agents stay) and exits 78 with the conflicting keys (credentials withheld). It re-enables on its own
   once the other setup is removed. Only ROUTING keys (endpoint, protocol, exporters, headers, raw-body path) can be foreign; tuning keys (intervals, OTEL_LOG_* flags) simply converge, loopback spellings of our endpoint are equivalent, and under Claude Code a differing shell OTEL_* value is a stale session snapshot (warning, never a disable). `agentlenspro setup --dry-run` prints the per-key verdict and writes nothing. `agentlenspro --force-install-telemetry <command>` replaces the
   foreign telemetry (managed file only if writable), overrides `AGENTLENS_DISABLED` and OTEL_* shell
