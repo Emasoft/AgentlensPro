@@ -4,7 +4,7 @@ title: help --install-skill and --install-hooks skip the foreign telemetry check
 column: design
 status: tasked
 created: 2026-11-04T15:36:47+0100
-updated: 2026-11-04T15:46:28+0100
+updated: 2026-11-04T15:56:02+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -19,7 +19,7 @@ approval-datetime: 2026-11-04T15:36:47+0100
 
 # help --install-skill and --install-hooks skip the foreign telemetry check
 
-Symptom: `agentlenspro help --install-skill` and `help --install-hooks` parse the install flags in diagnosticsCli at any argv position, but `help` is excluded from auto-setup, so these two flag paths run without the foreign-telemetry check that D15 of the step (d) spec puts on every other install path; under a foreign telemetry setup (company gateway, managed settings, shell export) they can install skills or hooks that the foreign path would have parked or refused (? INFERRED, read in code, not run). Reproducer: in an isolated HOME and AGENTLENS_DATA_DIR, put a foreign OTEL_EXPORTER_OTLP_ENDPOINT in settings.json, run `node standalone/cli.js help --install-skill`, then check whether the skills dir gained the agentlenspro skills. `help --install-otel` is still refused by ensureTelemetryConfig (src/telemetryConfig.ts, foreign refusal), so only the skill and hook flags are affected. Parent context: TRDD-RBBEX59R (cited as text, parent-trdd not set), bug B15 there; found in the review of the step (d) spec and read in code, not run. Fix: decide whether the two flags get the same foreign check as the other install paths, or help stops accepting install flags.
+Symptom: `agentlenspro help --install-skill` and `help --install-hooks` parse the install flags in diagnosticsCli at any argv position, but `help` is excluded from auto-setup, so these two flag paths run without the foreign-telemetry check that D15 of the step (d) spec puts on every other install path; under a foreign telemetry setup (company gateway, managed settings, shell export) they can install skills or hooks that the foreign path would have parked or refused (? INFERRED, read in code, not run). Reproducer: in an isolated HOME and AGENTLENS_DATA_DIR, put a foreign OTEL_EXPORTER_OTLP_ENDPOINT in settings.json, run `node standalone/cli.js help --install-skill`, then check whether the skills dir gained the agentlenspro skills; repeat with `help --install-hooks` and check whether settings.json gained agentlenspro hook entries. `help --install-otel` is still refused by ensureTelemetryConfig (src/telemetryConfig.ts, foreign refusal), so only the skill and hook flags are affected. Parent context: TRDD-RBBEX59R (cited as text, parent-trdd not set), bug B15 there; found in the review of the step (d) spec. Fix: decide whether the two flags get the same foreign check as the other install paths, or help stops accepting install flags.
 
 ## Approval log
 
