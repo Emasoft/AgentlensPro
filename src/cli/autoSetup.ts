@@ -93,7 +93,9 @@ export interface AutoSetupDeps {
   fullSetup?: (ctx: Ctx) => Promise<boolean>
   /** Set ONLY by runEnableCli: this ensureInstalled run IS the operator's own `agentlenspro enable`, so a foreign setup that
    *  refuses it re-arms the flag with FOREIGN_REASON (D10). Keyed on a flag, not on trigger "enable" (forceInstallTelemetry
-   *  passes that trigger too) and not on the verb (`--force-install-telemetry enable` makes the verb "enable" there as well). */
+   *  passes that trigger too) and not on the verb (`--force-install-telemetry enable` makes the verb "enable" there as well). That
+   *  force-install leg is measured UNREACHABLE today (forceInstallTelemetry clears processEnv, so step 2a never runs for it); the flag
+   *  is defence for future callers that reach step 2a with trigger "enable" without being the operator. */
   operatorEnable?: boolean
 }
 
@@ -254,6 +256,10 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
     // The one skip left is a server start under a switch armed for a FOREIGN setup: the foreign lift (enableIfForeign, below) runs only
     // for launches, so a server trigger that got on with the foreign setup gone would restore the parked skills (P1) and leave the flag
     // saying "foreign" while they are live. Lifting a switch is a launch's or `enable`'s decision, never a side effect of starting the collector.
+    // WHY the skip still matters although a LAUNCH can leave the same mismatch (P1 also restores under a foreign-armed flag with the foreign
+    // setup gone, so a launch whose repair then fails ends with the flag foreign over live skills): that launch state is transient. The next
+    // successful launch lifts the flag, and before d2 the same launch installed fresh copies anyway, so it is accepted. A server start
+    // never lifts, so a mismatch it created would persist until some launch or `enable` ran, however long the server stays up.
     // The read takes ctx.dataDir, the dir being converged, never the env default (TRDD-RBBEX59R R1).
     if (trigger === "server" && killSwitchArmedForForeign(ctx.dataDir)) return null
 
@@ -281,8 +287,10 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
         // replaceReason ONLY for the operator's own `enable` (D10, deps.operatorEnable, set by runEnableCli): the operator asked to
         // lift their switch and the foreign setup refuses it, so the flag is re-armed with FOREIGN_REASON, which records that the
         // lift waits for the foreign setup to go (the switch then lifts by itself). Not keyed on trigger "enable": forceInstallTelemetry
-        // passes that trigger too and is not an operator `enable`. Any other caller (a launch) keeps the reason that stands. A second
-        // reader of "foreign flag means parked" would be wrong once an operator-armed switch can stand here.
+        // passes that trigger too and is not an operator `enable`. Any other caller (a launch) keeps the reason that stands. The flag is
+        // defence for FUTURE callers: forceInstallTelemetry cannot reach this block at all (it clears processEnv, so no shell row exists,
+        // and forceInstall is set), which is measured, not assumed (test "--force-install-telemetry with a SHELL-scope conflict ...").
+        // A second reader of "foreign flag means parked" would be wrong once an operator-armed switch can stand here.
         const { moved } = disableForForeignTelemetry(dirs, { replaceReason: deps.operatorEnable === true })
         say(`${formatTelemetryConflicts(first.conflicts, verb)}\nCollection is off while this foreign setup stands (nothing is stored)`
           + `${moved.length ? ` and ${moved.length} skill(s) were moved to ${path.join(ctx.dataDir, "disabled-surfaces")}` : ""}; its agents stay installed.`)
@@ -304,10 +312,19 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       // legitimate reason for parked skills is a foreign setup. A MOVE, never a repair (a repair would install a second copy beside the
       // parked one). The guard runs HERE, inside the lock, never on the stale `first` (computed before takeLock: a launch that waited,
       // or a settings.json edited meanwhile, can have gained a foreign key). It uses otelDrift(ctx), the very call detectDrift takes
-      // `conflicts` from, so it cannot disagree with `first.conflicts` over user, managed and shell rows; the one difference is an
-      // unparseable settings.json, where detectDrift leaves conflicts empty and this guard refuses to restore (the verdict is unknown).
+      // `conflicts` from, so it cannot disagree with `first.conflicts` over user, managed and shell rows. The one difference is an
+      // unparseable settings.json: detectDrift leaves conflicts empty and this guard refuses to restore (the verdict is unknown), but that
+      // refusal does not stop the restore for good: the missing skills are a drift, so the skill step runs in the same launch and its
+      // P2 (stepSkill, setup.ts) puts them back, exactly as a fresh install did before d2: the launch still ends with live skills.
+      // The restore moves files the operator did not ask about in this run, so it is announced in ONE stderr line: how many, where to,
+      // and whether the switch stays armed (a foreign-armed flag is lifted further down by a launch, which prints its own line).
       const verdict = otelDrift(ctx)
-      if (verdict !== "unparseable" && verdict.conflicts.length === 0) restoreParkedSurfaces(dirs)
+      if (verdict !== "unparseable" && verdict.conflicts.length === 0) {
+        const back = restoreParkedSurfaces(dirs)
+        if (back.length > 0) {
+          say(`agentlenspro: put back ${back.length} parked skill(s) into ${ctx.skillsDir}; ${agentlensDisabled(ctx.dataDir) ? "the kill-switch stays armed (collection stays off)" : "no kill-switch is armed"}`)
+        }
+      }
       // Re-detect under the lock: the previous holder may have just fixed everything.
       const { drifts, conflicts, nothingInstalled, converge: converged } = detectDrift(ctx)
       // Content-logging flags the user EXPLICITLY set to 0/false are about to be forced on: remember the old
@@ -415,7 +432,7 @@ export async function forceInstallTelemetry(verb: string, deps: AutoSetupDeps = 
   // has overwritten the foreign setup (setup.ts stepOtel), so enableIfForeign alone would report "not lifted" in the normal case.
   const lifted = wasForeignArmed && !agentlensDisabled(ctx.dataDir)
   const switchNote = lifted ? "; the kill-switch armed for the foreign setup was lifted"
-    : agentlensDisabled(ctx.dataDir) ? "; the kill-switch armed by `agentlenspro disable` stays armed (`agentlenspro enable` lifts it)" : ""
+    : agentlensDisabled(ctx.dataDir) && !killSwitchArmedForForeign(ctx.dataDir) ? "; the kill-switch armed by `agentlenspro disable` stays armed (`agentlenspro enable` lifts it)" : ""
   say(`agentlenspro: --force-install-telemetry applied — telemetry, skills, agents and hooks are installed and current${restored.length ? `; ${restored.length} parked skill(s) restored` : ""}${switchNote}.`)
   return null
 }

@@ -131,8 +131,9 @@ function resolveOptions(options: TelemetryConfigOptions): {
  * True exactly while the off switch of `dataDir` is armed, either half, whatever its recorded reason.
  * WHY (owner rule 2026-11-03): "the disabled mode should ONLY stop the collection of the telemetry logs and raw
  * bodies" — so no writer (setup, auto-repair, --install-otel, the spool migration, the forced install) may write the
- * key while any switch half stands, a foreign-armed flag included. Every lift (enable, both foreign lifts, the forced
- * install) is followed by one telemetry converge in the same run, which writes it back. `--force-install-telemetry`
+ * key while any switch half stands, a foreign-armed flag included. Every lift (enable, both foreign lifts) is followed by one
+ * telemetry converge in the same run, which writes it back. The forced install lifts ONLY a flag armed for the foreign setup it
+ * overwrote (D17) and converges after that lift; an operator flag or the env half stands through it and keeps the key absent. `--force-install-telemetry`
  * overrides the env half for its own process (overrideKillSwitchEnv) for everything EXCEPT this decision: the env half counts here
  * whatever the override says (envHalfSet, B13), so a force install under AGENTLENS_DISABLED=1 never writes the key.
  * Fail direction: agentlensDisabled's (a flag that cannot be stat'ed reads as not armed — killSwitch.ts header).

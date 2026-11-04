@@ -54,7 +54,7 @@ installs the server itself; the CLI starts it on demand.
 
 If any agentlenspro command prints "agentlenspro is DISABLED", run the reactivate command it prints; do not retry the original command.
 While disabled, the reads that need no server still answer without enabling: `get_account_status --all` (every account's status; it also sends one billed probe per CLAUDE_CODE_LONG_OAUTH_KEY_* key, even while disabled, unless `--no-refresh`), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`. Server-only verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) refuse with exit 69; for account status use `get_account_status --all` instead of re-enabling.
-`server|daemon start|restart` self-heal the install once the server is up (`autoSetupOnServerStart`, under an operator `disable` too: the switch stops only collection). They skip it under a switch armed for a foreign telemetry setup, with a foreign setup in place (one line says so), with `AGENTLENS_NO_AUTOSETUP=1`, or where Claude Code is absent.
+`server|daemon start|restart` self-heal the install once the server is up (`autoSetupOnServerStart`, under an operator `disable` too: the switch stops only collection). They skip it under a switch armed for a foreign telemetry setup, with `AGENTLENS_NO_AUTOSETUP=1`, or where Claude Code is absent. With a foreign setup in place and no switch armed for it, the check still runs: it is the one-line no-write path (one line says so, nothing is written, nothing is armed), not a skip.
 
 ## Version floor — check this FIRST if a command is "unknown"
 

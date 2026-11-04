@@ -1102,8 +1102,9 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   // stops only COLLECTION (owner rule 2026-11-03: telemetry logs, raw bodies and the hook event log), and this gate
   // collects nothing: it reads the transcript and prints a block to stdout. While the switch silenced it, every stop
   // was allowed UNREVIEWED and no adversarial review was demanded (owner order 2026-09-03: never stopped or bypassed;
-  // owner directive 2026-11-03: the review must work at every turn and for every agent). The gate is removed only by
-  // `agentlenspro --uninstall-hooks`; each running session keeps the hook until it restarts, and the next launch of a
+  // owner directive 2026-11-03: the review must work at every turn and for every agent). The gate is removed by
+  // `agentlenspro --uninstall-hooks`, which disabledNotice (foreignTelemetry.ts) still refuses while the switch is armed (until step d1);
+  // each running session keeps the hook until it restarts, and the next launch of a
   // verb outside `AUTOSETUP_EXCLUDED_VERBS` (autoSetup.ts) re-registers it through `ensureInstalled`, under the switch too.
   const payload = await readStdin(process.stdin)
   // THE ENV KILL-SWITCH IS GONE (owner order, 2026-09-03: "it must NEVER BE STOPPED OR BYPASSED, no

@@ -99,7 +99,8 @@ function sourceGone(p: string): boolean {
  *  (only enableAgentlensSurfaces does both). It is a MOVE, never a repair: a repair would install a second copy beside the parked one.
  *  WHY ENOENT skips the name: two launches (or a launch and `setup`) can restore at once and the loser finds the source
  *  already moved; that is success, not an error. Any other failure still throws, and ENOENT with the source still present
- *  is a different fault, so it throws too. */
+ *  is a different fault, so it throws too. The mirror case is EEXIST/ENOTEMPTY with the destination present now: a concurrent
+ *  run put a copy live after the check, which is the "already live again" rule applied late, so the name is skipped, not thrown. */
 export function restoreParkedSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()): string[] {
   const restored: string[] = []
   for (const { names, live, parked } of KINDS(dirs)) {
@@ -112,7 +113,11 @@ export function restoreParkedSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()):
       } catch (e) {
         // lstat, not existsSync: the question is "is the source gone NOW", answered by the filesystem itself, and ENOENT from the
         // rename with the source still present is a different fault that must still throw.
-        if ((e as NodeJS.ErrnoException).code === "ENOENT" && sourceGone(from)) continue
+        const code = (e as NodeJS.ErrnoException).code
+        if (code === "ENOENT" && sourceGone(from)) continue
+        // EEXIST/ENOTEMPTY with `to` present now: a concurrent launch or `setup` put a copy live between the check above and the rename.
+        // That is the same case as "a name already live again" (skipped by the check above): leave the live copy and the parked one alone.
+        if ((code === "EEXIST" || code === "ENOTEMPTY") && fs.existsSync(to)) continue
         throw e
       }
       restored.push(to)

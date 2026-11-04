@@ -14,7 +14,7 @@ import { ensureServer } from '../cli/serverControl'
 import { runDisableCli, runEnableCli } from '../cli/disableCli'
 import { FOREIGN_REASON, HOOK_PATH_VERBS, disableForForeignTelemetry, disabledNotice, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
 import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
-import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
+import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, noRevivePath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
 import { DISPATCHED_VERBS, HOT_PATH_BUDGET_MS, cliMain } from '../cli/main'
 import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
@@ -820,8 +820,11 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     dropRawBodyKey(f) // as `disable` does
     parkAgentlensSurfaces(surfaceDirs(f))
     for (const name of SKILL_NAMES) assert.ok(fs.existsSync(path.join(parkedDir(f, name), 'SKILL.md')), `baseline: ${name} parked`)
-    const r = recorder(['skill'])
-    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: lines().say }), null)
+    const r = recorder(['skill']); const l = lines()
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: l.say }), null)
+    const announced = l.out.filter(x => x.includes('put back'))
+    assert.strictEqual(announced.length, 1, 'P1 announces the restore in ONE line: ' + l.out.join('|'))
+    assert.ok(announced[0].includes(`${SKILL_NAMES.length} parked skill(s)`) && announced[0].includes(f.skillsDir) && announced[0].includes('stays armed'), announced[0])
     assert.deepStrictEqual(r.calls, [], 'a restore, not a repair: a repair would install a second copy beside the parked one')
     SKILL_NAMES.forEach((name, i) => {
       assert.strictEqual(fs.readFileSync(path.join(f.skillsDir, name, 'SKILL.md'), 'utf8'), original[i], `${name} byte-identical`)
@@ -929,6 +932,29 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     } finally { nodeFs.existsSync = real }
   })
 
+  // The other half of the same race: the winner put a COPY live between the loser's check and its rename, so the rename fails with
+  // ENOTEMPTY/EEXIST (a non-empty live directory). Same pin as above, but the check on the DESTINATION answers "absent" once.
+  test('(restore race) a name that became live between the check and the move (ENOTEMPTY/EEXIST from a concurrent restore) is skipped, never thrown', () => {
+    const f = s.f()
+    const dirs = surfaceDirs(f)
+    parkAgentlensSurfaces(dirs)
+    const live = path.join(f.skillsDir, SKILL_NAMES[0])
+    fs.mkdirSync(live, { recursive: true })
+    fs.writeFileSync(path.join(live, 'SKILL.md'), 'the winner put this live')
+    const nodeFs = require('fs') as typeof import('fs') // the real module: under esModuleInterop `import * as fs` is a getter-only copy
+    const real = nodeFs.existsSync
+    let lied = false
+    nodeFs.existsSync = ((p: fs.PathLike): boolean => { if (String(p) === live && !lied) { lied = true; return false } return real(p) }) as typeof fs.existsSync
+    try {
+      const restored = restoreParkedSurfaces(dirs)
+      assert.ok(lied, 'the pin fired: the check saw the destination as absent')
+      assert.ok(!restored.includes(live), 'the name that became live is skipped')
+      assert.strictEqual(restored.length, SKILL_NAMES.length - 1, 'every other parked skill still came back')
+    } finally { nodeFs.existsSync = real }
+    assert.strictEqual(fs.readFileSync(path.join(live, 'SKILL.md'), 'utf8'), 'the winner put this live', 'the live copy is untouched')
+    assert.ok(fs.existsSync(path.join(parkedDir(f, SKILL_NAMES[0]), 'SKILL.md')), 'the parked copy stays')
+  })
+
   // The seam is the injected `stderr`: ensureInstalled calls it for a stale-env warning AFTER the first detectDrift and BEFORE
   // takeLock, so a settings.json edit made from it lands exactly in the window the in-lock guard exists for. The warning needs
   // CLAUDECODE=1 and a shell OTEL_* value that differs from our file.
@@ -999,6 +1025,69 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     assert.ok(!(RAW_BODIES_KEY in env), 'the raw-body key must stay absent while AGENTLENS_DISABLED=1 is set')
     assert.ok(l.out.some(x => x.includes('overrode AGENTLENS_DISABLED') && x.includes(`${RAW_BODIES_KEY} stays absent`)), l.out.join('|'))
   })
+
+  // The accepted launch state behind the D13 server skip: P1 restores under a foreign-armed flag whose foreign setup is gone, but the
+  // lift needs every repair to succeed, so a launch whose otel-env repair FAILS leaves the skills live and the flag still foreign. It is
+  // transient: the next launch that succeeds lifts the flag. A failed repair never refuses the verb (ensureInstalled returns null).
+  // The second launch stubs otel-env on purpose: the real step lifts a foreign-armed flag itself (stepOtel), which would hide the launch-only lift.
+  test('(P1, failed repair) a foreign-armed flag with the foreign setup gone: a launch whose otel-env repair FAILS leaves the skills live and the flag foreign; the next launch lifts it', async () => {
+    const f = s.f()
+    armKillSwitch(FOREIGN_REASON, f.dataDir)
+    dropRawBodyKey(f) // as the foreign arm does; the missing interval key below is the otel-env drift
+    const cfg = readSettings(f); delete cfg.env!.OTEL_LOGS_EXPORT_INTERVAL; writeSettings(f, cfg)
+    parkAgentlensSurfaces(surfaceDirs(f))
+    for (const name of SKILL_NAMES) assert.ok(!fs.existsSync(path.join(f.skillsDir, name)), `baseline: ${name} parked`)
+    const failedCalls: Step[] = []; const l1 = lines()
+    const failing = async (step: Step): Promise<RepairOutcome> => { failedCalls.push(step); return step === 'otel-env' ? { ok: false, detail: 'boom' } : { ok: true, detail: 'recorded' } }
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: failing, stderr: l1.say }), null, 'a failed repair does not refuse the verb')
+    for (const name of SKILL_NAMES) assert.ok(fs.existsSync(path.join(f.skillsDir, name, 'SKILL.md')), `${name} is live after the failed launch`)
+    assert.deepStrictEqual(failedCalls, ['otel-env'], 'the otel-env repair ran and failed; P1 restored the skills by move, so no skill step')
+    assert.strictEqual(flagReason(f), FOREIGN_REASON, 'the flag stays foreign: no lift without a successful repair')
+    assert.ok(l1.out.some(x => x.includes('could not restore telemetry env')), l1.out.join('|'))
+    const r2 = recorder(); const l2 = lines()
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r2.repair, stderr: l2.say }), null)
+    assert.ok(!fs.existsSync(killSwitchPath(f.dataDir)), 'the next successful launch lifts the foreign-armed flag')
+    assert.deepStrictEqual(r2.calls, ['otel-env', 'otel-env'], 'the repair, then the converge that follows the lift')
+    assert.ok(l2.out.some(x => x.includes('hooks and skills re-enabled')), l2.out.join('|'))
+  })
+
+  // M2 (review of d2): before d2 a switch made the launch return before the first-run FULL setup; now the launch runs it under the
+  // switch, and the full setup ends by starting a server. Starting is allowed under the switch (no-collection mode, c2), but the
+  // NO_REVIVE brake must still stop it: stepServer reads it in ctx.dataDir, and the full setup goes through that step. The control run
+  // (no brake) must reach the spawn, or the braked runs prove nothing; it is the slow part (the setup waits for the server), so it runs
+  // once, for the operator flag plus the env half. AGENTLENS_ALCORE=/usr/bin/false makes the spawn harmless (exits at once), and the
+  // ports are free ones, never 4318/3000/4316.
+  test('(M2) a first-run launch under the switch runs the full setup, and the revive brake still stops its server start (operator flag, env half, both)', async function () {
+    this.timeout(240_000)
+    const firstRun = async (how: 'operator flag' | 'env half' | 'both', braked: boolean): Promise<{ spawned: boolean; skills: boolean; out: string[] }> => {
+      const fx = makeFx()
+      const saved = { dir: process.env.AGENTLENS_DATA_DIR, alcore: process.env.AGENTLENS_ALCORE, off: process.env.AGENTLENS_DISABLED }
+      try {
+        process.env.AGENTLENS_DATA_DIR = fx.dataDir
+        process.env.AGENTLENS_ALCORE = '/usr/bin/false'
+        if (how !== 'env half') armKillSwitch('ops', fx.dataDir)
+        if (how !== 'operator flag') process.env.AGENTLENS_DISABLED = '1'; else delete process.env.AGENTLENS_DISABLED
+        if (braked) fs.writeFileSync(noRevivePath(fx.dataDir), 'brake\n')
+        const ctx: Ctx = { ...fx.ctx, otlpPort: await freePort(), uiPort: await freePort(), mcpPort: await freePort() }
+        const l = lines()
+        await ensureInstalled('launch', 'budget', { ctx, stderr: l.say })
+        return { spawned: fs.existsSync(path.join(fx.dataDir, 'server.log')), skills: fs.existsSync(path.join(fx.skillsDir, SKILL_NAMES[0], 'SKILL.md')), out: l.out }
+      } finally {
+        for (const [k, v] of [['AGENTLENS_DATA_DIR', saved.dir], ['AGENTLENS_ALCORE', saved.alcore], ['AGENTLENS_DISABLED', saved.off]] as const) {
+          if (v === undefined) delete process.env[k]; else process.env[k] = v
+        }
+        fx.cleanup()
+      }
+    }
+    const free = await firstRun('both', false)
+    assert.ok(free.skills, 'control: the full setup ran under the switch: ' + free.out.join('|'))
+    assert.ok(free.spawned, 'control: without the brake the full setup reaches the server spawn (no-collection mode): ' + free.out.join('|'))
+    for (const how of ['operator flag', 'env half', 'both'] as const) {
+      const braked = await firstRun(how, true)
+      assert.ok(braked.skills, `${how}: the full setup still ran: ` + braked.out.join('|'))
+      assert.ok(!braked.spawned, `${how}: the revive brake stopped the server start: ` + braked.out.join('|'))
+    }
+  })
 })
 
 suite('enable — the telemetry verdict comes first, then the restore, then the switch is lifted', () => {
@@ -1058,16 +1147,20 @@ suite('enable — the telemetry verdict comes first, then the restore, then the 
     assert.strictEqual(flagReason(f), FOREIGN_REASON, 'the operator enable replaces it (the lift waits for the foreign setup to go)')
   })
 
-  test('--force-install-telemetry with a SHELL-scope conflict and an "ops" switch keeps "ops" and writes settings.json anyway', async () => {
+  // A regression guard, not a probe of the replaceReason keying: step 2a of ensureInstalled is UNREACHABLE from forceInstallTelemetry
+  // (it clears processEnv, so the shell row never reaches the verdict, and forceInstall is set); the keying is held by the test above.
+  test('--force-install-telemetry over a SHELL-scope OTEL_* export under an "ops" switch: writes settings.json, warns that it overrode the variable, keeps "ops"', async () => {
     const shellFx = makeFx({ OTEL_EXPORTER_OTLP_ENDPOINT: 'https://shell.corp.example/otlp' })
     process.env.AGENTLENS_DATA_DIR = shellFx.dataDir
     try {
       await installAll(shellFx)
       armKillSwitch('ops', shellFx.dataDir)
       const cfg = readSettings(shellFx); delete cfg.env!.OTEL_LOGS_EXPORT_INTERVAL; writeSettings(shellFx, cfg)
-      assert.strictEqual(await forceInstallTelemetry('budget', { ctx: shellFx.ctx, repair: recorder(['otel-env']).repair, stderr: quiet }), null)
+      const l = lines()
+      assert.strictEqual(await forceInstallTelemetry('budget', { ctx: shellFx.ctx, repair: recorder(['otel-env']).repair, stderr: l.say }), null)
       assert.strictEqual(flagReason(shellFx), 'ops', 'a force install is not the operator enable: the operator reason survives')
       assert.strictEqual(readSettings(shellFx).env!.OTEL_LOGS_EXPORT_INTERVAL, '5000')
+      assert.ok(l.out.some(x => x.includes('overrode OTEL_EXPORTER_OTLP_ENDPOINT')), l.out.join('|'))
     } finally { shellFx.cleanup() }
   })
 
@@ -1433,7 +1526,7 @@ suite('server start — the install heals itself when the server is started (TRD
     assert.ok(killSwitchArmedForForeign(f.dataDir), 'the flag stays foreign')
   })
 
-  test('a server start with the foreign setup PRESENT returns before any restore or repair: the skills stay parked (D13, 6a)', async () => {
+  test('a server start with a foreign setup PRESENT returns before any restore or repair: the skills stay parked and the flag stays foreign (6a pins the early return at the conflicts block, which holds without the D13 skip)', async () => {
     const f = s.f()
     armKillSwitch(FOREIGN_REASON, f.dataDir)
     parkAgentlensSurfaces(surfaceDirs(f))

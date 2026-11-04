@@ -1228,7 +1228,7 @@ const stepOtel: StepDef = {
       // keeps the reason of an operator `disable` that already stands. No replaceReason: only the operator's `enable` replaces a reason, and a
       // `setup` run is not that. The skills are parked either way. The message says what is true: collection is off, nothing else is.
       const note = ctx.dryRun ? '' : `\nagentlenspro has parked its skills while this foreign setup stands: collection is off, ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).moved.length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}`
-      return { result: { step: this.name, found, action: ctx.dryRun ? 'would: refuse, disable agentlenspro, exit non-zero (dry-run: nothing done)' : 'refused', verify: ctx.dryRun ? 'SKIP' : 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
+      return { result: { step: this.name, found, action: ctx.dryRun ? 'would: refuse, park the skills, arm the kill-switch if none stands, exit non-zero (dry-run: nothing done)' : 'refused', verify: ctx.dryRun ? 'SKIP' : 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
     }
 
     if (ctx.dryRun) {

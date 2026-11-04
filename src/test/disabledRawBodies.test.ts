@@ -324,9 +324,9 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
     assert.deepStrictEqual(marker().keys[RAW_BODIES_KEY], { hadKey: false, priorValue: null })
   })
 
-  // R4, as changed by TRDD-RBBEX59R d2 (D17, B13). The force install lifts ONLY a switch armed for the foreign setup it overwrites, and
-  // the key is written by the converge that follows that lift. An operator switch is not undone by it, and the env half keeps the key
-  // absent even though the override ignores it for everything else.
+  // R4, as changed by TRDD-RBBEX59R d2 (D17). The force install lifts ONLY a switch armed for the foreign setup it overwrites, and
+  // the key is written by the converge that follows that lift. An operator switch is not undone by it. (The env half holding the key
+  // absent against the override is B13; its discriminating test is in autoSetup.test.ts, because the file half here already holds the key.)
   test('--force-install-telemetry over a FOREIGN-armed flag lifts it and writes the key (R4)', async () => {
     arm(FOREIGN_REASON)
     assert.strictEqual(await forceInstallTelemetry('budget', deps()), null)
@@ -334,7 +334,7 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
     assert.strictEqual(envOf()[RAW_BODIES_KEY], ours())
   })
 
-  test('--force-install-telemetry under AGENTLENS_DISABLED=1 and an armed OPERATOR flag: the flag stays and the key stays absent (D17, B13)', async () => {
+  test('--force-install-telemetry under AGENTLENS_DISABLED=1 and an armed OPERATOR flag: the flag stays and the key stays absent (D17)', async () => {
     arm() // reason "operator test"
     process.env.AGENTLENS_DISABLED = '1'
     assert.strictEqual(await forceInstallTelemetry('budget', deps()), null)
