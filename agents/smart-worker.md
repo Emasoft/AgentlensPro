@@ -1,6 +1,6 @@
 ---
 name: smart-worker
-description: Smart worker — the strongest model in the worker fleet (Opus 5.5 [1m]) for SIMPLE, bounded tasks — a single file create/edit, a small scripted step, a scoped code change, a bounded verification. Pinned to opus[1m] at medium effort with a minimal native-tool surface (no MCP). Use INSTEAD of a context-inheriting fork whenever the task does NOT need the parent's full conversation context; everything it needs is passed in its prompt as explicit absolute paths. Launch many in parallel for fan-out.
+description: Smart worker — the strongest model in the worker fleet for bounded tasks — a single file create/edit, a small scripted step, a scoped code change, a bounded verification. Pinned to opus[1m] at medium effort with a minimal native-tool surface (no MCP). PICK IT WHEN the task is bounded and fully specified but subtle enough that a Haiku or Sonnet worker would likely get it wrong, and the higher per-spawn cost is accepted. Use INSTEAD of a context-inheriting fork whenever the task does NOT need the parent's full conversation context; everything it needs is passed in its prompt as explicit absolute paths. Launch many in parallel for fan-out.
 model: opus[1m]
 effort: medium
 tools: Bash, Read, Write, Edit, Grep
