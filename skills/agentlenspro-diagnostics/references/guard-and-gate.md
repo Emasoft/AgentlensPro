@@ -89,7 +89,7 @@ eight full-size images one per turn produced seven consecutive appends with zero
 popular "an image invalidates the whole message cache" claim is false for an APPEND and must not
 become a deny on a hot-path tool. `Read` is also the only non-rare tool in the matcher, and its
 cost is bounded on the CLI side — a NON-image read is answered locally with one JSON parse and no
-network call. Switch it off alone with `--hooks cacheguard=off` or `AGENTLENS_CACHE_GUARD=off`;
+network call. Switch it off alone with the dashboard's "Image cache-guard" switch, `--hooks cacheguard=off` or `AGENTLENS_CACHE_GUARD=off`;
 the agent-launch gate stays armed. Deeper discipline: the `agentlenspro-cache-guard` skill.
 
 Operational facts: fail-open by construction (server down = 13ms silent no-op — the gate can
@@ -98,7 +98,7 @@ never stall or fail a turn). **Switches are REALTIME and machine-wide** — `age
 cacheguard=on|off` flips them
 instantly for every running session (the server is the decision point; registrations never
 change, so no restarts). Per-session escape hatch: `AGENTLENS_GATE=off` env (checked in the
-hook script before any network). Thresholds tune via `AGENTLENS_GATE_FORK_FAT_TOKENS` /
+hook script before any network); it silences every guard, images included, whereas the dashboard Burn gate switch and `--hooks gate=off` leave the image guard on. Thresholds tune via `AGENTLENS_GATE_FORK_FAT_TOKENS` /
 `_RUNAWAY_60S` / `_FANOUT_WARN_2MIN` / `_COLD_IDLE_MS` / `_COLD_RESUME_WINDOW_MS` /
 `_IMG_WARN_TOKENS` / `_IMG_DENY_TOKENS`. Deny/warn
 counts appear in `--status` and `/api/server-stats` under `gate`; every gate intervention

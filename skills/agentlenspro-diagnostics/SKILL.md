@@ -204,7 +204,7 @@ read only at session start: after `agentlenspro setup` or `--install-hooks` rest
 Hook **behavior** is hot: the server re-reads the dashboard toggle file (`~/.agentlens/hook-config.json`, created when a toggle is saved) on every request, so
 `agentlenspro --hooks gate=off|warn|enforce capture=on|off advisor=on|off cacheguard=on|off` (or
 `POST /api/hook-config` with a JSON patch) takes effect in every running session immediately. The
-gate also honors the `AGENTLENS_GATE=off` environment variable, read on each invocation.
+gate also honors the `AGENTLENS_GATE=off` environment variable, read on each invocation; it silences every guard, images included, whereas the dashboard Burn gate switch and `--hooks gate=off` leave the image guard on (its own switch: "Image cache-guard" or `cacheguard=off`).
 `agentlenspro setup` ends with a read-only `memory-check` (the last 60-second composition line in
 `server.log`: live + free-in-page should equal committed within 1 MB).
 

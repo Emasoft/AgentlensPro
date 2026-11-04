@@ -172,7 +172,7 @@ Per-process env equivalents: `AGENTLENS_GATE=off`, `AGENTLENS_GATE_MODE=warn`,
 `AGENTLENS_CACHE_GUARD=off` (this one short-circuits before any network call). Thresholds:
 `AGENTLENS_GATE_IMG_WARN_TOKENS` (50k) and `AGENTLENS_GATE_IMG_DENY_TOKENS` (300k, phrasing only).
 The two switches are separate on purpose — finding the image warning chatty must never cost you the
-fork-storm protection.
+fork-storm protection. The same holds the other way round: the dashboard's Burn gate switch and `--hooks gate=off` leave the image guard on (it has its own "Image cache-guard" switch in the Hook switches panel), while the env `AGENTLENS_GATE=off` still silences every guard, images included.
 
 The model-invoked skill **`agentlenspro-cache-guard`** teaches the underlying discipline (batch,
 delegate, write it down, compact after) with this project's verified rates.

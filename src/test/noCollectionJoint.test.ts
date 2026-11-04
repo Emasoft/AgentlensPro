@@ -378,6 +378,13 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
     assert.strictEqual(s?.collection, 'off')
     // The exact request the right panel sends (media/src/tabs/Alerts.tsx patch(): POST /api/hook-config, one key).
     assert.strictEqual(await postJson(leg.ports.ui, '/api/hook-config', { gateEnabled: false }), 200, 'panel: burn gate OFF')
+    // B8: Burn gate OFF must NOT silence the image cache-guard (its own switch, cacheGuardEnabled, is still on).
+    // Same `gate` CLI path as leg 1b, against the real alcore, under the switch.
+    const imgTranscript = path.join(leg.home, 'transcript.jsonl')
+    fs.writeFileSync(imgTranscript, JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { usage: { input_tokens: 10, cache_read_input_tokens: 120_000, cache_creation_input_tokens: 0 } } }) + '\n')
+    const img = cli(leg, ['gate'], { input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'joint-panel-img', transcript_path: imgTranscript, cwd: leg.home, tool_name: 'Read', tool_input: { file_path: path.join(leg.home, 'shot.png') } }) })
+    assert.strictEqual(img.code, 0)
+    assert.ok(img.stdout.includes('[agentlens cache-guard]') && img.stdout.includes('shot.png'), `gate OFF from the panel: the image guard must still warn (IMG_RESIDENT), got: ${img.stdout}`)
     subagentStarts(leg, 'joint-panel', 8)
     const allowed = agentGate(leg, 'joint-panel')
     assert.strictEqual(allowed.run.code, 0, 'the gate always exits 0')

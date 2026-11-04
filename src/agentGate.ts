@@ -594,7 +594,7 @@ export function evaluateImageReadGate(
       `Cheapest first: (1) delegate the look to a subagent — it reads the image in ITS small context and ` +
       `returns a text verdict, so nothing lands here; (2) if you look here, read every image you need in ` +
       `ONE message and draw the conclusions in that same turn — batching costs no more than one; ` +
-      `(3) write the verdict down and never re-read the file. Silence: AGENTLENS_CACHE_GUARD=off.`,
+      `(3) write the verdict down and never re-read the file. Silence: the dashboard Image cache-guard switch, or AGENTLENS_CACHE_GUARD=off.`,
   }
 }
 

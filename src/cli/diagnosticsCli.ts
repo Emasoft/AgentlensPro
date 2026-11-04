@@ -160,7 +160,7 @@ operations:
                         the magnitude — or "no active burn risks"
   --hooks [k=v ...]     show or flip the hook switches IN REALTIME for every running session
                         (server-side decision point — no restarts): gate=off|warn|enforce|on,
-                        cacheguard=on|off (image-read resident-cost warnings),
+                        cacheguard=on|off (image-read resident-cost warnings; independent of gate=),
                         capture=on|off (lifecycle event storage), advisor=on|off (in-band
                         PostToolUse warnings). No args = show current config + file path
   --guard [seconds]     realtime burn guard: polls the risk report (default 15s, REST fast path)
