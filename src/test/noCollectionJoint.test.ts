@@ -388,4 +388,35 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
     const stop = cli(leg, ['server', 'stop'])
     assert.strictEqual(stop.code, 0, stop.stderr)
   })
+
+  test('leg 8 — the deploy path: under a DISABLED file `setup --yes` exits 0 with its self-test PASS, the server reports collection off, nothing stored', async () => {
+    // Every write setup makes lands in the leg's HOME (settings.json, skills, rules, agents) or its data dir. Its only
+    // outside-HOME actions are conditional and absent here: the legacy spool migration (/Volumes/AgentLensSpool mounted,
+    // or a LaunchAgent plist under HOME), `npm rm -g agentlens-dashboard` (only if it resolves on PATH) and a
+    // managed-settings overwrite (only for a foreign value in such a file). The registered hooks run `agentlenspro` from
+    // PATH, so a shim in the leg dir puts THIS tree's bundle first — otherwise the hook verify would exercise
+    // whatever agentlenspro the machine has installed.
+    const leg = await makeLeg('setup'); legs.push(leg)
+    fs.writeFileSync(path.join(leg.data, 'DISABLED'), 'joint test leg 8\n')
+    const shimDir = path.join(path.dirname(leg.home), 'bin')
+    fs.mkdirSync(shimDir, { recursive: true })
+    fs.writeFileSync(path.join(shimDir, 'agentlenspro'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 })
+    const pathEnv = `${shimDir}:${process.env.PATH ?? '/usr/bin:/bin'}`
+    const run = cli(leg, ['setup', '--yes', '--json'], { extra: { PATH: pathEnv } })
+    const at = run.stdout.lastIndexOf('{\n  "dryRun"')
+    const out = at >= 0 ? JSON.parse(run.stdout.slice(at)) as { exitCode: number; steps: { step: string; verify: string; detail?: string }[] } : null
+    assert.ok(out !== null, `setup --json printed no outcome: ${run.stdout}${run.stderr}`)
+    const failed = out.steps.filter(s => s.verify === 'FAIL')
+    assert.strictEqual(run.code, 0, `setup exit ${run.code}; failed steps: ${JSON.stringify(failed)}`)
+    assert.strictEqual(out.exitCode, 0)
+    assert.strictEqual(out.steps.find(s => s.step === 'final-test')?.verify, 'PASS', `self-test: ${JSON.stringify(out.steps.find(s => s.step === 'final-test'))}`)
+    const s = await stats(leg)
+    assert.strictEqual(s?.collection, 'off', 'setup started the server in no-collection mode')
+    // Setup's own self-test already posted a span and hook events; none may be stored, nor any sent after it.
+    subagentStarts(leg, 'joint-setup', 1)
+    assert.strictEqual(await postJson(leg.ports.otlp, '/v1/traces', span('joint-leg8')), 200, 'OTLP is answered (and dropped)')
+    await assertNothingStored(leg, 0, 0, 'after setup under the switch')
+    const stop = cli(leg, ['server', 'stop'])
+    assert.strictEqual(stop.code, 0, stop.stderr)
+  })
 })
