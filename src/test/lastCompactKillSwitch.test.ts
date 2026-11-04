@@ -101,7 +101,9 @@ suite('last-compact / resumeStaleness under the kill-switch (TRDD-RBBEX59R e, B6
   test('file half armed, newest record stamped EXACTLY at the flag mtime: trusted (the boundary is strict less-than)', () => {
     const at = Math.floor(now - 60_000)
     preCompact(at)
-    armFileAt(at)
+    const p = armFileAt(at)
+    // utimesSync can round the mtime UP on a coarse-resolution filesystem; then the record would be OLDER than the flag and the test would exercise the wrong branch.
+    assert.ok(fs.statSync(p).mtimeMs <= at, `the platform rounded the flag mtime up (${fs.statSync(p).mtimeMs} > ${at}); the exact-boundary case cannot be built here`)
     const r = run(['--seconds'])
     assert.strictEqual(r.code, 0, r.stderr)
     assert.ok(Number(r.stdout) >= 59, r.stdout)
@@ -167,8 +169,8 @@ suite('last-compact / resumeStaleness under the kill-switch (TRDD-RBBEX59R e, B6
   })
 
   // The same blindness hits the SessionStart(resume) read that feeds cache-expired/cache-state --json.
-  const resume = (atMs: number): void => record('SessionStart', atMs, {
-    source: 'resume', seconds_since_last_response: 100, context_tokens: 5, prompt_cache_likely_expired: true, estimated_cache_write_usd: 1.5,
+  const resume = (atMs: number, usd = 1.5): void => record('SessionStart', atMs, {
+    source: 'resume', seconds_since_last_response: 100, context_tokens: 5, prompt_cache_likely_expired: true, estimated_cache_write_usd: usd,
   })
 
   test('latestResumeStaleness: file half — a resume older than the flag mtime is null, a newer one resolves', () => {
@@ -176,8 +178,8 @@ suite('last-compact / resumeStaleness under the kill-switch (TRDD-RBBEX59R e, B6
     assert.ok(latestResumeStaleness('sess-1'), 'unarmed: the old resume resolves')
     armFileAt(now - 60_000)
     assert.strictEqual(latestResumeStaleness('sess-1'), null)
-    resume(now - 10_000)
-    assert.strictEqual(latestResumeStaleness('sess-1')?.estimatedCacheWriteUsd, 1.5)
+    resume(now - 10_000, 2.5)
+    assert.strictEqual(latestResumeStaleness('sess-1')?.estimatedCacheWriteUsd, 2.5)
   })
 
   test('latestResumeStaleness: env half only — null (arm time unknown)', () => {
@@ -188,9 +190,10 @@ suite('last-compact / resumeStaleness under the kill-switch (TRDD-RBBEX59R e, B6
   })
 
   // `agentlenspro --force-install-telemetry last-compact` runs forceInstallTelemetry (autoSetup.ts) and then the verb in the SAME process;
-  // the override is an in-process flag (killSwitch.ts overrideKillSwitchEnv) that stays set for the verb. It only changes what the
+  // the override is an in-process flag (killSwitch.ts overrideKillSwitchEnv) that stays set for the verb. Only the env-only test below is the S1
+  // discriminator for the env-override fix (hookCaptureStop ignores the override): the file-half test passes with or without that fix. The override only changes what the
   // force install may repair: the hooks of the running sessions still store nothing, so the reader must still refuse.
-  test('--force-install-telemetry override active + env half + flag armed + older record: still exit 2, stdout EMPTY, arm time named', () => {
+  test('--force-install-telemetry override never hides the FILE half (passes with or without the env-override fix; the env-only test below is the S1 discriminator): override + env half + flag armed + older record: exit 2, stdout EMPTY, arm time named', () => {
     preCompact(now - 3_600_000)
     armFileAt(now - 60_000)
     process.env.AGENTLENS_DISABLED = '1'

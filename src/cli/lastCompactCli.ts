@@ -31,7 +31,7 @@ off disk — so it answers with the server down.
 
 While the global kill-switch is armed no hook event is stored, so the newest record can only be a
 pre-switch one: if it predates the flag file (or AGENTLENS_DISABLED=1 is set in this CLI's OWN environment,
-which may differ from the hooks' — no arm time is knowable), this exits 2 with stdout EMPTY and says why on stderr.
+which may differ from the server's and the hooks' — no arm time is knowable), this exits 2 with stdout EMPTY and says why on stderr.
 
 flags:
   --seconds            print the age as a bare integer number of seconds (for arithmetic)
@@ -105,10 +105,10 @@ export function runLastCompactCli(argv: string[]): number {
   // no record can be shown to postdate the switch: cannot answer, same shape as "no record" (exit 2, stdout EMPTY).
   const stopped = hookCaptureStop()
   if (stopped && stopped.armedAtMs === null) {
-    // No arm time: the env half alone (the OWN-environment line), or — envHalfSet() false — the flag file vanished between the arm check and its stat (a concurrent `enable`).
+    // No arm time: the env half alone (the OWN-environment line), or — envHalfSet() false — the flag file disappeared or became unreadable between the arm check and its stat (e.g. a concurrent `enable`; an unreadable file gives the same answer).
     console.error(envHalfSet()
-      ? 'cannot answer: AGENTLENS_DISABLED=1 is set in the OWN environment of this CLI process (the hook processes may see a different one); while the kill-switch is armed hook events are not stored and, with no flag file, the arm time is unknown, so no recorded compaction can be shown to be the latest'
-      : 'cannot answer: the kill-switch flag file disappeared while it was being read (a concurrent `agentlenspro enable`), so the arm time is unknown; run the command again')
+      ? 'cannot answer: AGENTLENS_DISABLED=1 is set in the OWN environment of this CLI process (the server and the hooks may see a different one); while the kill-switch is armed hook events are not stored and, with no flag file, the arm time is unknown, so no recorded compaction can be shown to be the latest'
+      : 'cannot answer: the kill-switch flag file disappeared or became unreadable while it was being read, so the arm time is unknown; if it was a concurrent `agentlenspro enable`, compactions made while it was armed stay unrecorded')
     return EXIT.UNKNOWN
   }
 
