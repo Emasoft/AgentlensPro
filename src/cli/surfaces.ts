@@ -92,6 +92,11 @@ function sourceGone(p: string): boolean {
   try { fs.lstatSync(p); return false } catch (e) { return (e as NodeJS.ErrnoException).code === "ENOENT" }
 }
 
+/** Does anything stand at `p` right now, a dangling symlink included? lstat succeeds; any lstat error is "not occupied", so the caller rethrows the rename error. */
+function occupied(p: string): boolean {
+  try { fs.lstatSync(p); return true } catch { return false }
+}
+
 /** Put the parked skills/rules back WITHOUT touching the kill-switch. Returns what came back. A name already live again
  *  (reinstalled meanwhile) is left alone and its parked copy stays; a timestamp-suffixed parked copy is never restored.
  *  WHY a separate primitive (TRDD-RBBEX59R D7, D11): after d2 the operator switch parks nothing, so skills parked by a
@@ -99,7 +104,7 @@ function sourceGone(p: string): boolean {
  *  (only enableAgentlensSurfaces does both). It is a MOVE, never a repair: a repair would install a second copy beside the parked one.
  *  WHY ENOENT skips the name: two launches (or a launch and `setup`) can restore at once and the loser finds the source
  *  already moved; that is success, not an error. Any other failure still throws, and ENOENT with the source still present
- *  is a different fault, so it throws too. The mirror case is EEXIST/ENOTEMPTY with the destination present now: a concurrent
+ *  is a different fault, so it throws too. The mirror case is EEXIST/ENOTEMPTY/ENOTDIR with the destination occupied now (lstat; a file or a dangling symlink there): a concurrent
  *  run put a copy live after the check, which is the "already live again" rule applied late, so the name is skipped, not thrown. */
 export function restoreParkedSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()): string[] {
   const restored: string[] = []
@@ -115,9 +120,11 @@ export function restoreParkedSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()):
         // rename with the source still present is a different fault that must still throw.
         const code = (e as NodeJS.ErrnoException).code
         if (code === "ENOENT" && sourceGone(from)) continue
-        // EEXIST/ENOTEMPTY with `to` present now: a concurrent launch or `setup` put a copy live between the check above and the rename.
+        // EEXIST/ENOTEMPTY/ENOTDIR with `to` present now: a concurrent launch or `setup` put a copy live between the check above and the rename.
         // That is the same case as "a name already live again" (skipped by the check above): leave the live copy and the parked one alone.
-        if ((code === "EEXIST" || code === "ENOTEMPTY") && fs.existsSync(to)) continue
+        // lstat, not existsSync: a dangling symlink at `to` is not "absent" (existsSync follows it and says so) and renaming a directory over
+        // it fails ENOTDIR, as it does over a plain file; both are an occupied name.
+        if ((code === "EEXIST" || code === "ENOTEMPTY" || code === "ENOTDIR") && occupied(to)) continue
         throw e
       }
       restored.push(to)

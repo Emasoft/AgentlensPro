@@ -227,7 +227,8 @@ const SERVER_START_SUBVERBS: ReadonlySet<string> = new Set(["start", "restart"])
  *  `server|daemon start|restart` only, and main.ts runs it AFTER the verb resolves (once the server answers, or once
  *  the `--supervise` child is spawned), so it never delays the start. Same gates as a launch — AGENTLENS_NO_AUTOSETUP,
  *  a switch armed for a foreign setup (an operator switch no longer gates it: it stops only collection), and here also "Claude Code absent". Never throws and never blocks, delays or fails the start:
- *  every outcome is at most one stderr line. */
+ *  it reports on stderr one line per piece it put back or repaired (measured 2026-11-04: a parked-skills restore plus a telemetry repair
+ *  prints two lines, a skill and an agent repair prints two with no restore at all), and one line for a skip or a thrown failure. */
 export async function autoSetupOnServerStart(argv: string[], deps: AutoSetupDeps = {}): Promise<void> {
   const [cmd, sub] = argv
   if ((cmd !== "server" && cmd !== "daemon") || !SERVER_START_SUBVERBS.has(sub ?? "")) return
@@ -289,7 +290,7 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
         // lift waits for the foreign setup to go (the switch then lifts by itself). Not keyed on trigger "enable": forceInstallTelemetry
         // passes that trigger too and is not an operator `enable`. Any other caller (a launch) keeps the reason that stands. The flag is
         // defence for FUTURE callers: forceInstallTelemetry cannot reach this block at all (it clears processEnv, so no shell row exists,
-        // and forceInstall is set), which is measured, not assumed (test "--force-install-telemetry with a SHELL-scope conflict ...").
+        // and forceInstall is set), which is measured, not assumed (test '--force-install-telemetry over a SHELL-scope OTEL_* export under an "ops" switch').
         // A second reader of "foreign flag means parked" would be wrong once an operator-armed switch can stand here.
         const { moved } = disableForForeignTelemetry(dirs, { replaceReason: deps.operatorEnable === true })
         say(`${formatTelemetryConflicts(first.conflicts, verb)}\nCollection is off while this foreign setup stands (nothing is stored)`
@@ -317,12 +318,20 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       // refusal does not stop the restore for good: the missing skills are a drift, so the skill step runs in the same launch and its
       // P2 (stepSkill, setup.ts) puts them back, exactly as a fresh install did before d2: the launch still ends with live skills.
       // The restore moves files the operator did not ask about in this run, so it is announced in ONE stderr line: how many, where to,
-      // and whether the switch stays armed (a foreign-armed flag is lifted further down by a launch, which prints its own line).
+      // and, except for `enable` (which prints its own switch line), what becomes of the switch (clause below).
       const verdict = otelDrift(ctx)
       if (verdict !== "unparseable" && verdict.conflicts.length === 0) {
         const back = restoreParkedSurfaces(dirs)
         if (back.length > 0) {
-          say(`agentlenspro: put back ${back.length} parked skill(s) into ${ctx.skillsDir}; ${agentlensDisabled(ctx.dataDir) ? "the kill-switch stays armed (collection stays off)" : "no kill-switch is armed"}`)
+          // The clause says what happens to the switch per caller. `enable` gets none: it prints its own switch line (runEnableCli after its
+          // disarm, forceInstallTelemetry in its summary), so "stays armed" would be false for the operator enable. A launch over a
+          // foreign-armed flag lifts it below once its repairs succeed (a server start never reaches here with that flag: the D13 skip
+          // returned). Any other switch, operator or env, stays armed.
+          const switchClause = trigger === "enable" ? ""
+            : !agentlensDisabled(ctx.dataDir) ? "; no kill-switch is armed"
+            : trigger === "launch" && killSwitchArmedForForeign(ctx.dataDir) ? "; the switch armed for the foreign setup is lifted once this launch's repairs succeed"
+            : "; the kill-switch stays armed (collection stays off)"
+          say(`agentlenspro: put back ${back.length} parked skill(s) into ${ctx.skillsDir}${switchClause}`)
         }
       }
       // Re-detect under the lock: the previous holder may have just fixed everything.
@@ -418,7 +427,7 @@ export async function forceInstallTelemetry(verb: string, deps: AutoSetupDeps = 
   // is the override of a FOREIGN setup, not the undo of the operator's disable. The overwrite above has just removed the foreign
   // setup, so a switch armed for it is lifted here (ensureInstalled lifts only for a launch, never for trigger "enable").
   const dirs: SurfaceDirs = { dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, ".claude", "rules") }
-  const restored = restoreParkedSurfaces(dirs)
+  restoreParkedSurfaces(dirs)
   enableIfForeign(dirs)
   // WHY (TRDD-RBBEX59R): the converge above held the raw-body key absent while the flag file stood; every lift is
   // followed by one telemetry converge, so the key is written in this same run (an env half or an operator switch keeps it absent).
@@ -432,7 +441,8 @@ export async function forceInstallTelemetry(verb: string, deps: AutoSetupDeps = 
   // has overwritten the foreign setup (setup.ts stepOtel), so enableIfForeign alone would report "not lifted" in the normal case.
   const lifted = wasForeignArmed && !agentlensDisabled(ctx.dataDir)
   const switchNote = lifted ? "; the kill-switch armed for the foreign setup was lifted"
+    // The "foreign-armed flag still standing" case (neither lifted nor operator-armed) is defensive: stepOtel and enableIfForeign lift it before this line.
     : agentlensDisabled(ctx.dataDir) && !killSwitchArmedForForeign(ctx.dataDir) ? "; the kill-switch armed by `agentlenspro disable` stays armed (`agentlenspro enable` lifts it)" : ""
-  say(`agentlenspro: --force-install-telemetry applied — telemetry, skills, agents and hooks are installed and current${restored.length ? `; ${restored.length} parked skill(s) restored` : ""}${switchNote}.`)
+  say(`agentlenspro: --force-install-telemetry applied — telemetry, skills, agents and hooks are installed and current${switchNote}.`)
   return null
 }
