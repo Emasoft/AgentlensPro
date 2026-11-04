@@ -389,20 +389,50 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
     assert.strictEqual(stop.code, 0, stop.stderr)
   })
 
-  test('leg 8 — the deploy path: under a DISABLED file `setup --yes` exits 0 with its self-test PASS, the server reports collection off, nothing stored', async () => {
-    // Every write setup makes lands in the leg's HOME (settings.json, skills, rules, agents) or its data dir. Its only
-    // outside-HOME actions are conditional and absent here: the legacy spool migration (/Volumes/AgentLensSpool mounted,
-    // or a LaunchAgent plist under HOME), `npm rm -g agentlens-dashboard` (only if it resolves on PATH) and a
-    // managed-settings overwrite (only for a foreign value in such a file). The registered hooks run `agentlenspro` from
-    // PATH, so a shim in the leg dir puts THIS tree's bundle first — otherwise the hook verify would exercise
-    // whatever agentlenspro the machine has installed.
+  test('leg 8 — the FRESH-INSTALL setup path (empty HOME, no server): under a DISABLED file `setup --yes` exits 0 with its self-test PASS, the server reports collection off, nothing stored', async function () {
+    // What this covers: a first install into an EMPTY throwaway HOME with no server running. It is NOT this machine's
+    // deploy path, which starts from an existing settings.json, a populated data dir and an older bin-native alcore.
+    // Every write setup makes lands in the leg's HOME (settings.json, skills, rules, agents) or its data dir, EXCEPT
+    // three conditional actions outside it. Their safety must not rest on this machine's state, so each condition is
+    // checked here with setup's OWN predicate, and the leg skips (naming it) if any holds:
+    //  - spool migration (setup.ts detectLegacySpoolWith / realSpoolDeps): /Volumes/AgentLensSpool/otel-bodies is a
+    //    directory, OR <HOME>/Library/LaunchAgents/com.agentlens.spool.plist exists, OR <HOME>/.claude/settings.json
+    //    env.OTEL_LOG_RAW_API_BODIES is the spool value — then it runs hdiutil detach and launchctl bootout;
+    //  - old-package (setup.ts 'old-package' step): resolveOnPath('agentlens-dashboard', PATH) finds an executable
+    //    file — then it runs `npm rm -g agentlens-dashboard` on the GLOBAL npm tree;
+    //  - otel-env managed overwrite (telemetryConfig.ts managedSettingsPaths + managed-settings.d drop-ins): a foreign
+    //    value in one of those files — checked here as the directory being present at all — or a foreign OTEL_* in
+    //    the process env (every OTEL_* key is also deleted from the env below).
+    // The registered hooks run `agentlenspro` from PATH, so a shim in the leg dir puts THIS tree's bundle first —
+    // otherwise the hook verify would exercise whatever agentlenspro the machine has installed.
     const leg = await makeLeg('setup'); legs.push(leg)
     fs.writeFileSync(path.join(leg.data, 'DISABLED'), 'joint test leg 8\n')
     const shimDir = path.join(path.dirname(leg.home), 'bin')
     fs.mkdirSync(shimDir, { recursive: true })
     fs.writeFileSync(path.join(shimDir, 'agentlenspro'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 })
-    const pathEnv = `${shimDir}:${process.env.PATH ?? '/usr/bin:/bin'}`
-    const run = cli(leg, ['setup', '--yes', '--json'], { extra: { PATH: pathEnv } })
+    const env = legEnv(leg, { PATH: `${shimDir}:${process.env.PATH ?? '/usr/bin:/bin'}` })
+    for (const k of Object.keys(env)) if (k.startsWith('OTEL_')) delete env[k]
+    const isDir = (p: string): boolean => { try { return fs.statSync(p).isDirectory() } catch { return false } }
+    const onPath = (name: string): string | null => {
+      for (const dir of (env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+        const p = path.join(dir, name)
+        try { fs.accessSync(p, fs.constants.X_OK); if (fs.statSync(p).isFile()) return p } catch { /* keep scanning */ }
+      }
+      return null
+    }
+    const legSettings = path.join(leg.home, '.claude', 'settings.json')
+    const hazards = [
+      isDir('/Volumes/AgentLensSpool/otel-bodies') && '/Volumes/AgentLensSpool/otel-bodies is mounted (spool migration would hdiutil detach it)',
+      fs.existsSync(path.join(leg.home, 'Library', 'LaunchAgents', 'com.agentlens.spool.plist')) && 'a spool LaunchAgent plist exists (launchctl bootout)',
+      fs.existsSync(legSettings) && `${legSettings} exists before setup (the HOME is not empty)`,
+      onPath('agentlens-dashboard') && `agentlens-dashboard resolves on PATH at ${onPath('agentlens-dashboard')} (npm rm -g)`,
+      isDir('/Library/Application Support/ClaudeCode') && '/Library/Application Support/ClaudeCode exists (managed-settings overwrite)',
+      isDir('/etc/claude-code') && '/etc/claude-code exists (managed-settings overwrite)',
+    ].filter((h): h is string => typeof h === 'string')
+    // mocha's this.skip() takes no message (and throws its own Pending), so the reason is printed first.
+    if (hazards.length > 0) { console.log(`    leg 8 SKIPPED — setup would act outside the throwaway HOME: ${hazards.join('; ')}`); this.skip() }
+    const r = cp.spawnSync(process.execPath, [CLI, 'setup', '--yes', '--json'], { env, input: '', encoding: 'utf8', timeout: 240_000 })
+    const run: Run = { code: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
     const at = run.stdout.lastIndexOf('{\n  "dryRun"')
     const out = at >= 0 ? JSON.parse(run.stdout.slice(at)) as { exitCode: number; steps: { step: string; verify: string; detail?: string }[] } : null
     assert.ok(out !== null, `setup --json printed no outcome: ${run.stdout}${run.stderr}`)
