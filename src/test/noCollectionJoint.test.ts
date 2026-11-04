@@ -17,6 +17,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { freePort } from './helpers/freePort'
 import { captureStatusline } from '../cli/statuslineCapture'
+import { queryStatusline } from '../statuslineStore'
 
 const ENABLED = process.env.AGENTLENS_RBBEX59R_JOINT === '1'
 const REPO = path.resolve(__dirname, '..', '..', '..')
@@ -483,5 +484,10 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
     assert.ok(after !== null, 'the no-collection server stored the status-line sample (statusline.receivedSinceBoot == 1)')
     const stop = cli(leg, ['server', 'stop'])
     assert.strictEqual(stop.code, 0, stop.stderr)
+    // Storage read-back: the counter alone only proves the handler ran. A graceful stop flushes the buffered sample to the
+    // statusline WAL (alcore.rs, st.statusline.flush) and every read unions the WALs, so the row is read after the stop.
+    const rows = await queryStatusline(path.join(leg.data, 'statusline'), 'main', 'SELECT session_id FROM samples')
+    assert.ok(rows !== null, 'the store holds a statusline WAL for the sample')
+    assert.deepStrictEqual(rows.map(r => r.session_id), ['joint-statusline'], 'the stored sample is the one POSTed')
   })
 })

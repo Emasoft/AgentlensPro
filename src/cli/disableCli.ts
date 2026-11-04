@@ -68,7 +68,7 @@ export async function runDisableCli(args: string[]): Promise<number> {
   // TRDD-RBBEX59R c2: the switch now means "store nothing", not "run nothing" — the text says so.
   console.log('  Off: storing telemetry, raw API bodies and hook events (the next server runs in no-collection mode),')
   console.log('  the CLI hook spool.')
-  console.log('  On: the status line (it keeps POSTing to the server, which stores it), the burn-gate and the image cache-guard (fed in memory), the in-band advisor, the other dashboard-panel')
+  console.log('  On: the status line (POSTed to the server whenever one runs), the burn-gate and the image cache-guard (fed in memory), the in-band advisor, the other dashboard-panel')
   console.log('  hook switches as you left them, the review gate and the review supervisor. Turn the guards on or off from')
   console.log('  the dashboard right panel.')
   console.log('  The next failed hook POST revives the server in that mode; `agentlenspro server stop --stay-down` keeps it down.')

@@ -349,6 +349,7 @@ suite('statusline capture — POSTs under an armed kill switch, never writes to 
     setEnv('AGENTLENS_UI_URL', `http://127.0.0.1:${await freePort()}`)
     await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
     assert.ok(!fs.existsSync(path.join(dir, 'statusline')), 'no status-line WAL: the direct-to-disk fallback is gone')
+    // 'hook-spool' is the directory name hookSpoolDirPath() builds in src/cli/serverControl.ts (not exported, so the name is repeated here).
     assert.ok(!fs.existsSync(path.join(dir, 'hook-spool')), 'spool false: a sample taken while the server is down is lost, not spooled')
   })
 })
@@ -391,7 +392,12 @@ suite('statusline capture — N failed POSTs under the armed switch start exactl
 
   test('20 failed POSTs with the switch armed produce exactly one revive spawn', async () => {
     assert.strictEqual(agentlensDisabled(), true, 'precondition: the switch is armed where captureStatusline reads it')
+    const t0 = Date.now()
     for (let i = 0; i < 20; i++) await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
+    // The revive lock lasts REVIVE_LOCK_TTL_MS (15 s): a loop slower than that lets the lock expire mid-burst and a second
+    // revive is legitimate, so a slow machine must fail as slow, not as a wrong spawn count.
+    const elapsedMs = Date.now() - t0
+    assert.ok(elapsedMs <= 14_000, `environment too slow for the lock window: ${elapsedMs} ms`)
     assert.strictEqual(spawns.length, 1, `exactly one revive, got ${JSON.stringify(spawns)}`)
     assert.deepStrictEqual(spawns[0].slice(-2), ['server', 'revive'], 'the spawn is the CLI server revive')
   })
