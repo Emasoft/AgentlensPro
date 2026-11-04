@@ -1,6 +1,6 @@
 ---
 name: smart-worker
-description: Smart worker — the strongest model in the worker fleet for bounded tasks — a single file create/edit, a small scripted step, a scoped code change, a bounded verification. Pinned to opus[1m] at medium effort with a minimal native-tool surface (no MCP). PICK IT WHEN the task is bounded and fully specified but subtle enough that a Haiku or Sonnet worker would likely get it wrong, and the higher per-spawn cost is accepted. Use INSTEAD of a context-inheriting fork whenever the task does NOT need the parent's full conversation context; everything it needs is passed in its prompt as explicit absolute paths. Launch many in parallel for fan-out.
+description: Smart worker — the strongest model in the worker fleet for bounded tasks — a single file create/edit, a small scripted step, a scoped code change, a bounded verification. Pinned to opus[1m] at medium effort with a minimal native-tool surface (no MCP). PICK IT WHEN the task is bounded and fully specified but subtle enough that a Haiku or Sonnet worker would likely get it wrong, and the higher per-spawn cost is accepted. Use INSTEAD of a context-inheriting fork when such a task does NOT need the parent's full conversation context; everything it needs is passed in its prompt as explicit absolute paths. Launch many in parallel for fan-out.
 model: opus[1m]
 effort: medium
 tools: Bash, Read, Write, Edit, Grep
@@ -72,21 +72,19 @@ Quick reference, not a spec: when a flag is unclear, run `<cli> --help`. Prefer 
 A CLI not on PATH (`command -v <cli>`): say so in your report and use the built-in Read/Grep/Edit/Write for that step; never skip it silently.
 
 <example>
-Context: The parent needs one bounded file edit and does not want to spend its own context on it.
-user: "Add a --dry-run flag to ~/proj/scripts/deploy.py: parse it in main() and skip the upload call when set. Verify with `uv run python -m py_compile`."
-assistant: "I'll dispatch smart-worker — one absolute path, one explicit check, no parent context needed."
+Context: A bounded edit where a subtle mistake is costly.
+user: "In /abs/src/lock.ts, acquire() can return before the rename lands for a second process. Make it wait for the rename and keep the stale-lock takeover. Verify with `npx tsc --noEmit -p /abs`."
+assistant: "I'll dispatch smart-worker: one named file and one check, but a concurrency fix that a cheaper worker would likely get subtly wrong."
 <commentary>
-Single named file plus a named verification command: nothing about the parent conversation is
-required, so a smart-worker is strictly cheaper than a context-inheriting fork.
+The task is bounded and fully specified, so no fork is needed. It is subtle, so the stronger model is worth its per-spawn cost.
 </commentary>
 </example>
 
 <example>
-Context: Fan-out — the same mechanical change across eight independent files.
+Context: Counter-example. The same mechanical change across eight files.
 user: "Replace the hardcoded /tmp paths with $TMPDIR in these 8 scripts (absolute paths listed)."
-assistant: "I'll launch eight smart-workers in parallel, one file each, and collect their [DONE] lines."
+assistant: "This is mechanical, so it does not need smart-worker. I'll use a cheaper worker per file."
 <commentary>
-Each worker starts from a fresh minimal context and touches exactly one named path, so the fan-out
-costs eight small contexts instead of one large one that grows with every file.
+smart-worker's cost buys judgement. A mechanical fan-out needs none.
 </commentary>
 </example>

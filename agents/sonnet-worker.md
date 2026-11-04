@@ -73,21 +73,19 @@ Quick reference, not a spec: when a flag is unclear, run `<cli> --help`. Prefer 
 A CLI not on PATH (`command -v <cli>`): say so in your report and use the built-in Read/Grep/Edit/Write for that step; never skip it silently.
 
 <example>
-Context: The parent needs one bounded file edit and does not want to spend its own context on it.
-user: "Add a --dry-run flag to ~/proj/scripts/deploy.py: parse it in main() and skip the upload call when set. Verify with `uv run python -m py_compile`."
-assistant: "I'll dispatch sonnet-worker — one absolute path, one explicit check, no parent context needed."
+Context: An ambiguous bug in unfamiliar code, with the paths known.
+user: "The test in /abs/src/test/queue.test.ts fails only under load. Find why in /abs/src/queue.ts and fix it. Verify with `npx mocha /abs/out/test/test/queue.test.js`."
+assistant: "I'll dispatch sonnet-worker: named paths and one check, but the cause needs reasoning across the queue and its test."
 <commentary>
-Single named file plus a named verification command: nothing about the parent conversation is
-required, so a sonnet-worker is strictly cheaper than a context-inheriting fork.
+The task needs judgement but not the parent's conversation, so a fresh sonnet-worker is cheaper than a fork.
 </commentary>
 </example>
 
 <example>
-Context: Fan-out — the same mechanical change across eight independent files.
+Context: Counter-example. The same mechanical change across eight files.
 user: "Replace the hardcoded /tmp paths with $TMPDIR in these 8 scripts (absolute paths listed)."
-assistant: "I'll launch eight sonnet-workers in parallel, one file each, and collect their [DONE] lines."
+assistant: "This is mechanical, so it does not need sonnet-worker. I'll use a cheaper worker per file."
 <commentary>
-Each worker starts from a fresh minimal context, so eight named files use eight focused contexts
-instead of making one context grow across every file.
+sonnet-worker's high effort buys judgement. A mechanical fan-out needs none.
 </commentary>
 </example>
