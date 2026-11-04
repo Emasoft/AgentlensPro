@@ -1,10 +1,10 @@
 ---
 trdd-id: 8GXG3SGV
 title: check-duckdb-only fails pnpm run compile on the fix-setup-agent-preflight branch because check-dist-contents.js lists sql.js
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-04T22:06:34+0100
-updated: 2026-11-04T22:46:22+0100
+updated: 2026-11-04T22:49:09+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -32,3 +32,11 @@ implementation-commits: [4577cfec]
 ## Approval log
 
 - 2026-11-04T22:06:34+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-04T22:49:09+0100 — COMPLETE by main-agent@agentlenspro. cause fixed in 4577cfec; remaining compile failure split to TRDD-J91CFAT8.
+
+## Acceptance checklist
+
+- [x] check-duckdb-only no longer reports scripts/check-dist-contents.js: the run after 4577cfec lists only the test opener cap (2026-11-04).
+- [x] Bundling src/cli/hookInstall.ts without the sql.js external gives byte-identical output and still yields 9 AGENT_NAMES (measured 2026-11-04).
+- [x] pnpm run check-dist-contents exits 0 after 4577cfec (2026-11-04).
+- [x] The remaining compile failure has its own card, TRDD-J91CFAT8.
