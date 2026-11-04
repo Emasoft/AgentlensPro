@@ -266,8 +266,13 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       if (!ctx.forceInstall || shell) {
         // STEP 2a — FOREIGN and no (usable) --force-install-telemetry: disable AGAIN (even if `enable` was just
         // run), write nothing, print the remedies, stop.
-        const wasArmed = killSwitchArmedForForeign(ctx.dataDir)
-        const moved = wasArmed ? [] : disableForForeignTelemetry(dirs)
+        // No "already armed, skip" shortcut (TRDD-RBBEX59R D15): disableForForeignTelemetry is idempotent on the park (a no-op when
+        // no skill is live) and keeps a standing flag's reason, so an operator reason survives a launch — EXCEPT for `enable`.
+        // replaceReason only for `enable` (D10): the operator asked to lift their own switch and the foreign setup refuses it,
+        // so the flag is re-armed with FOREIGN_REASON, which records that the lift waits for the foreign setup to go (the switch
+        // then lifts by itself). Any other trigger (a launch) keeps the reason that stands. A second reader of "foreign flag
+        // means parked" would be wrong once an operator-armed switch can stand here.
+        const { moved } = disableForForeignTelemetry(dirs, { replaceReason: trigger === "enable" })
         say(`${formatTelemetryConflicts(first.conflicts, verb)}\nEvery agentlenspro hook except the review gate and the review supervisor is now a no-op`
           + `${moved.length ? ` and ${moved.length} skill(s) were moved to ${path.join(ctx.dataDir, "disabled-surfaces")}` : ""}; its agents stay installed.`)
         return EXIT.CONFIG

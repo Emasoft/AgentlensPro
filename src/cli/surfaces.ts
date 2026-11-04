@@ -7,16 +7,17 @@
 // `DISABLED` kill-switch flag file, and the mkdir fails ENOTDIR) — a MOVE, never a delete, so `enable` can put
 // them back byte-identical. The agents stay: they do not depend on the CLI.
 //
-// EVERY place that arms the kill-switch must go through disableAgentlensSurfaces (today: `agentlenspro
-// disable` and the foreign-telemetry stop), and every disarm through enableAgentlensSurfaces, so the
-// switch and the skills can never disagree.
+// Arm and park are two primitives (armKillSwitch, parkAgentlensSurfaces): `agentlenspro disable` does both through
+// disableAgentlensSurfaces; the foreign-telemetry stop goes through parkForForeign, which always parks and arms only when no
+// switch stands — except for `enable`, which replaces the reason (replaceReason, TRDD-RBBEX59R D10). Every disarm goes
+// through enableAgentlensSurfaces, so the switch and the skills can never disagree.
 
 import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
 import { dataDir } from "./cliCore"
 import { SKILL_NAMES } from "./hookInstall"
-import { armKillSwitch, disarmKillSwitch } from "./killSwitch"
+import { armKillSwitch, disarmKillSwitch, killSwitchPath } from "./killSwitch"
 
 /** File/dir names under ~/.claude/rules that this package installs. EMPTY today (package.json `files`
  *  ships no rule and no code writes into ~/.claude/rules) — a future shipped rule goes HERE and is then
@@ -47,11 +48,20 @@ function move(src: string, dest: string): void {
 }
 
 /** Arm the kill-switch (with `reason`) and park agentlenspro's skills/rules in <dataDir>/disabled-surfaces/.
- *  Idempotent. Returns the flag path and what moved. */
+ *  Idempotent. Returns the flag path and what moved. Arm + park are separate primitives (TRDD-RBBEX59R D11): a caller
+ *  that must keep an existing switch's reason (disableForForeignTelemetry) arms conditionally and always parks. */
 export function disableAgentlensSurfaces(reason?: string, dirs: SurfaceDirs = defaultSurfaceDirs()): { flag: string; moved: string[] } {
   // dirs.dataDir, not the env default (TRDD-RBBEX59R): the flag is armed in the dir the skills are parked under and the
   // foreign check reads, so the check and the later removal hit the same file.
   const flag = armKillSwitch(reason, dirs.dataDir)
+  return { flag, moved: parkAgentlensSurfaces(dirs) }
+}
+
+/** Park agentlenspro's skills/rules in <dataDir>/disabled-surfaces/ WITHOUT touching the kill-switch. Idempotent (a
+ *  name that is not live is skipped). Returns what moved.
+ *  WHY a separate primitive (TRDD-RBBEX59R D10, D11): the foreign path must park whatever the reason of an already
+ *  armed switch is, while arming is conditional on the flag being absent; one function doing both could not do that. */
+export function parkAgentlensSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()): string[] {
   const moved: string[] = []
   for (const { names, live, parked } of KINDS(dirs)) {
     for (const name of names) {
@@ -63,9 +73,24 @@ export function disableAgentlensSurfaces(reason?: string, dirs: SurfaceDirs = de
       moved.push(dest)
     }
   }
-  return { flag, moved }
+  return moved
 }
 
+/** The foreign-telemetry stop's primitive: park the skills ALWAYS; arm `reason` when no flag file stands in dirs.dataDir,
+ *  or when `opts.replaceReason` is set. Returns what moved and `armed`: this call wrote the flag (it was absent, or the
+ *  caller asked to replace it). `armed` false means "a switch already stood and its reason was kept", NEVER "not foreign".
+ *  WHY the arm is conditional (TRDD-RBBEX59R D10, hazard B): armKillSwitch overwrites the flag, so an unconditional arm
+ *  turned an operator `agentlenspro disable` into a foreign-reason switch on any launch or `setup`, and the later auto-lift
+ *  (enableIfForeign, which lifts only FOREIGN_REASON) then undid the operator's disable.
+ *  WHY replaceReason exists: `enable` against a foreign setup records the operator's lift as FOREIGN_REASON, so the switch
+ *  lifts by itself once the foreign setup goes; keeping the operator reason would silently lose the `enable`.
+ *  WHY the park is unconditional: parking keys on the foreign verdict, never on who armed the switch.
+ *  The arm lives here, not in foreignTelemetry.ts, so every kill-switch arm stays in surfaces.ts (source guard). */
+export function parkForForeign(reason: string, dirs: SurfaceDirs = defaultSurfaceDirs(), opts: { replaceReason?: boolean } = {}): { moved: string[]; armed: boolean } {
+  const armed = opts.replaceReason === true || !fs.existsSync(killSwitchPath(dirs.dataDir))
+  if (armed) armKillSwitch(reason, dirs.dataDir)
+  return { moved: parkAgentlensSurfaces(dirs), armed }
+}
 /** Disarm the kill-switch and put the parked skills/rules back. A name already live again (reinstalled
  *  meanwhile) is left alone and its parked copy stays. Returns whether a flag was removed and what
  *  came back. */

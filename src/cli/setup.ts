@@ -1220,7 +1220,8 @@ const stepOtel: StepDef = {
     // was given. A conflicting SHELL export can never be fixed by a settings edit, so it refuses even then.
     if (conflicts.length > 0 && (!ctx.forceInstall || conflicts.some(c => c.scope === 'shell'))) {
       // Disable again, like the launch path (kill-switch re-armed, skills parked) — but never in a dry run.
-      const note = ctx.dryRun ? '' : `\nagentlenspro has disabled itself: ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}, hooks are no-ops`
+      // .moved.length (TRDD-RBBEX59R D10). No replaceReason: a `setup` run is not an operator's `enable`, so the switch keeps the reason of an operator `disable` that already stands; the skills are parked either way.
+      const note = ctx.dryRun ? '' : `\nagentlenspro has disabled itself: ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).moved.length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}, hooks are no-ops`
       return { result: { step: this.name, found, action: ctx.dryRun ? 'would: refuse, disable agentlenspro, exit non-zero (dry-run: nothing done)' : 'refused', verify: ctx.dryRun ? 'SKIP' : 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
     }
 

@@ -2,17 +2,18 @@
 // tells whoever runs it while it is DISABLED (owner orders 2026-10-02, TRDD-AGZ0XZKW).
 //
 // Without its own telemetry and raw body dumps agentlenspro is non-functional, so it cannot carry on
-// beside a company gateway: it DISABLES itself (disableAgentlensSurfaces — kill-switch + skills parked;
-// agents stay). `--force-install-telemetry` or a manual removal of the foreign setup undoes it: the next
-// launch repairs, and disarms the switch ONLY when it was armed for this reason — an operator-armed
-// `agentlenspro disable` is never touched.
+// beside a company gateway: it DISABLES itself (disableForForeignTelemetry — skills parked, and the kill-switch armed
+// with FOREIGN_REASON when no switch stands; agents stay). `--force-install-telemetry` or a manual removal of the foreign
+// setup undoes it: the next launch repairs, and disarms the switch ONLY when it was armed for this reason — an
+// operator-armed `agentlenspro disable` is never touched by a launch or `setup` (D10). The one exception is `enable`: it
+// records the operator's lift as FOREIGN_REASON, so the switch lifts by itself once the foreign setup is gone.
 
 import * as fs from "fs"
 import { detectTelemetryConflicts } from "../telemetryConfig"
 import { EXIT } from "./cliErrors"
 import { dataDir } from "./cliCore"
 import { killSwitchHalf, killSwitchPath } from "./killSwitch"
-import { SurfaceDirs, defaultSurfaceDirs, disableAgentlensSurfaces, enableAgentlensSurfaces } from "./surfaces"
+import { SurfaceDirs, defaultSurfaceDirs, enableAgentlensSurfaces, parkForForeign } from "./surfaces"
 
 export const FOREIGN_REASON = "foreign telemetry configuration present — run with --force-install-telemetry"
 
@@ -54,8 +55,13 @@ export function killSwitchArmedForForeign(dir: string = dataDir()): boolean {
   return recordedReason(dir) === FOREIGN_REASON
 }
 
-export function disableForForeignTelemetry(dirs: SurfaceDirs = defaultSurfaceDirs()): string[] {
-  return disableAgentlensSurfaces(FOREIGN_REASON, dirs).moved
+/** The foreign-telemetry stop: parks the skills ALWAYS and arms FOREIGN_REASON when no flag stands in dirs.dataDir, or when
+ *  `opts.replaceReason` is set (see parkForForeign in surfaces.ts for the WHY of both). Only `enable` passes replaceReason:
+ *  it records the operator's lift as FOREIGN_REASON, so the lift waits for the foreign setup to go. `armed` is "this call
+ *  wrote the flag (it was absent, or the caller asked to replace it)"; false means a switch already stood and its reason
+ *  was kept, NEVER "not foreign": no caller may read it as that (both callers keep parking, keep their refusal and message). */
+export function disableForForeignTelemetry(dirs: SurfaceDirs = defaultSurfaceDirs(), opts: { replaceReason?: boolean } = {}): { moved: string[]; armed: boolean } {
+  return parkForForeign(FOREIGN_REASON, dirs, opts)
 }
 
 /** Re-enable ONLY a switch this module armed — the one in dirs.dataDir (TRDD-RBBEX59R R1). Returns whether anything

@@ -12,7 +12,7 @@ import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, autoSetup
 import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runEnableCli } from '../cli/disableCli'
-import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
+import { FOREIGN_REASON, HOOK_PATH_VERBS, disableForForeignTelemetry, disabledNotice, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
 import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
@@ -682,6 +682,71 @@ suite('foreign telemetry — never overwritten without --force-install-telemetry
   })
 })
 
+suite('foreign telemetry — an armed switch keeps its reason, the skills are parked either way (TRDD-RBBEX59R D10, hazard B)', () => {
+  const s = fixtureSuite(true)
+  const dirsOf = (f: Fx) => ({ dataDir: f.dataDir, skillsDir: f.skillsDir, rulesDir: path.join(f.home, '.claude', 'rules') })
+  const flagReason = (f: Fx): string | null => /^Reason: (.*)$/m.exec(fs.readFileSync(killSwitchPath(f.dataDir), 'utf8'))?.[1] ?? null
+  const parkedDir = (f: Fx, name: string): string => path.join(f.dataDir, 'disabled-surfaces', 'skills', name)
+
+  // R2: the code under test (stepOtel, disableForForeignTelemetry, enableIfForeign) reads ctx.dataDir, so the switch is
+  // armed there (armKillSwitch(reason, f.dataDir)), not on the env default.
+  test('stepOtel with an operator switch ("ops") and a foreign setup: reason stays "ops", skills parked, refusal unchanged; foreign removed and stepOtel again: the flag is NOT lifted', async () => {
+    const f = s.f()
+    const clean = readSettings(f)
+    armKillSwitch('ops', f.dataDir)
+    const bytes = (() => { const cfg = readSettings(f); cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://gw.corp.example/otlp'; writeSettings(f, cfg); return fs.readFileSync(f.settingsPath, 'utf8') })()
+    const { result } = await REPAIR_STEPS['otel-env'].run({ ...f.ctx, forceInstall: false })
+    assert.strictEqual(result.action, 'refused')
+    assert.strictEqual(result.verify, 'FAIL')
+    assert.ok((result.detail ?? '').includes(`${SKILL_NAMES.length} skill(s) moved to`), 'the refusal message still counts the parked skills')
+    assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), bytes, 'nothing written over the foreign setup')
+    assert.strictEqual(flagReason(f), 'ops', 'the operator reason survives the foreign launch (an unconditional arm turned it into FOREIGN_REASON)')
+    assert.strictEqual(killSwitchArmedForForeign(f.dataDir), false)
+    for (const name of SKILL_NAMES) {
+      assert.ok(!fs.existsSync(path.join(f.skillsDir, name)), `${name} parked`)
+      assert.ok(fs.existsSync(path.join(parkedDir(f, name), 'SKILL.md')), `${name} is in <dataDir>/disabled-surfaces/skills`)
+    }
+    writeSettings(f, clean) // the foreign setup is removed by hand
+    const again = await REPAIR_STEPS['otel-env'].run({ ...f.ctx, forceInstall: false })
+    assert.notStrictEqual(again.result.verify, 'FAIL', again.result.detail)
+    assert.ok(fs.existsSync(killSwitchPath(f.dataDir)), 'the operator disable is NOT lifted by the foreign path')
+    assert.strictEqual(flagReason(f), 'ops')
+    assert.strictEqual(enableIfForeign(dirsOf(f)), false)
+    assert.ok(fs.existsSync(killSwitchPath(f.dataDir)), 'enableIfForeign left the flag in place')
+  })
+
+  test('a foreign-armed flag still lifts: stepOtel arms FOREIGN_REASON on an absent flag, and the next stepOtel without the foreign setup removes it and restores the skills', async () => {
+    const f = s.f()
+    const clean = readSettings(f)
+    const cfg = readSettings(f); cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://gw.corp.example/otlp'; writeSettings(f, cfg)
+    assert.ok(!fs.existsSync(killSwitchPath(f.dataDir)), 'baseline: no flag')
+    await REPAIR_STEPS['otel-env'].run({ ...f.ctx, forceInstall: false })
+    assert.strictEqual(flagReason(f), FOREIGN_REASON, 'an absent flag is armed with the foreign reason')
+    assert.strictEqual(killSwitchArmedForForeign(f.dataDir), true)
+    writeSettings(f, clean)
+    await REPAIR_STEPS['otel-env'].run({ ...f.ctx, forceInstall: false })
+    assert.ok(!fs.existsSync(killSwitchPath(f.dataDir)), 'the foreign-armed flag is lifted')
+    for (const name of SKILL_NAMES) assert.ok(fs.existsSync(path.join(f.skillsDir, name, 'SKILL.md')), `${name} restored`)
+  })
+
+  test('disableForForeignTelemetry: an absent flag is armed (armed true); a flag that stands keeps its reason (armed false) and the skills are STILL parked', () => {
+    const f = s.f()
+    const dirs = dirsOf(f)
+    armKillSwitch('ops', f.dataDir)
+    const refused = disableForForeignTelemetry(dirs)
+    assert.strictEqual(refused.armed, false, 'a switch already stood')
+    assert.strictEqual(refused.moved.length, SKILL_NAMES.length, 'the arm was refused and the skills were still parked')
+    assert.strictEqual(flagReason(f), 'ops')
+    for (const name of SKILL_NAMES) assert.ok(!fs.existsSync(path.join(f.skillsDir, name)), `${name} parked`)
+    assert.deepStrictEqual(disableForForeignTelemetry(dirs), { moved: [], armed: false }, 'a second call is a no-op')
+    const replaced = disableForForeignTelemetry(dirs, { replaceReason: true }) // what `enable` passes
+    assert.strictEqual(replaced.armed, true, 'replaceReason re-arms over a standing operator flag')
+    assert.strictEqual(flagReason(f), FOREIGN_REASON)
+    disarmKillSwitch(f.dataDir)
+    assert.strictEqual(disableForForeignTelemetry(dirs).armed, true, 'no flag: armed')
+    assert.strictEqual(flagReason(f), FOREIGN_REASON)
+  })
+})
 suite('enable — the telemetry verdict comes first, then the restore, then the switch is lifted', () => {
   const s = fixtureSuite(true)
 
@@ -696,6 +761,9 @@ suite('enable — the telemetry verdict comes first, then the restore, then the 
     assert.strictEqual(await runEnableCli(false, { ctx: f.ctx, repair: r.repair, stderr: l.say }), EXIT.CONFIG)
     assert.deepStrictEqual(r.calls, [], 'a restore running before the verdict (or at all) would be a bug')
     assert.ok(killSwitchArmedForForeign(), 're-armed with the foreign reason, even though enable was just run')
+    // WHY (TRDD-RBBEX59R D10): `enable` replaces the operator reason on purpose (replaceReason). The operator asked to lift
+    // their own switch and the foreign setup refuses it; the foreign reason records that the lift waits for the foreign setup to go.
+    assert.ok(fs.readFileSync(killSwitchPath(f.dataDir), 'utf8').includes(`Reason: ${FOREIGN_REASON}`), 'the flag in f.dataDir carries FOREIGN_REASON')
     assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), bytes)
     assert.ok(!fs.existsSync(path.join(f.skillsDir, SKILL_NAMES[0])), 'skills moved aside')
     assert.ok(l.out.join('\n').startsWith('agentlenspro is DISABLED — enable did not run.'))
