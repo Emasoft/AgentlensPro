@@ -1914,12 +1914,16 @@ suite('round 5 — deploy gates', () => {
     process.env.HOME = f.home
     process.env.AGENTLENS_NO_AUTOSETUP = '1'
     const err = console.error, log = console.log
-    console.error = quiet; console.log = quiet
+    const errLines: string[] = []
+    console.error = (...a: unknown[]): void => { errLines.push(a.join(' ')) }; console.log = quiet
     try {
       for (const argv of [['cache-state'], ['last-compact'], ['model-headroom', 'fable'], ['statusline-history', 'project']]) {
         const verb = argv[0]
+        errLines.length = 0
         await cliMain(argv, async () => undefined)
         assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), `${verb} must not start a server`)
+        // The old refusal text; its absence is what proves a verb runs under the switch (d1 dropped the exit-code assertion).
+        assert.ok(!errLines.join('\n').includes('did not run'), `${verb} printed the old refusal: ${errLines.join('\n')}`)
       }
     } finally {
       console.error = err; console.log = log

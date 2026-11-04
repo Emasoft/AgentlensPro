@@ -31,7 +31,7 @@ usage:
                                               (global, per invocation) overwrite an EXISTING telemetry
                                               setup (company gateway, managed settings) with agentlenspro's.
                                               Without it agentlenspro refuses to run beside one: it exits
-                                              78, arms the kill-switch (collection stays off), parks its
+                                              78, arms the kill-switch if none stands (collection off), parks its
                                               skills, and leaves that setup untouched.
                                               Every launch also restores missing/stale skills, agents,
                                               hooks and telemetry env by itself (AGENTLENS_NO_AUTOSETUP=1 off).
