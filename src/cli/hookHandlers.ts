@@ -28,7 +28,7 @@ import { atomicWriteFileSync, lockTakeoverVerdict, parsePidLock, processStartRef
 // reingests it) and fire a DETACHED, stampede-locked revive so the always-on ingestion comes back.
 // Every fs/spawn op here is best-effort and guarded — the hook contract is "always exit 0 fast,
 // never fail a tool call", so nothing in this file may throw or block.
-const REVIVE_LOCK_TTL_MS = Math.max(2_000, Number(process.env.AGENTLENS_REVIVE_LOCK_TTL_MS) || 15_000)
+export const REVIVE_LOCK_TTL_MS = Math.max(2_000, Number(process.env.AGENTLENS_REVIVE_LOCK_TTL_MS) || 15_000)
 // A lock written THIS millisecond can read as slightly-negative age: fs.statSync().mtimeMs carries
 // sub-ms precision while Date.now() truncates to integer ms, so (Date.now() - mtimeMs) is often a
 // small NEGATIVE fraction when the write + the check land in the same ms (measured ~97% of the time

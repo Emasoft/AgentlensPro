@@ -18,6 +18,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { spawnSync } from 'child_process'
 import { agentlensDisabled, armKillSwitch } from '../cli/killSwitch'
+import { REVIVE_LOCK_TTL_MS } from '../cli/hookHandlers'
 import {
   parseStatuslineArgs, toStatuslineRecord, captureStatusline, STATUSLINE_EV, SUBAGENT_STATUSLINE_EV, STATUSLINE_ENDPOINT,
 } from '../cli/statuslineCapture'
@@ -394,10 +395,11 @@ suite('statusline capture — N failed POSTs under the armed switch start exactl
     assert.strictEqual(agentlensDisabled(), true, 'precondition: the switch is armed where captureStatusline reads it')
     const t0 = Date.now()
     for (let i = 0; i < 20; i++) await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
-    // The revive lock lasts REVIVE_LOCK_TTL_MS (15 s): a loop slower than that lets the lock expire mid-burst and a second
-    // revive is legitimate, so a slow machine must fail as slow, not as a wrong spawn count.
+    // The revive lock lasts REVIVE_LOCK_TTL_MS (hookHandlers.ts:31; 15 s unless AGENTLENS_REVIVE_LOCK_TTL_MS overrides it): a loop
+    // slower than that lets the lock expire mid-burst and a second revive is legitimate, so a slow machine must fail as slow,
+    // not as a wrong spawn count.
     const elapsedMs = Date.now() - t0
-    assert.ok(elapsedMs <= 14_000, `environment too slow for the lock window: ${elapsedMs} ms`)
+    assert.ok(elapsedMs <= REVIVE_LOCK_TTL_MS - 1_000, `environment too slow for the lock window (${REVIVE_LOCK_TTL_MS} ms TTL): ${elapsedMs} ms`)
     assert.strictEqual(spawns.length, 1, `exactly one revive, got ${JSON.stringify(spawns)}`)
     assert.deepStrictEqual(spawns[0].slice(-2), ['server', 'revive'], 'the spawn is the CLI server revive')
   })

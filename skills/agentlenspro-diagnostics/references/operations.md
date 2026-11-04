@@ -94,7 +94,10 @@ process that sees it. The server runs in **no-collection mode** (answers, stores
 parks no skill: every verb runs while it is armed, and the burn-gate, the image cache-guard, the in-band advisor, the review
 gate, the review supervisor and the dashboard switches stay as they were. `disable` stops a running server (its mode is read
 only at boot) and the next hook revives it in no-collection mode; `server stop --stay-down` keeps it down. `disable` also turns
-raw-body capture off; `enable` clears the flag and restarts a server still in no-collection mode, except when the NO_REVIVE brake is armed (honoured, no restart), when `AGENTLENS_DISABLED=1` stays set in the environment (the verb cannot lift the env half), or when the server answering belongs to another data dir (not ours to restart). Covered by `enableRestartPlan` cases in `src/test/noCollectionEnable.test.ts` ("NO_REVIVE is honoured: no restart", "no restart while the env half stays armed", "each no-restart case has its own plan ...").
+raw-body capture off; `enable` clears the flag and restarts a server still in no-collection mode. It restarts nothing when no server answers,
+when the answering server belongs to another data dir (not ours to restart), when that server already collects, when this dir's server is in
+no-collection mode but the data dir resolved from the environment differs (the stop could hit another dir's server), when the NO_REVIVE
+brake is armed (honoured), or when `AGENTLENS_DISABLED=1` stays set in the environment (the verb cannot lift the env half).
 
 ⚠ **Neither is how you stop a burning workload.** The kill-switch stops the *measurement*, not the burn — the guards stay on, but
 the stored numbers you would diagnose the burn from stop exactly when they matter most. Reach for it only to take AgentlensPro's
