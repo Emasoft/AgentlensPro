@@ -508,16 +508,23 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
 
         assert.deepStrictEqual(errors, [], `zero console errors expected during the cache-guard round-trip:\n${errors.join('\n')}`)
       } finally {
-        // Restore by a direct POST, never through the UI: the UI path is what this test exercises,
-        // so a UI restore fails exactly when the test did, and a throw here would replace the
-        // test's own assertion error. Log the restore failure and let the original error surface.
+        // The server is shared across the suite, so a switch left off breaks later tests: restore
+        // both. Close the page first, so it cannot send a toggle write that lands after the
+        // restore. Restore by a direct POST, not through the UI this test exercises, which can fail
+        // for the same reason the test did. Log a failed restore instead of throwing: a throw here
+        // would replace the test's own assertion error.
         try {
-          const r = await httpReq(uiPort, 'POST', '/api/hook-config', { gateEnabled: true, cacheGuardEnabled: true })
-          if (r.status !== 200) console.error(`cache-guard test restore: POST /api/hook-config returned ${r.status}: ${r.text}`)
-        } catch (e) {
-          console.error(`cache-guard test restore failed: ${String(e)}`)
-        } finally {
           await page.close()
+        } finally {
+          try {
+            const r = await httpReq(uiPort, 'POST', '/api/hook-config', { gateEnabled: true, cacheGuardEnabled: true })
+            const cfg = (r.json as { config?: { gateEnabled?: boolean; cacheGuardEnabled?: boolean } } | null)?.config
+            if (r.status !== 200 || cfg?.gateEnabled !== true || cfg?.cacheGuardEnabled !== true) {
+              console.error(`cache-guard test restore: POST /api/hook-config returned ${r.status}: ${r.text}`)
+            }
+          } catch (e) {
+            console.error(`cache-guard test restore failed: ${String(e)}`)
+          }
         }
       }
     })
