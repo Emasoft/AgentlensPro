@@ -77,24 +77,29 @@ Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxGb` (
 traces on a big disk: `agentlenspro config set spansRetentionDays 365 && agentlenspro server
 restart`.
 
-### Emergency stop: `agentlenspro disable [reason]` / `enable`
+### Emergency stop: the real brakes, and `agentlenspro disable [reason]` / `enable` (collection only)
 
-The global brake on what AgentlensPro **stores** — one flag file that stops storing telemetry, raw
-API bodies and hook events, plus the CLI hook spool and status-line capture (unless
-`disable --keep-statusline` was used), in **every** Claude Code session already running, on that
-session's next hook fire. No restart needed (a `settings.json` edit alone cannot reach a session
-that already loaded its config). The server runs in **no-collection mode** (answers, stores
-nothing). The hooks keep running: the burn-gate, the image cache-guard, the in-band advisor, the
-review gate, the review supervisor and the other dashboard right-panel switches stay as they were.
-`disable` stops a running server (its mode is read only at boot) and the next hook revives it in
-no-collection mode; `server stop --stay-down` keeps it down. `disable` also turns raw-body capture
-off; `enable` clears the flag and restarts a server still in no-collection mode.
+**The brakes that stop AgentlensPro doing something** (live, no restart):
 
-⚠ **This is NOT how you stop a burning workload.** It stops the *measurement*, not the burn — the
-guards stay on, but the stored numbers you would diagnose the burn from stop exactly when they
-matter most. Reach for it only to take AgentlensPro's storage out of the picture (debugging its own
-disk writes, handing the machine to someone else). To abort a run that is draining the window, see
-**Budgeting a timed run** below.
+- the dashboard right-panel switches (the same four as `--hooks`: burn gate, image cache-guard, event capture, advisor) — per switch, in realtime for every running session;
+- `agentlenspro --hooks gate=off|warn|enforce cacheguard=off capture=off advisor=off` — the same switches from the CLI (no args shows them);
+- `AGENTLENS_GATE=off` in the environment — silences every burn-gate guard, the image guard included; read on each invocation;
+- `agentlenspro --uninstall-hooks` — removes the agentlens hook entries. A running session keeps its hooks until it restarts, and the next launch of a verb that self-heals the install registers them again (`AGENTLENS_NO_AUTOSETUP=1` stops that). The review gate and the review supervisor are never switchable.
+
+**The kill-switch stops only COLLECTION.** `agentlenspro disable [reason]` drops one flag file that stops storing telemetry, raw
+API bodies and hook events, plus the CLI hook spool and status-line capture (unless `disable --keep-statusline` was used), in
+**every** Claude Code session already running, on that session's next hook fire. No restart needed (a `settings.json` edit alone
+cannot reach a session that already loaded its config). `AGENTLENS_DISABLED=1` in the environment is the same switch for the
+process that sees it. The server runs in **no-collection mode** (answers, stores nothing). The switch refuses no command and
+parks no skill: every verb runs while it is armed, and the burn-gate, the image cache-guard, the in-band advisor, the review
+gate, the review supervisor and the dashboard switches stay as they were. `disable` stops a running server (its mode is read
+only at boot) and the next hook revives it in no-collection mode; `server stop --stay-down` keeps it down. `disable` also turns
+raw-body capture off; `enable` clears the flag and restarts a server still in no-collection mode.
+
+⚠ **Neither is how you stop a burning workload.** The kill-switch stops the *measurement*, not the burn — the guards stay on, but
+the stored numbers you would diagnose the burn from stop exactly when they matter most. Reach for it only to take AgentlensPro's
+storage out of the picture (debugging its own disk writes, handing the machine to someone else). To abort a run that is draining
+the window, see **Budgeting a timed run** below.
 
 ### `agentlenspro env` — environment / system detection
 

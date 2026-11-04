@@ -12,7 +12,7 @@ import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, autoSetup
 import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runDisableCli, runEnableCli } from '../cli/disableCli'
-import { FOREIGN_REASON, HOOK_PATH_VERBS, disableForForeignTelemetry, disabledNotice, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
+import { FOREIGN_REASON, HOOK_PATH_VERBS, disableForForeignTelemetry, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
 import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, noRevivePath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
@@ -647,7 +647,7 @@ suite('foreign telemetry — never overwritten without --force-install-telemetry
     assert.ok(!(RAW_BODIES_KEY in readSettings(f).env!), 'the env half still holds the raw-body key absent')
     assert.ok(fs.existsSync(path.join(f.skillsDir, SKILL_NAMES[0], 'SKILL.md')))
     assert.ok(l.out.some(x => x.includes('overrode AGENTLENS_DISABLED') && x.includes('next run')), l.out.join('|'))
-    assert.strictEqual(disabledNotice(['budget']), null, 'during the flagged run the env half is overridden (in-process flag)')
+    assert.strictEqual(killSwitchHalf(), null, 'during the flagged run the env half is overridden (in-process flag)')
     assert.strictEqual(process.env.AGENTLENS_DISABLED, '1', 'process.env is NOT mutated — nothing persists, children inherit it as it was')
     // the very next run, without the flag: the override is gone
     overrideKillSwitchEnv(false)
@@ -655,9 +655,7 @@ suite('foreign telemetry — never overwritten without --force-install-telemetry
     const next = recorder(); const l2 = lines()
     assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: next.repair, stderr: l2.say }), null)
     assert.deepStrictEqual(next.calls, ['skill'], 'the env half stops only collection (TRDD-RBBEX59R D8): the next launch repairs around it')
-    const n = disabledNotice(['budget'])!
-    assert.strictEqual(n.code, EXIT.DISABLED)
-    assert.ok(n.text.includes('To reactivate: unset AGENTLENS_DISABLED'))
+    assert.strictEqual(killSwitchHalf(), 'env', 'without the flag the env half is armed again')
   })
 
   test('--force-install-telemetry with a SHELL OTEL_* conflict: settings.json is written anyway, the warning names the variable', async () => {
@@ -1249,58 +1247,28 @@ suite('enable — the telemetry verdict comes first, then the restore, then the 
   })
 })
 
-suite('a disabled agentlenspro tells whoever runs it how to reactivate (owner order 2026-10-02)', () => {
+suite('the kill-switch refuses no verb; --force-install-telemetry is consumed by the dispatcher (TRDD-RBBEX59R d1)', () => {
   fixtureSuite(false)
 
-  test('enabled: no notice', () => {
-    assert.strictEqual(disabledNotice(['budget']), null)
-  })
-
-  test('operator disable: names the reason and `agentlenspro enable`, exit DISABLED', () => {
-    armKillSwitch('SSD burning')
-    const n = disabledNotice(['budget'])!
-    assert.strictEqual(n.code, EXIT.DISABLED)
-    const l = n.text.split('\n')
-    assert.strictEqual(l[0], 'agentlenspro is DISABLED — budget did not run.')
-    assert.ok(l[1].includes('SSD burning'))
-    assert.ok(l[2].includes('To reactivate: agentlenspro enable'))
-  })
-
-  test('env var: tells to UNSET it and says enable cannot clear an environment variable', () => {
-    process.env.AGENTLENS_DISABLED = '1'
-    const n = disabledNotice(['budget'])!
-    assert.ok(n.text.includes('To reactivate: unset AGENTLENS_DISABLED') && n.text.includes('enable cannot clear an environment variable'))
-  })
-
-  test('foreign telemetry reason: the remove-or---force-install-telemetry line', () => {
-    armKillSwitch(FOREIGN_REASON)
-    const n = disabledNotice(['budget'])!
-    assert.ok(n.text.includes('To reactivate: remove the existing telemetry setup') && n.text.includes('agentlenspro --force-install-telemetry <any command>'), n.text)
-  })
-
-  test('hook-path verbs stay SILENT; enable/disable/setup/server status pass; other verbs and the bare launch are refused', () => {
-    armKillSwitch('x')
-    for (const v of HOOK_PATH_VERBS) assert.strictEqual(disabledNotice([v]), null, v)
-    for (const v of ['enable', 'disable', 'setup']) assert.strictEqual(disabledNotice([v]), null, v)
-    assert.strictEqual(disabledNotice(['server', 'status']), null)
-    assert.strictEqual(disabledNotice(['server', 'start']), null, 'server/daemon keep their own terminal handling')
-    assert.notStrictEqual(disabledNotice([]), null)
-  })
-
-  test('the dispatcher prints it to stderr and exits EXIT.DISABLED without running the verb', async () => {
-    armKillSwitch('SSD burning')
-    const savedNo = process.env.AGENTLENS_NO_AUTOSETUP
-    process.env.AGENTLENS_NO_AUTOSETUP = '1' // never let a dispatcher test touch the real ~/.claude
+  test('armed the production way, the verbs that used to exit 69 run: a diagnostics tool, singular get_account_status, the bare launch', async () => {
+    armKillSwitch('operator reason')
+    // The production way (R2): killSwitchHalf() reads the env-default data dir, which fixtureSuite points at the temp dir.
+    assert.strictEqual(killSwitchHalf(), 'file', 'precondition: the switch is armed')
+    const diagnosticsCalls: string[][] = []
+    const deps = { launchCheck: async (): Promise<number | null> => null, diagnostics: async (argv: string[]): Promise<void> => { diagnosticsCalls.push(argv) } }
+    let started = 0
+    const startServer = async (): Promise<void> => { started += 1 }
     const err = console.error
     let printed = ''
     console.error = (...a: unknown[]): void => { printed += `${a.join(' ')}\n` }
     try {
-      assert.strictEqual(await cliMain(['budget'], async () => undefined), EXIT.DISABLED)
-    } finally {
-      console.error = err
-      if (savedNo === undefined) delete process.env.AGENTLENS_NO_AUTOSETUP; else process.env.AGENTLENS_NO_AUTOSETUP = savedNo
-    }
-    assert.ok(printed.includes('agentlenspro is DISABLED — budget did not run.') && printed.includes('agentlenspro enable'))
+      assert.strictEqual(await cliMain(['get_burn_status'], startServer, deps), 0, 'a diagnostics tool is not refused')
+      assert.strictEqual(await cliMain(['get_account_status'], startServer, deps), 0, 'the singular form proxies to the server')
+      assert.strictEqual(await cliMain([], startServer, deps), 0, 'the bare launch starts the server')
+    } finally { console.error = err }
+    assert.deepStrictEqual(diagnosticsCalls, [['get_burn_status'], ['get_account_status']])
+    assert.strictEqual(started, 1)
+    assert.strictEqual(printed, '', 'nothing is printed to stderr: no refusal notice')
   })
 
   test('--force-install-telemetry is consumed by the dispatcher: no verb ever sees it', async () => {
@@ -1469,15 +1437,12 @@ suite('setup --dry-run and per-launch opt-out never mutate anything', () => {
 suite('server verbs under DISABLED pass the dispatcher and START, in no-collection mode (TRDD-RBBEX59R c2)', () => {
   fixtureSuite(false)
 
-  test('server/daemon pass the dispatcher notice; `server start` and both `--supervise` forms spawn with --no-collection', async function () {
+  test('`server start` and both `--supervise` forms spawn with --no-collection', async function () {
     // They used to refuse before spawning anything. Under the switch the server now runs storing nothing, so the
     // guards answer. A fake alcore records each argv and exits at once.
     this.timeout(40_000)
     armKillSwitch('x')
     const data = process.env.AGENTLENS_DATA_DIR!
-    for (const argv of [['server', 'start'], ['server', 'start', '--supervise'], ['daemon', 'start', '--supervise']]) {
-      assert.strictEqual(disabledNotice(argv), null, argv.join(' '))
-    }
     const fake = makeFakeAlcore(path.join(data, 'fake'))
     const flagged = (): boolean => fake.calls().some(c => c.includes('--no-collection') && c[c.indexOf('--data-dir') + 1] === data)
     // `server start` runs in-process through the dispatcher: it reaches the spawn and fails only because the fake exits.
@@ -1890,7 +1855,7 @@ suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', 
     assert.ok(/installOtel[\s\S]*ensureTelemetryConfig\(common\)/.test(src), 'installOtel routes through ensureTelemetryConfig')
   })
 
-  test('read-only diagnostics (cache-state, last-compact, model-headroom, statusline-history) skip the check and the DISABLED stop with a foreign config', async () => {
+  test('read-only diagnostics (cache-state, last-compact, model-headroom, statusline-history) skip the check with a foreign config', async () => {
     const f = s.f()
     const cfg = readSettings(f)
     cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp'
@@ -1898,12 +1863,9 @@ suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', 
     const bytes = fs.readFileSync(f.settingsPath, 'utf8')
     for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history']) {
       assert.strictEqual(await maybeAutoSetup([verb], { ctx: f.ctx, repair: recorder().repair, stderr: lines().say }), null, verb)
-      assert.strictEqual(disabledNotice([verb]), null, verb)
     }
     assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), bytes)
     assert.ok(!agentlensDisabled())
-    armKillSwitch('x')
-    for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history']) assert.strictEqual(disabledNotice([verb]), null, verb)
   })
 })
 
@@ -1943,7 +1905,7 @@ suite('round 5 — deploy gates', () => {
     })
   }
 
-  test('diagnostics while DISABLED spawn no server and exit cleanly', async function () {
+  test('diagnostics while DISABLED spawn no server', async function () {
     this.timeout(60_000)
     const f = s.f()
     armKillSwitch('x')
@@ -1956,8 +1918,7 @@ suite('round 5 — deploy gates', () => {
     try {
       for (const argv of [['cache-state'], ['last-compact'], ['model-headroom', 'fable'], ['statusline-history', 'project']]) {
         const verb = argv[0]
-        const code = await cliMain(argv, async () => undefined)
-        assert.notStrictEqual(code, EXIT.DISABLED, `${verb} must not take the DISABLED stop`)
+        await cliMain(argv, async () => undefined)
         assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), `${verb} must not start a server`)
       }
     } finally {
@@ -2108,7 +2069,7 @@ suite('setup --json: one untruncated document, same exit codes, nothing mutated'
 // ── `get_account_status --all` while DISABLED (TRDD-HO94JMKD, owner directive 2026-10-29) ───────────────────────
 // "are you saying that in reduced mode you cannot determine the accounts status?? this is bad. fix this."
 // The plural form only reads files, so neither the off-switch brake nor the launch self-heal may touch it.
-suite('get_account_status --all works while DISABLED — and the singular form still refuses', () => {
+suite('get_account_status --all works while DISABLED — and the singular form proxies to the server', () => {
   const s = fixtureSuite(true)
   let savedLog: string | undefined
   setup(() => {
@@ -2165,13 +2126,14 @@ suite('get_account_status --all works while DISABLED — and the singular form s
     assert.ok(res.out.includes('roster-row@x'), res.out)
   })
 
-  test('the singular form stays refused (69) and its notice points at --all', async () => {
+  test('the singular form proxies to the server under the switch: no refusal, no 69', async () => {
     const f = s.f(); const r = recorder()
+    const proxied: string[][] = []
     const res = await capture(() => cliMain(['get_account_status'], async () => undefined,
-      { launchCheck: argv => maybeAutoSetup(argv, { ctx: f.ctx, repair: r.repair, stderr: quiet }) }))
-    assert.strictEqual(res.code, EXIT.DISABLED)
-    assert.ok(res.err.includes('get_account_status --all'), res.err)
-    assert.ok(!res.err.includes('Do not retry the original command'), 'the generic retry ban would contradict the pointer')
+      { launchCheck: argv => maybeAutoSetup(argv, { ctx: f.ctx, repair: r.repair, stderr: quiet }), diagnostics: async argv => { proxied.push(argv) } }))
+    assert.strictEqual(res.code, 0, res.err)
+    assert.deepStrictEqual(proxied, [['get_account_status']], 'the singular form reached the diagnostics surface (the server proxy)')
+    assert.strictEqual(res.err, '', 'no refusal notice')
   })
 
   test('self-heal: a non-exempt verb restores a missing skill; --all leaves HOME/.claude byte-identical', async () => {

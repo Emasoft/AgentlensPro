@@ -31,12 +31,11 @@ usage:
                                               (global, per invocation) overwrite an EXISTING telemetry
                                               setup (company gateway, managed settings) with agentlenspro's.
                                               Without it agentlenspro refuses to run beside one: it exits
-                                              non-zero, disables its hooks and skills, and touches nothing.
+                                              78, arms the kill-switch (collection stays off), parks its
+                                              skills, and leaves that setup untouched.
                                               Every launch also restores missing/stale skills, agents,
                                               hooks and telemetry env by itself (AGENTLENS_NO_AUTOSETUP=1 off).
-                                              Exit 69 = agentlenspro is DISABLED (the command did not run; the
-                                              message names the reactivation command, usually
-                                              'agentlenspro enable'); exit 78 = another telemetry setup blocks it.
+                                              The kill-switch (agentlenspro disable) stops only collection; it refuses no command.
   agentlenspro setup [--dry-run] [--yes] [--json]  detect → converge → verify: install or repair everything
                                               (server, DB, hooks, skill, telemetry env), then self-test.
                                               Starts with a read-only environment probe (platform,

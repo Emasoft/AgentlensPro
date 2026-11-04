@@ -112,9 +112,8 @@ export function reviveBraked(dir: string = dataDir()): boolean {
 }
 
 /**
- * WHICH half of the global kill-switch is armed, or `null` if neither is. ONE definition shared by
- * `agentlensDisabled()` and `disabledNotice()` (`foreignTelemetry.ts`): the two cannot disagree about
- * which half is armed, and the notice names the half that fired.
+ * WHICH half of the global kill-switch is armed, or `null` if neither is. ONE definition behind `agentlensDisabled()` and
+ * every other reader of the switch: they cannot disagree about which half is armed.
  *
  * `AGENTLENS_DISABLED=1` is honored too, for the cases where env DOES reach the process (tests,
  * a supervisor that spawns the server directly). The FILE is the one that reaches running agents.

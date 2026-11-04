@@ -29,7 +29,7 @@ import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
 import { autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
-import { disabledNotice, isAllAccountsStatus } from './foreignTelemetry'
+import { isAllAccountsStatus } from './foreignTelemetry'
 import { beginLaunchNotices, endLaunchNotices, flushNoticesToStderr } from './launchNotices'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
@@ -168,7 +168,7 @@ export const DISPATCHED_VERBS: ReadonlySet<string> = new Set([
 /** Does this invocation go to the diagnostics surface (runDiagnosticsCli) — the only place a tool can refuse? */
 function reachesDiagnosticsSurface(cmd: string | undefined, argv: string[]): boolean {
   if (cmd === undefined) return false // the bare foreground server
-  // only the plural form needs no server; it writes no user config, so the brake must not block it (owner directive 2026-10-29)
+  // only the plural form needs no server and it writes no user config (owner directive 2026-10-29)
   if (cmd === 'get_account_status') return !isAllAccountsStatus(argv)
   return !DISPATCHED_VERBS.has(cmd)
 }
@@ -264,17 +264,6 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
     if (blocked !== null) return blocked
   }
 
-  // Disabled (kill-switch flag or AGENTLENS_DISABLED): say so, name the reactivation command, exit
-  // EXIT.DISABLED without running the verb (owner order 2026-10-02) — written for an agent as much as a
-  // human. After maybeAutoSetup on purpose: a switch armed for foreign telemetry is lifted there once that
-  // setup is gone. Hook-path verbs, enable/disable/setup and `server status` pass through.
-  const disabled = disabledNotice(argv)
-  if (disabled) {
-    flushNoticesToStderr() // the launch check's lines came first; keep that order
-    console.error(disabled.text)
-    return disabled.code
-  }
-
   // ONE decision for the launch notices (launchNotices.ts, TRDD-YL3EWT6N item 7): only the diagnostics surface can end
   // in a tool refusal, whose stderr must be exactly one JSON object, so only there do they wait (runDiagnosticsCli
   // folds them into a refusal or prints them for its own non-tool sub-commands). Every other verb prints them now,
@@ -319,11 +308,10 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
       await (deps.diagnostics ?? runDiagnosticsCli)(argv)
       return 0
     case 'disable':
-      // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms server auto-revive, all background
-      // ingestion and every hook except the review gate and the review supervisor — in EVERY Claude
-      // session already running, on its next hook fire. This is the only channel that reaches an
-      // agent whose env and settings were fixed at launch; a settings edit reaches nothing that is
-      // already running (see killSwitch.ts).
+      // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which stops only COLLECTION (owner rule 2026-11-03: telemetry logs, raw bodies and
+      // the hook event log) in EVERY Claude session already running, on its next hook fire. It refuses no verb and parks no
+      // skill. This is the only channel that reaches an agent whose env and settings were fixed at launch; a settings edit
+      // reaches nothing that is already running (see killSwitch.ts).
       return runDisableCli(argv.slice(1))
     case 'enable':
       return runEnableCli(forceInstall)
