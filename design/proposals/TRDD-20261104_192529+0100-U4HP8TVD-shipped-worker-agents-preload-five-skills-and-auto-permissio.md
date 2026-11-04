@@ -4,14 +4,14 @@ title: Shipped worker agents preload five skills and auto permission mode for ev
 column: proposal
 status: proposed
 created: 2026-11-04T19:25:29+0100
-updated: 2026-11-04T20:21:51+0100
+updated: 2026-11-04T20:26:24+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
 min-approval-requirement: user
 assignee: main-agent@agentlenspro
 approved: false
-implementation-commits: [a2ba6005]
+implementation-commits: [a2ba6005, 18e6b49b]
 ---
 
 # Shipped worker agents preload five skills and auto permission mode for every user
@@ -38,4 +38,4 @@ Supersedes TRDD-CA5U48BA, which trddgrep new created with a default mandate (pre
 - Still open: permissionMode auto for every user; the lean-worker description vs its effort and model; the user rule that names lean-worker as Sonnet.
 - Agent's reading, not an owner decision: "(those installed by agentlenspro)" means the four workers above; agentlens-tldr-worker already conforms. Five user-scope agents not shipped by agentlenspro also preload skills (js-test-writer, python-test-writer, merge-role-worker, smart-worker, sonnet-worker); the owner was asked on 2026-11-04 whether to extend the change to them, no answer yet.
 - The implementation departs from the owner's example in two points: it does not copy the example's "Read with a tight offset/limit" paragraph, because these workers read with `tldr body` and the user's code-tools rule keeps the Read tool for images, PDFs and notebooks; and the example's own `tldr definition <symbol> <path>` line is broken (exits 2: tldr reads the second positional as a line number), so the workers and agents/agentlens-tldr-worker.md use `tldr definition --symbol <symbol> --file <file>`.
-- Implemented in a2ba6005 (cheap-worker, fast-worker, lean-worker, micro-worker: skills preload removed, commands inline; agentlens-tldr-worker definition line fixed) and in the follow-up commit that carries this line; installed into ~/.claude/agents on 2026-11-04 by a direct copy the owner chose, because `agentlenspro --install-skill` is refused (exit 69) while the kill-switch is armed.
+- Implemented in a2ba6005 (cheap-worker, fast-worker, lean-worker, micro-worker: skills preload removed, commands inline; agentlens-tldr-worker definition line fixed) and in 18e6b49b (review fold: quicksilver skips gitignored paths, the tldr search comment, the CHANGELOG headline); installed into ~/.claude/agents on 2026-11-04 by a direct copy the owner chose, because `agentlenspro --install-skill` is refused (exit 69) while the kill-switch is armed.
