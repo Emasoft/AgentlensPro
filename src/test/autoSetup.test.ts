@@ -495,10 +495,10 @@ suite('surfaces — an operator disable parks nothing; parked skills (foreign st
     const original = fs.readFileSync(path.join(f.skillsDir, SKILL_NAMES[0], 'SKILL.md'), 'utf8')
     armKillSwitch('ops', f.dataDir)
     parkAgentlensSurfaces(dirs)
-    assert.strictEqual(restoreParkedSurfaces(dirs).length, SKILL_NAMES.length)
+    assert.strictEqual(restoreParkedSurfaces(dirs).restored.length, SKILL_NAMES.length)
     assert.strictEqual(fs.readFileSync(path.join(f.skillsDir, SKILL_NAMES[0], 'SKILL.md'), 'utf8'), original)
     assert.strictEqual(flagReason(f), 'ops')
-    assert.deepStrictEqual(restoreParkedSurfaces(dirs), [], 'a second restore finds nothing')
+    assert.deepStrictEqual(restoreParkedSurfaces(dirs), { restored: [], skipped: [] }, 'a second restore finds nothing')
   })
 })
 
@@ -831,6 +831,23 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     assert.strictEqual(flagReason(f), 'ops', 'restoring does not lift the switch')
   })
 
+  // An occupied destination is a LASTING state (the skill stays parked on every launch), so the launch must say so instead of skipping it silently.
+  test('(occupied destination) a file standing at one skill live path: the launch puts the others back and the P1 line names that path as occupied; the file and the parked copy stay', async () => {
+    const f = s.f()
+    armKillSwitch('ops', f.dataDir)
+    dropRawBodyKey(f) // as `disable` does
+    parkAgentlensSurfaces(surfaceDirs(f))
+    const live = path.join(f.skillsDir, SKILL_NAMES[0])
+    fs.writeFileSync(live, 'a file stands where the skill directory goes')
+    const l = lines()
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder().repair, stderr: l.say }), null)
+    const announced = l.out.filter(x => x.includes('put back'))
+    assert.strictEqual(announced.length, 1, 'P1 announces in ONE line: ' + l.out.join('|'))
+    assert.ok(announced[0].includes(`${SKILL_NAMES.length - 1} parked skill(s)`), announced[0])
+    assert.ok(announced[0].includes(`${live} is occupied (a file stands there`), announced[0])
+    assert.strictEqual(fs.readFileSync(live, 'utf8'), 'a file stands where the skill directory goes', 'the file is untouched')
+    assert.ok(fs.existsSync(path.join(parkedDir(f, SKILL_NAMES[0]), 'SKILL.md')), 'the parked copy stays')
+  })
   test('(3, P2) the skill step (the setup verb, --force-install-telemetry) restores parked skills first: byte-identical, no second copy', async () => {
     const f = s.f()
     const original = fs.readFileSync(path.join(skill0(f), 'SKILL.md'), 'utf8')
@@ -900,7 +917,7 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     parkAgentlensSurfaces(dirs)
     const suffixed = `${parkedDir(f, name)}.2026-11-04T10-00-00-000Z`
     fs.renameSync(parkedDir(f, name), suffixed) // only the stamped copy of a re-park is left
-    assert.ok(!restoreParkedSurfaces(dirs).includes(path.join(f.skillsDir, name)), 'the stamped copy is not restored')
+    assert.ok(!restoreParkedSurfaces(dirs).restored.includes(path.join(f.skillsDir, name)), 'the stamped copy is not restored')
     assert.ok(!fs.existsSync(path.join(f.skillsDir, name)))
     assert.ok(fs.existsSync(path.join(suffixed, 'SKILL.md')), 'it stays, inert, outside ~/.claude/skills')
     // a name already live again: its parked copy stays
@@ -910,6 +927,23 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     restoreParkedSurfaces(dirs)
     assert.strictEqual(fs.readFileSync(path.join(f.skillsDir, name, 'SKILL.md'), 'utf8'), 'live again')
     assert.ok(fs.existsSync(path.join(parkedDir(f, name), 'SKILL.md')), 'the parked copy stays')
+  })
+
+  // A directory at a live skill path is a live skill ("already live again"), never a blocker: reporting it would tell the user to move away the real skill on every launch.
+  test('(live directory) a non-empty directory at a live skill path is left alone SILENTLY: not restored, not skipped, the parked copy stays', () => {
+    const f = s.f()
+    const dirs = surfaceDirs(f)
+    parkAgentlensSurfaces(dirs)
+    const live = path.join(f.skillsDir, SKILL_NAMES[0])
+    fs.mkdirSync(live, { recursive: true })
+    fs.writeFileSync(path.join(live, 'SKILL.md'), 'reinstalled meanwhile')
+    assert.ok(fs.existsSync(path.join(parkedDir(f, SKILL_NAMES[0]), 'SKILL.md')), 'baseline: the parked copy exists before the call')
+    const { restored, skipped } = restoreParkedSurfaces(dirs)
+    assert.deepStrictEqual(skipped, [], 'a live directory is not reported')
+    assert.ok(!restored.includes(live), 'the live name is not restored over')
+    assert.strictEqual(restored.length, SKILL_NAMES.length - 1, 'every other parked skill still came back')
+    assert.strictEqual(fs.readFileSync(path.join(live, 'SKILL.md'), 'utf8'), 'reinstalled meanwhile', 'the live copy is untouched')
+    assert.ok(fs.existsSync(path.join(parkedDir(f, SKILL_NAMES[0]), 'SKILL.md')), 'the parked copy exists after the call')
   })
 
   // A vanished source cannot be produced for real: restoreParkedSurfaces checks the source first, and the loser of a concurrent
@@ -925,7 +959,7 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     const real = nodeFs.existsSync
     nodeFs.existsSync = ((p: fs.PathLike): boolean => String(p) === gone ? true : real(p)) as typeof fs.existsSync
     try {
-      const restored = restoreParkedSurfaces(dirs)
+      const restored = restoreParkedSurfaces(dirs).restored
       assert.ok(!restored.includes(path.join(f.skillsDir, SKILL_NAMES[0])), 'the vanished name is skipped')
       assert.strictEqual(restored.length, SKILL_NAMES.length - 1, 'every other parked skill still came back')
     } finally { nodeFs.existsSync = real }
@@ -933,7 +967,7 @@ suite('the switch stops only collection — repair and restore run under it (TRD
 
   // The other half of the same race: the winner put a COPY live between the loser's check and its rename, so the rename fails with
   // ENOTEMPTY/EEXIST (a non-empty live directory). Same pin as above, but the check on the DESTINATION answers "absent" once.
-  test('(restore race) a name that became live between the check and the move (ENOTEMPTY/EEXIST from a concurrent restore) is skipped, never thrown', () => {
+  test('(restore race) a name that became live between the check and the move (ENOTEMPTY/EEXIST from a concurrent restore) is skipped silently: a live directory is not a blocker, never thrown', () => {
     const f = s.f()
     const dirs = surfaceDirs(f)
     parkAgentlensSurfaces(dirs)
@@ -945,7 +979,8 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     let lied = false
     nodeFs.existsSync = ((p: fs.PathLike): boolean => { if (String(p) === live && !lied) { lied = true; return false } return real(p) }) as typeof fs.existsSync
     try {
-      const restored = restoreParkedSurfaces(dirs)
+      const { restored, skipped } = restoreParkedSurfaces(dirs)
+      assert.deepStrictEqual(skipped, [], 'a live directory is a live skill: skipped silently, not reported')
       assert.ok(lied, 'the pin fired: the check saw the destination as absent')
       assert.ok(!restored.includes(live), 'the name that became live is skipped')
       assert.strictEqual(restored.length, SKILL_NAMES.length - 1, 'every other parked skill still came back')
@@ -956,7 +991,7 @@ suite('the switch stops only collection — repair and restore run under it (TRD
 
   // The destination of the skip is tested with lstat: renaming a directory over a plain FILE or over a SYMLINK fails ENOTDIR (not
   // ENOTEMPTY/EEXIST), and a dangling symlink reads as absent to existsSync, so the earlier existsSync-based skip threw on it.
-  test('(restore race) a plain file at the destination (ENOTDIR from the rename) is skipped, never thrown; the parked copy stays', () => {
+  test('(occupied destination) a plain file at the destination (ENOTDIR from the rename) is skipped, never thrown; the parked copy stays', () => {
     const f = s.f()
     const dirs = surfaceDirs(f)
     parkAgentlensSurfaces(dirs)
@@ -967,7 +1002,8 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     let lied = false
     nodeFs.existsSync = ((p: fs.PathLike): boolean => { if (String(p) === live && !lied) { lied = true; return false } return real(p) }) as typeof fs.existsSync
     try {
-      const restored = restoreParkedSurfaces(dirs)
+      const { restored, skipped } = restoreParkedSurfaces(dirs)
+      assert.deepStrictEqual(skipped, [{ to: live, what: 'file' }], 'the plain file is reported')
       assert.ok(lied, 'the pin fired: the check saw the destination as absent, so the rename ran and failed')
       assert.ok(!restored.includes(live), 'the occupied name is skipped')
       assert.strictEqual(restored.length, SKILL_NAMES.length - 1, 'every other parked skill still came back')
@@ -976,14 +1012,15 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     assert.ok(fs.existsSync(path.join(parkedDir(f, SKILL_NAMES[0]), 'SKILL.md')), 'the parked copy stays')
   })
 
-  test('(restore race) a dangling symlink at the destination (invisible to existsSync) is skipped, never thrown; the parked copy stays', () => {
+  test('(occupied destination) a dangling symlink at the destination (invisible to existsSync) is skipped, never thrown; the parked copy stays', () => {
     const f = s.f()
     const dirs = surfaceDirs(f)
     parkAgentlensSurfaces(dirs)
     const live = path.join(f.skillsDir, SKILL_NAMES[0])
     fs.symlinkSync(path.join(f.home, 'nowhere'), live)
     assert.ok(!fs.existsSync(live) && fs.lstatSync(live).isSymbolicLink(), 'baseline: existsSync says absent, lstat says a symlink stands there')
-    const restored = restoreParkedSurfaces(dirs)
+    const { restored, skipped } = restoreParkedSurfaces(dirs)
+    assert.deepStrictEqual(skipped, [{ to: live, what: 'symlink' }], 'the dangling symlink is reported')
     assert.ok(!restored.includes(live), 'the occupied name is skipped')
     assert.strictEqual(restored.length, SKILL_NAMES.length - 1, 'every other parked skill still came back')
     assert.ok(fs.lstatSync(live).isSymbolicLink(), 'the symlink is untouched')

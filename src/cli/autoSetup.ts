@@ -44,7 +44,7 @@ import { EXIT } from "./cliErrors"
 import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from "./foreignTelemetry"
 import { agentlensDisabled, overrideKillSwitchEnv } from "./killSwitch"
 import { pushNotice } from "./launchNotices"
-import { SurfaceDirs, restoreParkedSurfaces } from "./surfaces"
+import { SurfaceDirs, formatSkippedSurfaces, restoreParkedSurfaces } from "./surfaces"
 import { Ctx, REPAIR_STEPS, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
 import { TelemetryConflict, TelemetryVerdictRow, formatTelemetryConflicts, rawBodiesHeldAbsent } from "../telemetryConfig"
 import { RAW_BODIES_KEY } from "../captureConfig"
@@ -321,8 +321,8 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       // and, except for `enable` (which prints its own switch line), what becomes of the switch (clause below).
       const verdict = otelDrift(ctx)
       if (verdict !== "unparseable" && verdict.conflicts.length === 0) {
-        const back = restoreParkedSurfaces(dirs)
-        if (back.length > 0) {
+        const { restored: back, skipped } = restoreParkedSurfaces(dirs)
+        if (back.length > 0 || skipped.length > 0) {
           // The clause says what happens to the switch per caller. `enable` gets none: it prints its own switch line (runEnableCli after its
           // disarm, forceInstallTelemetry in its summary), so "stays armed" would be false for the operator enable. A launch over a
           // foreign-armed flag lifts it below once its repairs succeed (a server start never reaches here with that flag: the D13 skip
@@ -331,7 +331,13 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
             : !agentlensDisabled(ctx.dataDir) ? "; no kill-switch is armed"
             : trigger === "launch" && killSwitchArmedForForeign(ctx.dataDir) ? "; the switch armed for the foreign setup is lifted once this launch's repairs succeed"
             : "; the kill-switch stays armed (collection stays off)"
-          say(`agentlenspro: put back ${back.length} parked skill(s) into ${ctx.skillsDir}${switchClause}`)
+          // A file or a dangling/non-directory symlink at a live skill path is a LASTING state (the skill stays parked on every launch), so it is announced, never
+          // skipped silently. With nothing restored
+          // the line must not claim "put back 0", and the switch clause (which describes what happens after a restore) is dropped.
+          const skippedClause = skipped.length > 0 ? formatSkippedSurfaces(skipped) : ""
+          say(back.length > 0
+            ? `agentlenspro: put back ${back.length} parked skill(s) into ${ctx.skillsDir}${switchClause}${skippedClause ? `; ${skippedClause}` : ""}`
+            : `agentlenspro: ${skippedClause}`)
         }
       }
       // Re-detect under the lock: the previous holder may have just fixed everything.

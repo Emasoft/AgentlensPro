@@ -24,7 +24,10 @@ import { armKillSwitch, disarmKillSwitch, killSwitchPath } from "./killSwitch"
 
 /** File/dir names under ~/.claude/rules that this package installs. EMPTY today (package.json `files`
  *  ships no rule and no code writes into ~/.claude/rules) — a future shipped rule goes HERE and is then
- *  disabled/enabled with the skills automatically. */
+ *  disabled/enabled with the skills automatically.
+ *  BEFORE any rule name ships: restoreParkedSurfaces (via `occupant`) assumes the SKILL shape, where a live DIRECTORY is a live skill and only a file or a
+ *  non-directory symlink blocks. A live RULE is a FILE, so applied to rules as written every reinstalled rule would be reported as occupied on every
+ *  launch. The occupant rule must become per-kind (see KINDS) first. */
 export const RULE_NAMES: readonly string[] = []
 
 export interface SurfaceDirs { dataDir: string; skillsDir: string; rulesDir: string }
@@ -92,27 +95,57 @@ function sourceGone(p: string): boolean {
   try { fs.lstatSync(p); return false } catch (e) { return (e as NodeJS.ErrnoException).code === "ENOENT" }
 }
 
-/** Does anything stand at `p` right now, a dangling symlink included? lstat succeeds; any lstat error is "not occupied", so the caller rethrows the rename error. */
-function occupied(p: string): boolean {
-  try { fs.lstatSync(p); return true } catch { return false }
+/** What stands at `p` right now? lstat decides the kind (it does not follow links); a symlink is then followed with stat. Returns:
+ *  "file" / "symlink": something that BLOCKS installSkill (a plain file, or a symlink that is dangling or does not resolve to a directory: installSkill mkdirs
+ *  under the name and throws EEXIST), so the operator must clear it; "live": a directory, or a symlink resolving to one, which is a live skill ("already live
+ *  again"); null: nothing there, or any lstat error, so the caller rethrows the rename error. */
+function occupant(p: string): SkippedSurface["what"] | "live" | null {
+  try {
+    const st = fs.lstatSync(p)
+    if (st.isSymbolicLink()) {
+      try { return fs.statSync(p).isDirectory() ? "live" : "symlink" } catch { return "symlink" }
+    }
+    return st.isDirectory() ? "live" : "file"
+  } catch { return null }
 }
 
-/** Put the parked skills/rules back WITHOUT touching the kill-switch. Returns what came back. A name already live again
- *  (reinstalled meanwhile) is left alone and its parked copy stays; a timestamp-suffixed parked copy is never restored.
+/** The operator-facing clause for parked skills left parked because a file or a non-directory symlink blocks their live path: names each path, what stands there,
+ *  and the way out. Used by ensureInstalled (P1) only: the setup verb needs no clause, because the same blocker makes installSkill throw EEXIST there, and
+ *  that failure is its loud report. */
+export function formatSkippedSurfaces(skipped: readonly SkippedSurface[]): string {
+  return `${skipped.length} parked skill(s) left parked: ` + skipped.map(s => `${s.to} is occupied (a ${s.what} stands there, left untouched — move it away, then run agentlenspro setup)`).join("; ")
+}
+
+/** A parked surface that restoreParkedSurfaces left parked because something BLOCKING stands at its live destination `to`: `what` is the kind (a plain file, or a
+ *  symlink that is dangling or does not resolve to a directory). A directory is never listed: it is a live skill, not a blocker. */
+export interface SkippedSurface { to: string; what: "file" | "symlink" }
+
+/** Put the parked skills/rules back WITHOUT touching the kill-switch. Returns what came back (`restored`) and what stayed parked
+ *  because a BLOCKER stands at its live destination (`skipped`). A name already live again (reinstalled meanwhile, or put live by a concurrent
+ *  restore: a directory, or a symlink resolving to one) is left alone SILENTLY and its parked copy stays; a timestamp-suffixed parked copy is never restored.
+ *  WHY `skipped` is returned (TRDD-RBBEX59R d2 leftover): a plain file, or a symlink that is dangling or does not resolve to a directory, at
+ *  ~/.claude/skills/<name> is a LASTING state - installSkill mkdirs under that name and throws EEXIST - so that skill stays parked on every
+ *  launch and only the user can clear it; a silent skip left nobody told. The launch (ensureInstalled P1) prints it; the setup verb fails loudly on the same
+ *  blocker (installSkill throws EEXIST). A live DIRECTORY is not reported: it is a live
+ *  skill (the repair loop replaces a stale one by content), and telling the user to move away the real skill on every launch would be false.
+ *  The other skip (ENOENT with the source gone) is not lasting - the repair loop reinstalls a missing live skill - so it is not reported either.
  *  WHY a separate primitive (TRDD-RBBEX59R D7, D11): after d2 the operator switch parks nothing, so skills parked by a
  *  pre-d2 `disable` must come back at the next launch while the switch stays armed; restoring and lifting are two decisions
  *  (only enableAgentlensSurfaces does both). It is a MOVE, never a repair: a repair would install a second copy beside the parked one.
  *  WHY ENOENT skips the name: two launches (or a launch and `setup`) can restore at once and the loser finds the source
  *  already moved; that is success, not an error. Any other failure still throws, and ENOENT with the source still present
- *  is a different fault, so it throws too. The mirror case is EEXIST/ENOTEMPTY/ENOTDIR with the destination occupied now (lstat; a file or a dangling symlink there): a concurrent
- *  run put a copy live after the check, which is the "already live again" rule applied late, so the name is skipped, not thrown. */
-export function restoreParkedSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()): string[] {
+ *  is a different fault, so it throws too. The mirror case is EEXIST/ENOTEMPTY/ENOTDIR with the destination occupied now (lstat): a concurrent run put
+ *  a copy live after the check (a directory: "already live again" applied late, silent), or a file / dangling symlink stands there (reported); either way the name is skipped, not thrown. */
+export function restoreParkedSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()): { restored: string[]; skipped: SkippedSurface[] } {
   const restored: string[] = []
+  const skipped: SkippedSurface[] = []
   for (const { names, live, parked } of KINDS(dirs)) {
     for (const name of names) {
       const from = path.join(parked, name)
       const to = path.join(live, name)
-      if (!fs.existsSync(from) || fs.existsSync(to)) continue
+      if (!fs.existsSync(from)) continue
+      const standing = fs.existsSync(to) ? occupant(to) : null
+      if (standing) { if (standing !== "live") skipped.push({ to, what: standing }); continue }
       try {
         move(from, to)
       } catch (e) {
@@ -120,17 +153,18 @@ export function restoreParkedSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()):
         // rename with the source still present is a different fault that must still throw.
         const code = (e as NodeJS.ErrnoException).code
         if (code === "ENOENT" && sourceGone(from)) continue
-        // EEXIST/ENOTEMPTY/ENOTDIR with `to` present now: a concurrent launch or `setup` put a copy live between the check above and the rename.
-        // That is the same case as "a name already live again" (skipped by the check above): leave the live copy and the parked one alone.
+        // EEXIST/ENOTEMPTY/ENOTDIR with `to` occupied now: a concurrent launch or `setup` put a copy live between the check above and the rename
+        // (a directory: silent, as above), or a dangling symlink / file stands there (reported).
         // lstat, not existsSync: a dangling symlink at `to` is not "absent" (existsSync follows it and says so) and renaming a directory over
         // it fails ENOTDIR, as it does over a plain file; both are an occupied name.
-        if ((code === "EEXIST" || code === "ENOTEMPTY" || code === "ENOTDIR") && occupied(to)) continue
+        const what = occupant(to)
+        if ((code === "EEXIST" || code === "ENOTEMPTY" || code === "ENOTDIR") && what) { if (what !== "live") skipped.push({ to, what }); continue }
         throw e
       }
       restored.push(to)
     }
   }
-  return restored
+  return { restored, skipped }
 }
 
 /** Disarm the kill-switch and put the parked skills/rules back — the operator's explicit lift (`agentlenspro enable`) and
@@ -140,5 +174,5 @@ export function enableAgentlensSurfaces(dirs: SurfaceDirs = defaultSurfaceDirs()
   // dirs.dataDir, not the env default (TRDD-RBBEX59R): a foreign lift for ctx must remove ctx's flag — on the default it
   // removed another dir's flag (possibly the operator's) while ctx's foreign flag stayed.
   const disarmed = disarmKillSwitch(dirs.dataDir)
-  return { disarmed, restored: restoreParkedSurfaces(dirs) }
+  return { disarmed, restored: restoreParkedSurfaces(dirs).restored }
 }

@@ -1082,7 +1082,7 @@ const stepSkill: StepDef = {
     // P2 (TRDD-RBBEX59R D7, D14): put back the skills a pre-d2 `disable` parked BEFORE judging drift, or this step would install a second copy
     // beside the parked one. The `setup` verb and --force-install-telemetry reach the skill step without the in-lock restore of
     // ensureInstalled (P1). It is never reached with a foreign setup present: runSetup is fail-fast, so a refused otel-env stops the later steps.
-    const putBack = ctx.dryRun ? [] : restoreParkedSurfaces({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') })
+    const putBack = ctx.dryRun ? [] : restoreParkedSurfaces({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).restored
     // The restore moves files and the setup verb has no other line for it, so it goes into the step's detail (ensureInstalled announces its own P1 on stderr).
     const putBackNote = putBack.length > 0 ? `; ${putBack.length} parked skill(s) put back` : ''
     // EVERY shipped skill, not just the first: a second skill that was shipped in the tarball but
