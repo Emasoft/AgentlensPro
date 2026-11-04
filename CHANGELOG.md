@@ -34,9 +34,16 @@ All notable changes to AgentlensPro are documented here.
   whole file into context, and write with `fastedit` rather than `Edit`/`Write`/`sed -i`/a heredoc —
   `fastedit` validates every write and keeps a backup, and `fastedit diff <file>` then confirms that
   exactly the intended change landed. `micro-worker` gets the same `tldr body` reading recipe while
-  keeping its no-CLAUDE.md footprint (measured 2026-09-24: first request 61,119 -> 11,167
-  tokens).
-- **The shipped workers move to Haiku 5.5, preload the code-tool skills, and start in `auto` permission mode.** `lean-worker` (was `sonnet[1m]`/`medium`, now `haiku[1m]`/`high`), `micro-worker` (was `sonnet[1m]`, now `haiku[1m]`, effort unchanged) and `agentlens-tldr-worker` (was `sonnet[1m]`/`low`, now `haiku[1m]`/`medium`) leave Sonnet. Every shipped worker sets `permissionMode: auto`. `cheap-worker`, `fast-worker`, `lean-worker` and `micro-worker` preload the `tldr-code`, `fastedit`, `jgrep`, `quicksilver` and `graphify` skills, which AgentlensPro does not ship. `micro-worker` gains `Grep`, and `agentlens-tldr-worker` gains `Write`. `micro-worker` keeps `omitClaudeMd: true`.
+  keeping its no-CLAUDE.md footprint (measured 2026-09-24, before the workers preloaded skills: first
+  request 61,119 -> 11,167 tokens).
+- **The shipped workers move to Haiku 5.5, preload the code-tool skills, and set
+  `permissionMode: auto`.** `lean-worker` (was `sonnet[1m]`/`medium`, now `haiku[1m]`/`high`),
+  `micro-worker` (was `sonnet[1m]`, now `haiku[1m]`, effort unchanged) and `agentlens-tldr-worker`
+  (was `sonnet[1m]`/`low`, now `haiku[1m]`/`medium`) leave Sonnet. Every shipped worker sets
+  `permissionMode: auto`. `cheap-worker`, `fast-worker`, `lean-worker` and `micro-worker` preload
+  the `tldr-code`, `fastedit`, `jgrep`, `quicksilver` and `graphify` skills, which AgentlensPro
+  does not ship. `micro-worker` gains `Grep`, and `agentlens-tldr-worker` gains `Write`.
+  `micro-worker` keeps `omitClaudeMd: true`.
 - **A test pins the shipped-agent set.** Every file in `agents/` must be listed in `AGENT_NAMES` (so it
   actually installs), its frontmatter `name:` must match its filename, and its body must not name a
   sibling worker (a body that tells the model to dispatch a different worker is the defect this
