@@ -47,6 +47,7 @@ All notable changes to AgentlensPro are documented here.
   Basis: the Claude Code docs say a `skills:` preload injects the full skill content at spawn, and the
   five `SKILL.md` files measured 2026-11-04 total 126,557 bytes (a documentation-sourced byte count, not
   a measured per-spawn token count). `agentlens-tldr-worker`'s `tldr definition` example is corrected to `--symbol`/`--file` (the positional form exits 2).
+- **`sonnet-worker` and `smart-worker` now ship and install with agentlenspro.** `sonnet-worker` is `sonnet[1m]` at `high` effort (judgement tasks), `smart-worker` is `opus[1m]` at `medium`; both take the same `Bash, Read, Write, Edit, Grep` surface with `permissionMode: auto`. Neither preloads skills: each carries the same inline `## Tools` section as the other four workers, byte-identical (the shipped-agent test now checks all six).
 - **A test pins the shipped-agent set.** Every file in `agents/` must be listed in `AGENT_NAMES` (so it
   actually installs), its frontmatter `name:` must match its filename, and its body must not name a
   sibling worker (a body that tells the model to dispatch a different worker is the defect this

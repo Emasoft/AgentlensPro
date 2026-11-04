@@ -87,7 +87,7 @@ suite('shipped skill payloads install whole, agents ride along', () => {
     }
   })
 
-  test("every shipped agent is listed, named after its file, has no sibling name in its body, preloads no skills, and the four workers share one Tools section", () => {
+  test("every shipped agent is listed, named after its file, has no sibling name in its body, preloads no skills, and the six workers share one Tools section", () => {
     const agentsDir = path.join(repoRoot, "agents")
     const agentFiles = fs.readdirSync(agentsDir).filter(file => file.endsWith(".md"))
 
@@ -132,8 +132,8 @@ suite('shipped skill payloads install whole, agents ride along', () => {
       }
     }
 
-    // WHY compared byte-for-byte: the four workers carry the same inline command reference in place of
-    // a skills: preload, so a copy edited in one file only would silently drift from the other three.
+    // WHY compared byte-for-byte: the six workers carry the same inline command reference in place of
+    // a skills: preload, so a copy edited in one file only would silently drift from the other five.
     // The section runs from its heading to the next `## ` heading, the first `<example>` line, or EOF.
     const TOOLS_HEADING = "## Tools — the commands you use (no skill is preloaded)"
     const toolsSection = (worker: string): string => {
@@ -145,7 +145,7 @@ suite('shipped skill payloads install whole, agents ride along', () => {
       return lines.slice(start, end).join("\n").trimEnd()
     }
     const reference = toolsSection("cheap-worker")
-    for (const worker of ["fast-worker", "lean-worker", "micro-worker"]) {
+    for (const worker of ["fast-worker", "lean-worker", "micro-worker", "sonnet-worker", "smart-worker"]) {
       assert.strictEqual(toolsSection(worker), reference, worker + " Tools section differs from cheap-worker")
     }
   })

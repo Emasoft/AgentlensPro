@@ -825,6 +825,8 @@ export const AGENT_NAMES: readonly string[] = [
   'micro-worker',
   'cheap-worker',
   'fast-worker',
+  'sonnet-worker',
+  'smart-worker',
 ]
 
 /** (Re)install the shipped agent definitions at user scope, same discipline as the skills:
