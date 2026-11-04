@@ -508,27 +508,14 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
 
         assert.deepStrictEqual(errors, [], `zero console errors expected during the cache-guard round-trip:\n${errors.join('\n')}`)
       } finally {
-        // A failed assertion must not leave the server switches off for later tests (shared
-        // server across the suite). Restore through the UI only if the server still reports a
-        // non-default value; page.close() runs regardless.
+        // Restore by a direct POST, never through the UI: the UI path is what this test exercises,
+        // so a UI restore fails exactly when the test did, and a throw here would replace the
+        // test's own assertion error. Log the restore failure and let the original error surface.
         try {
-          const now = await hookConfig()
-          if (!now.gateEnabled || !now.cacheGuardEnabled) {
-            for (const [label, key, on] of [['Burn gate', 'gateEnabled', now.gateEnabled], ['Image cache-guard', 'cacheGuardEnabled', now.cacheGuardEnabled]] as const) {
-              if (on) continue
-              await page.evaluate((l: string) => {
-                const strong = Array.from(document.querySelectorAll('strong')).find((s) => (s.textContent ?? '').trim() === l)
-                const input = strong?.parentElement?.parentElement?.querySelector('label.toggle-switch input[type="checkbox"]') as HTMLInputElement | null
-                if (!input) throw new Error(`cannot restore ${l}: toggle not found`)
-                input.click()
-              }, label)
-              const deadline = Date.now() + 10_000
-              while (!(await hookConfig())[key]) {
-                if (Date.now() > deadline) throw new Error(`cannot restore ${label}: server never reported ${key}=true`)
-                await sleep(200)
-              }
-            }
-          }
+          const r = await httpReq(uiPort, 'POST', '/api/hook-config', { gateEnabled: true, cacheGuardEnabled: true })
+          if (r.status !== 200) console.error(`cache-guard test restore: POST /api/hook-config returned ${r.status}: ${r.text}`)
+        } catch (e) {
+          console.error(`cache-guard test restore failed: ${String(e)}`)
         } finally {
           await page.close()
         }
