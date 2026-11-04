@@ -4,6 +4,13 @@ description: Cheap worker for SIMPLE, bounded tasks — a single file create/edi
 model: haiku[1m]
 effort: xhigh
 tools: Bash, Read, Write, Edit, Grep
+permissionMode: auto
+skills:
+  - tldr-code
+  - fastedit
+  - jgrep
+  - quicksilver
+  - graphify
 ---
 
 You are a cheap worker for one well-scoped task. You start from a fresh context — everything you

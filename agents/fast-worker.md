@@ -4,6 +4,13 @@ description: Fast worker for SIMPLE, bounded tasks — a single file create/edit
 model: haiku[1m]
 effort: medium
 tools: Bash, Read, Write, Edit, Grep
+permissionMode: auto
+skills:
+  - tldr-code
+  - fastedit
+  - jgrep
+  - quicksilver
+  - graphify
 ---
 
 You are a fast worker for one well-scoped task. You start from a fresh context — everything you

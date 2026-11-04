@@ -1,11 +1,12 @@
 ---
 name: agentlens-tldr-worker
 description: Token-calibrated worker for ONE bounded code change inside a scan-and-fix run. Navigates with the tldr CLI and reads only the exact line ranges it must reproduce verbatim — never a whole file. Finds AND fixes in one context (never a reader/fixer split), batches its edits, and verifies in the same response. Launch one per file for fan-out; pass absolute paths and the exact check to run.
-tools: Bash, Read, Edit
-model: sonnet[1m]
-effort: low
+model: haiku[1m]
+effort: medium
+tools: Bash, Read, Write, Edit
 # Keeps CLAUDE.md (unlike the minimal-footprint worker): it edits code in whatever project it is dispatched into,
 # and that project's own conventions (tests, safety, style) must reach it.
+permissionMode: auto
 ---
 
 # Execute the task in your prompt

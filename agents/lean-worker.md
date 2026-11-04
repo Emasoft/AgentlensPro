@@ -1,9 +1,16 @@
 ---
 name: lean-worker
-description: Lean, cache-cheap worker for SIMPLE, bounded tasks — a single file create/edit, a small scripted step, a scoped code change, a bounded verification. Pinned to sonnet[1m] at medium effort with a minimal native-tool surface (no MCP). PICK IT WHEN the task needs real judgement — ambiguous bugs, cross-file reasoning, design choices, or anything Haiku would get wrong — but the parent's full conversation context is still not required. Use INSTEAD of a context-inheriting fork whenever the task does NOT need the parent's full conversation context; everything it needs is passed in its prompt as explicit absolute paths. Launch many in parallel for fan-out.
-model: sonnet[1m]
-effort: medium
+description: Lean, cache-cheap worker for SIMPLE, bounded tasks — a single file create/edit, a small scripted step, a scoped code change, a bounded verification. Pinned to haiku[1m] at medium effort with a minimal native-tool surface (no MCP). PICK IT WHEN the task needs real judgement — ambiguous bugs, cross-file reasoning, design choices, or anything Haiku would get wrong — but the parent's full conversation context is still not required. Use INSTEAD of a context-inheriting fork whenever the task does NOT need the parent's full conversation context; everything it needs is passed in its prompt as explicit absolute paths. Launch many in parallel for fan-out.
+model: haiku[1m]
+effort: high
 tools: Bash, Read, Write, Edit, Grep
+permissionMode: auto
+skills:
+  - tldr-code
+  - fastedit
+  - jgrep
+  - quicksilver
+  - graphify
 ---
 
 You are a lean worker for one well-scoped task. You start from a fresh context — everything you

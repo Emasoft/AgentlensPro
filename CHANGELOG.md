@@ -24,9 +24,9 @@ All notable changes to AgentlensPro are documented here.
   same `Bash, Read, Write, Edit, Grep` surface, and their bodies teach the four binding CLIs — a worker
   reads with `tldr`, locates with `jgrep`, triages with `qs.mjs` when quicksilver is installed, writes
   with `fastedit`, and reports (then falls back to the built-in tools) when a CLI is missing.
-  Nothing is preloaded: the skills are not shipped, so the recipes live in the bodies. Pick
+  The skills are not shipped, so the recipes also live in the bodies. Pick
   `cheap-worker` when the prompt already carries every fact the task needs; pick `lean-worker`
-  (Sonnet 5.5) when the task needs real judgement; pick
+  (Haiku 5.5 at `high`) when the task needs real judgement; pick
   `fast-worker` when the task is mechanical and latency matters more than the last bit of depth. Both
   install into `~/.claude/agents/` alongside the existing three.
 - **The shipped worker bodies now teach the four binding CLIs.** `lean-worker`, `cheap-worker` and
@@ -34,8 +34,9 @@ All notable changes to AgentlensPro are documented here.
   whole file into context, and write with `fastedit` rather than `Edit`/`Write`/`sed -i`/a heredoc —
   `fastedit` validates every write and keeps a backup, and `fastedit diff <file>` then confirms that
   exactly the intended change landed. `micro-worker` gets the same `tldr body` reading recipe while
-  keeping its zero-skill, no-CLAUDE.md footprint (measured 2026-09-24: first request 61,119 -> 11,167
+  keeping its no-CLAUDE.md footprint (measured 2026-09-24: first request 61,119 -> 11,167
   tokens).
+- **The shipped workers move to Haiku 5.5, preload the code-tool skills, and start in `auto` permission mode.** `lean-worker` (was `sonnet[1m]`/`medium`, now `haiku[1m]`/`high`), `micro-worker` (was `sonnet[1m]`, now `haiku[1m]`, effort unchanged) and `agentlens-tldr-worker` (was `sonnet[1m]`/`low`, now `haiku[1m]`/`medium`) leave Sonnet. Every shipped worker sets `permissionMode: auto`. `cheap-worker`, `fast-worker`, `lean-worker` and `micro-worker` preload the `tldr-code`, `fastedit`, `jgrep`, `quicksilver` and `graphify` skills, which AgentlensPro does not ship. `micro-worker` gains `Grep`, and `agentlens-tldr-worker` gains `Write`. `micro-worker` keeps `omitClaudeMd: true`.
 - **A test pins the shipped-agent set.** Every file in `agents/` must be listed in `AGENT_NAMES` (so it
   actually installs), its frontmatter `name:` must match its filename, and its body must not name a
   sibling worker (a body that tells the model to dispatch a different worker is the defect this

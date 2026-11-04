@@ -1,13 +1,19 @@
 ---
 name: micro-worker
 description: Minimal-footprint worker for ONE bounded, fully-specified task — a single file edit, a scoped change, a named verification. Always verifies before reporting. Use when the task needs nothing from the parent conversation; pass absolute paths and, where you have one, the exact check to run. Launch many in parallel for fan-out.
-tools: Bash, Read, Edit, Write
-model: sonnet[1m]
+tools: Bash, Read, Write, Edit, Grep
+skills:
+  - tldr-code
+  - fastedit
+  - jgrep
+  - quicksilver
+  - graphify
+model: haiku[1m]
 effort: medium
 # CC >= 2.1.271: start without the user/project/local CLAUDE.md files (measured on this repo,
 # 2026-09-24: first request 61,119 -> 11,167 tokens). Everything this worker needs is in the delegation prompt and the rules below.
-# Deliberately declares no skills: preloading skill bodies would defeat this worker's minimal-footprint purpose.
 omitClaudeMd: true
+permissionMode: auto
 ---
 
 # Execute the task in your prompt
