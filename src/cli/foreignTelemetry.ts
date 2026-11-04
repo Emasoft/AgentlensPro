@@ -5,8 +5,9 @@
 // beside a company gateway: it DISABLES itself (disableForForeignTelemetry — skills parked, and the kill-switch armed
 // with FOREIGN_REASON when no switch stands; agents stay). `--force-install-telemetry` or a manual removal of the foreign
 // setup undoes it: the next launch repairs, and disarms the switch ONLY when it was armed for this reason — an
-// operator-armed `agentlenspro disable` is never touched by a launch or `setup` (D10). The one exception is `enable`: it
-// records the operator's lift as FOREIGN_REASON, so the switch lifts by itself once the foreign setup is gone.
+// operator-armed `agentlenspro disable` is never touched by a launch, `setup` or --force-install-telemetry (D10, D17). The
+// one exception is the operator's own `enable` (runEnableCli): it records the lift as FOREIGN_REASON, so the switch lifts
+// by itself once the foreign setup is gone.
 
 import * as fs from "fs"
 import { detectTelemetryConflicts } from "../telemetryConfig"
@@ -56,12 +57,16 @@ export function killSwitchArmedForForeign(dir: string = dataDir()): boolean {
 }
 
 /** The foreign-telemetry stop: parks the skills ALWAYS and arms FOREIGN_REASON when no flag stands in dirs.dataDir, or when
- *  `opts.replaceReason` is set (see parkForForeign in surfaces.ts for the WHY of both). Only `enable` passes replaceReason:
- *  it records the operator's lift as FOREIGN_REASON, so the lift waits for the foreign setup to go. `armed` is "this call
- *  wrote the flag (it was absent, or the caller asked to replace it)"; false means a switch already stood and its reason
- *  was kept, NEVER "not foreign": no caller may read it as that (both callers keep parking, keep their refusal and message). */
+ *  `opts.replaceReason` is set (see parkForForeign in surfaces.ts for the WHY of both). Only the operator's `enable`
+ *  (runEnableCli) sets replaceReason: it records the operator's lift as FOREIGN_REASON, so the lift waits for the foreign
+ *  setup to go. `armed` is "this call wrote the flag (it was absent, or the caller asked to replace it)"; false means a
+ *  switch already stood and its reason was kept, NEVER "not foreign": no caller may read it as that (both callers keep
+ *  parking, keep their refusal and message).
+ *  WHY replaceReason is dropped when the flag already carries FOREIGN_REASON (TRDD-RBBEX59R d2): rewriting it records nothing
+ *  new and bumps the flag's mtime, which step (e) reads as "armed at"; a refused `enable` repeated against the same foreign
+ *  setup must leave the original arming time alone. */
 export function disableForForeignTelemetry(dirs: SurfaceDirs = defaultSurfaceDirs(), opts: { replaceReason?: boolean } = {}): { moved: string[]; armed: boolean } {
-  return parkForForeign(FOREIGN_REASON, dirs, opts)
+  return parkForForeign(FOREIGN_REASON, dirs, { replaceReason: opts.replaceReason === true && !killSwitchArmedForForeign(dirs.dataDir) })
 }
 
 /** Re-enable ONLY a switch this module armed — the one in dirs.dataDir (TRDD-RBBEX59R R1). Returns whether anything

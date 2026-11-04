@@ -9,8 +9,8 @@
 import * as path from 'path'
 import * as fs from 'fs'
 import { execFileSync } from 'child_process'
-import { killSwitchPath, agentlensDisabled, armKeepStatusline, keepStatuslinePath, killSwitchHalf, noRevivePath, reviveBraked } from './killSwitch'
-import { disableAgentlensSurfaces, enableAgentlensSurfaces, type SurfaceDirs } from './surfaces'
+import { killSwitchPath, agentlensDisabled, armKeepStatusline, armKillSwitch, keepStatuslinePath, killSwitchHalf, noRevivePath, reviveBraked } from './killSwitch'
+import { enableAgentlensSurfaces, type SurfaceDirs } from './surfaces'
 import { AutoSetupDeps, ensureInstalled } from './autoSetup'
 import { ensureServer, findServerPid, statsOwnership, stopServer, SUPERVISE_MAX_BACKOFF_DEFAULT_MS } from './serverControl'
 import { apiRequest, dataDir, PROBE_TIMEOUT_MS, sleep } from './cliCore'
@@ -21,9 +21,11 @@ import { removeRawBodiesKey } from '../telemetryConfig'
 
 export async function runDisableCli(args: string[]): Promise<number> {
   const reason = args.filter(a => !a.startsWith('-')).join(' ') || undefined
-  // Kill-switch AND the skills/rules move together (owner order 2026-10-02): one function, so the two
-  // can never disagree. The agents stay installed — they do not depend on the CLI.
-  const { flag: p, moved } = disableAgentlensSurfaces(reason)
+  // The switch stops ONLY collection (owner rule 2026-11-03, TRDD-RBBEX59R d2): `disable` arms the flag and moves nothing. Before d2
+  // the kill-switch AND the skills/rules moved together (owner order 2026-10-02), so `disable` suppressed more than collection. Skills an
+  // older `disable` parked come back at the next launch (restoreParkedSurfaces, autoSetup.ts) while the switch stays armed. The flag goes
+  // in the env-default data dir, where the hooks look for it (killSwitch.ts).
+  const p = armKillSwitch(reason)
   // `--keep-statusline`: owner request 2026-10-27, verbatim: "stop everything except the statusline data
   // collection, so the agentlenspro cli can still answer the basic questions about the session". The marker
   // only lets statuslineCapture.ts keep appending to disk; nothing else changes: the server still runs in no-collection
@@ -71,7 +73,7 @@ export async function runDisableCli(args: string[]): Promise<number> {
   if (keepStatusline) console.log(`  keep:    ${keepStatuslinePath()} (status-line capture stays ON, written straight to disk)`)
   console.log(`  server:  ${stopped}`)
   console.log(`  capture: ${capture}`)
-  console.log(`  skills:  ${moved.length ? `${moved.length} moved to ${path.join(dataDir(), 'disabled-surfaces')} (agents stay installed)` : 'none were installed'}`)
+  console.log('  skills:  not touched (agents stay installed); skills parked by a `disable` run before this version reappear at the next launch while the switch stays armed.')
   console.log('')
   // TRDD-RBBEX59R c2: the switch now means "store nothing", not "run nothing" — the text says so.
   console.log('  Off: storing telemetry, raw API bodies and hook events (the next server runs in no-collection mode),')
@@ -99,7 +101,9 @@ export async function runEnableCli(forceInstall = false, deps: AutoSetupDeps = {
   const dir = ctx.dataDir
   const envDir = dataDir()
   const dirs: SurfaceDirs = { dataDir: dir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }
-  const withCtx: AutoSetupDeps = { ...deps, ctx, forceInstall }
+  // operatorEnable: THIS is the operator's own `enable` (autoSetup.ts AutoSetupDeps), the only caller whose refused lift is recorded
+  // as FOREIGN_REASON (D10); forceInstallTelemetry reaches ensureInstalled with the same trigger and must not.
+  const withCtx: AutoSetupDeps = { ...deps, ctx, forceInstall, operatorEnable: true }
   // Steps 1-2 of the shared order (autoSetup.ts ensureInstalled): the telemetry verdict FIRST — a company
   // setup still in place re-disables agentlenspro and refuses; only an absent/ours verdict goes on to
   // restore anything. Only then is the switch lifted below.
@@ -112,7 +116,7 @@ export async function runEnableCli(forceInstall = false, deps: AutoSetupDeps = {
   const armed = agentlensDisabled(dir)
   let restored: string[] = []
   if (armed) {
-    // Disarm AND put the parked skills back — the mirror of disableAgentlensSurfaces.
+    // Disarm AND put the parked skills back (enableAgentlensSurfaces): the operator's explicit lift. Since d2 a plain `disable` parks nothing, so this restores only what a foreign setup or a pre-d2 `disable` parked.
     restored = enableAgentlensSurfaces(dirs).restored
     // WHY (TRDD-RBBEX59R): the converge above ran while the switch stood, so it held the raw-body key ABSENT
     // (rawBodiesHeldAbsent); every lift is followed by ONE telemetry converge, which writes the key back once no switch

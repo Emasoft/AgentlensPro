@@ -34,6 +34,7 @@ import {
   formatTelemetryVerdict, ownedTelemetryKeys, rawBodiesHeldAbsent, sameTelemetryValue, shown as shownValue, telemetryVerdict, verdictConflicts as detectConflictsFromRows,
 } from '../telemetryConfig'
 import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
+import { restoreParkedSurfaces } from './surfaces'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
 import { alstoreBin as resolveAlstoreBin, rustIngestPass, type RustPassResult } from '../rustStorePass'
 import { safeConfigEdit, type SafeEditOp } from '../safeConfigEdit'
@@ -1078,6 +1079,10 @@ const stepHooks: StepDef = {
 const stepSkill: StepDef = {
   name: 'skill',
   async run(ctx) {
+    // P2 (TRDD-RBBEX59R D7, D14): put back the skills a pre-d2 `disable` parked BEFORE judging drift, or this step would install a second copy
+    // beside the parked one. The `setup` verb and --force-install-telemetry reach the skill step without the in-lock restore of
+    // ensureInstalled (P1). It is never reached with a foreign setup present: runSetup is fail-fast, so a refused otel-env stops the later steps.
+    if (!ctx.dryRun) restoreParkedSurfaces({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') })
     // EVERY shipped skill, not just the first: a second skill that was shipped in the tarball but
     // never checked here would be installed once and then never repaired or refreshed, and setup's
     // whole contract is "detect → converge → verify" for the things it owns.
@@ -1219,9 +1224,10 @@ const stepOtel: StepDef = {
     // A foreign pipeline (owner order 2026-10-02): refuse and write NOTHING unless --force-install-telemetry
     // was given. A conflicting SHELL export can never be fixed by a settings edit, so it refuses even then.
     if (conflicts.length > 0 && (!ctx.forceInstall || conflicts.some(c => c.scope === 'shell'))) {
-      // Disable again, like the launch path (kill-switch re-armed, skills parked) — but never in a dry run.
-      // .moved.length (TRDD-RBBEX59R D10). No replaceReason: a `setup` run is not an operator's `enable`, so the switch keeps the reason of an operator `disable` that already stands; the skills are parked either way.
-      const note = ctx.dryRun ? '' : `\nagentlenspro has disabled itself: ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).moved.length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}, hooks are no-ops`
+      // Park the skills like the launch path (TRDD-RBBEX59R D10, D16) — never in a dry run. The kill-switch is armed only when none stands: it
+      // keeps the reason of an operator `disable` that already stands. No replaceReason: only the operator's `enable` replaces a reason, and a
+      // `setup` run is not that. The skills are parked either way. The message says what is true: collection is off, nothing else is.
+      const note = ctx.dryRun ? '' : `\nagentlenspro has parked its skills while this foreign setup stands: collection is off, ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).moved.length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}`
       return { result: { step: this.name, found, action: ctx.dryRun ? 'would: refuse, disable agentlenspro, exit non-zero (dry-run: nothing done)' : 'refused', verify: ctx.dryRun ? 'SKIP' : 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
     }
 

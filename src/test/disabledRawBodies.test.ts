@@ -324,13 +324,23 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
     assert.deepStrictEqual(marker().keys[RAW_BODIES_KEY], { hadKey: false, priorValue: null })
   })
 
-  test('--force-install-telemetry under AGENTLENS_DISABLED=1 and an armed flag writes the key (R4)', async () => {
-    arm()
-    process.env.AGENTLENS_DISABLED = '1'
+  // R4, as changed by TRDD-RBBEX59R d2 (D17, B13). The force install lifts ONLY a switch armed for the foreign setup it overwrites, and
+  // the key is written by the converge that follows that lift. An operator switch is not undone by it, and the env half keeps the key
+  // absent even though the override ignores it for everything else.
+  test('--force-install-telemetry over a FOREIGN-armed flag lifts it and writes the key (R4)', async () => {
+    arm(FOREIGN_REASON)
     assert.strictEqual(await forceInstallTelemetry('budget', deps()), null)
     assert.ok(!fs.existsSync(flag()), 'flag lifted')
-    assert.strictEqual(agentlensDisabled(ctx.dataDir), false, 'the env half is overridden for this process')
     assert.strictEqual(envOf()[RAW_BODIES_KEY], ours())
+  })
+
+  test('--force-install-telemetry under AGENTLENS_DISABLED=1 and an armed OPERATOR flag: the flag stays and the key stays absent (D17, B13)', async () => {
+    arm() // reason "operator test"
+    process.env.AGENTLENS_DISABLED = '1'
+    assert.strictEqual(await forceInstallTelemetry('budget', deps()), null)
+    assert.ok(fs.existsSync(flag()), 'an operator disable is not undone by a force install')
+    assert.strictEqual(agentlensDisabled(ctx.dataDir), true, 'the file half still stands')
+    assert.ok(!(RAW_BODIES_KEY in envOf()), 'the key is collection: absent while either half stands')
   })
 
   test('spool migration ACT 3 removes a spool-pointing raw-body key under the switch, re-points it without', async () => {

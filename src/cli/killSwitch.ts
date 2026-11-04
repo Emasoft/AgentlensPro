@@ -127,8 +127,15 @@ export function reviveBraked(dir: string = dataDir()): boolean {
 let envHalfOverridden = false
 export function overrideKillSwitchEnv(on = true): void { envHalfOverridden = on }
 
+/** Is AGENTLENS_DISABLED=1 set in this process's environment, whether or not `--force-install-telemetry` overrode it for the
+ *  rest of the run? ONLY rawBodiesHeldAbsent reads this (telemetryConfig.ts).
+ *  WHY it ignores the override (TRDD-RBBEX59R B13, d2): the override lets a force install repair, restore and lift around the env
+ *  half, but the switch stops COLLECTION (owner rule 2026-11-03) and OTEL_LOG_RAW_API_BODIES makes Claude Code dump every API body
+ *  to disk. With the override honoured, a force install under AGENTLENS_DISABLED=1 and no flag file WROTE that key. */
+export function envHalfSet(): boolean { return process.env.AGENTLENS_DISABLED === '1' }
+
 export function killSwitchHalf(dir: string = dataDir()): 'env' | 'file' | null {
-  if (process.env.AGENTLENS_DISABLED === '1' && !envHalfOverridden) return 'env'
+  if (envHalfSet() && !envHalfOverridden) return 'env'
   try { return fs.existsSync(killSwitchPath(dir)) ? 'file' : null } catch { return null }
 }
 

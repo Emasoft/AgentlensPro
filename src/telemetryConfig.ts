@@ -26,7 +26,7 @@ import * as fsSync from 'fs'
 import { safeConfigEdit, SafeEditOp } from './safeConfigEdit'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from './captureConfig'
 import { envPort } from './cli/cliCore'
-import { agentlensDisabled } from './cli/killSwitch'
+import { agentlensDisabled, envHalfSet } from './cli/killSwitch'
 
 export interface TelemetryConfigOptions {
   /** settings.json to manage. Default: ~/.claude/settings.json */
@@ -133,12 +133,15 @@ function resolveOptions(options: TelemetryConfigOptions): {
  * bodies" — so no writer (setup, auto-repair, --install-otel, the spool migration, the forced install) may write the
  * key while any switch half stands, a foreign-armed flag included. Every lift (enable, both foreign lifts, the forced
  * install) is followed by one telemetry converge in the same run, which writes it back. `--force-install-telemetry`
- * overrides the env half for its own process (overrideKillSwitchEnv), so it reads as not disabled there.
+ * overrides the env half for its own process (overrideKillSwitchEnv) for everything EXCEPT this decision: the env half counts here
+ * whatever the override says (envHalfSet, B13), so a force install under AGENTLENS_DISABLED=1 never writes the key.
  * Fail direction: agentlensDisabled's (a flag that cannot be stat'ed reads as not armed — killSwitch.ts header).
  * setup (otelDrift, the spool migration) calls this with ctx.dataDir, the dir being converged, never the env default.
  */
 export function rawBodiesHeldAbsent(dataDir?: string): boolean {
-  return agentlensDisabled(dataDir)
+  // envHalfSet, not just agentlensDisabled: the in-process --force-install-telemetry override makes agentlensDisabled ignore the env half
+  // (B13), and a force install under AGENTLENS_DISABLED=1 with no flag file then wrote the raw-body key — a collection write under the switch.
+  return envHalfSet() || agentlensDisabled(dataDir)
 }
 
 /**
