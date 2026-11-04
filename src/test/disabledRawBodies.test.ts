@@ -11,7 +11,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { Ctx, REPAIR_STEPS, SpoolMigrationDeps, otelDrift, runSpoolMigration } from '../cli/setup'
 import { AutoSetupDeps, ensureInstalled, forceInstallTelemetry } from '../cli/autoSetup'
-import { runEnableCli } from '../cli/disableCli'
+import { runEnableCli, type EnableRestartDeps } from '../cli/disableCli'
 import { FOREIGN_REASON } from '../cli/foreignTelemetry'
 import { agentlensDisabled, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { EXIT } from '../cli/cliErrors'
@@ -164,6 +164,88 @@ suite('raw-body key under the off switch (TRDD-RBBEX59R)', () => {
     assert.strictEqual(await quietly(() => runEnableCli(false, deps())), EXIT.UNKNOWN)
     assert.ok(!fs.existsSync(flag()), 'flag file removed')
     assert.ok(!(RAW_BODIES_KEY in envOf()), 'raw-body key stays absent while AGENTLENS_DISABLED=1')
+  })
+
+  test('the enable verb under the env half says it cannot lift it, and does not restart a no-collection server (TRDD-RBBEX59R c2)', async () => {
+    arm()
+    process.env.AGENTLENS_DISABLED = '1'
+    const out: string[] = []
+    const log = console.log
+    console.log = (...a: unknown[]): void => { out.push(a.join(' ')) }
+    const never = async (): Promise<void> => { throw new Error('must not restart under the env half') }
+    let code: number
+    try {
+      code = await runEnableCli(false, deps(), {
+        fetchStats: async () => ({ pid: 4242, dataDir: ctx.dataDir, collection: 'off', startedBy: 'server start' }),
+        stopServer: never, ensureServer: never,
+      })
+    } finally { console.log = log }
+    assert.strictEqual(code, EXIT.UNKNOWN)
+    const text = out.join('\n')
+    assert.match(text, /AGENTLENS_DISABLED=1 is set/)
+    assert.match(text, /pid 4242 stays in no-collection mode — not restarted, since the enable verb cannot lift the env half/)
+  })
+
+  // Round 2, A: no early return on "already enabled" — a re-run still reads the server and restarts an "off" one, which
+  // is what makes every "re-run `agentlenspro enable`" remedy true. The rig answers "off" for this dir on every read.
+  const restartRig = (stopFails: () => boolean): { ran: string[]; out: string[]; deps: EnableRestartDeps } => {
+    const ran: string[] = []
+    const out: string[] = []
+    return {
+      ran, out,
+      deps: {
+        fetchStats: async () => ({ pid: 4242, dataDir: ctx.dataDir, collection: 'off', startedBy: 'server start' }),
+        stopServer: async () => { ran.push('stop'); if (stopFails()) throw new Error('server (pid 4242) is still running 15s after SIGTERM') },
+        ensureServer: async () => { ran.push('ensure') },
+        say: (l: string) => { out.push(l) },
+      },
+    }
+  }
+  const captured = async (fn: () => Promise<number>): Promise<{ code: number; text: string }> => {
+    const out: string[] = []
+    const log = console.log
+    console.log = (...a: unknown[]): void => { out.push(a.join(' ')) }
+    try { const code = await fn(); return { code, text: out.join('\n') } } finally { console.log = log }
+  }
+
+  test('enable twice: a failed stop leaves the server off; the second run (no flag left) restarts it (TRDD-RBBEX59R c2 round 2)', async () => {
+    arm()
+    let fail = true
+    const r = restartRig(() => fail)
+    const first = await captured(() => runEnableCli(false, deps(), r.deps))
+    assert.strictEqual(first.code, EXIT.ABORT)
+    assert.ok(!fs.existsSync(flag()), 'the first run lifted the flag')
+    assert.match(r.out.join('\n'), /re-run|server restart/)
+    assert.deepStrictEqual(r.ran, ['stop'], 'nothing started after the failed stop')
+    fail = false
+    r.ran.length = 0
+    const second = await captured(() => runEnableCli(false, deps(), r.deps))
+    assert.strictEqual(second.code, EXIT.OK, r.out.join('\n'))
+    assert.match(second.text, /already enabled/)
+    assert.deepStrictEqual(r.ran, ['stop', 'ensure'], 'the re-run restarts the server that still reports "off"')
+  })
+
+  test('a re-run after the env half is unset restarts the no-collection server (TRDD-RBBEX59R c2 round 2)', async () => {
+    arm()
+    process.env.AGENTLENS_DISABLED = '1'
+    const r = restartRig(() => false)
+    assert.strictEqual((await captured(() => runEnableCli(false, deps(), r.deps))).code, EXIT.UNKNOWN)
+    assert.deepStrictEqual(r.ran, [], 'not restarted under the env half')
+    delete process.env.AGENTLENS_DISABLED
+    const again = await captured(() => runEnableCli(false, deps(), r.deps))
+    assert.strictEqual(again.code, EXIT.OK, r.out.join('\n'))
+    assert.deepStrictEqual(r.ran, ['stop', 'ensure'])
+  })
+
+  test('under the --force-install-telemetry override the env half does not count: enable restarts the server (TRDD-RBBEX59R c2 round 2, D)', async () => {
+    arm()
+    process.env.AGENTLENS_DISABLED = '1'
+    overrideKillSwitchEnv(true) // what forceInstallTelemetry sets for its own invocation; teardown resets it
+    const r = restartRig(() => false)
+    const run = await captured(() => runEnableCli(false, deps(), r.deps))
+    assert.strictEqual(run.code, EXIT.OK, run.text + r.out.join('\n'))
+    assert.doesNotMatch(run.text, /AGENTLENS_DISABLED=1 is set/)
+    assert.deepStrictEqual(r.ran, ['stop', 'ensure'])
   })
 
   test('a FOREIGN-armed switch holds the key absent too; the setup step lifts it and converges once more', async () => {

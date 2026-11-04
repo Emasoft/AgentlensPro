@@ -99,13 +99,15 @@ usage:
                                               writes are coalesced (--flush-ms, default 1s) to
                                               spare the SSD; run "agentlenspro watch" with no args
                                               for the metric list
-  agentlenspro disable [reason]               GLOBAL BRAKE — turn every AgentlensPro side-effect OFF
-                                              (hooks, burn-gate, auto-revive, background ingestion) in
-                                              EVERY running Claude session, on its next hook fire. Stops
-                                              the server too. Works WITHOUT restarting any session — a
-                                              settings edit does not, because a running agent loaded its
-                                              config at launch.
-  agentlenspro enable                         undo disable — hooks resume on their next fire
+  agentlenspro disable [reason]               GLOBAL SWITCH — store NOTHING (telemetry, raw API bodies,
+                                              hook events) in EVERY running Claude session, from its next
+                                              hook fire; the server runs in no-collection mode, so the
+                                              burn-gate and the image cache-guard keep working. Works
+                                              WITHOUT restarting any session. To keep the server down too:
+                                              agentlenspro server stop --stay-down
+  agentlenspro enable                         undo disable — hooks resume on their next fire; also
+                                              restarts a server for this data dir that still reports
+                                              no-collection mode (re-run it to retry that restart)
   agentlenspro config [list]                  show data-retention knobs: effective value + source
   agentlenspro config get <key>               one retention knob's effective value + where it came from
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json

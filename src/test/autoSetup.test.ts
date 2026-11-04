@@ -4,7 +4,6 @@
 // touched). Only the REPAIR RUNNER is injected where a test needs to count or order invocations — it never
 // replaces the detection under test.
 import * as assert from 'assert'
-import * as cp from 'child_process'
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -20,6 +19,7 @@ import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '.
 import { DISPATCHED_VERBS, HOT_PATH_BUDGET_MS, cliMain } from '../cli/main'
 import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
 import { freePort } from './helpers/freePort'
+import { makeFakeAlcore, spawnCliModule, stopChild, waitFor } from './helpers/fakeAlcore'
 import { startMcpStub } from './helpers/mcpStub'
 import { RULE_NAMES, disableAgentlensSurfaces, enableAgentlensSurfaces } from '../cli/surfaces'
 import { TelemetryVerdictRow, ensureTelemetryConfig, telemetryVerdict } from '../telemetryConfig'
@@ -939,18 +939,41 @@ suite('setup --dry-run and per-launch opt-out never mutate anything', () => {
   })
 })
 
-suite('server verbs under DISABLED hit serverControl\'s own terminal handling, not the dispatcher 69', () => {
+suite('server verbs under DISABLED pass the dispatcher and START, in no-collection mode (TRDD-RBBEX59R c2)', () => {
   fixtureSuite(false)
 
-  test('server/daemon pass the dispatcher notice; `server start` and `server start --supervise` refuse before spawning anything', async () => {
+  test('server/daemon pass the dispatcher notice; `server start` and both `--supervise` forms spawn with --no-collection', async function () {
+    // They used to refuse before spawning anything. Under the switch the server now runs storing nothing, so the
+    // guards answer. A fake alcore records each argv and exits at once.
+    this.timeout(40_000)
     armKillSwitch('x')
+    const data = process.env.AGENTLENS_DATA_DIR!
     for (const argv of [['server', 'start'], ['server', 'start', '--supervise'], ['daemon', 'start', '--supervise']]) {
       assert.strictEqual(disabledNotice(argv), null, argv.join(' '))
-      const savedNo = process.env.AGENTLENS_NO_AUTOSETUP
-      process.env.AGENTLENS_NO_AUTOSETUP = '1'
+    }
+    const fake = makeFakeAlcore(path.join(data, 'fake'))
+    const flagged = (): boolean => fake.calls().some(c => c.includes('--no-collection') && c[c.indexOf('--data-dir') + 1] === data)
+    // `server start` runs in-process through the dispatcher: it reaches the spawn and fails only because the fake exits.
+    const saved = { alcore: process.env.AGENTLENS_ALCORE, noAuto: process.env.AGENTLENS_NO_AUTOSETUP }
+    process.env.AGENTLENS_ALCORE = fake.bin
+    process.env.AGENTLENS_NO_AUTOSETUP = '1'
+    try {
+      await assert.rejects(() => cliMain(['server', 'start'], async () => undefined), /exited during startup/, 'server start')
+    } finally {
+      if (saved.alcore === undefined) delete process.env.AGENTLENS_ALCORE; else process.env.AGENTLENS_ALCORE = saved.alcore
+      if (saved.noAuto === undefined) delete process.env.AGENTLENS_NO_AUTOSETUP; else process.env.AGENTLENS_NO_AUTOSETUP = saved.noAuto
+    }
+    assert.ok(flagged(), `server start: ${JSON.stringify(fake.calls())}`)
+    // The supervise forms never return (runSupervise owns the process), so each runs in a child node process.
+    for (const [fn, argv] of [['serverCommand', ['start', '--supervise']], ['daemonCommand', ['start', '--supervise']]] as const) {
+      const before = fake.calls().length
+      const env: NodeJS.ProcessEnv = { ...process.env, AGENTLENS_DATA_DIR: data, AGENTLENS_ALCORE: fake.bin, AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp' }
+      delete env.AGENTLENS_DISABLED
+      const child = spawnCliModule('serverControl.js', fn, [argv], env)
       try {
-        await assert.rejects(() => cliMain(argv, async () => undefined), /DISABLED[\s\S]*refusing to (start|supervise)/, argv.join(' '))
-      } finally { if (savedNo === undefined) delete process.env.AGENTLENS_NO_AUTOSETUP; else process.env.AGENTLENS_NO_AUTOSETUP = savedNo }
+        assert.ok(await waitFor(() => fake.calls().length > before, 15_000), `${fn} ${argv.join(' ')} must spawn`)
+        assert.ok(fake.calls().slice(before).every(c => c.includes('--no-collection')), `${fn}: ${JSON.stringify(fake.calls().slice(before))}`)
+      } finally { await stopChild(child) }
     }
   })
 })
@@ -1414,16 +1437,23 @@ suite('content-logging override warning', () => {
   })
 })
 
-suite('ensureServer under DISABLED refuses without spawning', () => {
+suite('ensureServer under DISABLED spawns once, with --no-collection (TRDD-RBBEX59R c2)', () => {
   fixtureSuite(false)
 
-  test('throws the DISABLED refusal and starts no child: no server.pid, no alcore in the process table', async () => {
+  test('spawns exactly one (fake) alcore, its argv carrying --no-collection for the isolated data dir', async () => {
+    // It used to refuse without spawning. Now the switch means "store nothing", so the server starts in
+    // no-collection mode; a fake alcore records the argv and exits, so the start fails AFTER the one spawn.
     armKillSwitch('x')
-    await assert.rejects(() => ensureServer('test'), /DISABLED[\s\S]*refusing to start the server/)
-    assert.ok(!fs.existsSync(path.join(process.env.AGENTLENS_DATA_DIR!, 'server.pid')))
-    const snap = path.join(process.env.AGENTLENS_DATA_DIR!, 'ps.txt')
-    cp.execSync(`ps -eo pid,command > ${JSON.stringify(snap)}`)
-    assert.ok(!fs.readFileSync(snap, 'utf8').split('\n').some(l => l.includes(`--data-dir ${process.env.AGENTLENS_DATA_DIR}`)), 'no server was started on the isolated data dir')
+    const fake = makeFakeAlcore(path.join(process.env.AGENTLENS_DATA_DIR!, 'fake'))
+    const saved = process.env.AGENTLENS_ALCORE
+    process.env.AGENTLENS_ALCORE = fake.bin
+    try {
+      await assert.rejects(() => ensureServer('test'), /exited during startup/)
+    } finally { if (saved === undefined) delete process.env.AGENTLENS_ALCORE; else process.env.AGENTLENS_ALCORE = saved }
+    assert.strictEqual(fake.calls().length, 1, `one spawn: ${JSON.stringify(fake.calls())}`)
+    const argv = fake.calls()[0]
+    assert.ok(argv.includes('--no-collection'), argv.join(' '))
+    assert.strictEqual(argv[argv.indexOf('--data-dir') + 1], process.env.AGENTLENS_DATA_DIR)
   })
 })
 

@@ -4,11 +4,12 @@ import { dataDir } from './cliCore'
 import { NO_REVIVE_FILE } from '../dataDir'
 
 /**
- * The GLOBAL kill-switch — one flag file that disarms AgentlensPro's side-effects inside every Claude Code
- * session on this machine. Every AgentlensPro hook is OFF except the review gate and the review supervisor,
- * which only read transcripts. Off: lifecycle capture (`agentlenspro hook`), the burn-gate and the image
- * cache-guard (`agentlenspro gate`), server auto-revive, background ingestion, and status-line capture
- * (kept only by `agentlenspro disable --keep-statusline`).
+ * The GLOBAL kill-switch — one flag file that turns AgentlensPro's COLLECTION off inside every Claude Code
+ * session on this machine (TRDD-RBBEX59R): the server runs in no-collection mode — no telemetry, no raw API
+ * bodies, no hook-event log — while `agentlenspro hook` keeps feeding its in-memory ring (never the CLI hook
+ * spool) and `agentlenspro gate` keeps running, so the burn-gate and the image cache-guard stay ON, as do the
+ * review gate and the review supervisor. Status-line capture is off unless `agentlenspro disable
+ * --keep-statusline` armed it. The process itself is kept down only by the NO_REVIVE brake (below).
  *
  * WHY A FILE, AND WHY GLOBAL (this is the lesson of the 2026-07-14 SSD incident, TRDD-K3WDPR7M):
  *
@@ -25,8 +26,10 @@ import { NO_REVIVE_FILE } from '../dataDir'
  * fire — no restart, no env, no session surgery.
  *
  * Two scopes, deliberately separate:
- *   DISABLED   — global: every side-effect off. The "stop everything, now" brake.
- *   NO_REVIVE  — narrow: only stop hooks from auto-spawning the server (keep ingestion otherwise).
+ *   DISABLED   — global: COLLECTION off. Since TRDD-RBBEX59R (c) it no longer means every side effect off: the
+ *                server still runs, in no-collection mode, and the guards keep running.
+ *   NO_REVIVE  — narrow: stop every spawn path from starting the server; the brake that keeps the process
+ *                DOWN, armed by `agentlenspro server stop --stay-down`.
  *
  * FAIL-SAFE DIRECTION: an unreadable flag file reads as NOT disabled (fail-open). A kill-switch that
  * engages on a transient stat error would silently stop a user's observability with no diagnosis.
@@ -82,11 +85,10 @@ export function noRevivePath(dir: string = dataDir()): string {
 }
 
 /** Is the narrow revive brake armed? Checks NO_REVIVE ONLY — deliberately NOT the global DISABLED
- *  switch. The two must not be equal: NO_REVIVE is a PAUSE, DISABLED is TERMINAL, and the
- *  supervisor depends on the difference (under DISABLED its spawn must PROCEED so the child
- *  refuses with EX_CONFIG 78 and the terminal-exit path ends the loop; swallowing that spawn
- *  would make a DISABLED supervisor immortal). Callers that also want to refuse under DISABLED
- *  check `agentlensDisabled()` separately, ahead of this — that ordering is what keeps the split.
+ *  switch. The two must not be equal: NO_REVIVE keeps the server process DOWN, DISABLED only turns
+ *  collection off (TRDD-RBBEX59R c2: under DISABLED every spawn PROCEEDS, in no-collection mode, so
+ *  the burn-gate and the image cache-guard stay fed). Since c2 no spawn path refuses under DISABLED, so
+ *  this is the only brake on a spawn; it is also the precondition `ts-repair` requires (storeAdmin.ts).
  *
  *  THE TWO CALLERS FAIL DIFFERENTLY ON PURPOSE, and nothing else records it: the supervisor
  *  RESCHEDULES on a set brake (a pause self-heals on the next backoff tick), while `ensureServer()`
@@ -150,12 +152,13 @@ export function armKillSwitch(reason?: string, dir: string = dataDir()): string 
   fs.writeFileSync(p, [
     `AgentlensPro is DISABLED.`,
     ``,
-    `Every AgentlensPro hook is OFF while this file exists, except the review gate and the review`,
-    `supervisor, which only read transcripts. Off: lifecycle capture (agentlenspro hook), the burn-gate`,
-    `and the image cache-guard (agentlenspro gate), server auto-revive, background ingestion, and`,
-    `status-line capture (kept only by agentlenspro disable --keep-statusline).`,
-    `It takes effect on the NEXT hook fire in EVERY running Claude session —`,
-    `no restart needed.`,
+    `While this file exists AgentlensPro stores no telemetry, no raw API bodies and no hook-event`,
+    `log: the server runs in no-collection mode. The burn-gate and the image cache-guard stay ON`,
+    `(agentlenspro hook keeps feeding them, in memory only), and so do the review gate and the`,
+    `review supervisor. Status-line capture is off unless agentlenspro disable --keep-statusline.`,
+    `To keep the server process DOWN as well:  agentlenspro server stop --stay-down`,
+    `The hooks change on their NEXT fire in EVERY running Claude session — no restart needed;`,
+    `a server that was already running enters the mode at its next restart.`,
     ``,
     `Armed: ${new Date().toISOString()}`,
     reason ? `Reason: ${reason}` : ``,

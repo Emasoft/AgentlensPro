@@ -639,7 +639,7 @@ function HooksSection() {
           </select>
         </div>
       )}
-      {toggle('captureEnabled', 'Lifecycle capture', 'store hook lifecycle events; off = accept + drop')}
+      {toggle('captureEnabled', 'Lifecycle capture', 'store hook lifecycle events; off = not stored, still counted by the guards')}
       {toggle('advisorEnabled', 'In-band advisor', 'PostToolUse advisory messages to the model')}
       {error && <div style="font-size:11px;color:var(--error);margin-top:4px">⚠ {error}</div>}
     </div>
