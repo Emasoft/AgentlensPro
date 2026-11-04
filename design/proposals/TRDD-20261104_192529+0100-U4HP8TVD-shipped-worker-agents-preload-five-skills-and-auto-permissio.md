@@ -4,7 +4,7 @@ title: Shipped worker agents preload five skills and auto permission mode for ev
 column: proposal
 status: proposed
 created: 2026-11-04T19:25:29+0100
-updated: 2026-11-04T21:24:41+0100
+updated: 2026-11-04T21:32:26+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -18,7 +18,7 @@ implementation-commits: [a2ba6005, 18e6b49b, 12ae0ed0, 74f19755, d29e0bc7]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-04
 - Increment A (ship sonnet-worker and smart-worker) is committed as 12ae0ed0, local and unpushed. Verification: the worker ran check-types, eslint --quiet, check-identities, check-dist-contents and compile-tests (exit 0); the main agent reran the unit suite (mocha merged the named files with the .mocharc spec, so the whole suite ran): 3358 passing, 13 pending, 0 failing, autoSetup and shipped-agent tests included (run at 12ae0ed0; the later folds were checked only by the worker-run shipped-agent test, 6/6). Review folds: 74f19755 (smart-worker description without the model version and with a PICK IT WHEN line; sonnet-worker opener) and d29e0bc7 (example blocks rewritten; its premise was wrong, because the Agent catalog shows only the description, so body examples never reach the caller, and its counter-examples may read to the worker as a refusal). Still open: sonnet-worker's description ships a dated local incident sentence and a machine-specific ~140k token figure (provenance unverified).
-- NEXT ACTION: the owner's answers (below); then copy both agents into ~/.claude/agents/ and cmp them (a later CLI launch would also overwrite a differing copy through autoSetup, but not while an operator-armed kill-switch stands, as on this machine when --install-skill was refused; see TRDD-JCM1GZ1S); then increment B (js-test-writer, python-test-writer).
+- NEXT ACTION: the owner's answers (below); then copy both agents into ~/.claude/agents/ and cmp them (a later CLI launch would also overwrite a differing copy through autoSetup, but not while an operator-armed kill-switch stands, as on this machine (~/.agentlens/DISABLED, armed 2026-10-27, records no Reason line, so it is not foreign-armed; read 2026-11-04); see TRDD-JCM1GZ1S); then increment B (js-test-writer, python-test-writer).
 - Waiting on the owner: confirmation to hold merge-role-worker; keep or cut sonnet-worker's incident sentence; whether to drop d29e0bc7's counter-examples and fix routing in smart-worker's description instead (drop "Launch many in parallel for fan-out", trim the task list); permissionMode auto (on all 7 shipped agents, 2 of them added by 12ae0ed0); the lean-worker questions. The installAgents overwrite risk is proposed in TRDD-JCM1GZ1S.
 - Do not push 12ae0ed0 before the owner rules on the incident sentence.
 
