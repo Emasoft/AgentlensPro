@@ -4,7 +4,7 @@ title: check-duckdb-only fails pnpm run compile on the fix-setup-agent-preflight
 column: todo
 status: tasked
 created: 2026-11-04T22:06:34+0100
-updated: 2026-11-04T22:06:34+0100
+updated: 2026-11-04T22:19:42+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -21,10 +21,10 @@ approval-datetime: 2026-11-04T22:06:34+0100
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-04
 - `pnpm run compile` fails on branch fix/setup-agent-preflight at its fifth step: `pnpm run check-duckdb-only` exits 1 with «check-duckdb-only: FAIL — on-disk data reached without DuckDB» and «scripts/check-dist-contents.js: sql.js / sql-wasm (SQLite in TS)» (measured 2026-11-04).
-- Cause: scripts/check-dist-contents.js line 50 lists 'sql.js' in the esbuild `external:` array of readAgentNames(), which bundles src/cli/hookInstall.ts in memory to read AGENT_NAMES; the line came from e9e173ad (2026-10-22, git blame and git log -S). It reads no SQLite data. The matcher that fires is scripts/check-duckdb-only.js line 31 (`\bsql\.js['"]`). e9e173ad is not on main.
+- Cause: scripts/check-dist-contents.js line 50 lists 'sql.js' in the esbuild `external:` array of readAgentNames(), which bundles src/cli/hookInstall.ts in memory to read AGENT_NAMES; the line came from e9e173ad (2026-10-22, git blame and git log -S). It reads no SQLite data. The matcher that fires is scripts/check-duckdb-only.js line 31 (`\bsql\.js['"]`). e9e173ad is not on main. At its parent e9e173ad^, check-dist-contents.js held no 'sql.js' and compile already ran check-duckdb-only; check-duckdb-only.js last changed on 2026-10-17 (728b143b) and no later commit touches it. So e9e173ad introduced the string that trips the guard; whether the guard passed at e9e173ad^ was not run.
 - Consequence: compile stops before check-pricing-export, check-identities, check-guards, check-dist-contents and esbuild. Run alone on 2026-11-04, all four checks exit 0.
-- NEXT ACTION: pick one fix. (1) Drop 'sql.js' from that externals list, if bundling src/cli/hookInstall.ts does not reach sql.js (verify by building without it). (2) Add the file to check-duckdb-only's ALLOW list. That list is budgeted, and raising the budget must be justified in the commit message (scripts/check-duckdb-only.js lines 114-126). (3) Narrow the matcher. Every option keeps the TRDD-7YPQWKPG directive. Then rerun `pnpm run compile` until it exits 0.
-- Blocks the merge of fix/setup-agent-preflight; TRDD-U4HP8TVD's commits ride on that branch.
+- NEXT ACTION: pick one fix. (1) Preferred if the build passes without it: drop 'sql.js' from that externals list (verify by building src/cli/hookInstall.ts without it that the bundle does not reach sql.js). (2) Needs the owner's approval, because it loosens a guard that enforces the USER imperative TRDD-7YPQWKPG: add the file to check-duckdb-only's ALLOW list, which is budgeted, and raising the budget must be justified in the commit message (scripts/check-duckdb-only.js lines 114-126). (3) Same approval needed: narrow the matcher. Then rerun `pnpm run compile` until it exits 0.
+- Treated as a merge blocker for fix/setup-agent-preflight, because the branch cannot pass `pnpm run compile` (CI and branch protection not checked); TRDD-U4HP8TVD's commits ride on that branch.
 
 ## Approval log
 
