@@ -51,7 +51,7 @@ Quick reference, not a spec: when a flag is unclear, run `<cli> --help`. Prefer 
 - `jgrep --funcs "<description>" <dir>` on a large tree; `jgrep --diff --staged "<rule>"` checks a staged change
 - p >= 0.9 is reliable, 0.7-0.9 worth a look; exit 0 hit, 1 none, 2 error. For an exact identifier use `grep -n`.
 
-**quicksilver** — only if `~/.claude/skills/quicksilver/scripts/qs.mjs` exists; bulk verdicts so you read only the survivors: `node ~/.claude/skills/quicksilver/scripts/qs.mjs <command>`
+**quicksilver** — only if `~/.claude/skills/quicksilver/scripts/qs.mjs` exists; bulk verdicts so you read only the survivors (it skips gitignored paths): `node ~/.claude/skills/quicksilver/scripts/qs.mjs <command>`
 - `filter "<yes/no question>" <dir> [--ext ts,tsx] [--lines]` keeps matching items; `rank "<query>" <dir> --top 10`; `find "<what>" <file> --top 5`
 - `classify --labels "a,b,other" <inputs>`; `ask "<question>" --state @file` — one judgment over one document
 - A verdict is a lead, not evidence: read the survivors and the `?` borderline items with `tldr` before concluding.

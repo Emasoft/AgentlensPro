@@ -36,7 +36,7 @@ All notable changes to AgentlensPro are documented here.
   exactly the intended change landed. `micro-worker` gets the same `tldr body` reading recipe while
   keeping its no-CLAUDE.md footprint (measured 2026-09-24, before the workers preloaded skills: first
   request 61,119 -> 11,167 tokens).
-- **The shipped workers move to Haiku 5.5 and set `permissionMode: auto`.** `lean-worker`
+- **The shipped workers move to Haiku 5.5, set `permissionMode: auto`, and carry their tool commands inline instead of preloading skills.** `lean-worker`
   (was `sonnet[1m]`/`medium`, now `haiku[1m]`/`high`), `micro-worker` (was `sonnet[1m]`, now
   `haiku[1m]`, effort unchanged) and `agentlens-tldr-worker` (was `sonnet[1m]`/`low`, now
   `haiku[1m]`/`medium`) leave Sonnet. Every shipped worker sets `permissionMode: auto`.
@@ -46,7 +46,7 @@ All notable changes to AgentlensPro are documented here.
   commands inline, as `agentlens-tldr-worker` already does. AgentlensPro does not ship those CLIs.
   Basis: the Claude Code docs say a `skills:` preload injects the full skill content at spawn, and the
   five `SKILL.md` files measured 2026-11-04 total 126,557 bytes (a documentation-sourced byte count, not
-  a measured per-spawn token count).
+  a measured per-spawn token count). `agentlens-tldr-worker`'s `tldr definition` example is corrected to `--symbol`/`--file` (the positional form exits 2).
 - **A test pins the shipped-agent set.** Every file in `agents/` must be listed in `AGENT_NAMES` (so it
   actually installs), its frontmatter `name:` must match its filename, and its body must not name a
   sibling worker (a body that tells the model to dispatch a different worker is the defect this

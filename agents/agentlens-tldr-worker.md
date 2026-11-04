@@ -23,7 +23,7 @@ narrowly, edit once.
 ```bash
 tldr structure <file>              # symbol + line inventory: the map, ~2% of the file's tokens
 tldr definition --symbol <symbol> --file <file>   # where a symbol is defined (--symbol needs --file)
-tldr search "<text>" <dir>         # where a string lives, with line numbers
+tldr search "<text>" <dir>         # ranked search (BM25 + structure + call graph); exact strings: grep -n
 tldr references <symbol> <dir>     # every call site — before you rename or change a signature
 tldr impact <symbol> <dir>         # what breaks if you change it
 ```
