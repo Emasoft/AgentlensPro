@@ -323,9 +323,21 @@ export const PKG_WRITE_VERBS = ['add', 'remove', 'uninstall', 'rm', 'un', 'link'
 const GIT_WRITE = new Set(GIT_WRITE_SUBCOMMANDS)
 const GH_MUTATING = new Set(GH_MUTATING_VERBS)
 const PKG_WRITE = new Set(PKG_WRITE_VERBS)
-// Attached spellings count too: `--method=DELETE`, `-XPOST` and `--field=k=v` are what pflag
-// accepts, and an exact-word match released every one of them as a read.
-const GH_API_WRITE = /^(?:-X|-f|-F)|^--(?:method|field|raw-field|input)(?:=|$)/
+// gh api classifies on the METHOD, not on the flags: `-X GET` / `--method=GET` is a READ, while
+// `-f`/`-F`/`--field` alone are query params for a default GET (also a read) — gh#23 released a
+// mutating `-X DELETE` when the old regex keyed on the mere presence of `-X` or a field flag.
+function ghApiIsMutating(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    let method: string | undefined
+    if (a === "-X" || a === "--method") method = args[i + 1]
+    else if (a.startsWith("-X")) method = a.slice(2)
+    else if (a.startsWith("--method=")) method = a.slice("--method=".length)
+    if (method === undefined) continue
+    return !/^get$/i.test(method)
+  }
+  return false
+}
 // Prefix words that are not the command: wrappers, and the shell keywords that head a compound
 // body or condition (`for …; do git commit; done` put `do` in command position and released the
 // commit; `if git commit; then` and `while ! git push` did the same one review later).
@@ -389,7 +401,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
     return `git ${sub}`
   }
   if (base === 'gh') {
-    if (args[0] === 'api') return args.some((a) => GH_API_WRITE.test(a)) ? 'gh api (mutating)' : null
+    if (args[0] === 'api') return ghApiIsMutating(args) ? 'gh api (mutating)' : null
     return GH_MUTATING.has(args[1] ?? '') ? `gh ${args[0]} ${args[1]}` : null
   }
   // A shell given a command STRING runs it; classify the string, not the shell. Quoting hid

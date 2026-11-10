@@ -117,7 +117,9 @@ suite('review-gate triggers: write-shaped commands', () => {
     ['uv add y', 'uv add'],
     ['gh issue create -t x', 'gh issue create'],
     ['gh pr comment 1 -b y', 'gh pr comment'],
-    ['gh api repos/a/b/issues -f title=x', 'gh api (mutating)'],
+    ['gh api -X POST repos/a/b/issues -f title=x', 'gh api (mutating)'],  // method drives the verdict, not the flags
+    ['gh api --method DELETE repos/a/b/git/refs/heads/x', 'gh api (mutating)'],  // spaced pflag spelling
+    ['gh api -X DELETE repos/a/b/git/refs/heads/x', 'gh api (mutating)'],
     ['gh workflow run publish.yml', 'gh workflow run'],
     ['agentlenspro --install-hooks', 'agentlenspro config write'],
     ['agentlenspro setup', 'agentlenspro config write'],
@@ -146,6 +148,9 @@ suite('review-gate triggers: write-shaped commands', () => {
     'cmd | tee /tmp/x', 'cmd | tee reports/x/y.md', 'rm -f /tmp/x', 'mv x reports_dev/x',
     'pnpm run lint', 'pnpm install', 'uv run --script --quiet "/x/compose.py" --project-root "/y"', 'cargo build',
     'gh issue view 1', 'gh api repos/a/b', 'gh run view 1', 'agentlenspro setup --dry-run',
+    'gh api -X GET repos/a/b', 'gh api -X get repos/a/b', 'gh api -XGET repos/a/b',   // explicit GET is a READ
+    'gh api --method GET repos/a/b', 'gh api --method=GET repos/a/b',                 // spaced + attached spellings
+    'gh api repos/a/b/issues -f title=x',                                             // -f alone = query params for a default GET
     'agentlenspro statusline-history project 2>&1 | distill "A -> B"', 'memgrep recall "x" dir',
     'sed -n \'1,45p\' f', 'perl -ne \'print\' f', 'node -e \'console.log(1)\'', 'python3 -c "print(1)"',
     'perl -Mstrict -e \'print 1\'',                                  // a leading long-option flag must not be misread as `-i`

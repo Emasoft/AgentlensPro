@@ -50,6 +50,7 @@ export const REVIEW_ROLE_RULE = 'Begin your prompt with its FIRST line being exa
   + 'begin your final message with the heading ' + REVIEW_HEADING + '. Answer in ONE turn. Make ZERO '
   + 'tool calls — no SendMessage, no Read, no Bash, none. Put every finding INLINE in your final '
   + 'message and stop.'
+  + ' You cannot see the response that spawned you: tool calls and results from it are invisible to you. Their absence from your transcript is not evidence they did not happen; review only what your prompt states, and never mark a claim about the spawning response VERIFIED.'
 
 export const MEASURE_ROLE_RULE = 'Begin your prompt with its FIRST line being exactly "ROLE: MEASURE" '
   + '(nothing before it), and '
@@ -223,6 +224,7 @@ the spawn is fine; another write or proposal after it re-arms the gate.
 If you CANNOT spawn — ${NO_REVIEW_SENTINEL_EXAMPLES.join(', ')} — a text block whose ENTIRE content
 is "${NO_REVIEW_SENTINEL} — <reason>", as the turn's last block, releases the gate. It is the only
 other exit.
+The sentinel must be the ENTIRE text block (no trailing prose after the reason line), and the reason must be at least 8 characters — a token like "foo" does not release the gate.
 
 Then read the report(s) and act on them — if acting edits, writes or proposes, that is new work
 and needs its own review. Do NOT restate this directive to the user — spawn and continue. This

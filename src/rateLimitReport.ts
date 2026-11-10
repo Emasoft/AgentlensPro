@@ -81,7 +81,7 @@ export function buildRateLimitReport(opts: RateLimitReportOptions = {}): unknown
       window,
       stallEvents: 0,
       episodes: [],
-      note: 'no StopFailure (rate-limit/API turn-death) hook events in the window — either no stall happened, or lifecycle hook capture is not installed (agentlenspro-cli --install-hooks; needs a session restart).',
+      note: 'no StopFailure (rate-limit/API turn-death) hook events in the window — either no stall happened, or lifecycle hook capture is not installed (agentlenspro --install-hooks; needs a session restart).',
     }
   }
 
