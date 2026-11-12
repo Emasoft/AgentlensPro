@@ -10,7 +10,7 @@ import {
   REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, declaredRole, declaredRoleOwnTranscript,
   runMainGate, runReviewGate, agentCannotSpawn, declaredToolsHaveAgent,
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, workerReturnId, workerWriteDetail, workerDeclaredRole,
-  isTurnStart, readCurrentTurn, isCreditedFork,
+  isTurnStart, readCurrentTurn, isCreditedFork, computeVerdict,
 } from '../cli/reviewGate'
 import { PROPOSAL_MARKER, commandWriteReasons } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
@@ -1773,4 +1773,78 @@ suite('reviewGate — scanTranscriptLines: a delegate-gate-denied edit does not 
 
   })
 
+})
+
+// ── `--json-verdict`: the read-only verdict a mod calls (TRDD-KZCSO0R2 Phase 0) ───────────────────
+suite('reviewGate — --json-verdict: the read-only verdict mode', () => {
+  const turnStart = JSON.stringify({
+    type: 'user', isSidechain: false, message: { role: 'user', content: 'make the change' },
+    turnOrigin: 'human', turnPosition: { promptIndex: 1, turnIndex: 1 }, userType: 'external',
+  })
+  type Verdict = { demands: boolean; reasons: string[]; scan: { kind: string; lines: number } }
+  // Runs runReviewGate with the payload on a replaced stdin, capturing stdout and restoring both.
+  const run = async (argv: string[], lines: string[]): Promise<{ code: number; stdout: string }> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-verdict-'))
+    const transcript = path.join(dir, 'transcript.jsonl')
+    fs.writeFileSync(transcript, [turnStart, ...lines].join('\n') + '\n')
+    const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin')
+    const realStdout = process.stdout.write
+    const stdout: string[] = []
+    try {
+      const payload = JSON.stringify({ hook_event_name: 'Stop', transcript_path: transcript, cwd: CWD })
+      Object.defineProperty(process, 'stdin', { configurable: true, value: Readable.from([Buffer.from(payload)]) })
+      process.stdout.write = ((chunk: unknown): boolean => { stdout.push(String(chunk)); return true }) as typeof process.stdout.write
+      const code = await runReviewGate(argv)
+      return { code, stdout: stdout.join('') }
+    } finally {
+      process.stdout.write = realStdout
+      if (realStdin !== undefined) Object.defineProperty(process, 'stdin', realStdin)
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const firstJson = (stdout: string): string => {
+    const line = stdout.split('\n').find((l) => l.startsWith('{'))
+    assert.ok(line !== undefined, `no JSON on stdout: ${JSON.stringify(stdout)}`)
+    return line
+  }
+
+  test('an armed turn yields demands=true with a non-empty reason and NO hook block JSON', async () => {
+    const r = await run(['--json-verdict'], [assistantLine([editBlock])])
+    assert.strictEqual(r.code, 0, 'read-only: always exits 0, even when it demands a review')
+    const v = JSON.parse(firstJson(r.stdout)) as Verdict
+    assert.strictEqual(v.demands, true)
+    assert.ok(v.reasons.length > 0 && v.reasons[0].includes('edited a file'), v.reasons.join(' '))
+    assert.strictEqual(v.scan.kind, 'main')
+    assert.ok(!r.stdout.includes('"decision":"block"'), 'the verdict mode must never emit the Stop-hook block shape')
+  })
+
+  test('a clean turn yields demands=false with no reasons', async () => {
+    const r = await run(['--json-verdict'], [assistantLine([{ type: 'text', text: 'nothing to do' }])])
+    assert.strictEqual(r.code, 0)
+    const v = JSON.parse(firstJson(r.stdout)) as Verdict
+    assert.strictEqual(v.demands, false)
+    assert.deepStrictEqual(v.reasons, [])
+  })
+
+  test('no flag: the hook-mode block is unchanged (decision block, suppressOutput, reason)', async () => {
+    const r = await run([], [assistantLine([editBlock])])
+    const parsed = JSON.parse(firstJson(r.stdout)) as { decision: string; suppressOutput: boolean; reason: string }
+    assert.strictEqual(parsed.decision, 'block')
+    assert.strictEqual(parsed.suppressOutput, true)
+    assert.ok(parsed.reason.includes('edited a file'))
+    assert.ok(!('demands' in parsed), 'hook mode must not print the verdict shape')
+  })
+
+  test('computeVerdict directly: an unreviewed edit demands, a credited fork releases', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-verdict-'))
+    try {
+      const t = path.join(dir, 't.jsonl')
+      fs.writeFileSync(t, [assistantLine([editBlock])].join('\n') + '\n')
+      assert.strictEqual(computeVerdict({ transcript_path: t, cwd: CWD }).demands, true)
+      fs.writeFileSync(t, [assistantLine([editBlock]), assistantLine([agentBlock('fork', 'ROLE: REVIEW\nattack it')])].join('\n') + '\n')
+      assert.strictEqual(computeVerdict({ transcript_path: t, cwd: CWD }).demands, false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

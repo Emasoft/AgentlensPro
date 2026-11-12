@@ -1065,6 +1065,59 @@ export async function runSubagentGate(input: ReviewGateInput): Promise<string | 
   return (await subagentBlock(input)) ?? reviewDisplay(input)
 }
 
+// ── `--json-verdict`: the SAME scan, as machine-readable data for a mod (TRDD-KZCSO0R2 Phase 0) ───
+// A mod (hooks module) runs `agentlenspro review-gate --json-verdict` to ask the gate's own question —
+// "does this turn demand an adversarial review?" — and get data back instead of the hook-shaped block
+// JSON. It reuses readCurrentTurn -> scanTranscriptLines -> decideGate, so the criteria live in ONE place
+// and cannot drift from the hook behavior (the check-no-mirrors rule). Read-only: it never writes and, at
+// the call site, never blocks. It does NOT apply the gates' agent-capability check — the verdict is the
+// scanner's decision (the same reason strings the gates would block on); the caller decides what to do.
+
+export interface GateVerdict {
+  /** True when the scan demands a review/measure fork for this payload's turn. */
+  demands: boolean
+  /** The block reason string(s) the gate would emit — the SAME text mainBlockReason/subagentBlockReason
+   *  produce — so a caller can show or log exactly what the hook would have said. Empty when demands=false. */
+  reasons: string[]
+  /** A short summary of what was scanned. */
+  scan: { transcript: string | null; kind: 'main' | 'subagent'; lines: number }
+}
+
+/** The verdict the Stop/SubagentStop gate would reach for this payload's turn, as data. Read-only. A
+ *  missing/unreadable transcript is "no demand", the same fail-open allow the gates take. */
+export function computeVerdict(input: ReviewGateInput): GateVerdict {
+  const evt = input?.hook_event_name ?? input?.hookEventName
+  const subagent = evt === 'SubagentStop'
+  const kind: GateVerdict['scan']['kind'] = subagent ? 'subagent' : 'main'
+  const transcript = subagent ? input?.agent_transcript_path : input?.transcript_path
+  if (typeof transcript !== 'string' || !fs.existsSync(transcript)) {
+    return { demands: false, reasons: [], scan: { transcript: null, kind, lines: 0 } }
+  }
+  // The subagent gate honours the harness loop-breaker and the exemption list BEFORE scanning; mirror that
+  // so a subagent the hook would release never reads as a demand here.
+  const agentType = String(input?.agent_type ?? '')
+  if (subagent && (input?.stop_hook_active === true || subagentExempt(agentType, null))) {
+    return { demands: false, reasons: [], scan: { transcript, kind, lines: 0 } }
+  }
+  const lines = subagent ? readCurrentTurn(transcript) : readCurrentTurn(transcript, { warnNoTurnStart: true })
+  if (lines === null) return { demands: false, reasons: [], scan: { transcript, kind, lines: 0 } }
+  const ownAgentId = subagent && typeof input?.agent_id === 'string' ? input.agent_id : undefined
+  const scan = subagent
+    ? scanTranscriptLines(lines, hookCwd(input), ownAgentId)
+    : scanTranscriptLines(lines, hookCwd(input), undefined, (id) => workerWriteDetail(transcript, id, hookCwd(input)))
+  if (subagent && subagentExempt(agentType, scan.ownRole)) {
+    return { demands: false, reasons: [], scan: { transcript, kind, lines: lines.length } }
+  }
+  const demand = decideGate(scan)
+  if (demand === null || scan.work === null) {
+    return { demands: false, reasons: [], scan: { transcript, kind, lines: lines.length } }
+  }
+  const reason = subagent
+    ? subagentBlockReason(scan.work.cause, scan.work.detail, demand)
+    : mainBlockReason(scan.work.cause, scan.work.detail, demand)
+  return { demands: true, reasons: [reason], scan: { transcript, kind, lines: lines.length } }
+}
+
 /** Longest `systemMessage` the review display emits. WHY a cap: a review is long, and the terminal is not
  *  a file viewer; the full text stays one `Read` away at the transcript path. */
 const REVIEW_DISPLAY_MAX_CHARS = 9500
@@ -1091,15 +1144,20 @@ function reviewDisplay(input: ReviewGateInput): string | null {
 
 // ── Process entry for `agentlenspro review-gate` ─────────────────────────────────────────────────
 
-/** `agentlenspro review-gate [--directive]`. Always resolves 0 — a Stop/SubagentStop hook that
+/** `agentlenspro review-gate [--directive] [--json-verdict]`. Always resolves 0 — a Stop/SubagentStop hook that
  *  can throw or hang can wedge the session, which is worse than a missed review. Dispatches on
  *  `hook_event_name`: `SubagentStop` -> the subagent gate, `Stop` (or an absent field) -> the main
- *  gate. Any other event is a silent allow. */
+ *  gate. Any other event is a silent allow. `--json-verdict` (TRDD-KZCSO0R2 Phase 0) runs the SAME
+ *  readCurrentTurn -> scan -> decide pipeline but prints the verdict as ONE JSON object and ALWAYS
+ *  exits 0 (read-only: never blocks, unlike hook mode). */
 export async function runReviewGate(argv: string[]): Promise<number> {
   if (argv[0] === '--directive') {
     process.stdout.write(REVIEW_GATE_DIRECTIVE)
     return 0
   }
+  // --json-verdict: the read-only mode a mod calls. It shares the hook-mode parse path below (same
+  // payload, same kill-switch stance), and only the OUTPUT differs — a data object instead of a block.
+  const jsonVerdict = argv.includes('--json-verdict')
   // NO KILL-SWITCH CHECK HERE, on purpose. The global switch (the DISABLED flag file, or AGENTLENS_DISABLED=1)
   // exists to stop side-effects: disk writes and server revive. This gate has none: it reads the transcript
   // and prints a block to stdout. While the switch silenced it, every stop was allowed UNREVIEWED and no
@@ -1119,7 +1177,18 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   }
   let input: ReviewGateInput
   try { input = JSON.parse(payload.toString('utf8')) as ReviewGateInput } catch {
+    if (jsonVerdict) {
+      process.stdout.write(JSON.stringify({ demands: false, reasons: [], scan: { transcript: null, kind: 'main', lines: 0 } }) + '\n')
+      process.stderr.write('[review-gate] allowing UNREVIEWED: the hook payload is not valid JSON\n')
+      return 0
+    }
     process.stderr.write('[review-gate] allowing UNREVIEWED: the hook payload is not valid JSON\n')
+    return 0
+  }
+  if (jsonVerdict) {
+    // ALWAYS exit 0: read-only, it never blocks. The verdict is the scanner's own decision; a bad
+    // payload yields demands:false.
+    process.stdout.write(JSON.stringify(computeVerdict(input)) + '\n')
     return 0
   }
   const evt = input?.hook_event_name ?? input?.hookEventName
