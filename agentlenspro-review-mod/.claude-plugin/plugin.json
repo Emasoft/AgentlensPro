@@ -1,0 +1,6 @@
+{
+  "name": "agentlenspro-review-mod",
+  "version": "0.1.0",
+  "description": "Second net for the review gate: catches turns the Stop hook never sees (user interrupt, hook failure) and restarts the review demand via a pending-demand store and prompt.submit retry",
+  "types": "./types/index.d.ts"
+}
