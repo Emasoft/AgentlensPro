@@ -1,10 +1,10 @@
 ---
 trdd-id: KZCSO0R2
 title: Convert review-gate enforcement to mods so an interrupt can never skip the adversarial review
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-11T16:24:22+0100
-updated: 2026-11-11T16:24:22+0100
+updated: 2026-11-11T18:37:38+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -22,3 +22,4 @@ approval-datetime: 2026-11-11T16:24:22+0100
 ## Approval log
 
 - 2026-11-11T16:24:22+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-11T18:37:38+0100 — column → todo by user. design complete (reports_dev/mods-review-gate/20261111_design.md); starting Phase 0 --json-verdict flag
