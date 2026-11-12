@@ -1155,9 +1155,25 @@ export async function runReviewGate(argv: string[]): Promise<number> {
     process.stdout.write(REVIEW_GATE_DIRECTIVE)
     return 0
   }
-  // --json-verdict: the read-only mode a mod calls. It shares the hook-mode parse path below (same
-  // payload, same kill-switch stance), and only the OUTPUT differs — a data object instead of a block.
   const jsonVerdict = argv.includes('--json-verdict')
+  // --transcript <path> (with --json-verdict): build the ReviewGateInput from argv instead of reading
+  // stdin. The mod (agentlenspro-review-mod/hooks/register.js) calls via $.process.run, which provides
+  // NO stdin — so the stdin path would fail to parse and return demands:false, making the mod a runtime
+  // no-op (F1). Accepts --transcript <path>, --turn-id <id> (accepted but not used by computeVerdict),
+  // and --event Stop|SubagentStop (default Stop). The stdin path is kept for hook-mode and for
+  // --json-verdict without --transcript (back-compat). The computeVerdict call is unchanged.
+  const transcriptIdx = argv.indexOf('--transcript')
+  const argvTranscript = transcriptIdx !== -1 && transcriptIdx + 1 < argv.length ? argv[transcriptIdx + 1] : undefined
+  if (jsonVerdict && typeof argvTranscript === 'string' && argvTranscript !== '') {
+    const eventIdx = argv.indexOf('--event')
+    const evt = eventIdx !== -1 && eventIdx + 1 < argv.length ? argv[eventIdx + 1] : 'Stop'
+    const subagent = evt === 'SubagentStop'
+    const input: ReviewGateInput = subagent
+      ? { hook_event_name: 'SubagentStop', agent_transcript_path: argvTranscript, cwd: process.cwd() }
+      : { hook_event_name: 'Stop', transcript_path: argvTranscript, cwd: process.cwd() }
+    process.stdout.write(JSON.stringify(computeVerdict(input)) + '\n')
+    return 0
+  }
   // NO KILL-SWITCH CHECK HERE, on purpose. The global switch (the DISABLED flag file, or AGENTLENS_DISABLED=1)
   // exists to stop side-effects: disk writes and server revive. This gate has none: it reads the transcript
   // and prints a block to stdout. While the switch silenced it, every stop was allowed UNREVIEWED and no
