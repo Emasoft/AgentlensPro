@@ -776,10 +776,11 @@ export function userPromptText(content: unknown): string {
  *  silently defeat the floor the day a harness change pairs interrupt text with a tool_result — the
  *  exact "interrupted during a tool call" Esc this floor is meant to catch. So this scans the
  *  blocks directly instead of going through `userPromptText`. */
-export function isFloorPrompt(content: unknown): boolean {
+export function isFloorPrompt(content: unknown, ignoreInterrupt = false): boolean {
   const isFloorText = (t: string) => {
     const s = t.replace(/^\s+/, '')
-    return s.startsWith(HEARTBEAT_PREFIX) || s.startsWith(INTERRUPT_PREFIX)
+    // ignoreInterrupt (the review mod's opt-in): an interrupted turn still owes its review, so only a heartbeat is a floor.
+    return s.startsWith(HEARTBEAT_PREFIX) || (!ignoreInterrupt && s.startsWith(INTERRUPT_PREFIX))
   }
   if (typeof content === 'string') return isFloorText(content)
   if (!Array.isArray(content)) return false
@@ -807,7 +808,7 @@ export interface GateScan {
  *  turn's start, so a review or record write from an earlier turn cannot release this turn's work. WHAT
  *  counts as work is decided in the triggers module; `cwd` is the hook's, for resolving relative write
  *  targets. */
-export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAgentId?: string, workerWrote?: (toolUseId: string) => string | null): GateScan {
+export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAgentId?: string, workerWrote?: (toolUseId: string) => string | null, ignoreInterruptFloor = false): GateScan {
   let work: GateScan['work'] = null
   let lastProposal = -1
   const roles: GateScan['roles'] = { measure: -1, review: -1 }
@@ -850,7 +851,9 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
       // The transcript's OWN spawning prompt is its FIRST non-sidechain `user` entry — read ONCE,
       // so a later human-authored `user` turn is never mistaken for it.
       if (!sawFirstUser) { sawFirstUser = true; ownRole = declaredRoleOwnTranscript(userPromptText(content)) }
-      if (isFloorPrompt(content)) { work = null; lastProposal = -1 }
+      // ignoreInterruptFloor defaults false so the Stop/SubagentStop hooks are unchanged; the mod opts in because
+      // an Esc'd turn is exactly one it must still review (the hooks never fire on an interrupt).
+      if (isFloorPrompt(content, ignoreInterruptFloor)) { work = null; lastProposal = -1 }
       continue
     }
     if (e?.type !== 'assistant' || !Array.isArray(content)) continue
@@ -1079,43 +1082,49 @@ export interface GateVerdict {
   /** The block reason string(s) the gate would emit — the SAME text mainBlockReason/subagentBlockReason
    *  produce — so a caller can show or log exactly what the hook would have said. Empty when demands=false. */
   reasons: string[]
-  /** A short summary of what was scanned. */
-  scan: { transcript: string | null; kind: 'main' | 'subagent'; lines: number }
+  /** A short summary of what was scanned. `readable` is false when the transcript is missing or could not be
+   *  read: `transcript` is then null or a path with `lines: 0`, and without this flag a caller cannot tell that
+   *  from a clean scan of an empty turn. */
+  scan: { transcript: string | null; kind: 'main' | 'subagent'; lines: number; readable: boolean }
+  /** The options the scan applied, echoed so a caller can tell its flag took effect: an older CLI that does
+   *  not know a flag ignores it and echoes nothing (or `false`). */
+  options: { ignoreInterruptFloor: boolean }
 }
 
 /** The verdict the Stop/SubagentStop gate would reach for this payload's turn, as data. Read-only. A
- *  missing/unreadable transcript is "no demand", the same fail-open allow the gates take. */
-export function computeVerdict(input: ReviewGateInput): GateVerdict {
+ *  missing/unreadable transcript is "no demand", the same fail-open allow the gates take, with
+ *  `scan.readable` false. */
+export function computeVerdict(input: ReviewGateInput, opts: { ignoreInterruptFloor?: boolean } = {}): GateVerdict {
+  const ignoreInterruptFloor = opts.ignoreInterruptFloor === true
   const evt = input?.hook_event_name ?? input?.hookEventName
   const subagent = evt === 'SubagentStop'
   const kind: GateVerdict['scan']['kind'] = subagent ? 'subagent' : 'main'
   const transcript = subagent ? input?.agent_transcript_path : input?.transcript_path
-  if (typeof transcript !== 'string' || !fs.existsSync(transcript)) {
-    return { demands: false, reasons: [], scan: { transcript: null, kind, lines: 0 } }
-  }
+  const noDemand = (transcriptOut: string | null, lines: number, readable: boolean): GateVerdict =>
+    ({ demands: false, reasons: [], scan: { transcript: transcriptOut, kind, lines, readable }, options: { ignoreInterruptFloor } })
+  if (typeof transcript !== 'string' || !fs.existsSync(transcript)) return noDemand(null, 0, false)
   // The subagent gate honours the harness loop-breaker and the exemption list BEFORE scanning; mirror that
   // so a subagent the hook would release never reads as a demand here.
   const agentType = String(input?.agent_type ?? '')
-  if (subagent && (input?.stop_hook_active === true || subagentExempt(agentType, null))) {
-    return { demands: false, reasons: [], scan: { transcript, kind, lines: 0 } }
-  }
-  const lines = subagent ? readCurrentTurn(transcript) : readCurrentTurn(transcript, { warnNoTurnStart: true })
-  if (lines === null) return { demands: false, reasons: [], scan: { transcript, kind, lines: 0 } }
+  if (subagent && (input?.stop_hook_active === true || subagentExempt(agentType, null))) return noDemand(transcript, 0, true)
+  // skipUnstartedTurn only with ignoreInterruptFloor: a user who typed a new prompt right after Esc has
+  // written a turn start with no assistant entry yet, so the interrupted turn is the one BEFORE it. Without
+  // the option the hook semantics are unchanged (a hook only ever sees a turn that has an answer).
+  const lines = subagent
+    ? readCurrentTurn(transcript)
+    : readCurrentTurn(transcript, { warnNoTurnStart: true, skipUnstartedTurn: ignoreInterruptFloor })
+  if (lines === null) return noDemand(transcript, 0, false)
   const ownAgentId = subagent && typeof input?.agent_id === 'string' ? input.agent_id : undefined
   const scan = subagent
-    ? scanTranscriptLines(lines, hookCwd(input), ownAgentId)
-    : scanTranscriptLines(lines, hookCwd(input), undefined, (id) => workerWriteDetail(transcript, id, hookCwd(input)))
-  if (subagent && subagentExempt(agentType, scan.ownRole)) {
-    return { demands: false, reasons: [], scan: { transcript, kind, lines: lines.length } }
-  }
+    ? scanTranscriptLines(lines, hookCwd(input), ownAgentId, undefined, ignoreInterruptFloor)
+    : scanTranscriptLines(lines, hookCwd(input), undefined, (id) => workerWriteDetail(transcript, id, hookCwd(input)), ignoreInterruptFloor)
+  if (subagent && subagentExempt(agentType, scan.ownRole)) return noDemand(transcript, lines.length, true)
   const demand = decideGate(scan)
-  if (demand === null || scan.work === null) {
-    return { demands: false, reasons: [], scan: { transcript, kind, lines: lines.length } }
-  }
+  if (demand === null || scan.work === null) return noDemand(transcript, lines.length, true)
   const reason = subagent
     ? subagentBlockReason(scan.work.cause, scan.work.detail, demand)
     : mainBlockReason(scan.work.cause, scan.work.detail, demand)
-  return { demands: true, reasons: [reason], scan: { transcript, kind, lines: lines.length } }
+  return { demands: true, reasons: [reason], scan: { transcript, kind, lines: lines.length, readable: true }, options: { ignoreInterruptFloor } }
 }
 
 /** Longest `systemMessage` the review display emits. WHY a cap: a review is long, and the terminal is not
@@ -1144,12 +1153,38 @@ function reviewDisplay(input: ReviewGateInput): string | null {
 
 // ── Process entry for `agentlenspro review-gate` ─────────────────────────────────────────────────
 
-/** `agentlenspro review-gate [--directive] [--json-verdict]`. Always resolves 0 — a Stop/SubagentStop hook that
+/** The `--json-verdict` command line, or the one-line reason it is malformed. WHY strict: a `--cwd` or
+ *  `--ignore-interrupt-floor` an older or mistyped command line silently dropped would return a verdict
+ *  computed for other options than the caller asked for, and a verdict is only useful if it is the one
+ *  asked for. `--cwd` replaces process.cwd() as the base for relative write targets: the mod runs this CLI
+ *  from its own cwd, not the session's. */
+function parseVerdictArgs(argv: string[]): { transcript: string | undefined; cwd: string; event: 'Stop' | 'SubagentStop'; ignoreInterruptFloor: boolean } | string {
+  const values: Record<string, string | undefined> = {}
+  for (const flag of ['--transcript', '--cwd', '--event']) {
+    const i = argv.indexOf(flag)
+    if (i === -1) continue
+    const value = argv[i + 1]
+    if (value === undefined || value === '' || value.startsWith('--')) return `${flag} needs a value, got ${JSON.stringify(value ?? null)}`
+    values[flag] = value
+  }
+  const ignoreInterruptFloor = argv.includes('--ignore-interrupt-floor')
+  if (values['--transcript'] === undefined && (values['--cwd'] !== undefined || ignoreInterruptFloor)) {
+    return '--cwd and --ignore-interrupt-floor need --transcript: the hook-payload path takes its options from the payload'
+  }
+  const event = values['--event'] ?? 'Stop'
+  if (event !== 'Stop' && event !== 'SubagentStop') return `--event must be Stop or SubagentStop, got ${JSON.stringify(event)}`
+  return { transcript: values['--transcript'], cwd: values['--cwd'] ?? process.cwd(), event, ignoreInterruptFloor }
+}
+
+/** `agentlenspro review-gate [--directive] [--json-verdict]`. Hook mode resolves 0 — a Stop/SubagentStop hook that
  *  can throw or hang can wedge the session, which is worse than a missed review. Dispatches on
  *  `hook_event_name`: `SubagentStop` -> the subagent gate, `Stop` (or an absent field) -> the main
  *  gate. Any other event is a silent allow. `--json-verdict` (TRDD-KZCSO0R2 Phase 0) runs the SAME
- *  readCurrentTurn -> scan -> decide pipeline but prints the verdict as ONE JSON object and ALWAYS
- *  exits 0 (read-only: never blocks, unlike hook mode). */
+ *  readCurrentTurn -> scan -> decide pipeline but prints the verdict as ONE JSON object; it is read-only
+ *  and exits 0 whether or not the verdict demands a review. It exits 2, printing one stderr line, only for
+ *  a malformed command line (a flag without a usable value, `--cwd`/`--ignore-interrupt-floor` without
+ *  `--transcript`, an `--event` other than Stop/SubagentStop): a caller must not read a verdict that was
+ *  computed for options other than the ones it asked for. */
 export async function runReviewGate(argv: string[]): Promise<number> {
   if (argv[0] === '--directive') {
     process.stdout.write(REVIEW_GATE_DIRECTIVE)
@@ -1160,19 +1195,21 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   // stdin. The mod (agentlenspro-review-mod/hooks/register.js) calls via $.process.run, which provides
   // NO stdin — so the stdin path would fail to parse and return demands:false, making the mod a runtime
   // no-op (F1). Accepts --transcript <path>, --turn-id <id> (accepted but not used by computeVerdict),
-  // and --event Stop|SubagentStop (default Stop). The stdin path is kept for hook-mode and for
-  // --json-verdict without --transcript (back-compat). The computeVerdict call is unchanged.
-  const transcriptIdx = argv.indexOf('--transcript')
-  const argvTranscript = transcriptIdx !== -1 && transcriptIdx + 1 < argv.length ? argv[transcriptIdx + 1] : undefined
-  if (jsonVerdict && typeof argvTranscript === 'string' && argvTranscript !== '') {
-    const eventIdx = argv.indexOf('--event')
-    const evt = eventIdx !== -1 && eventIdx + 1 < argv.length ? argv[eventIdx + 1] : 'Stop'
-    const subagent = evt === 'SubagentStop'
-    const input: ReviewGateInput = subagent
-      ? { hook_event_name: 'SubagentStop', agent_transcript_path: argvTranscript, cwd: process.cwd() }
-      : { hook_event_name: 'Stop', transcript_path: argvTranscript, cwd: process.cwd() }
-    process.stdout.write(JSON.stringify(computeVerdict(input)) + '\n')
-    return 0
+  // --event Stop|SubagentStop (default Stop), --cwd <dir> and --ignore-interrupt-floor. The stdin path is
+  // kept for hook-mode and for --json-verdict without --transcript.
+  if (jsonVerdict) {
+    const parsed = parseVerdictArgs(argv)
+    if (typeof parsed === 'string') {
+      process.stderr.write(`[review-gate] ${parsed}\n`)
+      return 2
+    }
+    if (parsed.transcript !== undefined) {
+      const input: ReviewGateInput = parsed.event === 'SubagentStop'
+        ? { hook_event_name: 'SubagentStop', agent_transcript_path: parsed.transcript, cwd: parsed.cwd }
+        : { hook_event_name: 'Stop', transcript_path: parsed.transcript, cwd: parsed.cwd }
+      process.stdout.write(JSON.stringify(computeVerdict(input, { ignoreInterruptFloor: parsed.ignoreInterruptFloor })) + '\n')
+      return 0
+    }
   }
   // NO KILL-SWITCH CHECK HERE, on purpose. The global switch (the DISABLED flag file, or AGENTLENS_DISABLED=1)
   // exists to stop side-effects: disk writes and server revive. This gate has none: it reads the transcript
@@ -1194,7 +1231,7 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   let input: ReviewGateInput
   try { input = JSON.parse(payload.toString('utf8')) as ReviewGateInput } catch {
     if (jsonVerdict) {
-      process.stdout.write(JSON.stringify({ demands: false, reasons: [], scan: { transcript: null, kind: 'main', lines: 0 } }) + '\n')
+      process.stdout.write(JSON.stringify({ demands: false, reasons: [], scan: { transcript: null, kind: 'main', lines: 0, readable: false }, options: { ignoreInterruptFloor: false } } satisfies GateVerdict) + '\n')
       process.stderr.write('[review-gate] allowing UNREVIEWED: the hook payload is not valid JSON\n')
       return 0
     }
