@@ -4,8 +4,8 @@ title: Convert review-gate enforcement to mods so an interrupt can never skip th
 column: todo
 status: tasked
 created: 2026-11-11T16:24:22+0100
-updated: 2026-11-12T11:13:23+0100
-implementation-commits: [42b140f5, 43baaf9b, dd79f249]
+updated: 2026-11-12T13:48:15+0100
+implementation-commits: [42b140f5, 43baaf9b, dd79f249, bcf2b35b]
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -22,12 +22,12 @@ approval-datetime: 2026-11-11T16:24:22+0100
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-12
 
-- Phase 0 (--json-verdict + --transcript argv branch): COMMITTED — 42b140f5 (flag + stdin path), 43baaf9b (--transcript branch). Reviewed: accepted.
-- Phase 1 (mod scaffold agentlenspro-review-mod/): COMMITTED — dd79f249. Reviewed: accept-with-conditions, scaffold is INERT (not installed, no settings.json changes).
-- NEXT ACTION: live probe (design step 6) — run `claude --plugin-dir /Volumes/EmaUITEK4TBSSD/Code/AgentlensPro/agentlenspro-review-mod --debug` in a scratch project; interrupt a writing turn with Esc; confirm (a) e.transcriptPath exists in the turn.complete event (review F7), (b) whether the second-net scan causes spurious re-demands on compliant turns (review F1).
-- Review findings still open on the scaffold: F1 (second-net spurious demands — needs probe or dedup signal), F2 (dead `aborted` var), F3 (verdict() swallows scanner failures silently — surface via $.ui.status), F4 ($.process.run 30s timeout vs gate's 120s), F7 (e.transcriptPath unverified).
-- Gotcha: `aborted` var in register.js turn.complete is dead code (computed, never read) — harmless but a fingerprint of an earlier dropped-lines edit; remove when touching the file next.
-- SUPERSEDED: none.
+- Committed: 42b140f5 (--json-verdict), 43baaf9b (--transcript branch, reviewed accept-with-conditions), dd79f249 (mod scaffold; it scans nothing, because turn.complete carries no transcript path).
+- Scanner change is now committed as bcf2b35b (src/cli/reviewGate.ts, src/test/reviewGate.test.ts: `--ignore-interrupt-floor`, `--cwd`, `scan.readable`, `options.ignoreInterruptFloor`, exit 2 on malformed command line; reviewGate mocha 202 passing). Still uncommitted at the time of writing: the mod files (register.js, README.md, plugin.json, types/index.d.ts) and this card. The mod takes transcript_path and cwd from classic.* payloads and scans aborted turns only.
+- DECISIONS 2026-11-12 (user said: "decide yourself. just base your decisions on verified facts."): D1 transcript path and cwd come from classic.* event payloads; a temp file of $.session.messages() or a stdin message mode was rejected, both need a second scanner input format. D2 scanner opt-in --ignore-interrupt-floor, because the interrupt floor makes an interrupted turn scan as demands false. D3 cwd passed with --cwd. D4 the non-aborted second net stays in the code, disabled, until transcript lag is measured. D5 standalone/cli.js is gitignored local deploy state and must be rebuilt with node esbuild.js after each scanner change.
+- NEXT ACTION: commit the mod change (scanner already committed as bcf2b35b); then make a pending demand persist until a credited REVIEW fork is seen (today it is shown once); then measure with the mods probe tool: transcript lag at turn.complete, whether classic.* events fire with the expected fields, and the context injection.
+- OPEN MEASUREMENTS: subagent classic.PreToolUse payload; whether awaiting `$.prompt.submit` inside the `turn.complete` hook always rejects; four measurements that need a real user Esc: (1) the `$.prompt.submit` refusal shape; (2) transcript lag on the aborted scan; (3) Esc at a permission prompt (a bare tool_use that never ran arms the scan); (4) a prompt typed right after Esc.
+- The mod is NOT installed and must stay uninstalled until the probe measurements are done.
 
 ## Approval log
 

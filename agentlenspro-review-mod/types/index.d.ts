@@ -9,6 +9,12 @@ export type PendingDemand = {
   at: number
 }
 
+
+export type LastSession = {
+  transcriptPath: string
+  cwd: string | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     "agentlenspro-review-mod": {
@@ -17,6 +23,10 @@ declare module 'claude-code' {
       // Per-session (lives in $.state, never $.store): resets on /clear,
       // /resume, /branch — the classic.SessionStart hook is the reload point.
       pendingDemand: PendingDemand | null
+      // lastSession: the main conversation transcript path and cwd, remembered
+      // by the classic.UserPromptSubmit/PreToolUse/SessionStart hooks (the
+      // turn.complete event carries no transcript path). null until seen.
+      lastSession: LastSession | null
     }
   }
 }

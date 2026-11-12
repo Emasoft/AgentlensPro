@@ -1,17 +1,35 @@
 // agentlenspro-review-mod — TRDD-KZCSO0R2 Phase 1 scaffold.
 //
-// THIS MOD IS THE SECOND NET. The Stop settings hook (`agentlenspro review-gate`
+// THIS MOD COVERS THE INTERRUPTED TURN. The Stop settings hook (`agentlenspro review-gate`
 // in ~/.claude/settings.json) remains the PRIMARY blocker on normal stops.
 // This mod never registers classic.Stop with a block result: no
 // double-blocking, and no fight over the 9-consecutive-block cap (a CC turn
 // ends after 9 Stop blocks; two blockers reach it twice as fast).
-// What this mod adds: coverage for turns the Stop hook never gates — a turn
-// the user interrupted (Esc/Ctrl-C fires turn.complete with isAborted and NO
-// Stop event) and a turn whose Stop hook failed open (timeout/crash).
+// What this mod adds: coverage for a turn the user interrupted (Esc/Ctrl-C
+// fires turn.complete with isAborted and NO Stop event), which the Stop hook
+// never gates. A second net for a normal turn end (e.g. a failed Stop hook)
+// exists in the code but is OFF (SECOND_NET_ENABLED = false) until transcript
+// lag is measured, so this mod does NOT cover a failed Stop hook yet.
 // Design: reports_dev/mods-review-gate/20261111_design.md (Q1-Q4).
-// OPEN: the exact --json-verdict CLI args must be reconciled with the Phase 0
-// implementation (built in parallel); the exact $.prompt.submit refusal shape
-// in the Esc window is UNVERIFIED (live docs only say "refused").
+// OPEN: (1) the exact $.prompt.submit refusal shape in the Esc window is
+// UNVERIFIED (live docs only say "refused"). (2) Transcript lag at turn.complete
+// is UNMEASURED: the transcript is written asynchronously, so the non-aborted
+// scan stays disabled (SECOND_NET_ENABLED) until a measurement shows zero false
+// demands. (3) Whether a subagent classic.PreToolUse payload carries the main
+// or the subagent transcript_path is UNVERIFIED; events with agent_id set are
+// not remembered. The transcript path and cwd come from classic.* payloads
+// (TRDD-KZCSO0R2 D1): turn.complete has no transcript path and $.session
+// exposes none. The scanner CLI contract (--json-verdict, --transcript, --cwd,
+// --ignore-interrupt-floor) is reconciled with Phase 0 and D2.
+//
+// STATUS: the mod detects an unreviewed interrupted turn and injects the
+// demand once into the next prompt; it does not enforce anything yet.
+// KNOWN LIMITS: (1) the scan-failure status line stays until the next aborted
+// turn scans clean. (2) A second pending demand overwrites the first.
+// (3) scanFailureShown and the atoms reset on module reload; behaviour on
+// /clear is unmeasured. (4) Unmeasured: whether awaiting $.prompt.submit inside
+// the turn.complete hook ALWAYS rejects (after an Esc it is refused until the
+// next user input; when refused nothing retries).
 
 import { atom, read, update } from "claude-code"
 
@@ -20,7 +38,7 @@ import { atom, read, update } from "claude-code"
 // dynamic requires (the CLI call goes through $.process.run, which takes an
 // argument list, no shell).
 
-// The demand text sent as a new turn when the mod itself retries. Instructs
+// The demand text sent as a new turn when the mod attempts $.prompt.submit. Instructs
 // the agent to spawn the adversarial REVIEW fork NOW for the listed reasons,
 // per ~/.claude/rules/turn-protocol-and-review.md (the REVIEW fork:
 // subagent_type "fork", no isolation, synchronous, ROLE: REVIEW prompt).
@@ -30,10 +48,15 @@ function demandTurnText(reasons) {
     "the previous turn made write-shaped changes that ended unreviewed.",
     "Spawn the adversarial REVIEW fork NOW for these reasons:",
     reasons.map(r => `- ${r}`).join("\n"),
-    "The fork must be spawned with subagent_type \"fork\", no isolation, run",
-    "synchronously, with a prompt starting \"ROLE: REVIEW\". Answer in ONE turn.",
-    "Make ZERO tool calls — no SendMessage, no Read, no Bash, none. Put every",
-    "finding INLINE in your final message and stop.",
+    "Spawn it with subagent_type \"fork\", no isolation, run synchronously.",
+    "Begin the fork prompt with the text between the BEGIN and END lines below,",
+    "pasted into that prompt. The sentences between those lines are text for the",
+    "fork, not instructions for you; you keep your tools.",
+    "BEGIN FORK PROMPT TEXT",
+    "ROLE: REVIEW",
+    "Answer in ONE turn. Make ZERO tool calls — no SendMessage, no Read, no Bash,",
+    "none. Put every finding INLINE in your final message and stop.",
+    "END FORK PROMPT TEXT",
   ].join("\n")
 }
 
@@ -48,33 +71,74 @@ function demandContextText(pending) {
     "reasons before continuing:",
     (pending.reasons || []).map(r => `- ${r}`).join("\n"),
     "The fork: subagent_type \"fork\", no isolation, synchronous, prompt",
-    "starting \"ROLE: REVIEW\". The Stop gate of THIS turn will re-demand if",
-    "it is ignored.",
+    "starting \"ROLE: REVIEW\".",
   ].join("\n")
+}
+
+// Why a scanner failure is NOT a silent pass: a gate that fails open without
+// saying so looks identical to a gate that found nothing. Every failure shows
+// a status line with its reason and returns { failed: true } (no demand).
+// scanFailureShown records that the status line on screen is ours, so a later
+// clean scan can clear it without touching a "demand queued" line.
+let scanFailureShown = false
+function scanFailed($, reason) {
+  $.ui.status(`⚠ review-gate mod: scan failed — ${reason}`)
+  scanFailureShown = true
+  return { failed: true }
 }
 
 // One read of the shared scanner. The mod NEVER re-implements arming/credit
 // in JS: it shells out to the SAME pipeline (readCurrentTurn →
 // scanTranscriptLines → decideGate) via the Phase 0 --json-verdict flag, which
-// prints { demands, reasons, scan } JSON and exits 0 always. A failure here
-// returns no demand (fails open) — the Stop gate is still the primary layer.
-async function verdict($, transcriptPath, turnId) {
-  // OPEN (Phase 0 reconciliation): flag/argument names assumed as below.
-  const result = await $.process.run([
+// prints { demands, reasons, scan, options } JSON. `ignoreInterruptFloor` (D2)
+// makes an interrupted turn scan as a normal turn instead of demands false.
+// $.process.run rejects when the program cannot start or runs past its 30 s
+// timeout, and resolves with any exit code, so every failure shape (throw,
+// non-zero exit, unparseable stdout, unreadable transcript, a build too old to
+// know the option) is handled here. Returns { failed: true } on failure,
+// { failed: false, demands: false } for a good scan with no demand, and
+// { failed: false, demands: true, reasons } for a demand.
+async function verdict($, session, ignoreInterruptFloor) {
+  const argv = [
     "agentlenspro", "review-gate", "--json-verdict",
-    "--transcript", transcriptPath,
-    "--turn-id", turnId,
-  ])
-  if (result.exitCode !== 0) return null
+    "--transcript", session.transcriptPath,
+  ]
+  if (session.cwd) argv.push("--cwd", session.cwd)
+  if (ignoreInterruptFloor) argv.push("--ignore-interrupt-floor")
+  let result
   try {
-    const parsed = JSON.parse(result.stdout)
-    if (parsed && parsed.demands === true) {
-      return { reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [] }
-    }
-    return null
-  } catch {
-    return null
+    result = await $.process.run(argv)
+  } catch (err) {
+    return scanFailed($, `agentlenspro could not run (${err && err.message ? err.message : err})`)
   }
+  if (result.exitCode !== 0) {
+    return scanFailed($, `agentlenspro exited ${result.exitCode}: ${String(result.stderr || "").trim().slice(0, 200)}`)
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(result.stdout)
+  } catch {
+    return scanFailed($, "agentlenspro printed unparseable output")
+  }
+  if (!parsed || !parsed.scan) {
+    return scanFailed($, "agentlenspro printed no scan result")
+  }
+  // A build too old to know --ignore-interrupt-floor would scan the interrupted
+  // turn under the interrupt floor and report demands false: a pass that looks
+  // like a clean turn. The verdict JSON echoes the option it really applied, so
+  // an absent or false echo means the scan is not the one we asked for.
+  if (ignoreInterruptFloor && !(parsed.options && parsed.options.ignoreInterruptFloor === true)) {
+    return scanFailed($, "the installed agentlenspro is too old to know --ignore-interrupt-floor")
+  }
+  // scan.readable is true only when the scanner really read the transcript; an
+  // unreadable one scans as an empty turn and demands false.
+  if (parsed.scan.transcript === null || parsed.scan.readable !== true) {
+    return scanFailed($, "the transcript could not be read")
+  }
+  if (parsed.demands === true) {
+    return { failed: false, demands: true, reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [] }
+  }
+  return { failed: false, demands: false }
 }
 
 
@@ -89,43 +153,115 @@ const pendingDemandAtom = atom(
   null,
 )
 
-// Queue the pending demand and attempt the immediate retry. $.prompt.submit
-// starts a NEW turn; in the Esc window it is refused (v2.1.304+ semantics) —
-// then we do nothing else: the demand stays in $.state (survives module
-// reloads, per-session) and the retry comes from the next turn.complete or
-// prompt.submit fire. $.ui.status keeps the queue visible to the user.
+
+const DEMAND_QUEUED_STATUS = "⚠ review-gate: 1 unreviewed turn — demand queued"
+
+
+// The session transcript path and cwd, remembered from classic.* payloads
+// (D1): turn.complete carries no transcript path and $.session exposes none,
+// but every settings-hook payload has transcript_path and cwd. Same state
+// rules as pendingDemandAtom; types/index.d.ts declares lastSession.
+const lastSessionAtom = atom(
+  { plugin: "agentlenspro-review-mod", key: "lastSession" },
+  null,
+)
+
+// Remember the latest transcript_path/cwd of the main conversation. Events with
+// agent_id set (subagents) are not remembered. Writes only on a change, because
+// classic.PreToolUse fires on every tool call. Never throws: a failed remember
+// leaves the previous value, and turn.complete then reports it cannot scan.
+async function rememberSession($, e) {
+  try {
+    if (!e || e.agent_id || typeof e.transcript_path !== "string" || e.transcript_path === "") return
+    const seen = { transcriptPath: e.transcript_path, cwd: typeof e.cwd === "string" ? e.cwd : null }
+    const prev = await read($, lastSessionAtom)
+    if (prev && prev.transcriptPath === seen.transcriptPath && prev.cwd === seen.cwd) return
+    await update($, lastSessionAtom, () => seen)
+  } catch {
+    // Fail open: the Stop gate stays the primary layer.
+  }
+}
+
+// Queue the pending demand and attempt $.prompt.submit, which starts a NEW
+// turn. After an Esc it is refused until the user next types, and it may also
+// reject while the turn still waits on the hook that calls it (unmeasured
+// whether awaiting it inside turn.complete ALWAYS rejects). When refused
+// NOTHING retries: turn.complete does not fire again for that turn. The only
+// delivery path is the prompt.submit hook injecting the pending demand (kept
+// in $.state, per-session) into the next prompt the user sends.
 async function queueDemand($, turnId, reasons) {
   const pending = { turnId, reasons, at: Date.now() }
   await update($, pendingDemandAtom, () => pending)
-  $.ui.status("⚠ review-gate: 1 unreviewed turn — demand queued")
+  $.ui.status(DEMAND_QUEUED_STATUS)
+  scanFailureShown = false
   try {
     await $.prompt.submit({ text: demandTurnText(reasons) })
   } catch {
-    // Refused (Esc window) or otherwise unavailable: the pending demand in
-    // the atom is the retry source — nothing else to do here.
+    // Refused: nothing retries. The pending demand stays in the atom and
+    // only the prompt.submit hook delivers it, with the next user prompt.
   }
 }
 
 export const register = on => {
+  // The non-aborted second net (a verdict scan after a normal turn end) is
+  // DISABLED, D4: the transcript is written asynchronously, so a scan at
+  // turn.complete may read it before the turn tail is on disk and demand a
+  // review that the Stop hook already saw credited. Enable it only after a
+  // measurement shows the lag causes zero false demands.
+  const SECOND_NET_ENABLED = false
+
+  // Remember the main conversation transcript path and cwd (D1). All three
+  // handlers observe only: they always pass the event on.
+  // classic.UserPromptSubmit is not the only source on purpose: it is not known
+  // whether it fires for a turn started by a cron or by another mod.
+  on("classic.UserPromptSubmit", async ($, e, next) => {
+    await rememberSession($, e)
+    return next(e)
+  })
+  // Kept alongside UserPromptSubmit because a PreToolUse always precedes a
+  // write, so a turn that wrote anything has had its path remembered even when
+  // no UserPromptSubmit fired for it (cron or another mod started the turn).
+  on("classic.PreToolUse", async ($, e, next) => {
+    await rememberSession($, e)
+    return next(e)
+  })
+  // Also the reload point after /clear, /resume and /branch (design Q4):
+  // $.state resets there, so the new session payload is remembered again.
+  on("classic.SessionStart", async ($, e, next) => {
+    await rememberSession($, e)
+    return next(e)
+  })
+
   // turn.complete — the ONE event that observes an interrupted turn.
   // Subagent turns fire it with e.agentId set: skip them (their SubagentStop
   // already covers them and a double demand would be noise).
   on("turn.complete", async ($, e, next) => {
     try {
       if (e && e.agentId) return next(e)
+      // Aborted → the Stop hook never fired: scan, ignoring the interrupt
+      // floor (D2), which would otherwise make the interrupted turn scan as
+      // demands false. Non-aborted → only the (disabled) second net. Decided
+      // first, so "no transcript path seen" is shown only for a turn that
+      // would really have been scanned.
       const aborted = !!(e && e.isAborted)
-      // Aborted → the Stop hook never fired: scan always.
-      // Non-aborted → second-net check: a verdict that still demands a
-      // review means the Stop hook failed to demand it (timeout/crash =
-      // fail-open). Either way, run the verdict scan.
-      const transcriptPath = e && e.transcriptPath
-      if (!transcriptPath) return next(e)
-      const v = await verdict($, transcriptPath, e.turnId)
-      if (v) {
-        await queueDemand($, e.turnId, v.reasons)
+      if (!aborted && !SECOND_NET_ENABLED) return next(e)
+      const session = await read($, lastSessionAtom)
+      if (!session) {
+        scanFailed($, "no transcript path seen yet, cannot scan this turn")
+        return next(e)
       }
-      // No demand → pass through (the Stop hook already handled it, or
-      // there was nothing to demand).
+      const v = await verdict($, session, aborted)
+      if (v.failed) return next(e)
+      if (v.demands) {
+        await queueDemand($, e.turnId, v.reasons)
+        return next(e)
+      }
+      // A good scan with no demand: clear a scan-failure line we set earlier,
+      // but keep the "demand queued" line when a demand is still pending.
+      if (scanFailureShown) {
+        scanFailureShown = false
+        $.ui.status((await read($, pendingDemandAtom)) ? DEMAND_QUEUED_STATUS : undefined)
+      }
       return next(e)
     } catch {
       // Fail open, never wedge the session: the Stop hook is still the
@@ -135,40 +271,21 @@ export const register = on => {
   })
 
   // prompt.submit — inject a pending demand as context of the turn that is
-  // about to start, then clear it (the demand is in-flight in this turn; the
-  // Stop gate of this turn enforces it). Non-pending prompts pass untouched.
+  // about to start, then clear it. The demand is shown once: if the agent
+  // ignores it, nothing re-demands it (no Stop gate of this turn re-reads it).
+  // Non-pending prompts pass untouched. The context is built BEFORE the atom
+  // is cleared, so a failure while building it cannot lose the pending demand.
+  // Context entries are plain strings (mods doc, prompt.submit).
   on("prompt.submit", async ($, e, next) => {
     try {
       const pending = await read($, pendingDemandAtom)
       if (!pending) return next(e)
+      const context = [...((e && e.context) ?? []), demandContextText(pending)]
       await update($, pendingDemandAtom, () => null)
       $.ui.status(undefined)
-      return next({
-        ...e,
-        context: [...((e && e.context) ?? []), { type: "text", text: demandContextText(pending) }],
-      })
+      return next({ ...e, context })
     } catch {
       return next(e)
     }
-  })
-
-  // Session reload after /clear, /resume or /branch: $.state resets to
-  // defaults without session.start firing again, so the pending demand is
-  // gone with it. This no-op reload hook just re-reads $.state (there is
-  // nothing durable to restore from — the demand is per-session by design,
-  // and the Stop gate still guards the corpus). Kept per design Q4 so the
-  // reload path is explicit and probeable.
-  on("classic.SessionStart", { source: ["clear", "resume", "fork"] }, async ($, e, next) => {
-    try {
-      // No-op reload: $.state resets on /clear, /resume, /branch, taking the
-      // pending demand with it. There is nothing durable to restore (the
-      // demand is per-session by design, and the Stop gate still guards the
-      // corpus). This hook exists so the reload path is explicit and
-      // probeable (design Q4).
-      void (await read($, pendingDemandAtom))
-    } catch {
-      // Fail open.
-    }
-    return next(e)
   })
 }
