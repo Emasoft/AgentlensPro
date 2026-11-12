@@ -24,7 +24,7 @@ declare module 'claude-code' {
       // /resume, /branch — the classic.SessionStart hook is the reload point.
       pendingDemand: PendingDemand | null
       // lastSession: the main conversation transcript path and cwd, remembered
-      // by the classic.UserPromptSubmit/PreToolUse/SessionStart hooks (the
+      // by the classic.UserPromptSubmit/SessionStart hooks (the
       // turn.complete event carries no transcript path). null until seen.
       lastSession: LastSession | null
     }

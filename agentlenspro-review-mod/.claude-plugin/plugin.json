@@ -1,6 +1,6 @@
 {
   "name": "agentlenspro-review-mod",
   "version": "0.1.0",
-  "description": "Second net for the review gate: covers a turn the user interrupted, which the Stop hook never sees, by queuing the review demand and injecting it into the next prompt; the net for a normal turn end exists but is off",
+  "description": "Detects a turn the user interrupted (which the Stop hook never sees) that ended with unreviewed write-shaped changes, queues a review demand and injects it into the next prompt; not installed yet, aborted-turn path unmeasured",
   "types": "./types/index.d.ts"
 }

@@ -12,24 +12,32 @@
 // lag is measured, so this mod does NOT cover a failed Stop hook yet.
 // Design: reports_dev/mods-review-gate/20261111_design.md (Q1-Q4).
 // OPEN: (1) the exact $.prompt.submit refusal shape in the Esc window is
-// UNVERIFIED (live docs only say "refused"). (2) Transcript lag at turn.complete
-// is UNMEASURED: the transcript is written asynchronously, so the non-aborted
-// scan stays disabled (SECOND_NET_ENABLED) until a measurement shows zero false
-// demands. (3) Whether a subagent classic.PreToolUse payload carries the main
-// or the subagent transcript_path is UNVERIFIED; events with agent_id set are
-// not remembered. The transcript path and cwd come from classic.* payloads
+// UNVERIFIED (live docs only say "refused"). (2) The aborted-turn path has
+// never run: no aborted turn has been measured (probe report
+// reports_dev/mods-review-gate/20261112_135949+0100-probe-measurements.md).
+// (3) Transcript lag is indicated, not settled (M7, no positive control): the turn final
+// answer was not found on disk at
+// turn.complete in 5 of 5 turns, so a scan at turn.complete can miss the turn
+// tail; the non-aborted scan stays disabled (SECOND_NET_ENABLED).
+// The transcript path and cwd come from classic.* payloads
 // (TRDD-KZCSO0R2 D1): turn.complete has no transcript path and $.session
-// exposes none. The scanner CLI contract (--json-verdict, --transcript, --cwd,
-// --ignore-interrupt-floor) is reconciled with Phase 0 and D2.
+// exposes none. classic.PreToolUse is not used: its payload has no
+// transcript_path, cwd or agent_id (M4). The scanner CLI contract
+// (--json-verdict, --transcript, --cwd, --ignore-interrupt-floor) is
+// reconciled with Phase 0 and D2.
 //
 // STATUS: the mod detects an unreviewed interrupted turn and injects the
 // demand once into the next prompt; it does not enforce anything yet.
 // KNOWN LIMITS: (1) the scan-failure status line stays until the next aborted
 // turn scans clean. (2) A second pending demand overwrites the first.
 // (3) scanFailureShown and the atoms reset on module reload; behaviour on
-// /clear is unmeasured. (4) Unmeasured: whether awaiting $.prompt.submit inside
-// the turn.complete hook ALWAYS rejects (after an Esc it is refused until the
-// next user input; when refused nothing retries).
+// /clear is unmeasured. (4) $.prompt.submit awaited inside turn.complete
+// resolved and started a new turn on a NON-aborted turn (M8); the aborted
+// case is unmeasured (docs: refused after an Esc until the user next types;
+// when refused nothing retries). (5) A mod-submitted prompt passes through the
+// prompt.submit hook (M9), so a demand would be delivered twice in one turn if
+// the submit succeeds. (6) Hand-back and other automatic prompts fire
+// prompt.submit (M11) and would consume the show-once demand.
 
 import { atom, read, update } from "claude-code"
 
@@ -168,7 +176,7 @@ const lastSessionAtom = atom(
 
 // Remember the latest transcript_path/cwd of the main conversation. Events with
 // agent_id set (subagents) are not remembered. Writes only on a change, because
-// classic.PreToolUse fires on every tool call. Never throws: a failed remember
+// the hooks that call it fire on every prompt. Never throws: a failed remember
 // leaves the previous value, and turn.complete then reports it cannot scan.
 async function rememberSession($, e) {
   try {
@@ -183,12 +191,14 @@ async function rememberSession($, e) {
 }
 
 // Queue the pending demand and attempt $.prompt.submit, which starts a NEW
-// turn. After an Esc it is refused until the user next types, and it may also
-// reject while the turn still waits on the hook that calls it (unmeasured
-// whether awaiting it inside turn.complete ALWAYS rejects). When refused
-// NOTHING retries: turn.complete does not fire again for that turn. The only
-// delivery path is the prompt.submit hook injecting the pending demand (kept
-// in $.state, per-session) into the next prompt the user sends.
+// turn. Measured on a NON-aborted turn: it resolved and started a new turn
+// (probe M8). The aborted case is unmeasured; the docs say it is refused after
+// an Esc until the user next types. When refused NOTHING retries: turn.complete
+// does not fire again for that turn. The only fallback delivery path is the
+// prompt.submit hook injecting the pending demand (kept in $.state,
+// per-session) into the next prompt. Known limit (M9): a mod-submitted prompt
+// passes through the prompt.submit hook, so if the submit succeeds the demand
+// is delivered twice in one turn (as prompt text and as injected context).
 async function queueDemand($, turnId, reasons) {
   const pending = { turnId, reasons, at: Date.now() }
   await update($, pendingDemandAtom, () => pending)
@@ -210,18 +220,15 @@ export const register = on => {
   // measurement shows the lag causes zero false demands.
   const SECOND_NET_ENABLED = false
 
-  // Remember the main conversation transcript path and cwd (D1). All three
+  // Remember the main conversation transcript path and cwd (D1). Both
   // handlers observe only: they always pass the event on.
-  // classic.UserPromptSubmit is not the only source on purpose: it is not known
-  // whether it fires for a turn started by a cron or by another mod.
+  // classic.UserPromptSubmit fires for a typed prompt, for a mod-submitted
+  // prompt and for a subagent hand-back (probe M5); whether it fires for a
+  // cron-started turn is unmeasured, which classic.SessionStart covers.
+  // classic.PreToolUse is NOT used: its payload is the tool input plus tool and
+  // tool_use_id, with no transcript_path, cwd or agent_id (probe M4), so it
+  // could never remember anything.
   on("classic.UserPromptSubmit", async ($, e, next) => {
-    await rememberSession($, e)
-    return next(e)
-  })
-  // Kept alongside UserPromptSubmit because a PreToolUse always precedes a
-  // write, so a turn that wrote anything has had its path remembered even when
-  // no UserPromptSubmit fired for it (cron or another mod started the turn).
-  on("classic.PreToolUse", async ($, e, next) => {
     await rememberSession($, e)
     return next(e)
   })
@@ -263,9 +270,16 @@ export const register = on => {
         $.ui.status((await read($, pendingDemandAtom)) ? DEMAND_QUEUED_STATUS : undefined)
       }
       return next(e)
-    } catch {
+    } catch (err) {
       // Fail open, never wedge the session: the Stop hook is still the
-      // primary gate.
+      // primary gate. But never silently: a swallowed error looks like a
+      // clean scan, so show a status line first (inside its own try/catch,
+      // because the UI call itself may throw and must not wedge next()).
+      try {
+        scanFailed($, `turn.complete handler threw (${err && err.message ? err.message : err})`)
+      } catch {
+        // The status line failed too; nothing more to do.
+      }
       return next(e)
     }
   })
