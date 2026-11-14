@@ -40,10 +40,12 @@ const sessionAtom = atom({ plugin: "agentlenspro-review-mod", key: "lastSession"
 
 // Blocking rounds in the current turn; reset when a new prompt starts a turn.
 let roundsThisTurn = 0
+// The proposal marker line, mirrored from src/cli/reviewGateTriggers.ts PROPOSAL_LINE (bold or heading prefix, any dash).
+const PROPOSAL_LINE = /^[ \t]*(?:\*\*|#{1,6}[ \t]*)?PROPOSAL FOR ACTION [-–—] PLEASE REVIEW\b/m
 // The turn-relative line indexes of the work and proposal the last review covered. A Stop that another hook
 // blocked fires again with the SAME work; re-reviewing it would bill a whole-context fork per block (up to
 // the 9-block cap). Reset at turn.complete.
-let reviewedMark = { work: -1, proposal: -1 }
+let reviewedMark = { work: -1, proposal: -1, msg: null }
 
 const errText = (err) => (err && err.message ? err.message : String(err))
 
@@ -304,7 +306,7 @@ export const register = (on) => {
   })
 
   on("turn.complete", async ($, e, next) => {
-    if (e && !e.agentId) { roundsThisTurn = 0; reviewedMark = { work: -1, proposal: -1 } }
+    if (e && !e.agentId) { roundsThisTurn = 0; reviewedMark = { work: -1, proposal: -1, msg: null } }
     if (e && e.isAborted && !e.agentId) $.clock.after(1500, () => reviewInterrupted($))
     return next(e)
   })
@@ -332,6 +334,12 @@ export const register = (on) => {
       const pending = await read($, pendingAtom)
       const scan = await scanTurn($, session, false)
       if (!scan.ok) return await failClosed(scan.why)
+      // The engine fires Stop BEFORE the turn's final assistant message reaches the JSONL, so a text-only
+      // proposal turn scans as nothing (measured 2026-11-14: work None, proposal false on a turn whose only
+      // message was the proposal, and no measurement ran). The event carries that message: check it here.
+      const lastMessage = typeof e.last_assistant_message === "string" ? e.last_assistant_message : null
+      const proposalFromLast = !scan.proposal && lastMessage !== null && PROPOSAL_LINE.test(lastMessage)
+      if (proposalFromLast) scan.proposal = true
       const pendingBlock = pending && pending.block ? pending.text : null
       const debt = pending && pending.debt ? pending.debtWhy : null
       const clearPending = async () => { if (pending) await update($, pendingAtom, () => null) }
@@ -345,7 +353,7 @@ export const register = (on) => {
         return r
       }
       const workAt = scan.work ? scan.work.index : -1
-      if (!debt && workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal) {
+      if (!debt && workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal && !(proposalFromLast && lastMessage !== reviewedMark.msg)) {
         // Nothing new since the last harness review of this turn (a Stop re-fired after another hook blocked).
         await clearPending()
         return r
@@ -355,12 +363,11 @@ export const register = (on) => {
         return r
       }
       $.ui.status(scan.proposal ? "review: measuring the proposal, then reviewing…" : "review: reviewing this turn…")
-      const lastMessage = typeof e.last_assistant_message === "string" ? e.last_assistant_message : null
       const measure = scan.proposal ? await runMeasure($, session, lastMessage) : null
       const git = await gitContext($, session.cwd)
       const res = await runReview($, { interrupted: false, lastMessage, scan, measure, pending: pendingBlock, debt, git, round: roundsThisTurn + 1 })
       if (!res.ok) return await failClosed(`the review fork failed (${res.why})`)
-      reviewedMark = { work: workAt, proposal: scan.proposalIndex }
+      reviewedMark = { work: workAt, proposal: scan.proposalIndex, msg: lastMessage }
       await clearPending()
       const report = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness)\n${res.text}`
       if (!res.block) {
