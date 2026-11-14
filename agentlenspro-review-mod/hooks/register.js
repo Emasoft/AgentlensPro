@@ -301,13 +301,25 @@ export const register = (on) => {
   on("classic.Stop", async ($, e, next) => {
     const r = await next(e)
     if (!e || e.agent_id) return r
+    // A review that could not run must not let the stop through (owner: "unskippable"). It blocks and the next
+    // stop retries, up to MAX_ROUNDS per turn; past that it is logged as skipped (the engine's own 9-block cap
+    // would end the turn anyway, and an endless block would wedge the session).
+    const failClosed = async (why) => {
+      if (roundsThisTurn < MAX_ROUNDS) {
+        roundsThisTurn++
+        $.ui.log(`REVIEW FAILED, stop blocked for a retry (round ${roundsThisTurn}/${MAX_ROUNDS}): ${why}`)
+        return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness could not review this turn (${why}). End your turn again: the harness retries the review at the next stop. Do not spawn a review fork.`].filter(Boolean).join("\n\n") }
+      }
+      await notReviewed($, `${why}; gave up after ${MAX_ROUNDS} rounds`)
+      return r
+    }
     try {
       await rememberSession($, e)
       const session = await read($, sessionAtom)
-      if (!session) { await notReviewed($, "no transcript path"); return r }
+      if (!session) return await failClosed("no transcript path")
       const pending = await read($, pendingAtom)
       const scan = await scanTurn($, session, false)
-      if (!scan.ok) { await notReviewed($, `${scan.why}`); return r }
+      if (!scan.ok) return await failClosed(scan.why)
       const pendingBlock = pending && pending.block ? pending.text : null
       const clearPending = async () => { if (pending) await update($, pendingAtom, () => null) }
       if (!scan.work && !scan.proposal) {
@@ -334,7 +346,7 @@ export const register = (on) => {
       const measure = scan.proposal ? await runMeasure($, session, lastMessage) : null
       const git = await gitContext($, session.cwd)
       const res = await runReview($, { interrupted: false, lastMessage, scan, measure, pending: pendingBlock, git, round: roundsThisTurn + 1 })
-      if (!res.ok) { await notReviewed($, `the fork failed (${res.why})`); return r }
+      if (!res.ok) return await failClosed(`the review fork failed (${res.why})`)
       reviewedMark = { work: workAt, proposal: scan.proposalIndex }
       await clearPending()
       const report = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness)\n${res.text}`
@@ -349,8 +361,7 @@ export const register = (on) => {
       $.ui.status(`review: BLOCK (round ${roundsThisTurn}/${MAX_ROUNDS})`)
       return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness ran an adversarial review of this turn and it found BLOCKERS. Address each finding: fix it, or state why you reject it. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`].filter(Boolean).join("\n\n") }
     } catch (err) {
-      await notReviewed($, `${errText(err)}`)
-      return r
+      return await failClosed(errText(err))
     }
   })
 }

@@ -32,7 +32,9 @@ not addressed.
 
 - At most 2 blocking review rounds per turn; after that the status line says the rest of the turn is NOT
   reviewed.
-- The review runs every turn when it can, and reports when it cannot: a scanner failure, an unreadable
+- A review that cannot run (scanner failure, unreadable transcript, fork failure, an exception) BLOCKS the
+  stop and is retried at the next stop, up to the round cap; only past the cap is it let through as a skip.
+- Older note — superseded by the line above: a scanner failure, an unreadable
   transcript or a fork that fails twice does NOT block the stop (the model could not act on it). Each
   such skip is written to the transcript log as `REVIEW SKIPPED` and counted in the plugin store
   (`skipped`). The round cap counts the same way.
