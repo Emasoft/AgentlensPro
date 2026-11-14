@@ -30,14 +30,12 @@ not addressed.
 
 ## Limits
 
-- At most 2 blocking review rounds per turn; after that the status line says the rest of the turn is NOT
-  reviewed.
+- At most 2 blocking review rounds per turn; changes made after the second round are deferred (as a debt,
+  below) to the next stop, never dropped.
 - A review that cannot run (scanner failure, unreadable transcript, fork failure, an exception) BLOCKS the
-  stop and is retried at the next stop, up to the round cap; only past the cap is it let through as a skip.
-- Older note — superseded by the line above: a scanner failure, an unreadable
-  transcript or a fork that fails twice does NOT block the stop (the model could not act on it). Each
-  such skip is written to the transcript log as `REVIEW SKIPPED` and counted in the plugin store
-  (`skipped`). The round cap counts the same way.
+  stop and is retried at the next stop, up to the round cap. Past the cap nothing is dropped: the unreviewed
+  work is kept as a debt and the NEXT stop must review it (even if that turn changed nothing), logged as
+  `REVIEW DEFERRED`. The same holds for an interrupted turn whose review could not run.
 - The review fork has no tools: it judges what the conversation and the diff show it.
 - Cost: one fork per changing turn, three for a proposal, each re-reading the whole conversation from the
   prompt cache (at a 400k context, about 40k input-equivalent tokens per fork) plus its answer.

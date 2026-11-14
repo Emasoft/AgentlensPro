@@ -10,6 +10,10 @@ export type PendingReview = {
   // True once the text was injected into the next prompt's context.
   injected: boolean
   at: number
+  // True when a stop ended WITHOUT a harness review (failure past the retries, or the round cap): the next stop
+  // must review that work, even when its own turn changed nothing. debtWhy says why.
+  debt?: boolean
+  debtWhy?: string
 }
 
 export type LastSession = {

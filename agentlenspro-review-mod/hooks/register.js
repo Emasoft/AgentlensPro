@@ -189,7 +189,7 @@ async function runMeasure($, session, lastMessage) {
 }
 
 // ── REVIEW ─────────────────────────────────────────────────────────────────────────────────────
-function reviewPrompt({ interrupted, lastMessage, scan, measure, pending, git, round }) {
+function reviewPrompt({ interrupted, lastMessage, scan, measure, pending, debt, git, round }) {
   return [
     HARNESS_HEAD,
     "ROLE: REVIEW",
@@ -200,6 +200,7 @@ function reviewPrompt({ interrupted, lastMessage, scan, measure, pending, git, r
     `Scanner: work = ${scan.work ? `${scan.work.cause} — ${scan.work.detail}` : "none"}; proposal = ${scan.proposal}.`,
     measure ? `\n${measure}\n` : "",
     pending ? `An earlier INTERRUPTED turn was reviewed by the harness with these findings; check whether this turn addressed them:\n<<<\n${pending}\n>>>` : "",
+    debt ? `An earlier stop ended WITHOUT a harness review (${debt}). Review that earlier work too: it is in the conversation above.` : "",
     `Working tree, read by the harness:\n${git}`,
     "",
     "Review ONLY the most recent turn's work and claims. Hunt: a PROXY read in place of the thing (a pipe's exit status for the tool's, a preview for the file, one run for the variance, an assumed format for the real one); claims stronger than their evidence; broken references; untested or unverified changes; silent failure paths; destructive or irreversible actions without confirmation; scope beyond the request.",
@@ -234,9 +235,9 @@ async function runReview($, args) {
 async function reviewInterrupted($) {
   try {
     const session = await read($, sessionAtom)
-    if (!session) { await notReviewed($, "interrupted turn: no transcript path seen yet"); return }
+    if (!session) { await defer($, "interrupted turn: no transcript path seen yet"); return }
     const scan = await scanTurn($, session, true)
-    if (!scan.ok) { await notReviewed($, `interrupted turn: ${scan.why}`); return }
+    if (!scan.ok) { await defer($, `interrupted turn: ${scan.why}`); return }
     if (!scan.work && !scan.proposal) return
     const git = await gitContext($, session.cwd)
     const measure = scan.proposal ? await runMeasure($, session, null) : null
@@ -248,22 +249,26 @@ async function reviewInterrupted($) {
       const c = await $.model.complete({ model: "sonnet", system: reviewPrompt({ interrupted: true, lastMessage: null, scan, measure, pending: null, git, round: 1 }), prompt: `The interrupted conversation's last messages (JSON):\n${excerpt}`, maxTokens: 4000 })
       res = c.isAnswered ? parseVerdict(c.text.trim()) : { ok: false, why: `fork: ${res.why}; completion: ${c.reason}` }
     }
-    if (!res.ok) { await notReviewed($, `interrupted turn: ${res.why}`); return }
+    if (!res.ok) { await defer($, `interrupted turn: ${res.why}`); return }
     const text = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, interrupted turn)\n${res.text}`
     await update($, pendingAtom, () => ({ text, block: res.block, injected: false, at: Date.now() }))
     $.ui.log(text)
     $.ui.status(res.block ? "review: interrupted turn — BLOCK, findings go to the next prompt" : "review: interrupted turn — PASS")
   } catch (err) {
-    await notReviewed($, `interrupted turn: ${errText(err)}`)
+    await defer($, `interrupted turn: ${errText(err)}`)
   }
 }
 
 // A review that could not run is NOT a pass. The status line alone is lost in an unattended session, so
-// every skip is also written to the transcript log and counted in the plugin store (key "skipped").
-async function notReviewed($, why) {
-  $.ui.status(`review: NOT reviewed — ${why}`)
-  $.ui.log(`REVIEW SKIPPED (the harness could not review this turn): ${why}`)
-  try { const n = (await $.store.get("skipped")) || 0; await $.store.set("skipped", n + 1) } catch { /* the log line above already records it */ }
+// every deferral is also written to the transcript log and counted in the plugin store (key "deferred").
+// Nothing is ever dropped: a stop the harness could not review leaves a DEBT in session state, and the next
+// stop must review that work (it is in the conversation the fork reads), even when that turn changed nothing.
+async function defer($, why) {
+  $.ui.log(`REVIEW DEFERRED to the next stop (not dropped): ${why}`)
+  $.ui.status(`review: deferred — ${why}`)
+  try { const n = (await $.store.get("deferred")) || 0; await $.store.set("deferred", n + 1) } catch { /* the log line above records it */ }
+  const prev = await read($, pendingAtom)
+  await update($, pendingAtom, () => ({ ...(prev || { text: "", block: false, injected: true, at: Date.now() }), debt: true, debtWhy: why }))
 }
 export const register = (on) => {
   on("classic.SessionStart", async ($, e, next) => {
@@ -310,7 +315,7 @@ export const register = (on) => {
         $.ui.log(`REVIEW FAILED, stop blocked for a retry (round ${roundsThisTurn}/${MAX_ROUNDS}): ${why}`)
         return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness could not review this turn (${why}). End your turn again: the harness retries the review at the next stop. Do not spawn a review fork.`].filter(Boolean).join("\n\n") }
       }
-      await notReviewed($, `${why}; gave up after ${MAX_ROUNDS} rounds`)
+      await defer($, `${why}; ${MAX_ROUNDS} retries this turn failed`)
       return r
     }
     try {
@@ -321,31 +326,32 @@ export const register = (on) => {
       const scan = await scanTurn($, session, false)
       if (!scan.ok) return await failClosed(scan.why)
       const pendingBlock = pending && pending.block ? pending.text : null
+      const debt = pending && pending.debt ? pending.debtWhy : null
       const clearPending = async () => { if (pending) await update($, pendingAtom, () => null) }
-      if (!scan.work && !scan.proposal) {
+      if (!scan.work && !scan.proposal && !debt) {
         await clearPending()
         if (pendingBlock && roundsThisTurn < MAX_ROUNDS) {
           roundsThisTurn++
           return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness review of your INTERRUPTED earlier turn found BLOCKERS and this turn did not address them. Fix each one (or state why it is rejected), then end the turn.\n\n${pendingBlock}`].filter(Boolean).join("\n\n") }
         }
-        if (pendingBlock) await notReviewed($, `cap of ${MAX_ROUNDS} blocking rounds reached; the interrupted turn's BLOCK review was not re-checked`)
+        if (pendingBlock) await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached; the interrupted turn's BLOCK review was not re-checked`)
         return r
       }
       const workAt = scan.work ? scan.work.index : -1
-      if (workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal) {
+      if (!debt && workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal) {
         // Nothing new since the last harness review of this turn (a Stop re-fired after another hook blocked).
         await clearPending()
         return r
       }
       if (roundsThisTurn >= MAX_ROUNDS) {
-        await notReviewed($, `cap of ${MAX_ROUNDS} blocking rounds reached this turn`)
+        await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached this turn`)
         return r
       }
       $.ui.status(scan.proposal ? "review: measuring the proposal, then reviewing…" : "review: reviewing this turn…")
       const lastMessage = typeof e.last_assistant_message === "string" ? e.last_assistant_message : null
       const measure = scan.proposal ? await runMeasure($, session, lastMessage) : null
       const git = await gitContext($, session.cwd)
-      const res = await runReview($, { interrupted: false, lastMessage, scan, measure, pending: pendingBlock, git, round: roundsThisTurn + 1 })
+      const res = await runReview($, { interrupted: false, lastMessage, scan, measure, pending: pendingBlock, debt, git, round: roundsThisTurn + 1 })
       if (!res.ok) return await failClosed(`the review fork failed (${res.why})`)
       reviewedMark = { work: workAt, proposal: scan.proposalIndex }
       await clearPending()
