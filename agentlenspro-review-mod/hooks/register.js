@@ -45,21 +45,32 @@
 // with systemMessage!!! the adversarial review instead must be injected in the context and visible by both the agent and
 // the user!!"; "you don't want the subagent stop adversarial review to be triggered on the very adversarial review
 // subagent turn stop. that would become an infinite recursion of reviews. be careful."; "once it is been printed on
-// screen, it can be deleted."). classic.SubagentStop reviews a typed subagent's turn (Agent-tool forks included) with
-// $.model.complete on an explicit model over that agent's own messages, measuring when its last message carries the
-// proposal line. A report with findings blocks that subagent once (it continues and reads "Stop hook feedback"), except an
-// agent that ended with a SubagentHandback call: the engine discards a block after a turn that ended on a tool result
-// (measured live), so it is not blocked and its findings go to the parent only. A clean PASS does not block; a harness
-// failure never blocks it. Every report, and a note for every stop it did not review, also
-// goes to the parent's next prompt.submit. The coloured copy goes to <cwd>/.claude/tmp/agentlenspro-review-mod/
-// <session_id>__<agent_id>.txt, which show.py, registered on SubagentStop too, prints in that subagent's view and deletes.
-// Four recursion guards, each enough alone: (a) no agent id, agent_type "" (every $.model.fork) or a janitor agent;
-// (b) reentrancy while a subagent review calls the model; (c) a report-shaped last message or a ROLE: REVIEW/MEASURE
-// prompt; (d) MAX_ROUNDS reviews per agent turn and MAX_CONCURRENT_SUBAGENT_REVIEWS in flight. See SUBAGENT REVIEW.
+// screen, it can be deleted."). A typed subagent's turn (Agent-tool forks included) is reviewed with $.model.complete on
+// the pinned COMPLETION_MODEL over that agent's own messages, measuring when its last message carries the proposal line.
+// An agent that ends with text is reviewed at classic.SubagentStop: a report with findings blocks it once (it continues
+// and reads "Stop hook feedback"). An agent that reports with SubagentHandback is reviewed at that tool call (tool.call):
+// a report with findings refuses the call once, the agent reads it as the tool's error and can fix or reject each finding,
+// and its retried handback goes through (the engine discards a SubagentStop block after a turn that ended on a tool
+// result, measured live, so the stop is too late for it). A clean PASS does not block; a harness failure never blocks.
+// Every report, and a note for every turn it did not review, also goes to the parent's next prompt.submit. The coloured
+// copy goes to <cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>__<agent_id>.txt, which show.py, registered on
+// SubagentStop too, prints in that subagent's view and deletes. Reviews are completions, which fire no SubagentStop, so a
+// review cannot start another. Four recursion guards keep a main review's own fork from being reviewed (measured each
+// alone, test061/alone.mjs: (a) and (c) alone stop it; (b) alone stops it while the fork call is open, which is when its
+// SubagentStop fires; (d) alone bounds it to MAX_ROUNDS reviews): (a) no agent
+// id, agent_type "" (every $.model.fork), a loop $.agent.list() does not name (at a handback) or a janitor agent;
+// (b) reentrancy: a stop of an unlisted loop while any review calls the model; (c) a report-shaped last message or
+// a ROLE: REVIEW/MEASURE prompt; (d) MAX_ROUNDS reviews per agent turn, and MAX_CONCURRENT_SUBAGENT_REVIEWS review slots
+// (a FIFO wait, handed to the parent after SLOT_WAIT_MS). See SUBAGENT REVIEW.
 
 import { atom, read, update } from "claude-code"
 
 const MAX_ROUNDS = 2
+// The model of every $.model.complete this mod makes (a subagent review or measurement, an interrupted-turn fallback):
+// the full id, never the alias "sonnet". WHY: a completion result does not name the model an alias resolved to, so the
+// usage table could only print "rate unknown for sonnet"; with the full id lookupRates prices it. claude-sonnet-5-5 has
+// no row of its own in pricing.ts and is priced by the claude-sonnet-5 row (longest-prefix rule, as pricing.ts does).
+const COMPLETION_MODEL = "claude-sonnet-5-5"
 const DIFF_MAX = 40000
 const OBS_MAX = 4000
 const MAX_ASSUMPTIONS = 8
@@ -70,7 +81,7 @@ const MAX_ASSUMPTIONS = 8
 const pendingAtom = atom({ plugin: "agentlenspro-review-mod", key: "pendingReview" }, null)
 // The head of that injection: the agent must know it is the harness review of its own previous turn, and what to do.
 // 0.6.0: the same store also carries the reviews of SUBAGENT turns, each tagged "subagent <type> <id>" in its report header.
-const REVIEW_HEAD = "[agentlenspro-review-mod] The harness ran an adversarial review; the report follows, and the user sees it too. A report with no subagent tag reviews your PREVIOUS turn (\"interrupted turn\" marks a turn the user cut short); a report tagged \"subagent <type> <id>\" reviews that subagent's own turn (its header says whether that subagent was blocked once and saw the findings, or had already handed back), and a note says when a subagent's turn was not reviewed. Address every BLOCKER first, then apply each finding or state explicitly why you reject it, while you handle this prompt. Do not spawn a review fork."
+const REVIEW_HEAD = "[agentlenspro-review-mod] The harness ran an adversarial review; the report follows, and the user sees it too. A report with no subagent tag reviews your PREVIOUS turn (\"interrupted turn\" marks a turn the user cut short); a report tagged \"subagent <type> <id>\" reviews that subagent's own turn (its header says whether that subagent was blocked once, or had its handback refused once, and saw the findings, or had already handed back), and a note says when a subagent's turn was not reviewed. Address every BLOCKER first, then apply each finding or state explicitly why you reject it, while you handle this prompt. Do not spawn a review fork."
 // The main conversation's transcript path and cwd, from classic.* payloads (turn.complete carries neither).
 const sessionAtom = atom({ plugin: "agentlenspro-review-mod", key: "lastSession" }, null)
 
@@ -484,12 +495,12 @@ async function fork($, prompt, label) {
 // A subagent's review and measurement (0.6.0): one completion on an explicit model, retried once on an API error like a
 // fork. maxTokens is set because the default (1024) cuts a review short.
 async function complete($, prompt, label) {
-  const ask = () => $.model.complete({ model: SUBAGENT_MODEL, prompt, maxTokens: SUBAGENT_MAX_TOKENS, timeoutMs: SUBAGENT_TIMEOUT_MS })
+  const ask = () => $.model.complete({ model: COMPLETION_MODEL, prompt, maxTokens: SUBAGENT_MAX_TOKENS, timeoutMs: SUBAGENT_TIMEOUT_MS })
   let r = await ask()
-  const calls = [callRecord(label, SUBAGENT_MODEL, r)]
+  const calls = [callRecord(label, COMPLETION_MODEL, r)]
   if (!r.isAnswered && r.reason === "api-error") {
     r = await ask()
-    calls.push(callRecord(`${label} retry`, SUBAGENT_MODEL, r))
+    calls.push(callRecord(`${label} retry`, COMPLETION_MODEL, r))
   }
   return { r, calls }
 }
@@ -498,7 +509,10 @@ async function complete($, prompt, label) {
 // completes (a fork would read the MAIN thread). The prompts are the same; `subject` only adds the agent's messages.
 // A plain function, not a returned closure: `claude plugin validate` refuses `$` passed to anything else.
 async function callModel($, subject, prompt, label) {
-  return subject ? complete($, prompt, label) : fork($, prompt, label)
+  // Guard (b) counts EVERY review model call, the main thread's forks included: a main review's fork fires its own
+  // SubagentStop while the fork call is still open, so a stop of an unlisted loop inside that window is a review's own.
+  reviewDepth++
+  try { return subject ? await complete($, prompt, label) : await fork($, prompt, label) } finally { reviewDepth-- }
 }
 
 async function runMeasure($, session, lastMessage, subject = null) {
@@ -637,8 +651,8 @@ async function reviewInterrupted($, prompt, mark) {
       // A fork from the aborted conversation can fail; fall back to a plain completion over the transcript.
       let excerpt = ""
       try { excerpt = JSON.stringify((await $.session.messages()).slice(-40)).slice(-60000) } catch (err) { excerpt = `(messages unavailable: ${errText(err)})` }
-      const c = await $.model.complete({ model: "sonnet", system: reviewPrompt({ interrupted: true, lastMessage: null, scan, measure, pending: null, git, round: 1 }), prompt: `The interrupted conversation's last messages (JSON):\n${excerpt}`, maxTokens: 4000 })
-      calls.push(callRecord("review (interrupted, completion)", "sonnet", c))
+      const c = await $.model.complete({ model: COMPLETION_MODEL, system: reviewPrompt({ interrupted: true, lastMessage: null, scan, measure, pending: null, git, round: 1 }), prompt: `The interrupted conversation's last messages (JSON):\n${excerpt}`, maxTokens: 4000 })
+      calls.push(callRecord("review (interrupted, completion)", COMPLETION_MODEL, c))
       res = c.isAnswered ? parseVerdict(c.text.trim()) : { ok: false, why: `fork: ${res.why}; completion: ${c.reason}` }
     }
     if (!res.ok) { await defer($, `interrupted turn: ${res.why}`); return }
@@ -764,29 +778,77 @@ async function reviewAtStop($, e, sink) {
   }
 }
 // ── SUBAGENT REVIEW (0.6.0) ─────────────────────────────────────────────────────────────────────
-// A subagent's turn is reviewed at its SubagentStop with $.model.complete, never $.model.fork: a fork repeats the MAIN
-// thread's last request (measured: a fork inside SubagentStop read the main prefix, and once continued the main task),
-// and every fork fires a SubagentStop of its own (agent_type ""), which is the recursion guard (a) exists for. A
+// A subagent's turn is reviewed with $.model.complete (model COMPLETION_MODEL), never $.model.fork: a fork repeats the
+// MAIN thread's last request (measured: a fork inside SubagentStop read the main prefix, and once continued the main
+// task), and every fork fires a SubagentStop of its own (agent_type ""), which is the recursion guard (a) exists for. A
 // completion fires no SubagentStop, no agent.spawn and no turn.complete (measured, probe-060 A4). The conversation is
 // the agent's own `$.session.messages({ agentId })` rows (measured working at SubagentStop for typed agents), not the
-// agent_transcript_path file, whose last record is often not written yet when the hook runs (probe-060 A3).
-const SUBAGENT_MODEL = "sonnet"
+// agent_transcript_path file, whose last record is often not written yet when the hook runs (probe-060 A3). An agent
+// that ends with text is reviewed at its SubagentStop; one that reports with SubagentHandback at that tool call.
 const SUBAGENT_MAX_TOKENS = 4000
 const SUBAGENT_TIMEOUT_MS = 300000
 const MAX_CONCURRENT_SUBAGENT_REVIEWS = 2
+// How long a subagent turn waits for a review slot before its review is handed to the parent: 10 minutes.
+const SLOT_WAIT_MS = 600000
 // The conversation handed to the reviewer: its first prompt and as many of the newest messages as fit.
 const ROWS_MAX = 60000
 const ROW_PART_MAX = 2000
 // The janitor's agents (`ai-maestro-janitor:*`, or the bare `janitor-*` form some sessions list): their writes are the
 // janitor's actions (owner order 2026-09-15, same exclusion as review-gate's JANITOR_AGENT_RE).
 const JANITOR_AGENT = /^(?:ai-maestro-janitor:|janitor-)/
-// Per-agent state, keyed by agent_id: { rounds, mark, blocked }. It never touches the main thread's roundsThisTurn,
-// reviewedMark or debt; an entry goes at that agent's turn.complete.
+// Per-agent state, keyed by agent_id: { rounds, seen, blocked, denied, quiet, display }. It never touches the main
+// thread's roundsThisTurn, reviewedMark or debt; an entry goes at that agent's turn.complete (after its SubagentStop).
 const agentState = new Map()
-// Guard (b): >0 while a subagent review or measurement is calling the model.
-let subagentReviewDepth = 0
-// Guard (d), global half: subagent reviews in flight, from the first read to the last write.
-let activeSubagentReviews = 0
+function agentStateOf(id) {
+  let st = agentState.get(id)
+  if (!st) {
+    st = { rounds: 0, seen: null, blocked: false, denied: false, quiet: false, display: [] }
+    agentState.set(id, st)
+  }
+  return st
+}
+// Guard (b): >0 while any review or measurement model call is open (callModel), the main thread's forks included.
+let reviewDepth = 0
+
+// Guard (d), slots: a FIFO semaphore. WHY a wait and not a skip (round 2, coordinator 2026-11-15): with a skip, a fan-out
+// of N workers left all but two unreviewed. A released slot passes straight to the oldest waiter; a waiter whose time ran
+// out is marked settled and never takes a slot afterwards.
+let slotsInUse = 0
+const slotQueue = []
+function acquireSlot($, ms) {
+  if (slotsInUse < MAX_CONCURRENT_SUBAGENT_REVIEWS && slotQueue.length === 0) {
+    slotsInUse++
+    return Promise.resolve(true)
+  }
+  return new Promise((resolve) => {
+    const w = { resolve, settled: false }
+    slotQueue.push(w)
+    $.clock.after(ms, () => {
+      if (w.settled) return
+      w.settled = true
+      slotQueue.splice(slotQueue.indexOf(w), 1)
+      resolve(false)
+    })
+  })
+}
+function releaseSlot() {
+  while (slotQueue.length > 0) {
+    const w = slotQueue.shift()
+    if (!w.settled) { w.settled = true; w.resolve(true); return }
+  }
+  slotsInUse--
+}
+
+// The $.agent.list() entry of an agent loop, or null: the engine's forks (a $.model.fork, compaction, prompt suggestions)
+// and a workflow's agents are not listed. A list that cannot be read counts as "not listed".
+async function listedAgent($, id) {
+  try {
+    const list = await $.agent.list()
+    return (Array.isArray(list) && list.find((a) => a && a.id === id)) || null
+  } catch {
+    return null
+  }
+}
 
 function subagentOutOfScope(e) {
   if (!e || typeof e.agent_id !== "string" || e.agent_id === "") return true
@@ -897,68 +959,113 @@ async function skipSubagent($, sink, tag, why) {
   }
 }
 
-// One typed subagent's stop: read its messages, scan them, measure (proposal only), review. Returns the block text, or
-// null to let it stop. Every report also goes to the parent's next prompt.submit (storeForModel, never as a BLOCK record:
-// a stored BLOCK is read by the next MAIN Stop as an interrupted main turn's). The usage table goes to the display only.
-async function reviewSubagentStop($, e, sink, st, tag) {
+// What the gate needs of one subagent turn, or null for a reviewer's or a measurer's turn (guard (c)), or { why } when it
+// cannot be read. The final message is the handback's own at a SubagentHandback call; at a SubagentStop it is the event's,
+// or the last SubagentHandback message when the event carries none.
+async function readSubagentTurn($, ctx) {
+  const found = await $.session.messages({ agentId: ctx.agentId })
+  if (!Array.isArray(found)) return { why: `its messages could not be read (${found && found.deny ? found.deny : "no reason given"})` }
+  const rows = ownRows(found)
+  if (rows.length === 0) return { why: "it has no messages" }
+  // Guard (c), prompt half: an agent spawned as a reviewer or a measurer is never reviewed.
+  if (declaresReviewRole(rows[0].text)) return null
+  const lastMessage = ctx.handback !== null ? ctx.handback : ctx.eventMessage !== null ? ctx.eventMessage : handbackMessage(rows)
+  if (isReportText(lastMessage)) return null // guard (c) again, for a report handed back with SubagentHandback
+  return { rows, lastMessage, seen: turnFingerprint(rows, lastMessage) }
+}
+
+// What makes a turn "new" for the gate: its tool uses (SubagentHandback calls aside, a refused one included) and its final
+// message. A stop re-fired by another hook, or the SubagentStop after a handback this gate already reviewed, has the same
+// fingerprint and is not reviewed twice. Cheap on purpose: it is compared before the scanner runs.
+function turnFingerprint(rows, lastMessage) {
+  let tools = 0
+  for (const r of rows) if (r.role === "assistant") for (const u of r.toolUses || []) if (u && u.tool !== "SubagentHandback") tools++
+  return JSON.stringify([tools, lastMessage])
+}
+
+const nonEmptyText = (s) => (typeof s === "string" && s.trim() !== "" ? s : null)
+
+// One subagent turn through the gate, at its SubagentStop or at its SubagentHandback call: read it, let through what needs
+// no review, wait for a review slot, review. Returns the block (or deny) text, or null to let the agent go on. Every stop
+// it does not review, short of guard (c) and "nothing new", is noted for the user and for the parent (skipSubagent).
+async function gateSubagentTurn($, ctx, sink, st, tag) {
+  let turn
+  try { turn = await readSubagentTurn($, ctx) } catch (err) { turn = { why: errText(err) } }
+  if (turn === null) return null
+  if (turn.why) { await skipSubagent($, sink, tag, turn.why); return null }
+  // `seen` is null until this agent's turn was reviewed once: an agent with no work and no final message is still reviewed.
+  if (st.seen !== null && turn.seen === st.seen) return null
+  if (st.rounds >= MAX_ROUNDS) {
+    // Guard (d), per-agent half: at most MAX_ROUNDS reviews of one agent's turn. Noted once per new state of the turn.
+    st.seen = turn.seen
+    if (!st.quiet) await skipSubagent($, sink, tag, `cap of ${MAX_ROUNDS} review rounds reached for this agent's turn`)
+    return null
+  }
+  // Guard (d), slots: at most MAX_CONCURRENT_SUBAGENT_REVIEWS reviews in flight; the others wait in arrival order. A wait
+  // past SLOT_WAIT_MS hands this turn to the parent instead (never a silent drop), and ends this turn's reviews.
+  if (!(await acquireSlot($, SLOT_WAIT_MS))) {
+    st.rounds = MAX_ROUNDS
+    st.quiet = true
+    await skipSubagent($, sink, tag, `no review slot freed within ${SLOT_WAIT_MS / 60000} min (${MAX_CONCURRENT_SUBAGENT_REVIEWS} subagent reviews run at a time), so its review is queued to you: review its handback yourself`)
+    return null
+  }
+  try { return await reviewSubagent($, ctx, turn, sink, st, tag) } finally { releaseSlot() }
+}
+
+// One subagent turn's review: scan its messages, measure (proposal only), review. Returns the block or deny text, or null.
+// Every report also goes to the parent's next prompt.submit (storeForModel, never as a BLOCK record: a stored BLOCK is
+// read by the next MAIN Stop as an interrupted main turn's). The usage table goes to the display only.
+async function reviewSubagent($, ctx, turn, sink, st, tag) {
   const calls = []
   const notReviewed = async (why) => { await skipSubagent($, sink, tag, why); return null }
+  const { rows, lastMessage } = turn
+  const atHandback = ctx.handback !== null
   try {
-    const found = await $.session.messages({ agentId: e.agent_id })
-    if (!Array.isArray(found)) return await notReviewed(`its messages could not be read (${found && found.deny ? found.deny : "no reason given"})`)
-    const rows = ownRows(found)
-    if (rows.length === 0) return await notReviewed("it has no messages")
-    // Guard (c), prompt half: an agent spawned as a reviewer or a measurer is never reviewed.
-    if (declaresReviewRole(rows[0].text)) return null
-    const fromEvent = typeof e.last_assistant_message === "string" && e.last_assistant_message.trim() !== "" ? e.last_assistant_message : null
-    const lastMessage = fromEvent !== null ? fromEvent : handbackMessage(rows)
-    if (isReportText(lastMessage)) return null // guard (c) again, for a report handed back with SubagentHandback
-    const at = displayPath(e.cwd, e.session_id, e.agent_id)
-    if (!at) return await notReviewed(`no scan path (cwd ${JSON.stringify(e.cwd)}, session_id ${JSON.stringify(e.session_id)})`)
+    const at = displayPath(ctx.cwd, ctx.sessionId, ctx.agentId)
+    if (!at) return await notReviewed(`no scan path (cwd ${JSON.stringify(ctx.cwd)}, session_id ${JSON.stringify(ctx.sessionId)})`)
     // $.fs has no remove: the copy is emptied once read, and show.py deletes it (this stop's) or sweeps it (after 120 s).
     const scanFile = `${at.dir}/${at.base}.scan.jsonl`
     await ensureDisplayDir($, at.dir)
     await $.fs.write(scanFile, syntheticTranscript(rows))
     let scan
-    try { scan = await scanTurn($, { transcriptPath: scanFile, cwd: e.cwd }, false) } finally {
+    try { scan = await scanTurn($, { transcriptPath: scanFile, cwd: ctx.cwd }, false) } finally {
       try { await $.fs.write(scanFile, "") } catch { /* show.py deletes it */ }
     }
     if (!scan.ok) return await notReviewed(scan.why)
     // The measurement runs only when the agent's LAST message carries the proposal line (owner spec 0.6.0).
     const proposal = lastMessage !== null && PROPOSAL_LINE.test(lastMessage)
     if (proposal) scan.proposal = true
-    const workAt = scan.work ? scan.work.index : -1
-    // A stop re-fired with nothing new (another hook blocked it) is not reviewed twice. `mark` is null until this agent's
-    // turn was reviewed once: an agent that ends with no work and no final message is still reviewed at its first stop.
-    if (st.mark && workAt <= st.mark.work && scan.proposalIndex <= st.mark.proposal && lastMessage === st.mark.msg) return null
     st.rounds++
     $.ui.status(proposal ? `review: measuring and reviewing ${tag}…` : `review: reviewing ${tag}…`)
     const subject = { label: tag, rows: boundedRows(rows) }
-    const git = await gitContext($, e.cwd)
-    let measured = null
-    let res
-    subagentReviewDepth++
-    try {
-      measured = proposal ? await runMeasure($, { cwd: e.cwd }, lastMessage, subject) : null
-      if (measured) calls.push(...measured.calls)
-      res = await runReview($, { interrupted: false, lastMessage, scan, measure: measured ? measured.text : null, pending: null, debt: null, git, round: st.rounds, subject }, "review (subagent)")
-      calls.push(...res.calls)
-    } finally { subagentReviewDepth-- }
+    const git = await gitContext($, ctx.cwd)
+    const measured = proposal ? await runMeasure($, { cwd: ctx.cwd }, lastMessage, subject) : null
+    if (measured) calls.push(...measured.calls)
+    const res = await runReview($, { interrupted: false, lastMessage, scan, measure: measured ? measured.text : null, pending: null, debt: null, git, round: st.rounds, subject }, "review (subagent)")
+    calls.push(...res.calls)
     if (!res.ok) return await notReviewed(`the review failed (${res.why})`)
-    st.mark = { work: workAt, proposal: scan.proposalIndex, msg: lastMessage }
+    st.seen = turn.seen
     const findings = res.block || hasFindings(res.text)
-    // An agent that ended with a SubagentHandback call has no final text (the event's message is ""), and the engine
-    // DISCARDS a SubagentStop block after a turn that ended on a tool result: measured live 2026-11-14 on 2.1.325, debug log
-    // "[end-turn] Stop hook block discarded (turn ended by tool result, no model re-invoke)", no "Stop hook feedback" in the
-    // agent's transcript. Such an agent cannot be made to act on the report: it is not blocked, and the report says so.
-    const handedBack = fromEvent === null && lastMessage !== null
-    const outcome = !findings ? "it passed with no findings" : handedBack ? "it ended with SubagentHandback, which ends its run, so it was not blocked: these findings are for its parent" : "the subagent was blocked once with these findings"
+    // At a SubagentStop, an agent that ended with a SubagentHandback call has no final text (the event's message is ""),
+    // and the engine DISCARDS a SubagentStop block after a turn that ended on a tool result: measured live 2026-11-14 on
+    // 2.1.325, debug log "[end-turn] Stop hook block discarded (turn ended by tool result, no model re-invoke)", no "Stop
+    // hook feedback" in the agent's transcript. Such a stop is not blocked; its findings go to the parent. The handback
+    // gate (tool.call) reviews that agent BEFORE the call instead, where a refusal does reach it.
+    const handedBack = !atHandback && ctx.eventMessage === null && lastMessage !== null
+    const outcome = !findings ? "it passed with no findings"
+      : atHandback ? "its SubagentHandback was refused once with these findings; it can fix each one or state why it rejects it, then hand back again"
+      : handedBack ? "it ended with SubagentHandback, which ends its run, so it was not blocked: these findings are for its parent"
+      : "the subagent was blocked once with these findings"
     const report = `${measured ? measured.text + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, ${tag}: ${outcome})\n${res.text}`
     sink.add(layoutReport(report, true))
     logLines($, layoutReport(report).join("\n"), { to: "debug" })
     await storeForModel($, report, false)
     if (!findings) { $.ui.status(`review: ${tag} PASS`); return null }
     if (handedBack) { $.ui.status(`review: ${tag} has findings; it handed back, so they go to the parent`); return null }
+    if (atHandback) {
+      $.ui.status(`review: ${tag} handback refused once (round ${st.rounds}/${MAX_ROUNDS})`)
+      return `[agentlenspro-review-mod] The harness reviewed your turn before accepting your handback, and the review has findings${res.block ? ", BLOCKERS among them" : ""}. Address each finding: fix it, or state in your report why you reject it, then call SubagentHandback again; that call is accepted. Do not spawn a review fork.\n\n${report}`
+    }
     st.blocked = true
     $.ui.status(`review: ${tag} blocked once (round ${st.rounds}/${MAX_ROUNDS})`)
     return `[agentlenspro-review-mod] The harness ran an adversarial review of your turn and it has findings${res.block ? ", BLOCKERS among them" : ""}. Address each finding: fix it, or state why you reject it, then finish. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`
@@ -1049,35 +1156,32 @@ export const register = (on) => {
   // the reason classic.Stop does: the plugin's SubagentStop command hook (hooks/show.py) runs inside next(e) (measured on
   // 2.1.325, probe-060 A2) and prints this agent's display file in the subagent's own view.
   // RECURSION (owner: "you don't want the subagent stop adversarial review to be triggered on the very adversarial review
-  // subagent turn stop. that would become an infinite recursion of reviews. be careful."): four guards, each one enough
-  // on its own to stop a review of a review: (a) out of scope, (b) reentrancy, (c) report-shaped or roled agent,
-  // (d) the per-agent round cap and the global cap on concurrent subagent reviews.
+  // subagent turn stop. that would become an infinite recursion of reviews. be careful."): reviews are completions (no
+  // SubagentStop of their own), and four guards keep a review's fork out: (a) out of scope, (b) reentrancy for agents
+  // $.agent.list() does not name, (c) report-shaped or roled agent, (d) the per-agent round cap and the review slots (at
+  // most two in flight; a third waits its turn). (a), (b) and (c) each alone stop a main review's fork; (d) alone bounds it.
   on("classic.SubagentStop", async ($, e, next) => {
     // Guard (a), before anything is read or written: no agent id; agent_type "" (EVERY $.model.fork, the main review's own
     // forks included, plus internal agents such as prompt suggestions and /btw; measured, probe-060 A1/A4); a janitor agent.
     if (subagentOutOfScope(e)) return next(e)
     // Guard (c), message half: a reviewer's own report is never reviewed. The prompt half runs once the messages are read.
     if (isReportText(e.last_assistant_message)) return next(e)
-    const st = agentState.get(e.agent_id) || { rounds: 0, mark: null, blocked: false }
+    const st = agentStateOf(e.agent_id)
     // A stop of this agent means the continuation a block asked for has run (or this is its first stop): that block is spent.
     st.blocked = false
-    agentState.set(e.agent_id, st)
     const sink = displaySink()
+    // A review run at this agent's SubagentHandback call left its coloured copy in st.display: it is shown in this stop's file.
+    sink.add(st.display.splice(0))
     const tag = subagentTag(e)
     let mine = null
-    if (subagentReviewDepth > 0) {
-      // Guard (b): while a subagent review or measurement is calling the model, any SubagentStop passes untouched. COST, by
-      // spec: a typed sibling that stops in that window is not reviewed here either; the parent is told (skipSubagent).
-      await skipSubagent($, sink, tag, "another subagent review was calling the model (reentrancy guard)")
-    } else if (activeSubagentReviews >= MAX_CONCURRENT_SUBAGENT_REVIEWS) {
-      // Guard (d), global half: at most MAX_CONCURRENT_SUBAGENT_REVIEWS subagent reviews in flight at once.
-      await skipSubagent($, sink, tag, `${activeSubagentReviews} subagent reviews were already running (cap ${MAX_CONCURRENT_SUBAGENT_REVIEWS})`)
-    } else if (st.rounds >= MAX_ROUNDS) {
-      // Guard (d), per-agent half: at most MAX_ROUNDS reviews of one agent's turn.
-      await skipSubagent($, sink, tag, `cap of ${MAX_ROUNDS} review rounds reached for this agent's turn`)
+    if (reviewDepth > 0 && !(await listedAgent($, e.agent_id))) {
+      // Guard (b): while any review or measurement is calling the model (the main thread's forks included), a stop of a loop $.agent.list() does not
+      // name passes untouched. Real agents, siblings of a fan-out included, are listed and reviewed (they wait for a slot);
+      // a $.model.fork, an engine fork and a workflow's agents are not listed (measured 2026-11-15, probe-061: a prompt
+      // suggestion's SubagentStop, agent_type "", was absent from the list while the typed agent was present).
+      await skipSubagent($, sink, tag, "it stopped while a review was calling the model and $.agent.list() does not name it (reentrancy guard)")
     } else {
-      activeSubagentReviews++
-      try { mine = await reviewSubagentStop($, e, sink, st, tag) } finally { activeSubagentReviews-- }
+      mine = await gateSubagentTurn($, { agentId: e.agent_id, cwd: e.cwd, sessionId: e.session_id, eventMessage: nonEmptyText(e.last_assistant_message), handback: null }, sink, st, tag)
     }
     // Written for every typed agent's stop, empty when the sink is, so a leftover is overwritten before show.py reads it.
     try { await writeDisplay($, e.cwd, e.session_id, sink.lines, e.agent_id) } catch (err) {
@@ -1085,5 +1189,41 @@ export const register = (on) => {
     }
     const r = await next(e)
     return mine ? { ...r, block: [r && r.block, mine].filter(Boolean).join("\n\n") } : r
+  })
+
+  // THE HANDBACK GATE (0.6.0 round 2). An agent that reports with SubagentHandback ends its run on a tool result, and the
+  // engine discards a SubagentStop block after such a turn (measured live, run 1: "[end-turn] Stop hook block discarded
+  // (turn ended by tool result, no model re-invoke)"). Its turn is reviewed HERE instead, before the handback runs: a
+  // report with findings refuses the call ONCE ({ deny }: the agent reads it as the tool's error), so the agent can fix or
+  // reject each finding and hand back again; the retried handback goes through unreviewed, and the SubagentStop that
+  // follows reviews again only if the agent did something new (no new tool use, same message: nothing new). Measured
+  // 2026-11-15 (probe-061, 2.1.325): tool.call fires for SubagentHandback with agentId and the input's `message`; a deny
+  // reached the agent as a tool_use_error, the agent answered it ("...conflicts with your instruction..., so I'm ignoring
+  // it") and called SubagentHandback again 3 s later; classic.PreToolUse carries no agentId, so it cannot be used here.
+  on("tool.call", { tool: "SubagentHandback" }, async ($, e, next) => {
+    // Guard (a): no agent id, or a loop $.agent.list() does not name (forks of the engine, a workflow's agents), or an
+    // untyped or janitor agent.
+    if (!e || typeof e.agentId !== "string" || e.agentId === "") return next(e)
+    const info = await listedAgent($, e.agentId)
+    if (!info || subagentOutOfScope({ agent_id: e.agentId, agent_type: info.type })) return next(e)
+    // Guard (c), message half: a report handed back is a reviewer's or a measurer's.
+    if (isReportText(e.message)) return next(e)
+    const st = agentStateOf(e.agentId)
+    // One refusal per agent turn: the retried handback goes through. Past the round cap it goes through too; the
+    // SubagentStop that follows tells the parent.
+    if (st.denied || st.rounds >= MAX_ROUNDS) return next(e)
+    let cwd
+    let sessionId
+    try { cwd = await $.session.cwd(); sessionId = await $.session.id() } catch (err) {
+      $.ui.status(`review: handback of ${e.agentId} not reviewed here (${errText(err)}); its SubagentStop reviews it`)
+      return next(e)
+    }
+    const tag = subagentTag({ agent_type: info.type, agent_id: e.agentId })
+    // This review's coloured copy waits in st.display for the agent's SubagentStop, whose file show.py prints.
+    const sink = { lines: st.display, add: (rows) => { st.display.push(...rows) } }
+    const denial = await gateSubagentTurn($, { agentId: e.agentId, cwd, sessionId, eventMessage: null, handback: typeof e.message === "string" ? e.message : "" }, sink, st, tag)
+    if (!denial) return next(e)
+    st.denied = true
+    return { deny: denial }
   })
 }
