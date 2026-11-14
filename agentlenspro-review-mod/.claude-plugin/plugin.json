@@ -1,6 +1,6 @@
 {
   "name": "agentlenspro-review-mod",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "The harness runs the adversarial REVIEW (and, for a proposal, the MEASUREMENT) of every turn that changed something, via $.model.fork, and blocks the stop on BLOCKERS; interrupted turns are reviewed too. The model spawns nothing. Needs the agentlenspro CLI with work/proposal in review-gate --json-verdict.",
   "types": "./types/index.d.ts"
 }

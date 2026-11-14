@@ -85,10 +85,22 @@ async function gitContext($, cwd) {
   }
   const stat = await run(["diff", "HEAD", "--stat"])
   if (stat === null) return "(not a git work tree)"
+  const status = (await run(["status", "--short"])) || ""
   const diff = (await run(["diff", "HEAD"])) || ""
   const log = (await run(["log", "-3", "--stat", "--format=commit %h %s"])) || ""
-  const cut = diff.length > DIFF_MAX ? diff.slice(0, DIFF_MAX) + `\n[... diff cut at ${DIFF_MAX} of ${diff.length} chars]` : diff
-  return `git diff HEAD --stat:\n${stat || "(clean)"}\n\nlast 3 commits:\n${log}\n\ngit diff HEAD:\n${cut || "(empty)"}`
+  // `git diff HEAD` never shows an UNTRACKED file, so a new file (the commonest write) would be invisible to
+  // the review: list them and include their text, capped.
+  const untracked = ((await run(["ls-files", "--others", "--exclude-standard"])) || "").split("\n").filter(Boolean)
+  let newFiles = ""
+  for (const f of untracked.slice(0, 20)) {
+    let body
+    try { body = String(await $.fs.read(`${cwd}/${f}`)) } catch (err) { body = `(unreadable: ${errText(err)})` }
+    newFiles += `\n--- new file ${f}\n${body.length > 4000 ? body.slice(0, 4000) + `\n[... cut at 4000 of ${body.length} chars]` : body}\n`
+  }
+  if (untracked.length > 20) newFiles += `\n[... ${untracked.length - 20} more untracked files not shown]\n`
+  const all = diff + newFiles
+  const cut = all.length > DIFF_MAX ? all.slice(0, DIFF_MAX) + `\n[... diff cut at ${DIFF_MAX} of ${all.length} chars]` : all
+  return `git status --short:\n${status || "(clean)"}\n\ngit diff HEAD --stat:\n${stat || "(no tracked changes)"}\n\nlast 3 commits:\n${log}\n\ngit diff HEAD + new files:\n${cut || "(empty)"}`
 }
 
 // ── MEASURE ────────────────────────────────────────────────────────────────────────────────────
