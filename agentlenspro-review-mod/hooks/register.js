@@ -31,9 +31,10 @@
 // USAGE. The token usage and the deduced cost of every model call the mod makes are shown to the user only; they are
 // never put in a block string or a context injection.
 // DISPLAY (0.5.0). At a Stop the user-only rows (every report, PASS and BLOCK, the usage table, failures) are written in
-// ANSI colour to a per-session file that the plugin's Stop command hook (hooks/show.py) prints as a systemMessage, which
-// the model never receives (see USER DISPLAY); the review therefore runs before next(e). An interrupted turn fires no
-// Stop, so its rows still go to $.ui.log, plain (a log row is dim and turns ESC into U+FFFD; see REPORT LAYOUT).
+// ANSI colour to a per-session temp file under <cwd>/.claude/tmp/ (0.5.1) that the plugin's Stop command hook
+// (hooks/show.py) prints as a systemMessage, which the model never receives (see USER DISPLAY); the review therefore
+// runs before next(e). An interrupted turn fires no Stop, so its rows still go to $.ui.log, plain (a log row is dim and
+// turns ESC into U+FFFD; see REPORT LAYOUT).
 
 import { atom, read, update } from "claude-code"
 
@@ -266,12 +267,13 @@ let sessionUsage = emptySessionUsage()
 // The rows of one main-thread Stop (reports, usage, failures) are collected in a sink and written ONCE, before
 // classic.Stop calls next(e): the plugin's own Stop command hook (hooks/show.py) runs INSIDE that next(e) (measured
 // 2026-11-14 on 2.1.325, `claude -p`: "cmd display_exists=False" logged between "mod before-next" and "mod after-next"),
-// prints the file as a systemMessage and deletes it. The path is computed from HOME on both sides:
-// $HOME/.claude/plugins/data/agentlenspro-review-mod/display/<session_id>.txt. Not CLAUDE_PLUGIN_DATA: the command hook
-// gets it but this process does not ($.env.get gave undefined in the same probe), and its marketplace suffix cannot be
-// derived here. The file is written on EVERY main-thread Stop, empty when there is nothing to show, so a file an earlier
-// Stop left behind is overwritten before show.py reads it (show.py also drops a file older than 120 s).
-const DISPLAY_SUBDIR = ".claude/plugins/data/agentlenspro-review-mod/display"
+// prints the file as a systemMessage and deletes it. The path is computed on both sides from the Stop payload, which
+// both receive (the mod's classic.Stop `e` is the JSON the command hook reads on stdin): <cwd>/DISPLAY_DIR/<session_id>.txt.
+// Owner decision 0.5.1: no HOME, no USERPROFILE, no CLAUDE_PLUGIN_DATA (this process cannot read it). The folder is a
+// temp folder: the mod writes a `*` .gitignore in it so nothing shows in git status, and show.py sweeps files older
+// than an hour. The file is written on EVERY main-thread Stop, empty when there is nothing to show, so a file an
+// earlier Stop left behind is overwritten before show.py reads it (show.py also drops a file older than 120 s).
+const DISPLAY_DIR = ".claude/tmp/agentlenspro-review-mod"
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/
 const ANSI_SGR = /\u001b\[[0-9;]*m/g
 
@@ -280,10 +282,19 @@ function displaySink() {
   return { lines, add: (rows) => { lines.push(...rows) } }
 }
 
-async function writeDisplay($, sessionId, lines) {
-  const home = await $.env.get("HOME")
-  if (!home || typeof sessionId !== "string" || !SESSION_ID.test(sessionId)) throw new Error(`no display path (HOME ${home ? "set" : "unset"}, session_id ${JSON.stringify(sessionId)})`)
-  await $.fs.write(`${home}/${DISPLAY_SUBDIR}/${sessionId}.txt`, lines.length > 0 ? `${lines.join("\n")}\n` : "")
+// Pure: the display file of a Stop, or null when the payload gives no absolute cwd or no plain session id.
+function displayPath(cwd, sessionId) {
+  if (typeof cwd !== "string" || !/^(?:\/|[A-Za-z]:[\\/])/.test(cwd)) return null
+  if (typeof sessionId !== "string" || !SESSION_ID.test(sessionId)) return null
+  return { dir: `${cwd.replace(/[\\/]+$/, "")}/${DISPLAY_DIR}`, file: `${sessionId}.txt` }
+}
+
+async function writeDisplay($, cwd, sessionId, lines) {
+  const at = displayPath(cwd, sessionId)
+  if (!at) throw new Error(`no display path (cwd ${JSON.stringify(cwd)}, session_id ${JSON.stringify(sessionId)})`)
+  // $.fs.write creates the folder; the .gitignore keeps the temp files out of git status from the first write on.
+  if (!(await $.fs.exists(`${at.dir}/.gitignore`))) await $.fs.write(`${at.dir}/.gitignore`, "*\n")
+  await $.fs.write(`${at.dir}/${at.file}`, lines.length > 0 ? `${lines.join("\n")}\n` : "")
 }
 
 // One user-only message: into the Stop display (coloured, plus a plain copy in the debug log) when a sink is given,
@@ -705,9 +716,10 @@ export const register = (on) => {
     // proposed; no clearPending there, so a debt or a pending BLOCK stays for the next non-janitor stop.
     const mine = isJanitorPrompt(turnPrompt) ? null : await reviewAtStop($, e, sink)
     // Written on every main-thread Stop, empty when the sink is: a leftover from an earlier Stop is never shown.
-    try { await writeDisplay($, e.session_id, sink.lines) } catch (err) {
-      // The rows must not be lost: fall back to the plain dim transcript rows.
-      logLines($, [`[review-mod] display file not written (${errText(err)}); plain copy follows`, ...sink.lines.map((l) => l.replace(ANSI_SGR, ""))].join("\n"))
+    // When it cannot be written (no usable cwd in the payload, a refused write) the rows must not be lost: they fall
+    // back to plain dim transcript rows. A Stop with nothing to show logs nothing then.
+    try { await writeDisplay($, e.cwd, e.session_id, sink.lines) } catch (err) {
+      if (sink.lines.length > 0) logLines($, [`[review-mod] display file not written (${errText(err)}); plain copy follows`, ...sink.lines.map((l) => l.replace(ANSI_SGR, ""))].join("\n"))
     }
     const r = await next(e)
     return mine ? { ...r, block: [r.block, mine].filter(Boolean).join("\n\n") } : r

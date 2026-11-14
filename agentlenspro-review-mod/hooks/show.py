@@ -5,42 +5,67 @@ with ESC turned into U+FFFD. A command hook's {"systemMessage": ...} is drawn wi
 and the model never receives it (measured on Claude Code 2.1.325, 2026-11-14).
 
 Handoff: the mod (hooks/register.js, writeDisplay) writes the finished, coloured text ONCE per main-thread Stop to
-$HOME/.claude/plugins/data/agentlenspro-review-mod/display/<session_id>.txt BEFORE it calls next(e); this hook runs
-inside that next(e) (measured), so the file is complete when it is read. The path is computed from HOME on both sides:
-CLAUDE_PLUGIN_DATA is not used because the mod process cannot see it. The mod writes the file on every main-thread
-Stop, empty when there is nothing to show, so a leftover is overwritten before it could be shown; as a second guard a
-file older than STALE_SECONDS is deleted unread. The file is always deleted here (the mod cannot delete: $.fs has no
-remove). Exactly one JSON object, or nothing, goes to stdout, and the exit code is always 0 (non-zero takes the hook
-error path, not the display path).
+<cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>.txt BEFORE it calls next(e); this hook runs inside that next(e)
+(measured), so the file is complete when it is read. Both sides take cwd and session_id from the same Stop payload
+(owner decision 0.5.1: no HOME, no USERPROFILE, no CLAUDE_PLUGIN_DATA). The mod writes the file on every main-thread
+Stop, empty when there is nothing to show, so a leftover is overwritten before it could be shown.
+
+The folder holds temp files only (owner: "once it is been printed on screen, it can be deleted"): this session's file
+is deleted as soon as it is read; every other file older than STALE_SECONDS is deleted on every run (a crashed
+session's leftover); a younger one is kept, because it may be another session in the same project between its mod
+write and its own Stop hook. A `*` .gitignore keeps the folder out of git status. Nothing outside the folder is
+touched, and a project where the mod never wrote has no folder and is left alone. Exactly one JSON object, or nothing,
+goes to stdout, and the exit code is always 0 (non-zero takes the hook error path, not the display path).
 """
 import json
 import os
 import re
+import stat
 import sys
 import time
 
-SUBDIR = (".claude", "plugins", "data", "agentlenspro-review-mod", "display")
+DISPLAY_DIR = (".claude", "tmp", "agentlenspro-review-mod")
 SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 STALE_SECONDS = 120
+KEEP = ".gitignore"
 # Hook output is capped at 10,000 characters (hooks docs); past it the output is replaced by a preview and the colour is
 # lost. The budget is measured on the SERIALIZED payload (json.dumps spends 6 characters per ESC), with a margin.
 BUDGET = 9000
 RESET = "\x1b[0m"
+NOTE = RESET + "\n(truncated)"
 
 
-def fit(text, full_name):
+def fit(text):
     """Drop whole trailing lines until the serialized payload, note included, fits BUDGET.
 
     Line-safe: an SGR escape never contains a newline, so a cut at a line boundary never splits one, and the mod
-    closes every coloured span on its own line. The RESET in the note closes anything left open anyway."""
+    closes every coloured span on its own line. The RESET in the note closes anything left open anyway. Nothing of the
+    cut text is kept (owner: once printed, it can be deleted)."""
     lines = text.split("\n")
-    note = f"{RESET}\n[review-mod: report cut to fit the 10,000-character hook limit; full text in ~/{'/'.join(SUBDIR)}/{full_name}]"
     while lines:
-        candidate = "\n".join(lines) + note
+        candidate = "\n".join(lines) + NOTE
         if len(json.dumps({"systemMessage": candidate})) <= BUDGET:
             return candidate
         lines.pop()
-    return note.lstrip("\n")
+    return NOTE.lstrip("\n")
+
+
+def sweep(folder, now):
+    """Delete every regular file in the folder older than STALE_SECONDS, except the .gitignore; never follow a link."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    for name in names:
+        if name == KEEP:
+            continue
+        path = os.path.join(folder, name)
+        try:
+            st = os.lstat(path)
+            if stat.S_ISREG(st.st_mode) and now - st.st_mtime > STALE_SECONDS:
+                os.remove(path)
+        except OSError:
+            continue  # gone already (the other session's own hook) or not ours to remove: leave it
 
 
 def main():
@@ -48,29 +73,39 @@ def main():
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
         return 0
-    session_id = payload.get("session_id") if isinstance(payload, dict) else None
-    home = os.environ.get("HOME")
-    if not home or not isinstance(session_id, str) or not SESSION_ID.match(session_id):
+    if not isinstance(payload, dict):
         return 0
-    folder = os.path.join(home, *SUBDIR)
+    cwd, session_id = payload.get("cwd"), payload.get("session_id")
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or not isinstance(session_id, str) or not SESSION_ID.match(session_id):
+        return 0
+    folder = os.path.join(cwd, *DISPLAY_DIR)
+    if not os.path.isdir(folder):
+        return 0
+    gitignore = os.path.join(folder, KEEP)
+    if not os.path.exists(gitignore):
+        try:
+            with open(gitignore, "w", encoding="utf-8") as fh:
+                fh.write("*\n")
+        except OSError:
+            pass  # the report still prints; the mod writes the same file before each Stop
+    now = time.time()
     path = os.path.join(folder, session_id + ".txt")
+    text = ""
     try:
-        age = time.time() - os.stat(path).st_mtime
+        age = now - os.stat(path).st_mtime
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
-    except FileNotFoundError:
-        return 0
-    if age > STALE_SECONDS or text.strip() == "":
         os.remove(path)
-        return 0
+        if age > STALE_SECONDS:
+            text = ""
+    except OSError:  # no file this Stop (the usual case when the mod wrote nothing), or unreadable
+        pass
+    sweep(folder, now)
     text = text.rstrip("\n")
+    if text.strip() == "":
+        return 0
     if len(json.dumps({"systemMessage": text})) > BUDGET:
-        # Keep the whole report under a name this hook never reads as current, so the cut is not a loss.
-        full_name = "full-" + time.strftime("%Y%m%d_%H%M%S") + ".txt"
-        os.replace(path, os.path.join(folder, full_name))
-        text = fit(text, full_name)
-    else:
-        os.remove(path)
+        text = fit(text)
     print(json.dumps({"systemMessage": text}))
     return 0
 

@@ -23,11 +23,14 @@ At every main-thread **Stop**:
 4. **VERDICT: BLOCK** → the stop is blocked with the report; the model must address each finding in the same
    turn. **VERDICT: PASS** → the model is not re-prompted.
 5. Every report (PASS and BLOCK), the token usage and cost of the review calls, and any review failure are
-   shown to the **user only**, in colour: the mod writes them to
-   `~/.claude/plugins/data/agentlenspro-review-mod/display/<session_id>.txt` before the other Stop hooks run,
-   and the plugin's Stop command hook `hooks/show.py` prints that file as a `systemMessage` (drawn as
-   `Stop says: ...`, never sent to the model) and deletes it. Reports past the 10,000-character hook limit are
-   cut at a line, and the whole text is kept next to it as `full-<timestamp>.txt`.
+   shown to the **user only**, in colour: the mod writes them to a temp file,
+   `<cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>.txt` (cwd and session id from the Stop payload),
+   before the other Stop hooks run, and the plugin's Stop command hook `hooks/show.py` prints that file as a
+   `systemMessage` (drawn as `Stop says: ...`, never sent to the model) and deletes it. The folder holds temp
+   files only: a `*` `.gitignore` keeps it out of git status, and every run deletes any file there older than
+   120 seconds (a leftover of a crashed session). A report past the 10,000-character hook limit is cut at a line
+   and ends with `(truncated)`; nothing of it is kept. If the file cannot be written (no cwd in the payload, a
+   refused write), the rows go to the transcript log, plain.
 
 An **interrupted turn** (Esc) fires no Stop. `turn.complete` with `isAborted` schedules the same review from
 a timer; the report is shown at once, injected into the next prompt, and the next Stop blocks if a BLOCK was
