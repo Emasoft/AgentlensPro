@@ -4,7 +4,7 @@ title: Convert review-gate enforcement to mods so an interrupt can never skip th
 column: dev
 status: tasked
 created: 2026-11-11T16:24:22+0100
-updated: 2026-11-15T00:36:35+0100
+updated: 2026-11-15T00:56:08+0100
 implementation-commits: [42b140f5, 43baaf9b, dd79f249, bcf2b35b, b6440a9f, ef178cd6]
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
@@ -95,3 +95,4 @@ approval-datetime: 2026-11-11T16:24:22+0100
 - 2026-11-11T18:37:38+0100 — column → todo by user. design complete (reports_dev/mods-review-gate/20261111_design.md); starting Phase 0 --json-verdict flag
 2026-11-14 — 0.5.2 committed 98d367f7 (reviews injected into model context at next prompt.submit, usage screen-only), published plugin 4cac69c + marketplace e64a84e, installed user scope, cache cmp == repo. 0.6.0 subagent reviews: probes (reports_dev/review-mod/20261114_231927+0100-probe-060-assumptions.md) measured Agent-tool fork agent_type 'fork', $.model.fork agent_type '', $.model.complete fires no SubagentStop; builder dispatched.
 2026-11-15 — 0.6.0 committed 75c0123b + e1eec60f: every subagent turn reviewed (SubagentStop + SubagentHandback tool.call gate), $.model.complete on claude-sonnet-5-5, 4 recursion guards (guard-alone matrix measured), FIFO 2-slot wait, coloured display in the subagent view, tagged copy to the parent. Published plugin 7dc7234 + marketplace bump, installed user scope. Reports: reports_dev/review-mod/20261114_235818+0100-subagent-reviews-060.md, 20261115_002402+0100-subagent-reviews-060-round2.md. Open: Desktop display unchecked; claude-sonnet-5-5 priced at sonnet-5 rates (no pricing row).
+2026-11-15 — new owner directive (verbatim): "the mod should also send the token usage for the adverdarial review fork agent and the measuring agent report to agentlenspro, so it is recorded." Covers all four mod call kinds: main review fork, main measure fork, subagent review/measure completions, interrupted-turn completion. Probe-070 (does CC already emit/record them) and an ingest-path read dispatched. Facts so far: user settings export OTEL to localhost:4318; AgentlensPro is DISABLED (~/.agentlens/DISABLED since 2026-10-27), so nothing is recorded until the owner re-enables; this session's JSONL holds 289 api-request rows, all querySource repl_main_thread, none from mod forks.
