@@ -30,6 +30,8 @@
 // and the diff show it.
 // USAGE. The token usage and the deduced cost of every model call the mod makes are logged to the user only, through
 // $.ui.log (a dim system line the model never sees); they are never put in a block string or a context injection.
+// LAYOUT. The user-only rows (reports, usage) are laid out by layoutReport / usageTable: a box gutter and colour from
+// emoji glyphs, because a log row is plain dim text that no render hook can restyle (see REPORT LAYOUT).
 
 import { atom, read, update } from "claude-code"
 
@@ -77,8 +79,9 @@ const errText = (err) => (err && err.message ? err.message : String(err))
 // ── USAGE / COST (pure part; shown to the user only, through $.ui.log) ───────────────────────────
 // The terminal draws ONE $.ui.log call as ONE row and renders a newline inside it as a garbage character, so every
 // log text that can hold a newline goes through logLines: one call per line, an empty line as a single space.
-function logLines($, text) {
-  for (const line of String(text).split(/\r?\n/)) $.ui.log(line === "" ? " " : line)
+// `options` is $.ui.log own (`{ to: "debug" }` keeps the text off screen).
+function logLines($, text, options) {
+  for (const line of String(text).split(/\r?\n/)) $.ui.log(line === "" ? " " : line, options)
 }
 
 // RATES mirrored from src/shared/pricing.ts (PRICING_LAST_UPDATED 2026-11-01); update together. USD per MTok:
@@ -134,14 +137,16 @@ const fmtRange = (lo, hi) => {
 }
 const emptySessionUsage = () => ({ lo: 0, hi: 0, calls: 0, unpriced: 0 })
 
-// calls: [{ label, model (null = the session model), usage | reason }]. Returns the one line and the new session total.
+// calls: [{ label, model (null = the session model), usage | reason }]. Returns the one plain line (the debug log and any
+// host that reads text), the structured rows usageTable lays out for the transcript, and the new session total.
 function formatUsageLine(calls, sessionModel, prev) {
   const parts = []
+  const rows = []
   const tot = { inp: 0, cr: 0, cw: 0, out: 0, lo: 0, hi: 0, billed: 0 }
   const models = []
   const unpriced = []
   for (const c of calls) {
-    if (!c.usage) { parts.push(`${c.label}: no reply (${c.reason}), not billed`); continue }
+    if (!c.usage) { parts.push(`${c.label}: no reply (${c.reason}), not billed`); rows.push({ label: c.label, cost: `no reply (${c.reason}), not billed`, tokens: null }); continue }
     const id = c.model || sessionModel
     const u = c.usage
     const inp = u.input_tokens || 0
@@ -154,25 +159,97 @@ function formatUsageLine(calls, sessionModel, prev) {
     let cost
     if (rt) { const k = callCostUsd(u, rt); tot.lo += k.lo; tot.hi += k.hi; cost = fmtRange(k.lo, k.hi) } else { unpriced.push(id); cost = `rate unknown for ${id}` }
     parts.push(`${c.label}: in ${fmtInt(inp)} · cache-read ${fmtInt(cr)} · cache-write ${fmtInt(cw)} · out ${fmtInt(out)} · ${cost}`)
+    rows.push({ label: c.label, cost, tokens: { inp, cr, cw, out } })
   }
   const session = { lo: prev.lo + tot.lo, hi: prev.hi + tot.hi, calls: prev.calls + tot.billed, unpriced: prev.unpriced + unpriced.length }
   const unp = unpriced.length ? ` + unpriced call(s) on ${[...new Set(unpriced)].join(", ")}` : ""
-  parts.push(`total this turn: in ${fmtInt(tot.inp)} · cache-read ${fmtInt(tot.cr)} · cache-write ${fmtInt(tot.cw)} · out ${fmtInt(tot.out)} · ${fmtRange(tot.lo, tot.hi)}${unp} (cache writes at 5m–1h) · model ${models.join(", ") || sessionModel}`)
+  const model = models.join(", ") || sessionModel
+  parts.push(`total this turn: in ${fmtInt(tot.inp)} · cache-read ${fmtInt(tot.cr)} · cache-write ${fmtInt(tot.cw)} · out ${fmtInt(tot.out)} · ${fmtRange(tot.lo, tot.hi)}${unp} (cache writes at 5m–1h) · model ${model}`)
   const sessionUnp = session.unpriced ? ` (excludes ${session.unpriced} unpriced)` : ""
-  return { line: `[review-mod usage] ${parts.join(" | ")} | session total: ${fmtRange(session.lo, session.hi)} over ${session.calls} calls${sessionUnp}`, session }
+  const sessionText = `${fmtRange(session.lo, session.hi)} over ${session.calls} calls${sessionUnp}`
+  const table = { model, rows, total: { cost: `${fmtRange(tot.lo, tot.hi)}${unp}`, tokens: tot }, session: sessionText }
+  return { line: `[review-mod usage] ${parts.join(" | ")} | session total: ${sessionText}`, table, session }
+}
+
+// The transcript layout of one usage cycle: a header, one cost row plus one token row per call, the turn total, and
+// the session total. Rows stay short (the terminal prefixes each with the plugin name and wraps a long one with no
+// gutter); colour comes from the leading glyph only, since a $.ui.log row is plain dim text (escapes become U+FFFD).
+// The transcript layout of one usage cycle: a header, a cost row plus a token row per call, the turn total, and the
+// session total. Rows stay short: the terminal prefixes each with the plugin name (27 cells) and wraps a long one
+// with no gutter, so a token row is kept near 53 cells (an 80-column terminal). Colour comes from the leading glyph
+// only, since a $.ui.log row is plain dim text (escapes become U+FFFD). Token counts stay exact.
+function usageTable(table) {
+  const pad = Math.max(10, ...table.rows.map((r) => r.label.length))
+  const tok = (t) => `│  in ${fmtInt(t.inp)} · out ${fmtInt(t.out)} · cache r ${fmtInt(t.cr)} / w ${fmtInt(t.cw)}`
+  const lines = ["╭─ 💰 [review-mod usage]", `│ model ${table.model}`, "│ $ spans the 5m–1h cache-write rates"]
+  for (const r of table.rows) {
+    lines.push(`│ ${r.label.padEnd(pad)}  ${r.cost}`)
+    if (r.tokens) lines.push(tok(r.tokens))
+  }
+  lines.push(`│ ${"this turn".padEnd(pad)}  ${table.total.cost}`, tok(table.total.tokens))
+  lines.push(`╰─ session total ${table.session}`)
+  return lines
 }
 // ── END USAGE / COST (pure part) ──────────────────────────────────────────────────────────────────
+
+// ── REPORT LAYOUT (pure part; the user-only copy of a report) ─────────────────────────────────────
+// A $.ui.log row is ONE plain dim line: no render site is raised for it (probe 2026-11-14 on 2.1.325: a catch-all
+// ui.render hook saw InfoNotice only for the startup "Debug mode" notice, never for a log row), and an ESC byte is
+// drawn as U+FFFD, so neither a render hook nor ANSI escapes can colour it. The layout therefore lives in the text:
+// a box gutter, and colour from default-emoji glyphs, which a -p / SDK host still receives as readable ui_log text.
+// It is applied ONLY where a report is logged for the user: the block string, the pending-review injection and the
+// review prompt keep the raw text, because they reach the model. Total: every input line comes out once, in order;
+// a line it does not recognise passes through unchanged behind the gutter.
+const SEVERITY_GLYPH = { "BLOCKER": "🟥", "SHOULD-FIX": "🟨", "NIT": "⬜" }
+const MEASURE_GLYPH = { confirmed: "✅", refuted: "❌", unmeasurable: "🟡" }
+function layoutReport(text) {
+  const out = []
+  let section = null // "review" | "measure" while a header is open
+  const close = () => { if (section) out.push("╰─"); section = null }
+  for (const raw of String(text).split(/\r?\n/)) {
+    // Bold markers are drawn literally in a plain row; a heading, quote or bullet mark only hides the keyword.
+    const line = raw.replace(/\*\*/g, "").trimEnd()
+    const key = line.trim().replace(/^(?:[#>]+\s*|[-•]\s+)/, "")
+    const g = section ? "│ " : ""
+    let m
+    if ((m = key.match(/^\[AGENTLENSPRO-REVIEW-REPORT\]\s*(.*)$/))) { close(); section = "review"; out.push(`╭─ 🔍 [AGENTLENSPRO-REVIEW-REPORT] ${m[1]}`.trimEnd()); continue }
+    if ((m = key.match(/^\[AGENTLENSPRO-MEASURE-REPORT\]\s*(.*)$/))) { close(); section = "measure"; out.push(`╭─ 📏 [AGENTLENSPRO-MEASURE-REPORT] ${m[1]}`.trimEnd()); continue }
+    if (key === "") { out.push(section ? "│" : " "); continue }
+    if ((m = key.match(/^VERDICT:\s*(PASS|BLOCK)\b/i))) { out.push(`${g}${m[1].toUpperCase() === "PASS" ? "🟢" : "🔴"} ${key}`); continue }
+    if ((m = key.match(/^(?:(\d+)[.)]\s*)?\[?(BLOCKER|SHOULD-FIX|NIT)\]?(?=[\s:—–-]|$)\s*(.*)$/))) {
+      out.push(`${g}${SEVERITY_GLYPH[m[2]]} ${m[1] ? `${m[1]}. ` : ""}[${m[2]}] ${m[3].replace(/^:\s*/, "")}`.trimEnd())
+      continue
+    }
+    if ((m = key.match(/^WEAKEST LINK:\s*(.*?)\s+[—–-]+\s+SETTLE WITH:\s*(.*)$/))) { out.push(`${g}🔗 WEAKEST LINK: ${m[1]}`, `${g}🧪 SETTLE WITH: ${m[2]}`); continue }
+    if (/^WEAKEST LINK:/.test(key)) { out.push(`${g}🔗 ${key}`); continue }
+    if (/^(?:Strongest reason|Most likely way)/i.test(key)) { out.push(`${g}💭 ${key}`); continue }
+    if (/^(?:\d+[.)]\s*)?ASSUMPTION:/.test(key)) {
+      if (out.length > 0 && !out[out.length - 1].startsWith("╭─") && out[out.length - 1] !== "│") out.push(section ? "│" : " ")
+      out.push(`${g}◆ ${key}`)
+      continue
+    }
+    if ((m = key.match(/^LOAD-BEARING REFUTED:\s*(.*)$/i))) { out.push(`${g}${/^(?:none|n\/a|-|—)?\.?$/i.test(m[1].trim()) ? "🟢" : "🔴"} ${key}`); continue }
+    if ((m = key.match(/\bVERDICT:\s*(confirmed|refuted|unmeasurable)\b/i))) { out.push(`${g}    ${MEASURE_GLYPH[m[1].toLowerCase()]} ${key}`); continue }
+    if (/^(?:COMMAND|OBSERVED|EXPECT):/.test(key)) { out.push(`${g}    ${key}`); continue }
+    out.push(`${g}${line}`)
+  }
+  close()
+  return out
+}
+// ── END REPORT LAYOUT (pure part) ─────────────────────────────────────────────────────────────────
 
 // Running total for this session, reset on classic.SessionStart.
 let sessionUsage = emptySessionUsage()
 
-// One user-only usage line for the model calls of one review cycle. A failure here is reported, never thrown: it
+// One user-only usage table for the model calls of one review cycle. A failure here is reported, never thrown: it
 // must not turn a finished review into a failed one.
 async function logUsage($, calls) {
   try {
-    const { line, session } = formatUsageLine(calls, await $.session.model(), sessionUsage)
+    const { line, table, session } = formatUsageLine(calls, await $.session.model(), sessionUsage)
     sessionUsage = session
-    logLines($, line)
+    logLines($, usageTable(table).join("\n"))
+    // The one-line form goes to the debug log too, where one grep finds a whole cycle.
+    logLines($, line, { to: "debug" })
   } catch (err) {
     logLines($, `[review-mod usage] could not be computed: ${errText(err)}`)
   }
@@ -418,7 +495,7 @@ async function reviewInterrupted($, prompt) {
     if (!res.ok) { await defer($, `interrupted turn: ${res.why}`); return }
     const text = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, interrupted turn)\n${res.text}`
     await update($, pendingAtom, () => ({ text, block: res.block, injected: false, at: Date.now() }))
-    logLines($, text)
+    logLines($, layoutReport(text).join("\n"))
     $.ui.status(res.block ? "review: interrupted turn — BLOCK, findings go to the next prompt" : "review: interrupted turn — PASS")
   } catch (err) {
     await defer($, `interrupted turn: ${errText(err)}`)
@@ -543,7 +620,7 @@ export const register = (on) => {
       await clearPending()
       const report = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness)\n${res.text}`
       if (!res.block) {
-        logLines($, report)
+        logLines($, layoutReport(report).join("\n"))
         $.ui.status("review: PASS")
         // PASS is logged only: Stop additionalContext may start a continuation turn (unmeasured), costing a
         // model turn per changing turn. The report stays in the transcript log for the user.
