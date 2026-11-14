@@ -5,8 +5,11 @@
 // the same for the measurement."
 //
 // HOW. At every main-thread Stop the mod asks the shared scanner (`agentlenspro review-gate
-// --json-verdict`) what the turn did. When the turn has work (a write, a write-shaped command, a worker
-// return that wrote) or a proposal line, the mod itself runs:
+// --json-verdict`) what the turn did. The REVIEW runs at every main turn (answers, claims and read-only commands
+// included), except (owner 2026-11-14): a janitor-originated turn is NEVER reviewed ("janitor heartbeat or
+// chores are absolutely excluded from the adversarial review"; a pending debt waits for the next non-janitor
+// stop), and an agent-message turn is exempt only when it wrote and proposed nothing. The MEASUREMENT runs
+// only when the turn carries the proposal line. The mod itself runs:
 //   - MEASURE (proposal only): a `$.model.fork` lists the proposal's load-bearing assumptions, each with
 //     one read-only command; the mod runs those commands itself through `$.process.run` (argv, no shell,
 //     an allowlist of read-only programs) and a second fork turns the observed output into verdicts;
@@ -40,8 +43,28 @@ const sessionAtom = atom({ plugin: "agentlenspro-review-mod", key: "lastSession"
 
 // Blocking rounds in the current turn; reset when a new prompt starts a turn.
 let roundsThisTurn = 0
+// The prompt that opened the current turn (classic.UserPromptSubmit); decides the janitor / agent-message exemptions.
+let turnPrompt = null
 // The proposal marker line, mirrored from src/cli/reviewGateTriggers.ts PROPOSAL_LINE (bold or heading prefix, any dash).
 const PROPOSAL_LINE = /^[ \t]*(?:\*\*|#{1,6}[ \t]*)?PROPOSAL FOR ACTION [-–—] PLEASE REVIEW\b/m
+// Owner 2026-11-14: "janitor turn must never be reviewved no matter what it says" and "janitor heartbeat or
+// chores are absolutely excluded from the adversarial review". A turn opened by a janitor bracket tag
+// ([janitor-heartbeat], [janitor-resume], ...) or a janitor slash command/skill is NEVER reviewed, whatever it
+// wrote or proposed; classic.Stop returns before measuring or reviewing and leaves any debt pending. Janitor
+// subagents (memory/repair/security chores) are already excluded because classic.Stop returns on e.agent_id.
+const JANITOR_PROMPT = /^\s*(?:\[janitor-[a-z-]+\]|\/janitor-|\/ai-maestro-janitor:janitor-)|<command-name>\/(?:ai-maestro-janitor:)?janitor-|<command-message>(?:ai-maestro-janitor:)?janitor-/
+function isJanitorPrompt(prompt) {
+  return typeof prompt === "string" && JANITOR_PROMPT.test(prompt)
+}
+// Other agents' messages/reports (notification, cross-session, teammate) are exempt ONLY when the turn wrote
+// nothing, proposed nothing and carries no debt, so work done in such a turn is still reviewed.
+const AGENT_MSG_PROMPT = /^\s*(?:<task-notification>|<cross-session-message\b|<teammate-message\b)/
+function shouldReview({ work, proposal, debt, lastMessage, prompt }) {
+  if (work || proposal || debt) return true
+  if (lastMessage === null || lastMessage.trim() === "") return false
+  if (typeof prompt === "string" && AGENT_MSG_PROMPT.test(prompt)) return false
+  return true
+}
 // The turn-relative line indexes of the work and proposal the last review covered. A Stop that another hook
 // blocked fires again with the SAME work; re-reviewing it would bill a whole-context fork per block (up to
 // the 9-block cap). Reset at turn.complete.
@@ -218,10 +241,10 @@ function reviewPrompt({ interrupted, lastMessage, scan, measure, pending, debt, 
     debt ? `An earlier stop ended WITHOUT a harness review (${debt}). Review that earlier work too: it is in the conversation above.` : "",
     `Working tree, read by the harness:\n${git}`,
     "",
-    "Review ONLY the most recent turn's work and claims. Hunt: a PROXY read in place of the thing (a pipe's exit status for the tool's, a preview for the file, one run for the variance, an assumed format for the real one); claims stronger than their evidence; broken references; untested or unverified changes; silent failure paths; destructive or irreversible actions without confirmation; scope beyond the request.",
+    "Review EVERYTHING the most recent turn did or proposed: its claims and answers, its reasoning, every command it ran (read-only ones included), any proposal, and any change. A turn with no change is still reviewed: hunt false or unsupported claims, answers that skip what was asked, and conclusions stronger than the evidence shown. Also hunt: a PROXY read in place of the thing (a pipe's exit status for the tool's, a preview for the file, one run for the variance, an assumed format for the real one); broken references; untested or unverified changes; silent failure paths; destructive or irreversible actions without confirmation; scope beyond the request.",
     "You are the REVIEWER, not the agent: write about the main agent in the third person (\"the agent\", \"the turn\"). Never write \"I\", \"me\" or \"my\" about the agent's actions.",
     "Never recommend, in a finding or in SETTLE WITH, an action the user forbade in the conversation (for example running code the user said not to run); if the only settling check is forbidden, write that instead of the command.",
-    "Answer both: the strongest reason NOT to have made this change, and the most likely way it is wrong.",
+    "Answer both: the strongest reason NOT to have done what the turn did, and the most likely way it is wrong.",
     "OUTPUT FORMAT, strictly:",
     "Line 1: exactly \"VERDICT: PASS\" or \"VERDICT: BLOCK\" (BLOCK only when at least one finding is a BLOCKER).",
     "Then numbered findings: [BLOCKER|SHOULD-FIX|NIT] claim — evidence — fix.",
@@ -249,7 +272,8 @@ async function runReview($, args) {
 }
 
 // The interrupted turn's review, from a timer: outside the aborted event, so the fork is not cut by it.
-async function reviewInterrupted($) {
+async function reviewInterrupted($, prompt) {
+  if (isJanitorPrompt(prompt)) return // owner: janitor turns are never reviewed (the scheduler checks too)
   try {
     const session = await read($, sessionAtom)
     if (!session) { await defer($, "interrupted turn: no transcript path seen yet"); return }
@@ -296,6 +320,8 @@ export const register = (on) => {
   on("classic.UserPromptSubmit", async ($, e, next) => {
     // The round cap is NOT reset here: UserPromptSubmit also fires for hand-backs (probe M5) and maybe for a
     // Stop-block continuation, which would reset the cap and loop. It resets at turn.complete only.
+    // Main-thread prompts only: a subagent prompt must not overwrite the turn's prompt.
+    if (e && !e.agent_id) turnPrompt = typeof e.prompt === "string" ? e.prompt : null
     try { await rememberSession($, e) } catch (err) { $.ui.status(`review: session not remembered — ${errText(err)}`) }
     return next(e)
   })
@@ -315,14 +341,19 @@ export const register = (on) => {
 
   on("turn.complete", async ($, e, next) => {
     if (e && !e.agentId) { roundsThisTurn = 0; reviewedMark = { work: -1, proposal: -1, msg: null } }
-    if (e && e.isAborted && !e.agentId) $.clock.after(1500, () => reviewInterrupted($))
+    // The prompt is captured now: a new prompt may overwrite turnPrompt before the timer fires.
+    if (e && e.isAborted && !e.agentId && !isJanitorPrompt(turnPrompt)) { const prompt = turnPrompt; $.clock.after(1500, () => reviewInterrupted($, prompt)) }
     return next(e)
   })
 
   // THE GATE. Runs the measurement and the review itself and blocks the stop on a BLOCK verdict.
   on("classic.Stop", async ($, e, next) => {
     const r = await next(e)
-    if (!e || e.agent_id) return r
+    if (!e || e.agent_id) return r // janitor subagents (memory/repair/security chores) are subagents: excluded here
+    // Owner: janitor-originated turns (heartbeat, chores) are NEVER reviewed or measured, whatever they wrote or
+    // proposed. Return before everything else: no clearPending, so a debt or a pending BLOCK stays for the next
+    // non-janitor stop.
+    if (isJanitorPrompt(turnPrompt)) return r
     // A review that could not run must not let the stop through (owner: "unskippable"). It blocks and the next
     // stop retries, up to MAX_ROUNDS per turn; past that it is logged as skipped (the engine's own 9-block cap
     // would end the turn anyway, and an endless block would wedge the session).
@@ -351,7 +382,7 @@ export const register = (on) => {
       const pendingBlock = pending && pending.block ? pending.text : null
       const debt = pending && pending.debt ? pending.debtWhy : null
       const clearPending = async () => { if (pending) await update($, pendingAtom, () => null) }
-      if (!scan.work && !scan.proposal && !debt) {
+      if (!shouldReview({ work: scan.work, proposal: scan.proposal, debt, lastMessage, prompt: turnPrompt })) {
         await clearPending()
         if (pendingBlock && roundsThisTurn < MAX_ROUNDS) {
           roundsThisTurn++
@@ -361,7 +392,8 @@ export const register = (on) => {
         return r
       }
       const workAt = scan.work ? scan.work.index : -1
-      if (!debt && workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal && !(proposalFromLast && lastMessage !== reviewedMark.msg)) {
+      // A Stop re-fired with the same final message is skipped; a new final message is new agent output and is reviewed.
+      if (!debt && workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal && lastMessage === reviewedMark.msg) {
         // Nothing new since the last harness review of this turn (a Stop re-fired after another hook blocked).
         await clearPending()
         return r
