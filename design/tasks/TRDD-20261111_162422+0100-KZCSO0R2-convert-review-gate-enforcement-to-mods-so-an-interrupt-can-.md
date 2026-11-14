@@ -4,7 +4,7 @@ title: Convert review-gate enforcement to mods so an interrupt can never skip th
 column: dev
 status: tasked
 created: 2026-11-11T16:24:22+0100
-updated: 2026-11-14T22:50:37+0100
+updated: 2026-11-14T23:21:06+0100
 implementation-commits: [42b140f5, 43baaf9b, dd79f249, bcf2b35b, b6440a9f, ef178cd6]
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
@@ -93,3 +93,4 @@ approval-datetime: 2026-11-11T16:24:22+0100
 
 - 2026-11-11T16:24:22+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-11T18:37:38+0100 — column → todo by user. design complete (reports_dev/mods-review-gate/20261111_design.md); starting Phase 0 --json-verdict flag
+2026-11-14 — 0.5.2 committed 98d367f7 (reviews injected into model context at next prompt.submit, usage screen-only), published plugin 4cac69c + marketplace e64a84e, installed user scope, cache cmp == repo. 0.6.0 subagent reviews: probes (reports_dev/review-mod/20261114_231927+0100-probe-060-assumptions.md) measured Agent-tool fork agent_type 'fork', $.model.fork agent_type '', $.model.complete fires no SubagentStop; builder dispatched.
