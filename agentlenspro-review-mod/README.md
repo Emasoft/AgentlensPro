@@ -1,50 +1,56 @@
 # agentlenspro-review-mod
 
-Phase 1 scaffold for TRDD-KZCSO0R2 — a Claude Code plugin (mod) whose hooks module detects an unreviewed interrupted turn and injects a review demand into the next prompt. It does not yet enforce the review.
+A Claude Code mod that makes the adversarial review part of the harness cycle. The model is never asked to
+spawn a reviewer: the mod runs the review itself at the end of every turn that changed something, and
+blocks the stop when the review finds blockers.
 
 ## What it does
 
-The Stop settings hook (`agentlenspro review-gate` in `~/.claude/settings.json`) fires only when Claude finishes responding normally. When the user interrupts (Esc/Ctrl-C), the turn ends with `isAborted` and NO Stop event — so a turn that made write-shaped changes with no credited REVIEW fork ends unreviewed. This mod covers that interrupted turn:
+At every main-thread **Stop**:
 
-- **`classic.UserPromptSubmit`, `classic.SessionStart`** — remember the main conversation `transcript_path` and `cwd` from the settings-hook payload (the `turn.complete` event carries no transcript path and `$.session` exposes none). `classic.UserPromptSubmit` fires for a typed prompt, a mod-submitted prompt and a subagent hand-back (probe M5); a cron-started turn is unmeasured and `classic.SessionStart` covers it. `classic.PreToolUse` is not used (see Open items). They always pass the event on.
-- **`turn.complete`** — skips subagent turns. A turn that is not aborted is passed untouched (the second net is off). For an aborted turn with no remembered path it shows a status line (cannot scan) and passes. Otherwise it runs the shared scanner via `agentlenspro review-gate --json-verdict --transcript <path> --cwd <cwd> --ignore-interrupt-floor`, stores a pending demand in `$.state`, shows a status line, and attempts `$.prompt.submit` to restart the demand as a new turn. On a non-aborted turn that call resolved and started a new turn (probe M8); the aborted case is unmeasured, and the docs say it is refused after an Esc until the user next types, in which case the demand arrives with the next prompt. A scanner failure (cannot start, non-zero exit, unparseable output, unreadable transcript, or an `agentlenspro` build too old to know `--ignore-interrupt-floor`) or an error thrown by the handler shows a status line and queues nothing; a later clean scan clears that status line. The non-aborted second-net scan exists in the code but is disabled (`SECOND_NET_ENABLED = false`).
-- **`prompt.submit`** — if a pending demand exists, injects it as Claude-read context (a plain string entry) into the turn about to start, then clears the pending flag. The demand is shown once.
+1. Asks the shared scanner what the turn did:
+   `agentlenspro review-gate --json-verdict --transcript <t> --cwd <c>`. It reads the verdict's `work`
+   and `proposal` fields, which are reported whatever review credits the turn carries, so a fork the model
+   spawned on its own cannot skip the harness review.
+2. If the turn has a **proposal** (a line starting `PROPOSAL FOR ACTION - PLEASE REVIEW`), runs the
+   **MEASUREMENT**: a `$.model.fork` lists the proposal's load-bearing assumptions, each with one read-only
+   command; the mod runs those commands itself with `$.process.run` (argument list, no shell, a read-only
+   program allowlist with write flags refused); a second fork turns the observed output into
+   confirmed / refuted / unmeasurable verdicts.
+3. If the turn has **work** or a proposal, runs the **REVIEW**: a `$.model.fork` over the whole
+   conversation (served from the prompt cache), plus the turn's final message, the measure report and the
+   `git diff HEAD` the mod reads (so a worker's writes are reviewed too).
+4. **VERDICT: BLOCK** → the stop is blocked with the report; the model must address each finding in the same
+   turn. **VERDICT: PASS** → the report is written to the transcript log (the user sees it; the model is
+   not re-prompted).
 
-Handlers fail open (never wedge the session). The mod never registers `classic.Stop` with a block result — no double-blocking, no 9-block cap fight. The mod covers interrupted turns only: the second net for a normal turn end (for example a failed Stop hook) exists in the code but is off (`SECOND_NET_ENABLED = false`), so a failed Stop hook is NOT covered.
+An **interrupted turn** (Esc) fires no Stop. `turn.complete` with `isAborted` schedules the same review from
+a timer; the report is shown at once, injected into the next prompt, and the next Stop blocks if a BLOCK was
+not addressed.
 
-## Design report
+## Limits
 
-`reports_dev/mods-review-gate/20261111_design.md` (sections Q1-Q4 and implementation plan steps 3-4; gitignored, local only).
+- At most 2 blocking review rounds per turn; after that the status line says the rest of the turn is NOT
+  reviewed.
+- The review runs every turn when it can, and reports when it cannot: a scanner failure, an unreadable
+  transcript or a fork that fails twice does NOT block the stop (the model could not act on it). Each
+  such skip is written to the transcript log as `REVIEW SKIPPED` and counted in the plugin store
+  (`skipped`). The round cap counts the same way.
+- The review fork has no tools: it judges what the conversation and the diff show it.
+- Cost: one fork per changing turn, three for a proposal, each re-reading the whole conversation from the
+  prompt cache (at a 400k context, about 40k input-equivalent tokens per fork) plus its answer.
+- The fork repeats the main thread's last request, which does not contain the final answer; the final
+  answer reaches the review only through the Stop payload's optional `last_assistant_message`.
 
-## Deployment
+## Requirements
 
-Do NOT install this mod yet: it has only been loaded in a throwaway probe session and its aborted-turn path has never run.
+- The `agentlenspro` CLI on PATH, with `work` and `proposal` in `review-gate --json-verdict`
+  (AgentlensPro TRDD-KZCSO0R2). An older CLI is refused on the status line rather than reviewing less.
+- When this mod is installed, remove the settings hooks `agentlenspro review-gate` (Stop, SubagentStop) and
+  `agentlenspro review-supervisor`: they ask the model to spawn review forks, which this mod replaces.
 
-Dev loop first:
+## Install
 
 ```bash
-claude --plugin-dir ./agentlenspro-review-mod --debug   # run from the repository root
+claude plugin install agentlenspro-review-mod@emasoft-plugins
 ```
-
-Then install via local marketplace. The settings hooks STAY REGISTERED — Phase 1 changes no `settings.json` entries, so there is no enforcement window: if the mod fails to load, the Stop gate is unchanged.
-
-## Open items
-
-- **Exact `$.prompt.submit` refusal shape unverified** — the live docs (v2.1.304+) only say "refused"; after an Esc it is refused until the user next types. When it is refused NOTHING retries: `turn.complete` does not fire again for that turn, and the only delivery path is the `prompt.submit` hook injecting the pending demand into the next prompt the user sends. Four measurements need a real user Esc: (1) the refusal shape; (2) transcript lag on the aborted scan; (3) Esc at a permission prompt (a bare `tool_use` that never ran arms the scan); (4) a prompt typed right after Esc.
-- **Transcript lag at `turn.complete` is indicated, not settled (probe M7, no positive control)** — the transcript is written asynchronously: the turn final answer was not found on disk at `turn.complete` in 5 of 5 turns, so the non-aborted second net stays disabled (the same lag may hide writes from the interrupted-turn scan, see below). On an aborted turn the lag is unmeasured.
-- **`classic.PreToolUse` is not used** — its payload is the tool input plus `tool` and `tool_use_id`, with no `transcript_path`, `cwd` or `agent_id` (probe M4), so it cannot remember the session.
-- **CC >= 2.1.287 requirement** — mods need Claude Code >= 2.1.287 (Desktop >= 2.1.286) for any of this; the Esc-window refusal semantics are v2.1.304+. On older CC the mod is not the enforcing layer and the settings hooks carry everything — same as today.
-- **The demand is shown once and is lost if ignored** — `prompt.submit` clears the pending demand when it injects it; nothing re-demands it afterwards. Making it persist until a credited REVIEW fork is seen is the next step.
-- **No survival across a session exit; module reload resets state** — the pending demand lives in per-session `$.state`, and `scanFailureShown` and the atoms reset on module reload. Behaviour on `/clear` is unmeasured.
-- **Transcript lag can also hide writes on the interrupted-turn scan** — a write not yet on disk at `turn.complete` is missed, so the aborted scan can under-demand (not only the disabled second net can over-demand).
-- **Esc at a tool permission prompt may demand a review for a write that never ran** — unmeasured.
-- **A heartbeat or other automatic prompt may consume the demand** — the next `prompt.submit` takes it, whoever typed it.
-- **A scan-failure status line stays** until the next aborted turn scans clean.
-- **A second pending demand overwrites the first** — only one demand is kept.
-- **`$.prompt.submit` awaited inside `turn.complete`** — measured on a NON-aborted turn (probe M8): it resolved within 6 s and started a new turn. The aborted case is unmeasured; the docs say it is refused after an Esc until the user next types.
-- **A mod-submitted prompt passes through the `prompt.submit` hook (probe M9)** — if the submit succeeds, the demand would be delivered twice in one turn: as the prompt text and as injected context.
-- **Hand-back and other automatic prompts fire `prompt.submit` (probe M11)** — each would consume the show-once demand.
-
-## Tests
-
-None shipped. `claude plugin test` has no real process: every `$.process.run` needs a stub, so a test of the aborted-turn path would have to mock the `agentlenspro` CLI, which this project does not do. Verify live instead (see Deployment).

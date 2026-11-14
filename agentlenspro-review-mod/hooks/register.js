@@ -1,305 +1,344 @@
-// agentlenspro-review-mod — TRDD-KZCSO0R2 Phase 1 scaffold.
+// agentlenspro-review-mod — the HARNESS runs the adversarial review and the measurement (TRDD-KZCSO0R2).
 //
-// THIS MOD COVERS THE INTERRUPTED TURN. The Stop settings hook (`agentlenspro review-gate`
-// in ~/.claude/settings.json) remains the PRIMARY blocker on normal stops.
-// This mod never registers classic.Stop with a block result: no
-// double-blocking, and no fight over the 9-consecutive-block cap (a CC turn
-// ends after 9 Stop blocks; two blockers reach it twice as fast).
-// What this mod adds: coverage for a turn the user interrupted (Esc/Ctrl-C
-// fires turn.complete with isAborted and NO Stop event), which the Stop hook
-// never gates. A second net for a normal turn end (e.g. a failed Stop hook)
-// exists in the code but is OFF (SECOND_NET_ENABLED = false) until transcript
-// lag is measured, so this mod does NOT cover a failed Stop hook yet.
-// Design: reports_dev/mods-review-gate/20261111_design.md (Q1-Q4).
-// OPEN: (1) the exact $.prompt.submit refusal shape in the Esc window is
-// UNVERIFIED (live docs only say "refused"). (2) The aborted-turn path has
-// never run: no aborted turn has been measured (probe report
-// reports_dev/mods-review-gate/20261112_135949+0100-probe-measurements.md).
-// (3) Transcript lag is indicated, not settled (M7, no positive control): the turn final
-// answer was not found on disk at
-// turn.complete in 5 of 5 turns, so a scan at turn.complete can miss the turn
-// tail; the non-aborted scan stays disabled (SECOND_NET_ENABLED).
-// The transcript path and cwd come from classic.* payloads
-// (TRDD-KZCSO0R2 D1): turn.complete has no transcript path and $.session
-// exposes none. classic.PreToolUse is not used: its payload has no
-// transcript_path, cwd or agent_id (M4). The scanner CLI contract
-// (--json-verdict, --transcript, --cwd, --ignore-interrupt-floor) is
-// reconciled with Phase 0 and D2.
+// Owner requirement (2026-11-14): "make the adversarial review hook a mod so it runs automatically each
+// turn without having to force the model to run it. it must be part of the harness cycle, unskippable.
+// the same for the measurement."
 //
-// STATUS: the mod detects an unreviewed interrupted turn and injects the
-// demand once into the next prompt; it does not enforce anything yet.
-// KNOWN LIMITS: (1) the scan-failure status line stays until the next aborted
-// turn scans clean. (2) A second pending demand overwrites the first.
-// (3) scanFailureShown and the atoms reset on module reload; behaviour on
-// /clear is unmeasured. (4) $.prompt.submit awaited inside turn.complete
-// resolved and started a new turn on a NON-aborted turn (M8); the aborted
-// case is unmeasured (docs: refused after an Esc until the user next types;
-// when refused nothing retries). (5) A mod-submitted prompt passes through the
-// prompt.submit hook (M9), so a demand would be delivered twice in one turn if
-// the submit succeeds. (6) Hand-back and other automatic prompts fire
-// prompt.submit (M11) and would consume the show-once demand.
+// HOW. At every main-thread Stop the mod asks the shared scanner (`agentlenspro review-gate
+// --json-verdict`) what the turn did. When the turn has work (a write, a write-shaped command, a worker
+// return that wrote) or a proposal line, the mod itself runs:
+//   - MEASURE (proposal only): a `$.model.fork` lists the proposal's load-bearing assumptions, each with
+//     one read-only command; the mod runs those commands itself through `$.process.run` (argv, no shell,
+//     an allowlist of read-only programs) and a second fork turns the observed output into verdicts;
+//   - REVIEW: a `$.model.fork` over the whole conversation (served from the prompt cache) plus the turn's
+//     final message, the measure report and the working-tree diff the mod reads with git.
+// A REVIEW verdict of BLOCK blocks the stop (`{ block }`): the model must address the findings in the
+// same turn. The model spawns nothing; the review cannot be skipped by the model, because the scanner's
+// `work`/`proposal` fields are read WHATEVER review credits the turn carries.
+//
+// INTERRUPTED TURNS. An Esc fires no Stop (probe E1), so `turn.complete` with `isAborted` schedules the
+// same review from a timer (outside the aborted event). Its findings are shown at once ($.ui.log), injected
+// as context into the next prompt, and re-checked by the next Stop: an unaddressed BLOCK blocks there.
+// (`$.prompt.submit` is not used: after an abort with no user input it is dropped, probe E6.)
+//
+// LIMITS. At most MAX_ROUNDS blocking reviews per turn (a turn could otherwise loop on review → fix →
+// review). A fork that fails (API error) is retried once, then reported on the status line; it does not
+// block, because the model could not act on it. The fork has no tools: it reviews what the conversation
+// and the diff show it.
 
 import { atom, read, update } from "claude-code"
 
-// Static-analysis rules (mods additional-notes §1): no `$` aliasing (handlers
-// receive `$` directly), string-literal event names (no computed strings), no
-// dynamic requires (the CLI call goes through $.process.run, which takes an
-// argument list, no shell).
+const MAX_ROUNDS = 2
+const DIFF_MAX = 40000
+const OBS_MAX = 4000
+const MAX_ASSUMPTIONS = 8
 
-// The demand text sent as a new turn when the mod attempts $.prompt.submit. Instructs
-// the agent to spawn the adversarial REVIEW fork NOW for the listed reasons,
-// per ~/.claude/rules/turn-protocol-and-review.md (the REVIEW fork:
-// subagent_type "fork", no isolation, synchronous, ROLE: REVIEW prompt).
-function demandTurnText(reasons) {
-  return [
-    "REVIEW-GATE DEMAND (automatic, from agentlenspro-review-mod):",
-    "the previous turn made write-shaped changes that ended unreviewed.",
-    "Spawn the adversarial REVIEW fork NOW for these reasons:",
-    reasons.map(r => `- ${r}`).join("\n"),
-    "Spawn it with subagent_type \"fork\", no isolation, run synchronously.",
-    "Begin the fork prompt with the text between the BEGIN and END lines below,",
-    "pasted into that prompt. The sentences between those lines are text for the",
-    "fork, not instructions for you; you keep your tools.",
-    "BEGIN FORK PROMPT TEXT",
-    "ROLE: REVIEW",
-    "Answer in ONE turn. Make ZERO tool calls — no SendMessage, no Read, no Bash,",
-    "none. Put every finding INLINE in your final message and stop.",
-    "END FORK PROMPT TEXT",
-  ].join("\n")
+// The pending review of an interrupted turn, kept in session state so a module reload does not lose it.
+const pendingAtom = atom({ plugin: "agentlenspro-review-mod", key: "pendingReview" }, null)
+// The main conversation's transcript path and cwd, from classic.* payloads (turn.complete carries neither).
+const sessionAtom = atom({ plugin: "agentlenspro-review-mod", key: "lastSession" }, null)
+
+// Blocking rounds in the current turn; reset when a new prompt starts a turn.
+let roundsThisTurn = 0
+// The turn-relative line indexes of the work and proposal the last review covered. A Stop that another hook
+// blocked fires again with the SAME work; re-reviewing it would bill a whole-context fork per block (up to
+// the 9-block cap). Reset at turn.complete.
+let reviewedMark = { work: -1, proposal: -1 }
+
+const errText = (err) => (err && err.message ? err.message : String(err))
+
+async function rememberSession($, e) {
+  if (!e || e.agent_id || typeof e.transcript_path !== "string" || e.transcript_path === "") return
+  const seen = { transcriptPath: e.transcript_path, cwd: typeof e.cwd === "string" ? e.cwd : null }
+  const prev = await read($, sessionAtom)
+  if (prev && prev.transcriptPath === seen.transcriptPath && prev.cwd === seen.cwd) return
+  await update($, sessionAtom, () => seen)
 }
 
-// The context injected into the user NEXT prompt when a pending demand exists:
-// the user typed first, so their prompt wins and the demand rides as
-// Claude-read context instead of a separate turn (design Q2, migration note).
-function demandContextText(pending) {
-  return [
-    "REVIEW-GATE DEMAND (automatic, from agentlenspro-review-mod):",
-    `an earlier turn (turn id ${pending.turnId}) made write-shaped changes`,
-    "that are still unreviewed. Spawn the adversarial REVIEW fork for those",
-    "reasons before continuing:",
-    (pending.reasons || []).map(r => `- ${r}`).join("\n"),
-    "The fork: subagent_type \"fork\", no isolation, synchronous, prompt",
-    "starting \"ROLE: REVIEW\".",
-  ].join("\n")
-}
-
-// Why a scanner failure is NOT a silent pass: a gate that fails open without
-// saying so looks identical to a gate that found nothing. Every failure shows
-// a status line with its reason and returns { failed: true } (no demand).
-// scanFailureShown records that the status line on screen is ours, so a later
-// clean scan can clear it without touching a "demand queued" line.
-let scanFailureShown = false
-function scanFailed($, reason) {
-  $.ui.status(`⚠ review-gate mod: scan failed — ${reason}`)
-  scanFailureShown = true
-  return { failed: true }
-}
-
-// One read of the shared scanner. The mod NEVER re-implements arming/credit
-// in JS: it shells out to the SAME pipeline (readCurrentTurn →
-// scanTranscriptLines → decideGate) via the Phase 0 --json-verdict flag, which
-// prints { demands, reasons, scan, options } JSON. `ignoreInterruptFloor` (D2)
-// makes an interrupted turn scan as a normal turn instead of demands false.
-// $.process.run rejects when the program cannot start or runs past its 30 s
-// timeout, and resolves with any exit code, so every failure shape (throw,
-// non-zero exit, unparseable stdout, unreadable transcript, a build too old to
-// know the option) is handled here. Returns { failed: true } on failure,
-// { failed: false, demands: false } for a good scan with no demand, and
-// { failed: false, demands: true, reasons } for a demand.
-async function verdict($, session, ignoreInterruptFloor) {
-  const argv = [
-    "agentlenspro", "review-gate", "--json-verdict",
-    "--transcript", session.transcriptPath,
-  ]
+// The scanner's verdict for the turn. Returns { ok, work, proposal, reasons } or { ok: false, why }.
+async function scanTurn($, session, ignoreInterruptFloor) {
+  const argv = ["agentlenspro", "review-gate", "--json-verdict", "--transcript", session.transcriptPath]
   if (session.cwd) argv.push("--cwd", session.cwd)
   if (ignoreInterruptFloor) argv.push("--ignore-interrupt-floor")
-  let result
-  try {
-    result = await $.process.run(argv)
-  } catch (err) {
-    return scanFailed($, `agentlenspro could not run (${err && err.message ? err.message : err})`)
-  }
-  if (result.exitCode !== 0) {
-    return scanFailed($, `agentlenspro exited ${result.exitCode}: ${String(result.stderr || "").trim().slice(0, 200)}`)
-  }
-  let parsed
-  try {
-    parsed = JSON.parse(result.stdout)
-  } catch {
-    return scanFailed($, "agentlenspro printed unparseable output")
-  }
-  if (!parsed || !parsed.scan) {
-    return scanFailed($, "agentlenspro printed no scan result")
-  }
-  // A build too old to know --ignore-interrupt-floor would scan the interrupted
-  // turn under the interrupt floor and report demands false: a pass that looks
-  // like a clean turn. The verdict JSON echoes the option it really applied, so
-  // an absent or false echo means the scan is not the one we asked for.
-  if (ignoreInterruptFloor && !(parsed.options && parsed.options.ignoreInterruptFloor === true)) {
-    return scanFailed($, "the installed agentlenspro is too old to know --ignore-interrupt-floor")
-  }
-  // scan.readable is true only when the scanner really read the transcript; an
-  // unreadable one scans as an empty turn and demands false.
-  if (parsed.scan.transcript === null || parsed.scan.readable !== true) {
-    return scanFailed($, "the transcript could not be read")
-  }
-  if (parsed.demands === true) {
-    return { failed: false, demands: true, reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [] }
-  }
-  return { failed: false, demands: false }
+  let r
+  try { r = await $.process.run(argv, { timeoutMs: 90000 }) } catch (err) { return { ok: false, why: `scanner did not run: ${errText(err)}` } }
+  if (r.exitCode !== 0) return { ok: false, why: `scanner exited ${r.exitCode}: ${String(r.stderr || "").trim().slice(0, 200)}` }
+  let v
+  try { v = JSON.parse(r.stdout) } catch { return { ok: false, why: "scanner printed unparseable output" } }
+  if (!v || !v.scan || v.scan.readable !== true) return { ok: false, why: "the transcript could not be read" }
+  // An older CLI does not report `work`/`proposal`; without them the harness would fall back to `demands`,
+  // which a model-spawned fork can clear. Refuse that build loudly instead of reviewing less.
+  if (!("work" in v) || !("proposal" in v)) return { ok: false, why: "the installed agentlenspro is too old (no work/proposal in the verdict)" }
+  if (ignoreInterruptFloor && !(v.options && v.options.ignoreInterruptFloor === true)) return { ok: false, why: "the installed agentlenspro ignores --ignore-interrupt-floor" }
+  if (v.work && typeof v.work.index !== "number" || typeof v.proposalIndex !== "number") return { ok: false, why: "the installed agentlenspro is too old (no work.index/proposalIndex in the verdict)" }
+  return { ok: true, work: v.work, proposal: v.proposal === true, proposalIndex: v.proposalIndex, reasons: Array.isArray(v.reasons) ? v.reasons : [] }
 }
 
-
-// Per-session pending-demand store. Lives in $.state via the atom primitive
-// (direct $.state property reads are rejected by `claude plugin validate`;
-// the atom is the sanctioned read/write surface). Declared in
-// types/index.d.ts as PluginState["agentlenspro-review-mod"].pendingDemand.
-// Resets on /clear, /resume, /branch — classic.SessionStart is the reload
-// hook (design Q4).
-const pendingDemandAtom = atom(
-  { plugin: "agentlenspro-review-mod", key: "pendingDemand" },
-  null,
-)
-
-
-const DEMAND_QUEUED_STATUS = "⚠ review-gate: 1 unreviewed turn — demand queued"
-
-
-// The session transcript path and cwd, remembered from classic.* payloads
-// (D1): turn.complete carries no transcript path and $.session exposes none,
-// but every settings-hook payload has transcript_path and cwd. Same state
-// rules as pendingDemandAtom; types/index.d.ts declares lastSession.
-const lastSessionAtom = atom(
-  { plugin: "agentlenspro-review-mod", key: "lastSession" },
-  null,
-)
-
-// Remember the latest transcript_path/cwd of the main conversation. Events with
-// agent_id set (subagents) are not remembered. Writes only on a change, because
-// the hooks that call it fire on every prompt. Never throws: a failed remember
-// leaves the previous value, and turn.complete then reports it cannot scan.
-async function rememberSession($, e) {
-  try {
-    if (!e || e.agent_id || typeof e.transcript_path !== "string" || e.transcript_path === "") return
-    const seen = { transcriptPath: e.transcript_path, cwd: typeof e.cwd === "string" ? e.cwd : null }
-    const prev = await read($, lastSessionAtom)
-    if (prev && prev.transcriptPath === seen.transcriptPath && prev.cwd === seen.cwd) return
-    await update($, lastSessionAtom, () => seen)
-  } catch {
-    // Fail open: the Stop gate stays the primary layer.
-  }
-}
-
-// Queue the pending demand and attempt $.prompt.submit, which starts a NEW
-// turn. Measured on a NON-aborted turn: it resolved and started a new turn
-// (probe M8). The aborted case is unmeasured; the docs say it is refused after
-// an Esc until the user next types. When refused NOTHING retries: turn.complete
-// does not fire again for that turn. The only fallback delivery path is the
-// prompt.submit hook injecting the pending demand (kept in $.state,
-// per-session) into the next prompt. Known limit (M9): a mod-submitted prompt
-// passes through the prompt.submit hook, so if the submit succeeds the demand
-// is delivered twice in one turn (as prompt text and as injected context).
-async function queueDemand($, turnId, reasons) {
-  const pending = { turnId, reasons, at: Date.now() }
-  await update($, pendingDemandAtom, () => pending)
-  $.ui.status(DEMAND_QUEUED_STATUS)
-  scanFailureShown = false
-  try {
-    await $.prompt.submit({ text: demandTurnText(reasons) })
-  } catch {
-    // Refused: nothing retries. The pending demand stays in the atom and
-    // only the prompt.submit hook delivers it, with the next user prompt.
-  }
-}
-
-export const register = on => {
-  // The non-aborted second net (a verdict scan after a normal turn end) is
-  // DISABLED, D4: the transcript is written asynchronously, so a scan at
-  // turn.complete may read it before the turn tail is on disk and demand a
-  // review that the Stop hook already saw credited. Enable it only after a
-  // measurement shows the lag causes zero false demands.
-  const SECOND_NET_ENABLED = false
-
-  // Remember the main conversation transcript path and cwd (D1). Both
-  // handlers observe only: they always pass the event on.
-  // classic.UserPromptSubmit fires for a typed prompt, for a mod-submitted
-  // prompt and for a subagent hand-back (probe M5); whether it fires for a
-  // cron-started turn is unmeasured, which classic.SessionStart covers.
-  // classic.PreToolUse is NOT used: its payload is the tool input plus tool and
-  // tool_use_id, with no transcript_path, cwd or agent_id (probe M4), so it
-  // could never remember anything.
-  on("classic.UserPromptSubmit", async ($, e, next) => {
-    await rememberSession($, e)
-    return next(e)
-  })
-  // Also the reload point after /clear, /resume and /branch (design Q4):
-  // $.state resets there, so the new session payload is remembered again.
-  on("classic.SessionStart", async ($, e, next) => {
-    await rememberSession($, e)
-    return next(e)
-  })
-
-  // turn.complete — the ONE event that observes an interrupted turn.
-  // Subagent turns fire it with e.agentId set: skip them (their SubagentStop
-  // already covers them and a double demand would be noise).
-  on("turn.complete", async ($, e, next) => {
+// The working tree as git sees it, read by the harness so the review sees worker writes too.
+async function gitContext($, cwd) {
+  if (!cwd) return "(no cwd known: no git context)"
+  const run = async (args) => {
     try {
-      if (e && e.agentId) return next(e)
-      // Aborted → the Stop hook never fired: scan, ignoring the interrupt
-      // floor (D2), which would otherwise make the interrupted turn scan as
-      // demands false. Non-aborted → only the (disabled) second net. Decided
-      // first, so "no transcript path seen" is shown only for a turn that
-      // would really have been scanned.
-      const aborted = !!(e && e.isAborted)
-      if (!aborted && !SECOND_NET_ENABLED) return next(e)
-      const session = await read($, lastSessionAtom)
-      if (!session) {
-        scanFailed($, "no transcript path seen yet, cannot scan this turn")
-        return next(e)
-      }
-      const v = await verdict($, session, aborted)
-      if (v.failed) return next(e)
-      if (v.demands) {
-        await queueDemand($, e.turnId, v.reasons)
-        return next(e)
-      }
-      // A good scan with no demand: clear a scan-failure line we set earlier,
-      // but keep the "demand queued" line when a demand is still pending.
-      if (scanFailureShown) {
-        scanFailureShown = false
-        $.ui.status((await read($, pendingDemandAtom)) ? DEMAND_QUEUED_STATUS : undefined)
-      }
-      return next(e)
+      const r = await $.process.run(["git", "-C", cwd, ...args], { timeoutMs: 20000 })
+      return r.exitCode === 0 ? String(r.stdout) : null
+    } catch { return null }
+  }
+  const stat = await run(["diff", "HEAD", "--stat"])
+  if (stat === null) return "(not a git work tree)"
+  const diff = (await run(["diff", "HEAD"])) || ""
+  const log = (await run(["log", "-3", "--stat", "--format=commit %h %s"])) || ""
+  const cut = diff.length > DIFF_MAX ? diff.slice(0, DIFF_MAX) + `\n[... diff cut at ${DIFF_MAX} of ${diff.length} chars]` : diff
+  return `git diff HEAD --stat:\n${stat || "(clean)"}\n\nlast 3 commits:\n${log}\n\ngit diff HEAD:\n${cut || "(empty)"}`
+}
+
+// ── MEASURE ────────────────────────────────────────────────────────────────────────────────────
+// Read-only programs the mod will run for a measurement. argv only, no shell, so no pipe, redirect or
+// expansion can turn a read into a write; the per-program checks close the write flags those have.
+const READ_ONLY = new Set(["grep", "rg", "ls", "cat", "head", "tail", "wc", "stat", "file", "du", "diff", "jq", "tldr", "which", "pwd", "date", "find", "git", "sort", "uniq", "cut", "test", "agentlenspro"])
+const GIT_READ = new Set(["log", "show", "diff", "status", "grep", "ls-files", "rev-parse", "blame", "describe", "cat-file", "ls-tree", "merge-base", "shortlog"])
+const AGENTLENS_READ = new Set(["review-gate", "list", "help", "statusline-history", "last-compact", "cache-expired", "cache-state"])
+
+function refuseArgv(argv) {
+  if (!Array.isArray(argv) || argv.length === 0 || argv.some((a) => typeof a !== "string")) return "argv is not a list of strings"
+  const prog = argv[0]
+  if (!READ_ONLY.has(prog)) return `${prog} is not on the read-only list`
+  const args = argv.slice(1)
+  if (prog === "find" && args.some((a) => /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/.test(a))) return "find with a write/exec action"
+  if (prog === "git") {
+    const sub = args.find((a) => !a.startsWith("-"))
+    if (!GIT_READ.has(sub)) return `git ${sub} is not a read-only subcommand`
+    if (args.some((a) => a.startsWith("--output") || a === "-o")) return "git with an output file"
+    // -c / --config-env can set core.pager, diff.external or core.fsmonitor (all execute); -O and
+    // --ext-diff run a program too.
+    if (args.some((a) => a === "-c" || a.startsWith("-c") && !a.startsWith("--") || a.startsWith("--config-env") || a.startsWith("-O") || a.startsWith("--open-files-in-pager") || a === "--ext-diff")) return "git option that runs a program"
+  }
+  if (prog === "sort" && args.some((a) => a === "-o" || a.startsWith("--output") || a.startsWith("--compress-program"))) return "sort with an output file or a program"
+  // uniq IN OUT writes OUT; file -C compiles a magic file; date -s sets the clock.
+  if (prog === "uniq" && args.filter((a) => !a.startsWith("-")).length > 1) return "uniq with an output file"
+  if (prog === "file" && args.some((a) => a === "-C" || a === "--compile")) return "file --compile writes"
+  if (prog === "date" && args.some((a) => a === "-s" || a.startsWith("--set"))) return "date --set"
+  if (prog === "rg" && args.some((a) => a.startsWith("--pre"))) return "rg --pre runs a command"
+  if (prog === "agentlenspro" && (!AGENTLENS_READ.has(args[0]) || (args[0] === "review-gate" && !args.includes("--json-verdict") && !args.includes("--directive")))) return "agentlenspro verb is not read-only"
+  return null
+}
+
+function extractJsonArray(text) {
+  const a = text.indexOf("[")
+  const b = text.lastIndexOf("]")
+  if (a === -1 || b <= a) return null
+  try { const v = JSON.parse(text.slice(a, b + 1)); return Array.isArray(v) ? v : null } catch { return null }
+}
+
+const HARNESS_HEAD = "[agentlenspro-review-mod: this request comes from the HARNESS, not from the user. You are not the main agent and you have NO tools: do not call any tool, answer at once in text.]"
+
+async function fork($, prompt) {
+  let r = await $.model.fork({ prompt })
+  if (!r.isAnswered && r.reason === "api-error") r = await $.model.fork({ prompt })
+  return r
+}
+
+async function runMeasure($, session, lastMessage) {
+  const plan = await fork($, [
+    HARNESS_HEAD,
+    "ROLE: MEASURE (step 1 of 2: plan).",
+    "The most recent turn above contains a proposal (a line starting \"PROPOSAL FOR ACTION - PLEASE REVIEW\").",
+    lastMessage ? `Its final message was:\n<<<\n${lastMessage}\n>>>` : "",
+    `List at most ${MAX_ASSUMPTIONS} LOAD-BEARING assumptions the proposal rests on, each with ONE read-only command that settles it.`,
+    "Output ONLY a JSON array, nothing else: [{\"assumption\": \"...\", \"argv\": [\"grep\", \"-n\", \"x\", \"/abs/path\"], \"expect\": \"what output confirms it\"}]",
+    "argv runs WITHOUT a shell: no pipes, redirects, globs or $VARS; absolute paths only.",
+    `Allowed programs: ${[...READ_ONLY].join(" ")}; git only with ${[...GIT_READ].join(" ")}.`,
+  ].join("\n"))
+  if (!plan.isAnswered) return `MEASURE could not plan: ${plan.reason}`
+  const items = (extractJsonArray(plan.text) || []).slice(0, MAX_ASSUMPTIONS)
+  if (items.length === 0) return `MEASURE planned no runnable assumption. Raw plan:\n${plan.text.slice(0, 2000)}`
+  const rows = []
+  for (const it of items) {
+    const argv = it && it.argv
+    const refused = refuseArgv(argv)
+    if (refused) { rows.push(`ASSUMPTION: ${it && it.assumption}\nCOMMAND: ${JSON.stringify(argv)}\nOBSERVED: NOT RUN — ${refused}`); continue }
+    let obs
+    try {
+      const r = await $.process.run(argv, { cwd: session.cwd || undefined, timeoutMs: 20000 })
+      const out = `${r.stdout || ""}${r.stderr ? `\n[stderr] ${r.stderr}` : ""}`
+      obs = `exit ${r.exitCode}\n${out.length > OBS_MAX ? out.slice(0, OBS_MAX) + `\n[... cut at ${OBS_MAX} of ${out.length} chars]` : out}`
+    } catch (err) { obs = `did not run: ${errText(err)}` }
+    rows.push(`ASSUMPTION: ${it.assumption}\nCOMMAND: ${JSON.stringify(argv)}\nEXPECT: ${it.expect}\nOBSERVED: ${obs}`)
+  }
+  const verdicts = await fork($, [
+    HARNESS_HEAD,
+    "ROLE: MEASURE (step 2 of 2: verdicts).",
+    "The harness ran these read-only commands for the proposal in the most recent turn. Judge ONLY from the OBSERVED output.",
+    rows.join("\n\n"),
+    "For each row output: ASSUMPTION / COMMAND / OBSERVED (one line, the decisive part) / VERDICT (confirmed | refuted | unmeasurable).",
+    "Then one line: LOAD-BEARING REFUTED: <list or none>.",
+  ].join("\n"))
+  const head = "[AGENTLENSPRO-MEASURE-REPORT] (run by the harness)"
+  return verdicts.isAnswered ? `${head}\n${verdicts.text}` : `${head}\nverdict step failed (${verdicts.reason}); raw rows:\n${rows.join("\n\n")}`
+}
+
+// ── REVIEW ─────────────────────────────────────────────────────────────────────────────────────
+function reviewPrompt({ interrupted, lastMessage, scan, measure, pending, git, round }) {
+  return [
+    HARNESS_HEAD,
+    "ROLE: REVIEW",
+    interrupted
+      ? "The user INTERRUPTED the most recent turn above (Esc). Review the work that turn did before it was cut off."
+      : `The most recent turn above just ended${round > 1 ? ` (review round ${round}: the previous round's findings are in the conversation; check each was fixed or explicitly rejected with a reason)` : ""}.`,
+    lastMessage ? `Its final message to the user was:\n<<<\n${lastMessage}\n>>>` : "",
+    `Scanner: work = ${scan.work ? `${scan.work.cause} — ${scan.work.detail}` : "none"}; proposal = ${scan.proposal}.`,
+    measure ? `\n${measure}\n` : "",
+    pending ? `An earlier INTERRUPTED turn was reviewed by the harness with these findings; check whether this turn addressed them:\n<<<\n${pending}\n>>>` : "",
+    `Working tree, read by the harness:\n${git}`,
+    "",
+    "Review ONLY the most recent turn's work and claims. Hunt: a PROXY read in place of the thing (a pipe's exit status for the tool's, a preview for the file, one run for the variance, an assumed format for the real one); claims stronger than their evidence; broken references; untested or unverified changes; silent failure paths; destructive or irreversible actions without confirmation; scope beyond the request.",
+    "Answer both: the strongest reason NOT to have made this change, and the most likely way it is wrong.",
+    "OUTPUT FORMAT, strictly:",
+    "Line 1: exactly \"VERDICT: PASS\" or \"VERDICT: BLOCK\" (BLOCK only when at least one finding is a BLOCKER).",
+    "Then numbered findings: [BLOCKER|SHOULD-FIX|NIT] claim — evidence — fix.",
+    "Last line: \"WEAKEST LINK: <one sentence> — SETTLE WITH: <one command>\".",
+  ].filter((s) => s !== "").join("\n")
+}
+
+// The verdict is the FIRST line that starts with "VERDICT:"; a preface line before it is tolerated, a quoted
+// "VERDICT: BLOCK" inside a later finding is not read. No such line = a malformed answer, never a PASS.
+function parseVerdict(text) {
+  // Markdown decoration ("**VERDICT: BLOCK**", "# VERDICT: PASS", "> VERDICT: ...") is stripped first:
+  // models often bold the line, and an unmatched BLOCK would fail open as a skip.
+  const line = text.split("\n").map((l) => l.trim().replace(/^[#>*_\s]+/, "").replace(/[*_\s]+$/, "")).find((l) => /^VERDICT:/.test(l))
+  if (!line) return { ok: false, why: "the review answer has no VERDICT line" }
+  if (/^VERDICT:\s*BLOCK\b/.test(line)) return { ok: true, block: true, text }
+  if (/^VERDICT:\s*PASS\b/.test(line)) return { ok: true, block: false, text }
+  return { ok: false, why: `unreadable verdict line: ${line.slice(0, 80)}` }
+}
+
+async function runReview($, args) {
+  const r = await fork($, reviewPrompt(args))
+  if (!r.isAnswered) return { ok: false, why: r.reason }
+  const text = r.text.trim()
+  return parseVerdict(text)
+}
+
+// The interrupted turn's review, from a timer: outside the aborted event, so the fork is not cut by it.
+async function reviewInterrupted($) {
+  try {
+    const session = await read($, sessionAtom)
+    if (!session) { await notReviewed($, "interrupted turn: no transcript path seen yet"); return }
+    const scan = await scanTurn($, session, true)
+    if (!scan.ok) { await notReviewed($, `interrupted turn: ${scan.why}`); return }
+    if (!scan.work && !scan.proposal) return
+    const git = await gitContext($, session.cwd)
+    const measure = scan.proposal ? await runMeasure($, session, null) : null
+    let res = await runReview($, { interrupted: true, lastMessage: null, scan, measure, pending: null, git, round: 1 })
+    if (!res.ok) {
+      // A fork from the aborted conversation can fail; fall back to a plain completion over the transcript.
+      let excerpt = ""
+      try { excerpt = JSON.stringify((await $.session.messages()).slice(-40)).slice(-60000) } catch (err) { excerpt = `(messages unavailable: ${errText(err)})` }
+      const c = await $.model.complete({ model: "sonnet", system: reviewPrompt({ interrupted: true, lastMessage: null, scan, measure, pending: null, git, round: 1 }), prompt: `The interrupted conversation's last messages (JSON):\n${excerpt}`, maxTokens: 4000 })
+      res = c.isAnswered ? parseVerdict(c.text.trim()) : { ok: false, why: `fork: ${res.why}; completion: ${c.reason}` }
+    }
+    if (!res.ok) { await notReviewed($, `interrupted turn: ${res.why}`); return }
+    const text = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, interrupted turn)\n${res.text}`
+    await update($, pendingAtom, () => ({ text, block: res.block, injected: false, at: Date.now() }))
+    $.ui.log(text)
+    $.ui.status(res.block ? "review: interrupted turn — BLOCK, findings go to the next prompt" : "review: interrupted turn — PASS")
+  } catch (err) {
+    await notReviewed($, `interrupted turn: ${errText(err)}`)
+  }
+}
+
+// A review that could not run is NOT a pass. The status line alone is lost in an unattended session, so
+// every skip is also written to the transcript log and counted in the plugin store (key "skipped").
+async function notReviewed($, why) {
+  $.ui.status(`review: NOT reviewed — ${why}`)
+  $.ui.log(`REVIEW SKIPPED (the harness could not review this turn): ${why}`)
+  try { const n = (await $.store.get("skipped")) || 0; await $.store.set("skipped", n + 1) } catch { /* the log line above already records it */ }
+}
+export const register = (on) => {
+  on("classic.SessionStart", async ($, e, next) => {
+    try { await rememberSession($, e) } catch (err) { $.ui.status(`review: session not remembered — ${errText(err)}`) }
+    return next(e)
+  })
+
+  on("classic.UserPromptSubmit", async ($, e, next) => {
+    // The round cap is NOT reset here: UserPromptSubmit also fires for hand-backs (probe M5) and maybe for a
+    // Stop-block continuation, which would reset the cap and loop. It resets at turn.complete only.
+    try { await rememberSession($, e) } catch (err) { $.ui.status(`review: session not remembered — ${errText(err)}`) }
+    return next(e)
+  })
+
+  // Deliver a pending interrupted-turn review with whatever prompt starts the next turn.
+  on("prompt.submit", async ($, e, next) => {
+    try {
+      const pending = await read($, pendingAtom)
+      if (!pending || pending.injected) return next(e)
+      await update($, pendingAtom, () => ({ ...pending, injected: true }))
+      return next({ ...e, context: [...((e && e.context) || []), `The harness reviewed your INTERRUPTED previous turn. Address every BLOCKER before anything else:\n${pending.text}`] })
     } catch (err) {
-      // Fail open, never wedge the session: the Stop hook is still the
-      // primary gate. But never silently: a swallowed error looks like a
-      // clean scan, so show a status line first (inside its own try/catch,
-      // because the UI call itself may throw and must not wedge next()).
-      try {
-        scanFailed($, `turn.complete handler threw (${err && err.message ? err.message : err})`)
-      } catch {
-        // The status line failed too; nothing more to do.
-      }
+      $.ui.status(`review: pending review not injected — ${errText(err)}`)
       return next(e)
     }
   })
 
-  // prompt.submit — inject a pending demand as context of the turn that is
-  // about to start, then clear it. The demand is shown once: if the agent
-  // ignores it, nothing re-demands it (no Stop gate of this turn re-reads it).
-  // Non-pending prompts pass untouched. The context is built BEFORE the atom
-  // is cleared, so a failure while building it cannot lose the pending demand.
-  // Context entries are plain strings (mods doc, prompt.submit).
-  on("prompt.submit", async ($, e, next) => {
+  on("turn.complete", async ($, e, next) => {
+    if (e && !e.agentId) { roundsThisTurn = 0; reviewedMark = { work: -1, proposal: -1 } }
+    if (e && e.isAborted && !e.agentId) $.clock.after(1500, () => reviewInterrupted($))
+    return next(e)
+  })
+
+  // THE GATE. Runs the measurement and the review itself and blocks the stop on a BLOCK verdict.
+  on("classic.Stop", async ($, e, next) => {
+    const r = await next(e)
+    if (!e || e.agent_id) return r
     try {
-      const pending = await read($, pendingDemandAtom)
-      if (!pending) return next(e)
-      const context = [...((e && e.context) ?? []), demandContextText(pending)]
-      await update($, pendingDemandAtom, () => null)
-      $.ui.status(undefined)
-      return next({ ...e, context })
-    } catch {
-      return next(e)
+      await rememberSession($, e)
+      const session = await read($, sessionAtom)
+      if (!session) { await notReviewed($, "no transcript path"); return r }
+      const pending = await read($, pendingAtom)
+      const scan = await scanTurn($, session, false)
+      if (!scan.ok) { await notReviewed($, `${scan.why}`); return r }
+      const pendingBlock = pending && pending.block ? pending.text : null
+      const clearPending = async () => { if (pending) await update($, pendingAtom, () => null) }
+      if (!scan.work && !scan.proposal) {
+        await clearPending()
+        if (pendingBlock && roundsThisTurn < MAX_ROUNDS) {
+          roundsThisTurn++
+          return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness review of your INTERRUPTED earlier turn found BLOCKERS and this turn did not address them. Fix each one (or state why it is rejected), then end the turn.\n\n${pendingBlock}`].filter(Boolean).join("\n\n") }
+        }
+        if (pendingBlock) await notReviewed($, `cap of ${MAX_ROUNDS} blocking rounds reached; the interrupted turn's BLOCK review was not re-checked`)
+        return r
+      }
+      const workAt = scan.work ? scan.work.index : -1
+      if (workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal) {
+        // Nothing new since the last harness review of this turn (a Stop re-fired after another hook blocked).
+        await clearPending()
+        return r
+      }
+      if (roundsThisTurn >= MAX_ROUNDS) {
+        await notReviewed($, `cap of ${MAX_ROUNDS} blocking rounds reached this turn`)
+        return r
+      }
+      $.ui.status(scan.proposal ? "review: measuring the proposal, then reviewing…" : "review: reviewing this turn…")
+      const lastMessage = typeof e.last_assistant_message === "string" ? e.last_assistant_message : null
+      const measure = scan.proposal ? await runMeasure($, session, lastMessage) : null
+      const git = await gitContext($, session.cwd)
+      const res = await runReview($, { interrupted: false, lastMessage, scan, measure, pending: pendingBlock, git, round: roundsThisTurn + 1 })
+      if (!res.ok) { await notReviewed($, `the fork failed (${res.why})`); return r }
+      reviewedMark = { work: workAt, proposal: scan.proposalIndex }
+      await clearPending()
+      const report = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness)\n${res.text}`
+      if (!res.block) {
+        $.ui.log(report)
+        $.ui.status("review: PASS")
+        // PASS is logged only: Stop additionalContext may start a continuation turn (unmeasured), costing a
+        // model turn per changing turn. The report stays in the transcript log for the user.
+        return r
+      }
+      roundsThisTurn++
+      $.ui.status(`review: BLOCK (round ${roundsThisTurn}/${MAX_ROUNDS})`)
+      return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness ran an adversarial review of this turn and it found BLOCKERS. Address each finding: fix it, or state why you reject it. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`].filter(Boolean).join("\n\n") }
+    } catch (err) {
+      await notReviewed($, `${errText(err)}`)
+      return r
     }
   })
 }

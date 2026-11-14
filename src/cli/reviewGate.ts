@@ -1089,6 +1089,14 @@ export interface GateVerdict {
   /** The options the scan applied, echoed so a caller can tell its flag took effect: an older CLI that does
    *  not know a flag ignores it and echoes nothing (or `false`). */
   options: { ignoreInterruptFloor: boolean }
+  /** What the turn did, reported WHETHER OR NOT a review credit released it (TRDD-KZCSO0R2): the
+   *  harness-run review in agentlenspro-review-mod keys on this, so a fork the model spawned itself can
+   *  never skip the review the harness runs. null when the turn has no arming work. */
+  work?: { cause: ArmCause; detail: string; index: number } | null
+  /** True when the turn has a proposal line, whatever the credits. */
+  proposal?: boolean
+  /** Line index (within the turn) of the last proposal, -1 when none: lets the mod skip work it already reviewed. */
+  proposalIndex?: number
 }
 
 /** The verdict the Stop/SubagentStop gate would reach for this payload's turn, as data. Read-only. A
@@ -1101,7 +1109,7 @@ export function computeVerdict(input: ReviewGateInput, opts: { ignoreInterruptFl
   const kind: GateVerdict['scan']['kind'] = subagent ? 'subagent' : 'main'
   const transcript = subagent ? input?.agent_transcript_path : input?.transcript_path
   const noDemand = (transcriptOut: string | null, lines: number, readable: boolean): GateVerdict =>
-    ({ demands: false, reasons: [], scan: { transcript: transcriptOut, kind, lines, readable }, options: { ignoreInterruptFloor } })
+    ({ demands: false, reasons: [], scan: { transcript: transcriptOut, kind, lines, readable }, options: { ignoreInterruptFloor }, work: null, proposal: false, proposalIndex: -1 })
   if (typeof transcript !== 'string' || !fs.existsSync(transcript)) return noDemand(null, 0, false)
   // The subagent gate honours the harness loop-breaker and the exemption list BEFORE scanning; mirror that
   // so a subagent the hook would release never reads as a demand here.
@@ -1120,11 +1128,12 @@ export function computeVerdict(input: ReviewGateInput, opts: { ignoreInterruptFl
     : scanTranscriptLines(lines, hookCwd(input), undefined, (id) => workerWriteDetail(transcript, id, hookCwd(input)), ignoreInterruptFloor)
   if (subagent && subagentExempt(agentType, scan.ownRole)) return noDemand(transcript, lines.length, true)
   const demand = decideGate(scan)
-  if (demand === null || scan.work === null) return noDemand(transcript, lines.length, true)
+  const found = { work: scan.work === null ? null : { cause: scan.work.cause, detail: scan.work.detail, index: scan.work.index }, proposal: scan.lastProposal >= 0, proposalIndex: scan.lastProposal }
+  if (demand === null || scan.work === null) return { ...noDemand(transcript, lines.length, true), ...found }
   const reason = subagent
     ? subagentBlockReason(scan.work.cause, scan.work.detail, demand)
     : mainBlockReason(scan.work.cause, scan.work.detail, demand)
-  return { demands: true, reasons: [reason], scan: { transcript, kind, lines: lines.length, readable: true }, options: { ignoreInterruptFloor } }
+  return { demands: true, reasons: [reason], scan: { transcript, kind, lines: lines.length, readable: true }, options: { ignoreInterruptFloor }, ...found }
 }
 
 /** Longest `systemMessage` the review display emits. WHY a cap: a review is long, and the terminal is not
