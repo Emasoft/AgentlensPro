@@ -21,9 +21,12 @@ At every main-thread **Stop**:
    conversation (served from the prompt cache), plus the turn's final message, the measure report and the
    `git diff HEAD` the mod reads (so a worker's writes are reviewed too).
 4. **VERDICT: BLOCK** → the stop is blocked with the report; the model must address each finding in the same
-   turn. **VERDICT: PASS** → the model is not re-prompted.
-5. Every report (PASS and BLOCK), the token usage and cost of the review calls, and any review failure are
-   shown to the **user only**, in colour: the mod writes them to a temp file,
+   turn. **VERDICT: PASS** → the stop goes through, and the report is injected into the model's context with
+   the next prompt (typed, sent by a mod, or a hand-back; janitor prompts included), raw and once, with a head
+   asking the model to apply each finding or say why it rejects it.
+5. The user sees every report too (PASS and BLOCK), plus the token usage and cost of the review calls and any
+   review failure. The **usage table is shown to the user only** and never reaches the model. The user's copy is
+   in colour: the mod writes it to a temp file,
    `<cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>.txt` (cwd and session id from the Stop payload),
    before the other Stop hooks run, and the plugin's Stop command hook `hooks/show.py` prints that file as a
    `systemMessage` (drawn as `Stop says: ...`, never sent to the model) and deletes it. The folder holds temp

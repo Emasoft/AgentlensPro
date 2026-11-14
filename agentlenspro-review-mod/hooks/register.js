@@ -35,6 +35,11 @@
 // (hooks/show.py) prints as a systemMessage, which the model never receives (see USER DISPLAY); the review therefore
 // runs before next(e). An interrupted turn fires no Stop, so its rows still go to $.ui.log, plain (a log row is dim and
 // turns ESC into U+FFFD; see REPORT LAYOUT).
+// DELIVERY TO THE MODEL (0.5.2, owner 2026-11-14: "only the token counts must be restricted to the user view with
+// systemMessage! the adversarial review instead must be injected in the context and visible by both the agent and the
+// user!"). The coloured display is the user's copy only. The model gets every report RAW: a BLOCK through the block
+// string at once; a PASS, and an interrupted turn's review, through the one store (pendingAtom) that the next
+// prompt.submit injects as context, once. The usage table never reaches the model.
 
 import { atom, read, update } from "claude-code"
 
@@ -43,8 +48,12 @@ const DIFF_MAX = 40000
 const OBS_MAX = 4000
 const MAX_ASSUMPTIONS = 8
 
-// The pending review of an interrupted turn, kept in session state so a module reload does not lose it.
+// The ONE store of what the model has not been shown yet (0.5.2): `{ text, block, injected, at, debt?, debtWhy? }`. It
+// holds a Stop review that PASSED and an interrupted turn's review (RAW, never the usage table), plus a DEBT left by a
+// review that could not run; prompt.submit is its one injection point. Session state, so a module reload does not lose it.
 const pendingAtom = atom({ plugin: "agentlenspro-review-mod", key: "pendingReview" }, null)
+// The head of that injection: the agent must know it is the harness review of its own previous turn, and what to do.
+const REVIEW_HEAD = "[agentlenspro-review-mod] The harness ran an adversarial review of your PREVIOUS turn; the report follows (\"interrupted turn\" marks the review of a turn the user cut short), and the user sees it too. Address every BLOCKER first, then apply each finding or state explicitly why you reject it, while you handle this prompt. Do not spawn a review fork."
 // The main conversation's transcript path and cwd, from classic.* payloads (turn.complete carries neither).
 const sessionAtom = atom({ plugin: "agentlenspro-review-mod", key: "lastSession" }, null)
 
@@ -535,8 +544,25 @@ async function runReview($, args, label = "review") {
   return { ...parseVerdict(f.r.text.trim()), calls: f.calls }
 }
 
-// The interrupted turn's review, from a timer: outside the aborted event, so the fork is not cut by it.
-async function reviewInterrupted($, prompt) {
+// Puts a report the model has not seen into the ONE store (pendingAtom) that prompt.submit delivers from (0.5.2). A report
+// still waiting there (stored, not yet injected) is kept and the new one appended, so neither is lost and each is
+// delivered exactly once; a waiting BLOCK keeps the record a BLOCK, and a debt survives (only a review that runs clears it).
+async function storeForModel($, text, block) {
+  await update($, pendingAtom, (prev) => {
+    const waiting = prev && !prev.injected && prev.text ? prev : null
+    return {
+      ...(prev && prev.debt ? { debt: true, debtWhy: prev.debtWhy } : {}),
+      text: waiting ? `${waiting.text}\n\n${text}` : text,
+      block: block || !!(waiting && waiting.block),
+      injected: false,
+      at: Date.now(),
+    }
+  })
+}
+
+// The interrupted turn's review, from a timer: outside the aborted event, so the fork is not cut by it. `mark` is what
+// this turn's last Stop review covered (captured at turn.complete); work it already covered is not reviewed twice.
+async function reviewInterrupted($, prompt, mark) {
   if (isJanitorPrompt(prompt)) return // owner: janitor turns are never reviewed (the scheduler checks too)
   const calls = []
   try {
@@ -545,6 +571,9 @@ async function reviewInterrupted($, prompt) {
     const scan = await scanTurn($, session, true)
     if (!scan.ok) { await defer($, `interrupted turn: ${scan.why}`); return }
     if (!scan.work && !scan.proposal) return
+    // A turn cut after a Stop review (a BLOCK continuation interrupted before any new work or proposal): that review's
+    // report already reached the model, so a second report of the same work would be a double delivery.
+    if (mark && (scan.work ? scan.work.index : -1) <= mark.work && scan.proposalIndex <= mark.proposal) return
     const git = await gitContext($, session.cwd)
     const measured = scan.proposal ? await runMeasure($, session, null) : null
     if (measured) calls.push(...measured.calls)
@@ -561,7 +590,7 @@ async function reviewInterrupted($, prompt) {
     }
     if (!res.ok) { await defer($, `interrupted turn: ${res.why}`); return }
     const text = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, interrupted turn)\n${res.text}`
-    await update($, pendingAtom, () => ({ text, block: res.block, injected: false, at: Date.now() }))
+    await storeForModel($, text, res.block)
     logLines($, layoutReport(text).join("\n"))
     $.ui.status(res.block ? "review: interrupted turn — BLOCK, findings go to the next prompt" : "review: interrupted turn — PASS")
   } catch (err) {
@@ -580,8 +609,9 @@ async function defer($, why, sink = null) {
   note($, sink, "yellow", `REVIEW DEFERRED to the next stop (not dropped): ${why}`)
   $.ui.status(`review: deferred — ${why}`)
   try { const n = (await $.store.get("deferred")) || 0; await $.store.set("deferred", n + 1) } catch { /* the message above records it */ }
-  const prev = await read($, pendingAtom)
-  await update($, pendingAtom, () => ({ ...(prev || { text: "", block: false, injected: true, at: Date.now() }), debt: true, debtWhy: why }))
+  // The debt is merged into the record as it is at write time (update's own prev, not an earlier read): the record may
+  // hold a report still waiting for the model (0.5.2), and a stale copy would drop it.
+  await update($, pendingAtom, (prev) => ({ ...(prev || { text: "", block: false, injected: true, at: Date.now() }), debt: true, debtWhy: why }))
 }
 
 // One main-thread, non-janitor Stop: scan, measure (proposal only), review. Returns the mod's block text, or null to let
@@ -616,7 +646,17 @@ async function reviewAtStop($, e, sink) {
     if (proposalFromLast) scan.proposal = true
     const pendingBlock = pending && pending.block ? pending.text : null
     const debt = pending && pending.debt ? pending.debtWhy : null
-    const clearPending = async () => { if (pending) await update($, pendingAtom, () => null) }
+    // Clears what this stop deals with: the record read at its start (its BLOCK goes into this review or into the block
+    // string, its debt into this review). A report still waiting for the model that is not a BLOCK is kept for the next
+    // prompt.submit (a PASS stored by an earlier Stop of this turn, or an interrupted turn's PASS); a record written after
+    // this stop read it (the interrupted timer, during the review) is left alone.
+    const clearPending = async () => {
+      if (!pending) return
+      await update($, pendingAtom, (prev) => {
+        if (!prev || prev.at !== pending.at) return prev
+        return !prev.injected && prev.text && !prev.block ? { text: prev.text, block: false, injected: false, at: prev.at } : null
+      })
+    }
     if (!shouldReview({ work: scan.work, proposal: scan.proposal, debt, lastMessage, prompt: turnPrompt })) {
       await clearPending()
       if (pendingBlock && roundsThisTurn < MAX_ROUNDS) {
@@ -654,8 +694,10 @@ async function reviewAtStop($, e, sink) {
     logLines($, layoutReport(report).join("\n"), { to: "debug" })
     if (!res.block) {
       $.ui.status("review: PASS")
-      // PASS is shown only: Stop additionalContext may start a continuation turn (unmeasured), costing a
-      // model turn per changing turn.
+      // A PASS report is not put in Stop additionalContext (that may start a continuation turn, unmeasured, costing a
+      // model turn per changing turn). It goes, RAW (no colour, no usage), into the one store the next prompt.submit
+      // delivers from; a BLOCK report is never stored, since the block string below already gives it to the model.
+      await storeForModel($, report, false)
       return null
     }
     roundsThisTurn++
@@ -684,23 +726,36 @@ export const register = (on) => {
     return next(e)
   })
 
-  // Deliver a pending interrupted-turn review with whatever prompt starts the next turn.
+  // Deliver to the model, with whatever prompt starts the next turn (0.5.2, owner 2026-11-14: "the adversarial review
+  // instead must be injected in the context and visible by both the agent and the user! otherwise how the agent is
+  // supposed to use the review to correct itself?"). ONE store (pendingAtom) and this ONE injection point carry every
+  // report the model has not seen yet: a Stop review that PASSED and an interrupted-turn review (a BLOCK report reached
+  // the model through the block string and is never stored). The record is TAKEN in one update (marked injected), so
+  // it is delivered once, on the first prompt.submit only: typed, mod-submitted and hand-back prompts all fire this
+  // event (probes M9/M11). A janitor prompt receives it too: the agent must see it, and a janitor turn's own Stop
+  // stores nothing. The usage table is never stored or injected: it stays on the user's screen only.
   on("prompt.submit", async ($, e, next) => {
     try {
-      const pending = await read($, pendingAtom)
-      if (!pending || pending.injected) return next(e)
-      await update($, pendingAtom, () => ({ ...pending, injected: true }))
-      return next({ ...e, context: [...((e && e.context) || []), `The harness reviewed your INTERRUPTED previous turn. Address every BLOCKER before anything else:\n${pending.text}`] })
+      let pending = null
+      await update($, pendingAtom, (prev) => {
+        pending = prev && !prev.injected && prev.text ? prev : null
+        return pending ? { ...prev, injected: true } : prev
+      })
+      if (!pending) return next(e)
+      return next({ ...e, context: [...((e && e.context) || []), `${REVIEW_HEAD}\n\n${pending.text}`] })
     } catch (err) {
-      $.ui.status(`review: pending review not injected — ${errText(err)}`)
+      $.ui.status(`review: review not injected — ${errText(err)}`)
       return next(e)
     }
   })
 
   on("turn.complete", async ($, e, next) => {
+    // The Stop review's mark is captured before the reset: an interrupted turn whose work that review already covered
+    // (a BLOCK continuation cut with nothing new) is not reviewed again, so the same work never yields two reports.
+    const mark = reviewedMark
     if (e && !e.agentId) { roundsThisTurn = 0; reviewedMark = { work: -1, proposal: -1, msg: null } }
     // The prompt is captured now: a new prompt may overwrite turnPrompt before the timer fires.
-    if (e && e.isAborted && !e.agentId && !isJanitorPrompt(turnPrompt)) { const prompt = turnPrompt; $.clock.after(1500, () => reviewInterrupted($, prompt)) }
+    if (e && e.isAborted && !e.agentId && !isJanitorPrompt(turnPrompt)) { const prompt = turnPrompt; $.clock.after(1500, () => reviewInterrupted($, prompt, mark)) }
     return next(e)
   })
 
