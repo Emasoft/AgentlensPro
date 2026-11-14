@@ -4,7 +4,7 @@ title: Convert review-gate enforcement to mods so an interrupt can never skip th
 column: dev
 status: tasked
 created: 2026-11-11T16:24:22+0100
-updated: 2026-11-14T16:07:59+0100
+updated: 2026-11-14T16:16:58+0100
 implementation-commits: [42b140f5, 43baaf9b, dd79f249, bcf2b35b, b6440a9f, ef178cd6]
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
@@ -78,6 +78,7 @@ approval-datetime: 2026-11-11T16:24:22+0100
   - D12 The `--directive` text changes in the same commit as D9 and quotes what it replaces: "only the turn that just ended decides" (owner ruling 2026-10-14) and "a user interrupt is a floor: nothing before it is ever demanded" (owner order 2026-09-15), against the card requirement "it should never be skipped". Hook-mode behaviour for a turn with no ungated predecessor is unchanged.
   - KNOWN LIMITS of D9 (state them in the directive too): the review is lost when no later turn ends normally in the same transcript (session ended after the Esc: 3 of 14 real cases; /clear); look-back across a compact summary is unmeasured; a turn that ended ungated WITHOUT an interrupt entry (Stop hook failed open, session killed mid-turn, 9-block cap) is not covered; a debt made of a worker's writes is unmeasured; whether the user's settings Stop hook stays silent on a permission-dialog rejection is inferred from real transcripts (0 of 17), not probed.
 - 2026-11-14 OWNER ORDER: "make the adeversarial review hook a mod so it runs automatically each turn without having to force the model to run it. it must be part of the harness cycle, unskippable. the same for the measurement. and you must publish and install this asap". DONE: agentlenspro-review-mod 0.2.1 (commits 9ac5918e, 271c031d, cd65eb12) runs the REVIEW ($.model.fork) and, for a proposal, the MEASUREMENT (fork plans read-only argv, the mod runs them, fork judges) at every main classic.Stop with work, blocks on VERDICT: BLOCK; interrupted turns reviewed from a timer (UNMEASURED). Published: github Emasoft/agentlenspro-review-mod, emasoft-plugins marketplace; installed user scope. settings.json review-gate (Stop, SubagentStop) and review-supervisor hooks removed (backup settings.json.agentlens-bak-20261114_155527228153-81495); hookInstall no longer registers them while the mod is installed. LIVE (headless sessions): review ran at Stop (7.5 s, cacheRead 148,888); measurement ran find/ls/git itself; a forced BLOCK reached the model and it acted; a re-fired Stop with no new work was not re-reviewed. Supersedes D8-D12 (look-back in the Stop gate) and the frozen-mod plan. OPEN: Esc path, the user rule turn-protocol-and-review.md still tells the model to spawn forks.
+- 2026-11-14 0.2.2 (4dee52e7): a review that cannot run BLOCKS the stop and retries (up to 2 rounds). LIVE Esc test (interactive tmux session, CC 2.1.325): Escape pressed while the Stop-hook review fork ran -> that fork returned aborted -> turn.complete isAborted -> the timer ran the interrupted-turn review 8 s later (fork answered, VERDICT: PASS, logged '(run by the harness, interrupted turn)'). The interrupted-turn path is MEASURED. User rule ~/.claude/rules/turn-protocol-and-review.md now says the harness runs REVIEW/MEASURE when the mod is installed (backup docs_dev/backup-turn-protocol-and-review.20261114_160859+0100.md).
 
 ## Approval log
 
