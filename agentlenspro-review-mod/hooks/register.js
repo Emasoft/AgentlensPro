@@ -28,6 +28,8 @@
 // review). A fork that fails (API error) is retried once, then reported on the status line; it does not
 // block, because the model could not act on it. The fork has no tools: it reviews what the conversation
 // and the diff show it.
+// USAGE. The token usage and the deduced cost of every model call the mod makes are logged to the user only, through
+// $.ui.log (a dim system line the model never sees); they are never put in a block string or a context injection.
 
 import { atom, read, update } from "claude-code"
 
@@ -71,6 +73,110 @@ function shouldReview({ work, proposal, debt, lastMessage, prompt }) {
 let reviewedMark = { work: -1, proposal: -1, msg: null }
 
 const errText = (err) => (err && err.message ? err.message : String(err))
+
+// ── USAGE / COST (pure part; shown to the user only, through $.ui.log) ───────────────────────────
+// The terminal draws ONE $.ui.log call as ONE row and renders a newline inside it as a garbage character, so every
+// log text that can hold a newline goes through logLines: one call per line, an empty line as a single space.
+function logLines($, text) {
+  for (const line of String(text).split(/\r?\n/)) $.ui.log(line === "" ? " " : line)
+}
+
+// RATES mirrored from src/shared/pricing.ts (PRICING_LAST_UPDATED 2026-11-01); update together. USD per MTok:
+// i input, r cache read, w cache write at the 5-minute TTL, o output. The 1-hour write rate is derived exactly as
+// pricing.ts cacheWrite1hRate does (2x input when the 5m write has the 1.25x shape). `above` is pricing.ts own
+// whole-request surcharge step: once input + cache read + cache write exceeds `over`, EVERY bucket bills at it.
+const RATES = {
+  "claude-opus-4-8": { i: 5, r: 0.5, w: 6.25, o: 25 },
+  "claude-opus-4-8-fast": { i: 10, r: 1, w: 12.5, o: 50 },
+  "claude-opus-5": { i: 5, r: 0.5, w: 6.25, o: 25 },
+  "claude-opus-5-fast": { i: 10, r: 1, w: 12.5, o: 50 },
+  "claude-opus-5-5": { i: 4, r: 0.2, w: 5, o: 20 },
+  "claude-opus-5-5-fast": { i: 8, r: 0.4, w: 10, o: 40 },
+  "claude-sonnet-5": { i: 2, r: 0.2, w: 2.5, o: 10 },
+  "claude-haiku-5-5": { i: 0.1, r: 0.01, w: 0.125, o: 0.5, above: { over: 100000, i: 0.5, r: 0.05, w: 0.625, o: 2.5 } },
+  "claude-fable-5": { i: 10, r: 1, w: 12.5, o: 50 },
+  "claude-fable-5-1": { i: 10, r: 0.25, w: 12.5, o: 50 },
+  "claude-mythos-5": { i: 10, r: 1, w: 12.5, o: 50 },
+  "claude-mythos-5-1": { i: 10, r: 0.25, w: 12.5, o: 50 },
+}
+
+// pricing.ts lookupRates: exact key, else the LONGEST key the id starts with; no match = null (never a guess).
+// A trailing [1m] and a date suffix are stripped first.
+function lookupRates(modelId) {
+  if (!modelId) return null
+  const id = String(modelId).toLowerCase().replace(/\[[^\]]*\]$/, "").replace(/-\d{4}-\d{2}-\d{2}$/, "").replace(/-\d{8}$/, "").trim()
+  if (RATES[id]) return RATES[id]
+  let best = null
+  for (const key of Object.keys(RATES)) if (id.startsWith(key) && (best === null || key.length > best.length)) best = key
+  return best ? RATES[best] : null
+}
+
+function write1hRate(rt) {
+  return rt.w > 0 && Math.abs(rt.w - rt.i * 1.25) < 1e-9 ? rt.i * 2 : rt.w
+}
+
+// The usage does not say which TTL a cache write used, so the cost is a bracket: all writes at 5m (lo), all at 1h (hi).
+function callCostUsd(usage, rt) {
+  const inp = usage.input_tokens || 0
+  const cr = usage.cache_read_input_tokens || 0
+  const cw = usage.cache_creation_input_tokens || 0
+  const out = usage.output_tokens || 0
+  const b = rt.above && inp + cr + cw > rt.above.over ? rt.above : rt
+  const base = (inp * b.i + cr * b.r + out * b.o) / 1e6
+  return { lo: base + (cw * b.w) / 1e6, hi: base + (cw * write1hRate(b)) / 1e6 }
+}
+
+const fmtInt = (n) => Math.round(n).toLocaleString("en-US")
+const fmtRange = (lo, hi) => {
+  const a = lo.toFixed(4)
+  const b = hi.toFixed(4)
+  return a === b ? `$${a}` : `$${a}–${b}`
+}
+const emptySessionUsage = () => ({ lo: 0, hi: 0, calls: 0, unpriced: 0 })
+
+// calls: [{ label, model (null = the session model), usage | reason }]. Returns the one line and the new session total.
+function formatUsageLine(calls, sessionModel, prev) {
+  const parts = []
+  const tot = { inp: 0, cr: 0, cw: 0, out: 0, lo: 0, hi: 0, billed: 0 }
+  const models = []
+  const unpriced = []
+  for (const c of calls) {
+    if (!c.usage) { parts.push(`${c.label}: no reply (${c.reason}), not billed`); continue }
+    const id = c.model || sessionModel
+    const u = c.usage
+    const inp = u.input_tokens || 0
+    const cr = u.cache_read_input_tokens || 0
+    const cw = u.cache_creation_input_tokens || 0
+    const out = u.output_tokens || 0
+    tot.inp += inp; tot.cr += cr; tot.cw += cw; tot.out += out; tot.billed++
+    if (!models.includes(id)) models.push(id)
+    const rt = lookupRates(id)
+    let cost
+    if (rt) { const k = callCostUsd(u, rt); tot.lo += k.lo; tot.hi += k.hi; cost = fmtRange(k.lo, k.hi) } else { unpriced.push(id); cost = `rate unknown for ${id}` }
+    parts.push(`${c.label}: in ${fmtInt(inp)} · cache-read ${fmtInt(cr)} · cache-write ${fmtInt(cw)} · out ${fmtInt(out)} · ${cost}`)
+  }
+  const session = { lo: prev.lo + tot.lo, hi: prev.hi + tot.hi, calls: prev.calls + tot.billed, unpriced: prev.unpriced + unpriced.length }
+  const unp = unpriced.length ? ` + unpriced call(s) on ${[...new Set(unpriced)].join(", ")}` : ""
+  parts.push(`total this turn: in ${fmtInt(tot.inp)} · cache-read ${fmtInt(tot.cr)} · cache-write ${fmtInt(tot.cw)} · out ${fmtInt(tot.out)} · ${fmtRange(tot.lo, tot.hi)}${unp} (cache writes at 5m–1h) · model ${models.join(", ") || sessionModel}`)
+  const sessionUnp = session.unpriced ? ` (excludes ${session.unpriced} unpriced)` : ""
+  return { line: `[review-mod usage] ${parts.join(" | ")} | session total: ${fmtRange(session.lo, session.hi)} over ${session.calls} calls${sessionUnp}`, session }
+}
+// ── END USAGE / COST (pure part) ──────────────────────────────────────────────────────────────────
+
+// Running total for this session, reset on classic.SessionStart.
+let sessionUsage = emptySessionUsage()
+
+// One user-only usage line for the model calls of one review cycle. A failure here is reported, never thrown: it
+// must not turn a finished review into a failed one.
+async function logUsage($, calls) {
+  try {
+    const { line, session } = formatUsageLine(calls, await $.session.model(), sessionUsage)
+    sessionUsage = session
+    logLines($, line)
+  } catch (err) {
+    logLines($, `[review-mod usage] could not be computed: ${errText(err)}`)
+  }
+}
 
 async function rememberSession($, e) {
   if (!e || e.agent_id || typeof e.transcript_path !== "string" || e.transcript_path === "") return
@@ -181,14 +287,25 @@ function extractJsonArray(text) {
 
 const HARNESS_HEAD = "[agentlenspro-review-mod: this request comes from the HARNESS, not from the user. You are not the main agent and you have NO tools: do not call any tool, answer at once in text.]"
 
-async function fork($, prompt) {
+// One model call as the usage log needs it; model null = the session model (a fork runs on it).
+function callRecord(label, model, r) {
+  return r.isAnswered ? { label, model, usage: r.usage } : { label, model, reason: r.reason }
+}
+
+// Returns { r, calls }: r is the final result, calls every attempt (the api-error retry bills on its own).
+async function fork($, prompt, label) {
   let r = await $.model.fork({ prompt })
-  if (!r.isAnswered && r.reason === "api-error") r = await $.model.fork({ prompt })
-  return r
+  const calls = [callRecord(label, null, r)]
+  if (!r.isAnswered && r.reason === "api-error") {
+    r = await $.model.fork({ prompt })
+    calls.push(callRecord(`${label} retry`, null, r))
+  }
+  return { r, calls }
 }
 
 async function runMeasure($, session, lastMessage) {
-  const plan = await fork($, [
+  const calls = []
+  const planned = await fork($, [
     HARNESS_HEAD,
     "ROLE: MEASURE (step 1 of 2: plan).",
     "The most recent turn above contains a proposal (a line starting \"PROPOSAL FOR ACTION - PLEASE REVIEW\").",
@@ -197,10 +314,12 @@ async function runMeasure($, session, lastMessage) {
     "Output ONLY a JSON array, nothing else: [{\"assumption\": \"...\", \"argv\": [\"grep\", \"-n\", \"x\", \"/abs/path\"], \"expect\": \"what output confirms it\"}]",
     "argv runs WITHOUT a shell: no pipes, redirects, globs or $VARS; absolute paths only.",
     `Allowed programs: ${[...READ_ONLY].join(" ")}; git only with ${[...GIT_READ].join(" ")}.`,
-  ].join("\n"))
-  if (!plan.isAnswered) return `MEASURE could not plan: ${plan.reason}`
+  ].join("\n"), "measure-plan")
+  calls.push(...planned.calls)
+  const plan = planned.r
+  if (!plan.isAnswered) return { text: `MEASURE could not plan: ${plan.reason}`, calls }
   const items = (extractJsonArray(plan.text) || []).slice(0, MAX_ASSUMPTIONS)
-  if (items.length === 0) return `MEASURE planned no runnable assumption. Raw plan:\n${plan.text.slice(0, 2000)}`
+  if (items.length === 0) return { text: `MEASURE planned no runnable assumption. Raw plan:\n${plan.text.slice(0, 2000)}`, calls }
   const rows = []
   for (const it of items) {
     const argv = it && it.argv
@@ -214,16 +333,18 @@ async function runMeasure($, session, lastMessage) {
     } catch (err) { obs = `did not run: ${errText(err)}` }
     rows.push(`ASSUMPTION: ${it.assumption}\nCOMMAND: ${JSON.stringify(argv)}\nEXPECT: ${it.expect}\nOBSERVED: ${obs}`)
   }
-  const verdicts = await fork($, [
+  const judged = await fork($, [
     HARNESS_HEAD,
     "ROLE: MEASURE (step 2 of 2: verdicts).",
     "The harness ran these read-only commands for the proposal in the most recent turn. Judge ONLY from the OBSERVED output.",
     rows.join("\n\n"),
     "For each row output: ASSUMPTION / COMMAND / OBSERVED (one line, the decisive part) / VERDICT (confirmed | refuted | unmeasurable).",
     "Then one line: LOAD-BEARING REFUTED: <list or none>.",
-  ].join("\n"))
+  ].join("\n"), "measure-judge")
+  calls.push(...judged.calls)
+  const verdicts = judged.r
   const head = "[AGENTLENSPRO-MEASURE-REPORT] (run by the harness)"
-  return verdicts.isAnswered ? `${head}\n${verdicts.text}` : `${head}\nverdict step failed (${verdicts.reason}); raw rows:\n${rows.join("\n\n")}`
+  return { text: verdicts.isAnswered ? `${head}\n${verdicts.text}` : `${head}\nverdict step failed (${verdicts.reason}); raw rows:\n${rows.join("\n\n")}`, calls }
 }
 
 // ── REVIEW ─────────────────────────────────────────────────────────────────────────────────────
@@ -264,16 +385,16 @@ function parseVerdict(text) {
   return { ok: false, why: `unreadable verdict line: ${line.slice(0, 80)}` }
 }
 
-async function runReview($, args) {
-  const r = await fork($, reviewPrompt(args))
-  if (!r.isAnswered) return { ok: false, why: r.reason }
-  const text = r.text.trim()
-  return parseVerdict(text)
+async function runReview($, args, label = "review") {
+  const f = await fork($, reviewPrompt(args), label)
+  if (!f.r.isAnswered) return { ok: false, why: f.r.reason, calls: f.calls }
+  return { ...parseVerdict(f.r.text.trim()), calls: f.calls }
 }
 
 // The interrupted turn's review, from a timer: outside the aborted event, so the fork is not cut by it.
 async function reviewInterrupted($, prompt) {
   if (isJanitorPrompt(prompt)) return // owner: janitor turns are never reviewed (the scheduler checks too)
+  const calls = []
   try {
     const session = await read($, sessionAtom)
     if (!session) { await defer($, "interrupted turn: no transcript path seen yet"); return }
@@ -281,22 +402,28 @@ async function reviewInterrupted($, prompt) {
     if (!scan.ok) { await defer($, `interrupted turn: ${scan.why}`); return }
     if (!scan.work && !scan.proposal) return
     const git = await gitContext($, session.cwd)
-    const measure = scan.proposal ? await runMeasure($, session, null) : null
-    let res = await runReview($, { interrupted: true, lastMessage: null, scan, measure, pending: null, git, round: 1 })
+    const measured = scan.proposal ? await runMeasure($, session, null) : null
+    if (measured) calls.push(...measured.calls)
+    const measure = measured ? measured.text : null
+    let res = await runReview($, { interrupted: true, lastMessage: null, scan, measure, pending: null, git, round: 1 }, "review (interrupted)")
+    calls.push(...res.calls)
     if (!res.ok) {
       // A fork from the aborted conversation can fail; fall back to a plain completion over the transcript.
       let excerpt = ""
       try { excerpt = JSON.stringify((await $.session.messages()).slice(-40)).slice(-60000) } catch (err) { excerpt = `(messages unavailable: ${errText(err)})` }
       const c = await $.model.complete({ model: "sonnet", system: reviewPrompt({ interrupted: true, lastMessage: null, scan, measure, pending: null, git, round: 1 }), prompt: `The interrupted conversation's last messages (JSON):\n${excerpt}`, maxTokens: 4000 })
+      calls.push(callRecord("review (interrupted, completion)", "sonnet", c))
       res = c.isAnswered ? parseVerdict(c.text.trim()) : { ok: false, why: `fork: ${res.why}; completion: ${c.reason}` }
     }
     if (!res.ok) { await defer($, `interrupted turn: ${res.why}`); return }
     const text = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, interrupted turn)\n${res.text}`
     await update($, pendingAtom, () => ({ text, block: res.block, injected: false, at: Date.now() }))
-    $.ui.log(text)
+    logLines($, text)
     $.ui.status(res.block ? "review: interrupted turn — BLOCK, findings go to the next prompt" : "review: interrupted turn — PASS")
   } catch (err) {
     await defer($, `interrupted turn: ${errText(err)}`)
+  } finally {
+    if (calls.length > 0) await logUsage($, calls)
   }
 }
 
@@ -305,7 +432,7 @@ async function reviewInterrupted($, prompt) {
 // Nothing is ever dropped: a stop the harness could not review leaves a DEBT in session state, and the next
 // stop must review that work (it is in the conversation the fork reads), even when that turn changed nothing.
 async function defer($, why) {
-  $.ui.log(`REVIEW DEFERRED to the next stop (not dropped): ${why}`)
+  logLines($, `REVIEW DEFERRED to the next stop (not dropped): ${why}`)
   $.ui.status(`review: deferred — ${why}`)
   try { const n = (await $.store.get("deferred")) || 0; await $.store.set("deferred", n + 1) } catch { /* the log line above records it */ }
   const prev = await read($, pendingAtom)
@@ -313,6 +440,7 @@ async function defer($, why) {
 }
 export const register = (on) => {
   on("classic.SessionStart", async ($, e, next) => {
+    sessionUsage = emptySessionUsage()
     try { await rememberSession($, e) } catch (err) { $.ui.status(`review: session not remembered — ${errText(err)}`) }
     return next(e)
   })
@@ -360,12 +488,13 @@ export const register = (on) => {
     const failClosed = async (why) => {
       if (roundsThisTurn < MAX_ROUNDS) {
         roundsThisTurn++
-        $.ui.log(`REVIEW FAILED, stop blocked for a retry (round ${roundsThisTurn}/${MAX_ROUNDS}): ${why}`)
+        logLines($, `REVIEW FAILED, stop blocked for a retry (round ${roundsThisTurn}/${MAX_ROUNDS}): ${why}`)
         return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness could not review this turn (${why}). End your turn again: the harness retries the review at the next stop. Do not spawn a review fork.`].filter(Boolean).join("\n\n") }
       }
       await defer($, `${why}; ${MAX_ROUNDS} retries this turn failed`)
       return r
     }
+    const calls = []
     try {
       await rememberSession($, e)
       const session = await read($, sessionAtom)
@@ -403,15 +532,18 @@ export const register = (on) => {
         return r
       }
       $.ui.status(scan.proposal ? "review: measuring the proposal, then reviewing…" : "review: reviewing this turn…")
-      const measure = scan.proposal ? await runMeasure($, session, lastMessage) : null
+      const measured = scan.proposal ? await runMeasure($, session, lastMessage) : null
+      if (measured) calls.push(...measured.calls)
+      const measure = measured ? measured.text : null
       const git = await gitContext($, session.cwd)
       const res = await runReview($, { interrupted: false, lastMessage, scan, measure, pending: pendingBlock, debt, git, round: roundsThisTurn + 1 })
+      calls.push(...res.calls)
       if (!res.ok) return await failClosed(`the review fork failed (${res.why})`)
       reviewedMark = { work: workAt, proposal: scan.proposalIndex, msg: lastMessage }
       await clearPending()
       const report = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness)\n${res.text}`
       if (!res.block) {
-        $.ui.log(report)
+        logLines($, report)
         $.ui.status("review: PASS")
         // PASS is logged only: Stop additionalContext may start a continuation turn (unmeasured), costing a
         // model turn per changing turn. The report stays in the transcript log for the user.
@@ -422,6 +554,9 @@ export const register = (on) => {
       return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness ran an adversarial review of this turn and it found BLOCKERS. Address each finding: fix it, or state why you reject it. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`].filter(Boolean).join("\n\n") }
     } catch (err) {
       return await failClosed(errText(err))
+    } finally {
+      // Usage of every model call this stop made, logged once on every path (PASS, BLOCK, failed review) and only to the user.
+      if (calls.length > 0) await logUsage($, calls)
     }
   })
 }
