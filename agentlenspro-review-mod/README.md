@@ -39,6 +39,35 @@ An **interrupted turn** (Esc) fires no Stop. `turn.complete` with `isAborted` sc
 a timer; the report is shown at once, injected into the next prompt, and the next Stop blocks if a BLOCK was
 not addressed.
 
+## Subagents (0.6.0)
+
+At every **SubagentStop** of a typed subagent (`general-purpose`, a plugin agent, an Agent-tool `fork`):
+
+1. The mod reads that agent's own messages (`$.session.messages({ agentId })`; the final message from the event,
+   or from the agent's `SubagentHandback` call when the event carries none) and asks the same scanner what the
+   turn did, on a non-sidechain copy of those messages written next to the display file (and deleted by
+   `hooks/show.py`).
+2. It runs the same REVIEW (and, when the agent's last message carries the proposal line, the MEASUREMENT) with
+   `$.model.complete` on `sonnet`, over those messages (the first prompt plus the newest, about 60,000 characters)
+   and the git context. Not `$.model.fork`: a fork repeats the main thread's request.
+3. A report with any finding blocks that subagent once: it continues and reads the report as `Stop hook feedback`.
+   An agent that ended with a `SubagentHandback` call (the usual end of an interactive background agent) is not
+   blocked: Claude Code discards a SubagentStop block after a turn that ended on a tool result (measured on
+   2.1.325), so its findings reach the parent only, and the report header says so. A clean PASS does not block.
+   A harness failure never blocks the subagent.
+4. Every report, and a note for every subagent stop the harness did not review, is injected into the parent's
+   next prompt, tagged `subagent <type> <id>`. The usage table is shown to the user only.
+5. The coloured copy is written to `<cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>__<agent_id>.txt`, and
+   `hooks/show.py`, registered on SubagentStop too, prints it in that subagent's view (`/tasks`, then the agent)
+   and deletes it.
+
+No review of a review: four guards, each enough on its own. (a) A stop with no agent id, with `agent_type` `""`
+(every `$.model.fork`, the mod's own main-review forks included, and internal agents) or of a janitor agent passes
+untouched. (b) While a subagent review is calling the model, every SubagentStop passes untouched. (c) A last message
+that opens with a review or measure report heading or with `VERDICT:`, or an agent whose first prompt is
+`ROLE: REVIEW` or `ROLE: MEASURE`, is not reviewed. (d) At most 2 reviews per agent turn, and at most 2 subagent
+reviews in flight at once. A typed subagent passed through by (b) or (d) is not reviewed; the parent is told.
+
 ## Limits
 
 - At most 2 blocking review rounds per turn; changes made after the second round are deferred (as a debt,
@@ -50,6 +79,10 @@ not addressed.
 - The review fork has no tools: it judges what the conversation and the diff show it.
 - Cost: one fork per changing turn, three for a proposal, each re-reading the whole conversation from the
   prompt cache (at a 400k context, about 40k input-equivalent tokens per fork) plus its answer.
+- Subagent cost: one uncached `sonnet` completion per reviewed subagent turn (three with a proposal), each about
+  the agent's messages (up to ~60,000 characters) plus the git context (up to 40,000 characters) plus its answer
+  (up to 4,000 tokens), times the fan-out, plus one extra subagent turn per block. The usage table prices it as
+  `rate unknown for sonnet`, because the completion result does not name the model the alias resolved to.
 - The fork repeats the main thread's last request, which does not contain the final answer; the final
   answer reaches the review only through the Stop payload's optional `last_assistant_message`.
 

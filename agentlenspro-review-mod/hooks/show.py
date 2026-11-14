@@ -1,12 +1,14 @@
-"""agentlenspro-review-mod Stop command hook: print the mod's coloured user-only report as a systemMessage (TRDD-KZCSO0R2).
+"""agentlenspro-review-mod Stop/SubagentStop command hook: print the mod's coloured user-only report as a systemMessage (TRDD-KZCSO0R2).
 
 Why a command hook: a mod's classic.Stop handler cannot return systemMessage, and $.ui.log draws every row dim grey
 with ESC turned into U+FFFD. A command hook's {"systemMessage": ...} is drawn with real ANSI colour and real newlines,
-and the model never receives it (measured on Claude Code 2.1.325, 2026-11-14).
+and the model never receives it (measured on Claude Code 2.1.325, 2026-11-14). On SubagentStop it is drawn in that
+subagent's own view, in colour (measured, probe-060), not in the main view.
 
 Handoff: the mod (hooks/register.js, writeDisplay) writes the finished, coloured text ONCE per main-thread Stop to
-<cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>.txt BEFORE it calls next(e); this hook runs inside that next(e)
-(measured), so the file is complete when it is read. Both sides take cwd and session_id from the same Stop payload
+<cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>.txt, and once per typed subagent's SubagentStop to
+<session_id>__<agent_id>.txt (0.6.0), BEFORE it calls next(e); this hook runs inside that next(e)
+(measured), so the file is complete when it is read. Both sides take cwd, session_id and agent_id from the same payload
 (owner decision 0.5.1: no HOME, no USERPROFILE, no CLAUDE_PLUGIN_DATA). The mod writes the file on every main-thread
 Stop, empty when there is nothing to show, so a leftover is overwritten before it could be shown.
 
@@ -89,17 +91,31 @@ def main():
         except OSError:
             pass  # the report still prints; the mod writes the same file before each Stop
     now = time.time()
-    path = os.path.join(folder, session_id + ".txt")
+    # SubagentStop (0.6.0): the file is <session_id>__<agent_id>.txt, picked strictly by the payload's agent_id and NEVER
+    # the main <session_id>.txt: every main-review $.model.fork fires a SubagentStop with the same session id, and falling
+    # back would steal or delete the main display. The mod's scan copy of that agent's messages goes here too.
+    if payload.get("hook_event_name") == "SubagentStop":
+        agent_id = payload.get("agent_id")
+        base = session_id + "__" + agent_id if isinstance(agent_id, str) and SESSION_ID.match(agent_id) else None
+    else:
+        base = session_id
     text = ""
-    try:
-        age = now - os.stat(path).st_mtime
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-        os.remove(path)
-        if age > STALE_SECONDS:
-            text = ""
-    except OSError:  # no file this Stop (the usual case when the mod wrote nothing), or unreadable
-        pass
+    if base is not None:
+        if base != session_id:
+            try:
+                os.remove(os.path.join(folder, base + ".scan.jsonl"))
+            except OSError:
+                pass  # this agent's stop was not reviewed (no copy), or the sweep removes it later
+        path = os.path.join(folder, base + ".txt")
+        try:
+            age = now - os.stat(path).st_mtime
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            os.remove(path)
+            if age > STALE_SECONDS:
+                text = ""
+        except OSError:  # no file this Stop (the usual case when the mod wrote nothing), or unreadable
+            pass
     sweep(folder, now)
     text = text.rstrip("\n")
     if text.strip() == "":

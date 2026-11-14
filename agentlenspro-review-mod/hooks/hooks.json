@@ -1,6 +1,7 @@
 {
   "modules": ["./register.js"],
   "hooks": {
-    "Stop": [{ "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/show.py\"" }] }]
+    "Stop": [{ "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/show.py\"" }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/show.py\"" }] }]
   }
 }
