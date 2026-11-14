@@ -124,7 +124,15 @@ function refuseArgv(argv) {
   const args = argv.slice(1)
   if (prog === "find" && args.some((a) => /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/.test(a))) return "find with a write/exec action"
   if (prog === "git") {
-    const sub = args.find((a) => !a.startsWith("-"))
+    // `git -C <dir> <sub>`: -C takes a separate value, which must not be read as the subcommand
+    // (probe 2026-11-14: every `git -C <dir> grep|ls-files|status` was refused as "git <dir>").
+    let sub
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "-C") { i++; continue }
+      if (args[i].startsWith("-")) continue
+      sub = args[i]
+      break
+    }
     if (!GIT_READ.has(sub)) return `git ${sub} is not a read-only subcommand`
     if (args.some((a) => a.startsWith("--output") || a === "-o")) return "git with an output file"
     // -c / --config-env can set core.pager, diff.external or core.fsmonitor (all execute); -O and
