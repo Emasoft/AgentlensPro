@@ -83,10 +83,15 @@ async function gitContext($, cwd) {
       return r.exitCode === 0 ? String(r.stdout) : null
     } catch { return null }
   }
-  const stat = await run(["diff", "HEAD", "--stat"])
-  if (stat === null) return "(not a git work tree)"
+  if ((await run(["rev-parse", "--is-inside-work-tree"])) === null) return "(not a git work tree)"
+  // A repository with no commit yet has no HEAD, and `git diff HEAD` fails there: the probe of 2026-11-14
+  // reported a fresh `git init` repo as "not a git work tree". Diff against the empty tree in that case.
+  const hasHead = (await run(["rev-parse", "--verify", "-q", "HEAD"])) !== null
+  const emptyTree = hasHead ? null : ((await run(["hash-object", "-t", "tree", "/dev/null"])) || "").trim()
+  const base = hasHead ? "HEAD" : emptyTree
+  const stat = base ? ((await run(["diff", base, "--stat"])) || "") : ""
   const status = (await run(["status", "--short"])) || ""
-  const diff = (await run(["diff", "HEAD"])) || ""
+  const diff = base ? ((await run(["diff", base])) || "") : ""
   const log = (await run(["log", "-3", "--stat", "--format=commit %h %s"])) || ""
   // `git diff HEAD` never shows an UNTRACKED file, so a new file (the commonest write) would be invisible to
   // the review: list them and include their text, capped.
@@ -100,7 +105,7 @@ async function gitContext($, cwd) {
   if (untracked.length > 20) newFiles += `\n[... ${untracked.length - 20} more untracked files not shown]\n`
   const all = diff + newFiles
   const cut = all.length > DIFF_MAX ? all.slice(0, DIFF_MAX) + `\n[... diff cut at ${DIFF_MAX} of ${all.length} chars]` : all
-  return `git status --short:\n${status || "(clean)"}\n\ngit diff HEAD --stat:\n${stat || "(no tracked changes)"}\n\nlast 3 commits:\n${log}\n\ngit diff HEAD + new files:\n${cut || "(empty)"}`
+  return `git status --short:\n${status || "(clean)"}\n\ngit diff ${hasHead ? "HEAD" : "(no commit yet: against the empty tree)"} --stat:\n${stat || "(no tracked changes)"}\n\nlast 3 commits:\n${log}\n\ngit diff ${hasHead ? "HEAD" : "(no commit yet)"} + new files:\n${cut || "(empty)"}`
 }
 
 // ── MEASURE ────────────────────────────────────────────────────────────────────────────────────
@@ -204,6 +209,8 @@ function reviewPrompt({ interrupted, lastMessage, scan, measure, pending, debt, 
     `Working tree, read by the harness:\n${git}`,
     "",
     "Review ONLY the most recent turn's work and claims. Hunt: a PROXY read in place of the thing (a pipe's exit status for the tool's, a preview for the file, one run for the variance, an assumed format for the real one); claims stronger than their evidence; broken references; untested or unverified changes; silent failure paths; destructive or irreversible actions without confirmation; scope beyond the request.",
+    "You are the REVIEWER, not the agent: write about the main agent in the third person (\"the agent\", \"the turn\"). Never write \"I\", \"me\" or \"my\" about the agent's actions.",
+    "Never recommend, in a finding or in SETTLE WITH, an action the user forbade in the conversation (for example running code the user said not to run); if the only settling check is forbidden, write that instead of the command.",
     "Answer both: the strongest reason NOT to have made this change, and the most likely way it is wrong.",
     "OUTPUT FORMAT, strictly:",
     "Line 1: exactly \"VERDICT: PASS\" or \"VERDICT: BLOCK\" (BLOCK only when at least one finding is a BLOCKER).",
