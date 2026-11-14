@@ -28,10 +28,12 @@
 // review). A fork that fails (API error) is retried once, then reported on the status line; it does not
 // block, because the model could not act on it. The fork has no tools: it reviews what the conversation
 // and the diff show it.
-// USAGE. The token usage and the deduced cost of every model call the mod makes are logged to the user only, through
-// $.ui.log (a dim system line the model never sees); they are never put in a block string or a context injection.
-// LAYOUT. The user-only rows (reports, usage) are laid out by layoutReport / usageTable: a box gutter and colour from
-// emoji glyphs, because a log row is plain dim text that no render hook can restyle (see REPORT LAYOUT).
+// USAGE. The token usage and the deduced cost of every model call the mod makes are shown to the user only; they are
+// never put in a block string or a context injection.
+// DISPLAY (0.5.0). At a Stop the user-only rows (every report, PASS and BLOCK, the usage table, failures) are written in
+// ANSI colour to a per-session file that the plugin's Stop command hook (hooks/show.py) prints as a systemMessage, which
+// the model never receives (see USER DISPLAY); the review therefore runs before next(e). An interrupted turn fires no
+// Stop, so its rows still go to $.ui.log, plain (a log row is dim and turns ESC into U+FFFD; see REPORT LAYOUT).
 
 import { atom, read, update } from "claude-code"
 
@@ -171,67 +173,86 @@ function formatUsageLine(calls, sessionModel, prev) {
   return { line: `[review-mod usage] ${parts.join(" | ")} | session total: ${sessionText}`, table, session }
 }
 
-// The transcript layout of one usage cycle: a header, one cost row plus one token row per call, the turn total, and
-// the session total. Rows stay short (the terminal prefixes each with the plugin name and wraps a long one with no
-// gutter); colour comes from the leading glyph only, since a $.ui.log row is plain dim text (escapes become U+FFFD).
-// The transcript layout of one usage cycle: a header, a cost row plus a token row per call, the turn total, and the
-// session total. Rows stay short: the terminal prefixes each with the plugin name (27 cells) and wraps a long one
-// with no gutter, so a token row is kept near 53 cells (an 80-column terminal). Colour comes from the leading glyph
-// only, since a $.ui.log row is plain dim text (escapes become U+FFFD). Token counts stay exact.
-function usageTable(table) {
+// The user-only layout of one usage cycle: a header, a cost row plus a token row per call, the turn total, and the
+// session total. With `paint` (the Stop display file) the header is bold and every row dim; without it (the $.ui.log
+// fallback) the rows carry no escape. Rows are kept near 53 cells, because a terminal wraps a long row with no gutter.
+// Token counts stay exact.
+function usageTable(table, paint = false) {
+  const p = painter(paint)
   const pad = Math.max(10, ...table.rows.map((r) => r.label.length))
   const tok = (t) => `│  in ${fmtInt(t.inp)} · out ${fmtInt(t.out)} · cache r ${fmtInt(t.cr)} / w ${fmtInt(t.cw)}`
-  const lines = ["╭─ 💰 [review-mod usage]", `│ model ${table.model}`, "│ $ spans the 5m–1h cache-write rates"]
+  const lines = ["╭─ [review-mod usage]", `│ model ${table.model}`, "│ $ spans the 5m–1h cache-write rates"]
   for (const r of table.rows) {
     lines.push(`│ ${r.label.padEnd(pad)}  ${r.cost}`)
     if (r.tokens) lines.push(tok(r.tokens))
   }
   lines.push(`│ ${"this turn".padEnd(pad)}  ${table.total.cost}`, tok(table.total.tokens))
   lines.push(`╰─ session total ${table.session}`)
-  return lines
+  return lines.map((l, i) => p(i === 0 ? "bold+dim" : "dim", l))
 }
 // ── END USAGE / COST (pure part) ──────────────────────────────────────────────────────────────────
 
 // ── REPORT LAYOUT (pure part; the user-only copy of a report) ─────────────────────────────────────
-// A $.ui.log row is ONE plain dim line: no render site is raised for it (probe 2026-11-14 on 2.1.325: a catch-all
-// ui.render hook saw InfoNotice only for the startup "Debug mode" notice, never for a log row), and an ESC byte is
-// drawn as U+FFFD, so neither a render hook nor ANSI escapes can colour it. The layout therefore lives in the text:
-// a box gutter, and colour from default-emoji glyphs, which a -p / SDK host still receives as readable ui_log text.
-// It is applied ONLY where a report is logged for the user: the block string, the pending-review injection and the
-// review prompt keep the raw text, because they reach the model. Total: every input line comes out once, in order;
-// a line it does not recognise passes through unchanged behind the gutter.
-const SEVERITY_GLYPH = { "BLOCKER": "🟥", "SHOULD-FIX": "🟨", "NIT": "⬜" }
-const MEASURE_GLYPH = { confirmed: "✅", refuted: "❌", unmeasurable: "🟡" }
-function layoutReport(text) {
+// One layout, two sinks. A plugin Stop COMMAND hook's systemMessage is drawn with real ANSI SGR colour and real
+// newlines, and the model never receives it (probe 2026-11-14 on 2.1.325); a $.ui.log row is one plain dim line where
+// ESC is drawn as U+FFFD and no render hook can restyle it. So layoutReport and usageTable take `paint`: true for the
+// display file hooks/show.py prints at Stop, false for the $.ui.log fallback (interrupted turns fire no Stop), which gets
+// the same rows with no escape. Colour always sits beside a word (VERDICT: PASS, [BLOCKER], confirmed), never alone.
+// Line-safe: every coloured span is closed on its own line, and control characters in the report text (model output,
+// diffs, stderr) are stripped first, so the only escapes in a row are these and show.py may cut between any two lines.
+// It is applied ONLY to the user's copy: the block string, the pending-review injection and the review prompt keep the
+// raw text, because they reach the model. Total: every input line comes out once, in order; a line it does not
+// recognise passes through unchanged behind the gutter.
+const SGR = { bold: "1", dim: "2", red: "31", green: "32", yellow: "33" }
+// painter(true)("bold+red", s) wraps s in one SGR span closed by a reset; painter(false) returns s unchanged.
+const painter = (on) => (style, s) => (on && s !== "" ? `\u001b[${style.split("+").map((k) => SGR[k]).join(";")}m${s}\u001b[0m` : s)
+// C0 controls except TAB and LF, DEL, and the C1 range (0x9b is a one-byte CSI).
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g
+const SEVERITY_STYLE = { "BLOCKER": "bold+red", "SHOULD-FIX": "yellow", "NIT": "dim" }
+const MEASURE_STYLE = { confirmed: "green", refuted: "red", unmeasurable: "yellow" }
+function layoutReport(text, paint = false) {
+  const p = painter(paint)
+  const bar = p("dim", "│")
   const out = []
-  let section = null // "review" | "measure" while a header is open
-  const close = () => { if (section) out.push("╰─"); section = null }
+  let section = false // a report header is open
+  let spaced = true // the last row is a box top or a spacer: an ASSUMPTION needs no spacer before it
+  const push = (row, isSpacer = false) => { out.push(row); spaced = isSpacer }
+  const close = () => { if (section) push(p("dim", "╰─")); section = false }
   for (const raw of String(text).split(/\r?\n/)) {
-    // Bold markers are drawn literally in a plain row; a heading, quote or bullet mark only hides the keyword.
-    const line = raw.replace(/\*\*/g, "").trimEnd()
+    // Bold markers are drawn literally; a heading, quote or bullet mark only hides the keyword.
+    const line = raw.replace(CONTROL, "").replace(/\*\*/g, "").trimEnd()
     const key = line.trim().replace(/^(?:[#>]+\s*|[-•]\s+)/, "")
-    const g = section ? "│ " : ""
+    const g = section ? `${bar} ` : ""
     let m
-    if ((m = key.match(/^\[AGENTLENSPRO-REVIEW-REPORT\]\s*(.*)$/))) { close(); section = "review"; out.push(`╭─ 🔍 [AGENTLENSPRO-REVIEW-REPORT] ${m[1]}`.trimEnd()); continue }
-    if ((m = key.match(/^\[AGENTLENSPRO-MEASURE-REPORT\]\s*(.*)$/))) { close(); section = "measure"; out.push(`╭─ 📏 [AGENTLENSPRO-MEASURE-REPORT] ${m[1]}`.trimEnd()); continue }
-    if (key === "") { out.push(section ? "│" : " "); continue }
-    if ((m = key.match(/^VERDICT:\s*(PASS|BLOCK)\b/i))) { out.push(`${g}${m[1].toUpperCase() === "PASS" ? "🟢" : "🔴"} ${key}`); continue }
+    if ((m = key.match(/^\[(AGENTLENSPRO-(?:REVIEW|MEASURE)-REPORT)\]\s*(.*)$/))) {
+      close()
+      section = true
+      push(`${p("dim", "╭─")} ${p("bold", `[${m[1]}] ${m[2]}`.trimEnd())}`, true)
+      continue
+    }
+    if (key === "") { push(section ? bar : " ", true); continue }
+    if ((m = key.match(/^VERDICT:\s*(PASS|BLOCK)\b/i))) { push(`${g}${p(m[1].toUpperCase() === "PASS" ? "bold+green" : "bold+red", key)}`); continue }
     if ((m = key.match(/^(?:(\d+)[.)]\s*)?\[?(BLOCKER|SHOULD-FIX|NIT)\]?(?=[\s:—–-]|$)\s*(.*)$/))) {
-      out.push(`${g}${SEVERITY_GLYPH[m[2]]} ${m[1] ? `${m[1]}. ` : ""}[${m[2]}] ${m[3].replace(/^:\s*/, "")}`.trimEnd())
+      const tag = `${m[1] ? `${m[1]}. ` : ""}[${m[2]}]`
+      const rest = m[3].replace(/^:\s*/, "")
+      push(`${g}${m[2] === "NIT" ? p("dim", `${tag} ${rest}`.trimEnd()) : `${p(SEVERITY_STYLE[m[2]], tag)} ${rest}`.trimEnd()}`)
       continue
     }
-    if ((m = key.match(/^WEAKEST LINK:\s*(.*?)\s+[—–-]+\s+SETTLE WITH:\s*(.*)$/))) { out.push(`${g}🔗 WEAKEST LINK: ${m[1]}`, `${g}🧪 SETTLE WITH: ${m[2]}`); continue }
-    if (/^WEAKEST LINK:/.test(key)) { out.push(`${g}🔗 ${key}`); continue }
-    if (/^(?:Strongest reason|Most likely way)/i.test(key)) { out.push(`${g}💭 ${key}`); continue }
+    if ((m = key.match(/^WEAKEST LINK:\s*(.*?)\s+[—–-]+\s+SETTLE WITH:\s*(.*)$/))) {
+      push(`${g}${p("bold", "WEAKEST LINK:")} ${m[1]}`.trimEnd())
+      push(`${g}${p("bold", "SETTLE WITH:")} ${m[2]}`.trimEnd())
+      continue
+    }
+    if ((m = key.match(/^WEAKEST LINK:(.*)$/))) { push(`${g}${p("bold", "WEAKEST LINK:")}${m[1]}`); continue }
     if (/^(?:\d+[.)]\s*)?ASSUMPTION:/.test(key)) {
-      if (out.length > 0 && !out[out.length - 1].startsWith("╭─") && out[out.length - 1] !== "│") out.push(section ? "│" : " ")
-      out.push(`${g}◆ ${key}`)
+      if (!spaced) push(section ? bar : " ", true)
+      push(`${g}${p("bold", key)}`)
       continue
     }
-    if ((m = key.match(/^LOAD-BEARING REFUTED:\s*(.*)$/i))) { out.push(`${g}${/^(?:none|n\/a|-|—)?\.?$/i.test(m[1].trim()) ? "🟢" : "🔴"} ${key}`); continue }
-    if ((m = key.match(/\bVERDICT:\s*(confirmed|refuted|unmeasurable)\b/i))) { out.push(`${g}    ${MEASURE_GLYPH[m[1].toLowerCase()]} ${key}`); continue }
-    if (/^(?:COMMAND|OBSERVED|EXPECT):/.test(key)) { out.push(`${g}    ${key}`); continue }
-    out.push(`${g}${line}`)
+    if ((m = key.match(/^LOAD-BEARING REFUTED:\s*(.*)$/i))) { push(`${g}${p(/^(?:none|n\/a|-|—)?\.?$/i.test(m[1].trim()) ? "bold+green" : "bold+red", key)}`); continue }
+    if ((m = key.match(/\bVERDICT:\s*(confirmed|refuted|unmeasurable)\b/i))) { push(`${g}    ${p(MEASURE_STYLE[m[1].toLowerCase()], key)}`); continue }
+    if (/^(?:COMMAND|OBSERVED|EXPECT):/.test(key)) { push(`${g}    ${key}`); continue }
+    push(`${g}${line}`)
   }
   close()
   return out
@@ -241,17 +262,52 @@ function layoutReport(text) {
 // Running total for this session, reset on classic.SessionStart.
 let sessionUsage = emptySessionUsage()
 
-// One user-only usage table for the model calls of one review cycle. A failure here is reported, never thrown: it
-// must not turn a finished review into a failed one.
-async function logUsage($, calls) {
+// ── USER DISPLAY (the coloured user-only rows of one Stop, printed by hooks/show.py) ──────────────────
+// The rows of one main-thread Stop (reports, usage, failures) are collected in a sink and written ONCE, before
+// classic.Stop calls next(e): the plugin's own Stop command hook (hooks/show.py) runs INSIDE that next(e) (measured
+// 2026-11-14 on 2.1.325, `claude -p`: "cmd display_exists=False" logged between "mod before-next" and "mod after-next"),
+// prints the file as a systemMessage and deletes it. The path is computed from HOME on both sides:
+// $HOME/.claude/plugins/data/agentlenspro-review-mod/display/<session_id>.txt. Not CLAUDE_PLUGIN_DATA: the command hook
+// gets it but this process does not ($.env.get gave undefined in the same probe), and its marketplace suffix cannot be
+// derived here. The file is written on EVERY main-thread Stop, empty when there is nothing to show, so a file an earlier
+// Stop left behind is overwritten before show.py reads it (show.py also drops a file older than 120 s).
+const DISPLAY_SUBDIR = ".claude/plugins/data/agentlenspro-review-mod/display"
+const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/
+const ANSI_SGR = /\u001b\[[0-9;]*m/g
+
+function displaySink() {
+  const lines = []
+  return { lines, add: (rows) => { lines.push(...rows) } }
+}
+
+async function writeDisplay($, sessionId, lines) {
+  const home = await $.env.get("HOME")
+  if (!home || typeof sessionId !== "string" || !SESSION_ID.test(sessionId)) throw new Error(`no display path (HOME ${home ? "set" : "unset"}, session_id ${JSON.stringify(sessionId)})`)
+  await $.fs.write(`${home}/${DISPLAY_SUBDIR}/${sessionId}.txt`, lines.length > 0 ? `${lines.join("\n")}\n` : "")
+}
+
+// One user-only message: into the Stop display (coloured, plus a plain copy in the debug log) when a sink is given,
+// else to the transcript as plain dim rows.
+function note($, sink, style, text) {
+  const clean = String(text).replace(CONTROL, "")
+  if (!sink) { logLines($, clean); return }
+  const p = painter(true)
+  sink.add(clean.split("\n").map((l) => p(style, l)))
+  logLines($, clean, { to: "debug" })
+}
+
+// One user-only usage table for the model calls of one review cycle: into the Stop display when a sink is given, else
+// to the transcript. A failure here is reported, never thrown: it must not turn a finished review into a failed one.
+async function logUsage($, calls, sink = null) {
   try {
     const { line, table, session } = formatUsageLine(calls, await $.session.model(), sessionUsage)
     sessionUsage = session
-    logLines($, usageTable(table).join("\n"))
+    if (sink) sink.add(usageTable(table, true))
+    else logLines($, usageTable(table).join("\n"))
     // The one-line form goes to the debug log too, where one grep finds a whole cycle.
     logLines($, line, { to: "debug" })
   } catch (err) {
-    logLines($, `[review-mod usage] could not be computed: ${errText(err)}`)
+    note($, sink, "yellow", `[review-mod usage] could not be computed: ${errText(err)}`)
   }
 }
 
@@ -505,15 +561,101 @@ async function reviewInterrupted($, prompt) {
 }
 
 // A review that could not run is NOT a pass. The status line alone is lost in an unattended session, so
-// every deferral is also written to the transcript log and counted in the plugin store (key "deferred").
-// Nothing is ever dropped: a stop the harness could not review leaves a DEBT in session state, and the next
-// stop must review that work (it is in the conversation the fork reads), even when that turn changed nothing.
-async function defer($, why) {
-  logLines($, `REVIEW DEFERRED to the next stop (not dropped): ${why}`)
+// every deferral is also shown to the user (the Stop display, or the transcript log from a timer) and counted in the
+// plugin store (key "deferred"). Nothing is ever dropped: a stop the harness could not review leaves a DEBT in session
+// state, and the next stop must review that work (it is in the conversation the fork reads), even when that turn
+// changed nothing.
+async function defer($, why, sink = null) {
+  note($, sink, "yellow", `REVIEW DEFERRED to the next stop (not dropped): ${why}`)
   $.ui.status(`review: deferred — ${why}`)
-  try { const n = (await $.store.get("deferred")) || 0; await $.store.set("deferred", n + 1) } catch { /* the log line above records it */ }
+  try { const n = (await $.store.get("deferred")) || 0; await $.store.set("deferred", n + 1) } catch { /* the message above records it */ }
   const prev = await read($, pendingAtom)
   await update($, pendingAtom, () => ({ ...(prev || { text: "", block: false, injected: true, at: Date.now() }), debt: true, debtWhy: why }))
+}
+
+// One main-thread, non-janitor Stop: scan, measure (proposal only), review. Returns the mod's block text, or null to let
+// the stop through. Every user-only row (reports, BLOCK ones included, usage, failures) goes to `sink`; the returned
+// block text keeps the RAW report, because it reaches the model.
+async function reviewAtStop($, e, sink) {
+  // A review that could not run must not let the stop through (owner: "unskippable"). It blocks and the next
+  // stop retries, up to MAX_ROUNDS per turn; past that it is deferred (the engine's own 9-block cap
+  // would end the turn anyway, and an endless block would wedge the session).
+  const failClosed = async (why) => {
+    if (roundsThisTurn < MAX_ROUNDS) {
+      roundsThisTurn++
+      note($, sink, "yellow", `REVIEW FAILED, stop blocked for a retry (round ${roundsThisTurn}/${MAX_ROUNDS}): ${why}`)
+      return `[agentlenspro-review-mod] The harness could not review this turn (${why}). End your turn again: the harness retries the review at the next stop. Do not spawn a review fork.`
+    }
+    await defer($, `${why}; ${MAX_ROUNDS} retries this turn failed`, sink)
+    return null
+  }
+  const calls = []
+  try {
+    await rememberSession($, e)
+    const session = await read($, sessionAtom)
+    if (!session) return await failClosed("no transcript path")
+    const pending = await read($, pendingAtom)
+    const scan = await scanTurn($, session, false)
+    if (!scan.ok) return await failClosed(scan.why)
+    // The engine fires Stop BEFORE the turn's final assistant message reaches the JSONL, so a text-only
+    // proposal turn scans as nothing (measured 2026-11-14: work None, proposal false on a turn whose only
+    // message was the proposal, and no measurement ran). The event carries that message: check it here.
+    const lastMessage = typeof e.last_assistant_message === "string" ? e.last_assistant_message : null
+    const proposalFromLast = !scan.proposal && lastMessage !== null && PROPOSAL_LINE.test(lastMessage)
+    if (proposalFromLast) scan.proposal = true
+    const pendingBlock = pending && pending.block ? pending.text : null
+    const debt = pending && pending.debt ? pending.debtWhy : null
+    const clearPending = async () => { if (pending) await update($, pendingAtom, () => null) }
+    if (!shouldReview({ work: scan.work, proposal: scan.proposal, debt, lastMessage, prompt: turnPrompt })) {
+      await clearPending()
+      if (pendingBlock && roundsThisTurn < MAX_ROUNDS) {
+        roundsThisTurn++
+        return `[agentlenspro-review-mod] The harness review of your INTERRUPTED earlier turn found BLOCKERS and this turn did not address them. Fix each one (or state why it is rejected), then end the turn.\n\n${pendingBlock}`
+      }
+      if (pendingBlock) await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached; the interrupted turn's BLOCK review was not re-checked`, sink)
+      return null
+    }
+    const workAt = scan.work ? scan.work.index : -1
+    // A Stop re-fired with the same final message is skipped; a new final message is new agent output and is reviewed.
+    if (!debt && workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal && lastMessage === reviewedMark.msg) {
+      // Nothing new since the last harness review of this turn (a Stop re-fired after another hook blocked).
+      await clearPending()
+      return null
+    }
+    if (roundsThisTurn >= MAX_ROUNDS) {
+      await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached this turn`, sink)
+      return null
+    }
+    $.ui.status(scan.proposal ? "review: measuring the proposal, then reviewing…" : "review: reviewing this turn…")
+    const measured = scan.proposal ? await runMeasure($, session, lastMessage) : null
+    if (measured) calls.push(...measured.calls)
+    const measure = measured ? measured.text : null
+    const git = await gitContext($, session.cwd)
+    const res = await runReview($, { interrupted: false, lastMessage, scan, measure, pending: pendingBlock, debt, git, round: roundsThisTurn + 1 })
+    calls.push(...res.calls)
+    if (!res.ok) return await failClosed(`the review fork failed (${res.why})`)
+    reviewedMark = { work: workAt, proposal: scan.proposalIndex, msg: lastMessage }
+    await clearPending()
+    const report = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness)\n${res.text}`
+    // The user sees every report, PASS and BLOCK (before 0.5.0 a BLOCK report reached only the model); the debug log
+    // keeps a plain copy, since show.py cuts a report past the hook output cap.
+    sink.add(layoutReport(report, true))
+    logLines($, layoutReport(report).join("\n"), { to: "debug" })
+    if (!res.block) {
+      $.ui.status("review: PASS")
+      // PASS is shown only: Stop additionalContext may start a continuation turn (unmeasured), costing a
+      // model turn per changing turn.
+      return null
+    }
+    roundsThisTurn++
+    $.ui.status(`review: BLOCK (round ${roundsThisTurn}/${MAX_ROUNDS})`)
+    return `[agentlenspro-review-mod] The harness ran an adversarial review of this turn and it found BLOCKERS. Address each finding: fix it, or state why you reject it. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`
+  } catch (err) {
+    return await failClosed(errText(err))
+  } finally {
+    // Usage of every model call this stop made, shown once on every path (PASS, BLOCK, failed review) and only to the user.
+    if (calls.length > 0) await logUsage($, calls, sink)
+  }
 }
 export const register = (on) => {
   on("classic.SessionStart", async ($, e, next) => {
@@ -552,88 +694,22 @@ export const register = (on) => {
   })
 
   // THE GATE. Runs the measurement and the review itself and blocks the stop on a BLOCK verdict.
+  // The review runs BEFORE next(e) (TRDD-KZCSO0R2, 0.5.0): the plugin's own Stop command hook (hooks/show.py), which
+  // prints the coloured user-only report, runs inside next(e) (measured, see USER DISPLAY), so the display file must
+  // be complete before next is called. Cost of this order: every other Stop hook waits for the review. The mod's block
+  // text is merged with whatever the other Stop hooks decided, exactly as before.
   on("classic.Stop", async ($, e, next) => {
-    const r = await next(e)
-    if (!e || e.agent_id) return r // janitor subagents (memory/repair/security chores) are subagents: excluded here
+    if (!e || e.agent_id) return next(e) // janitor subagents (memory/repair/security chores) are subagents: excluded here
+    const sink = displaySink()
     // Owner: janitor-originated turns (heartbeat, chores) are NEVER reviewed or measured, whatever they wrote or
-    // proposed. Return before everything else: no clearPending, so a debt or a pending BLOCK stays for the next
-    // non-janitor stop.
-    if (isJanitorPrompt(turnPrompt)) return r
-    // A review that could not run must not let the stop through (owner: "unskippable"). It blocks and the next
-    // stop retries, up to MAX_ROUNDS per turn; past that it is logged as skipped (the engine's own 9-block cap
-    // would end the turn anyway, and an endless block would wedge the session).
-    const failClosed = async (why) => {
-      if (roundsThisTurn < MAX_ROUNDS) {
-        roundsThisTurn++
-        logLines($, `REVIEW FAILED, stop blocked for a retry (round ${roundsThisTurn}/${MAX_ROUNDS}): ${why}`)
-        return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness could not review this turn (${why}). End your turn again: the harness retries the review at the next stop. Do not spawn a review fork.`].filter(Boolean).join("\n\n") }
-      }
-      await defer($, `${why}; ${MAX_ROUNDS} retries this turn failed`)
-      return r
+    // proposed; no clearPending there, so a debt or a pending BLOCK stays for the next non-janitor stop.
+    const mine = isJanitorPrompt(turnPrompt) ? null : await reviewAtStop($, e, sink)
+    // Written on every main-thread Stop, empty when the sink is: a leftover from an earlier Stop is never shown.
+    try { await writeDisplay($, e.session_id, sink.lines) } catch (err) {
+      // The rows must not be lost: fall back to the plain dim transcript rows.
+      logLines($, [`[review-mod] display file not written (${errText(err)}); plain copy follows`, ...sink.lines.map((l) => l.replace(ANSI_SGR, ""))].join("\n"))
     }
-    const calls = []
-    try {
-      await rememberSession($, e)
-      const session = await read($, sessionAtom)
-      if (!session) return await failClosed("no transcript path")
-      const pending = await read($, pendingAtom)
-      const scan = await scanTurn($, session, false)
-      if (!scan.ok) return await failClosed(scan.why)
-      // The engine fires Stop BEFORE the turn's final assistant message reaches the JSONL, so a text-only
-      // proposal turn scans as nothing (measured 2026-11-14: work None, proposal false on a turn whose only
-      // message was the proposal, and no measurement ran). The event carries that message: check it here.
-      const lastMessage = typeof e.last_assistant_message === "string" ? e.last_assistant_message : null
-      const proposalFromLast = !scan.proposal && lastMessage !== null && PROPOSAL_LINE.test(lastMessage)
-      if (proposalFromLast) scan.proposal = true
-      const pendingBlock = pending && pending.block ? pending.text : null
-      const debt = pending && pending.debt ? pending.debtWhy : null
-      const clearPending = async () => { if (pending) await update($, pendingAtom, () => null) }
-      if (!shouldReview({ work: scan.work, proposal: scan.proposal, debt, lastMessage, prompt: turnPrompt })) {
-        await clearPending()
-        if (pendingBlock && roundsThisTurn < MAX_ROUNDS) {
-          roundsThisTurn++
-          return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness review of your INTERRUPTED earlier turn found BLOCKERS and this turn did not address them. Fix each one (or state why it is rejected), then end the turn.\n\n${pendingBlock}`].filter(Boolean).join("\n\n") }
-        }
-        if (pendingBlock) await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached; the interrupted turn's BLOCK review was not re-checked`)
-        return r
-      }
-      const workAt = scan.work ? scan.work.index : -1
-      // A Stop re-fired with the same final message is skipped; a new final message is new agent output and is reviewed.
-      if (!debt && workAt <= reviewedMark.work && scan.proposalIndex <= reviewedMark.proposal && lastMessage === reviewedMark.msg) {
-        // Nothing new since the last harness review of this turn (a Stop re-fired after another hook blocked).
-        await clearPending()
-        return r
-      }
-      if (roundsThisTurn >= MAX_ROUNDS) {
-        await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached this turn`)
-        return r
-      }
-      $.ui.status(scan.proposal ? "review: measuring the proposal, then reviewing…" : "review: reviewing this turn…")
-      const measured = scan.proposal ? await runMeasure($, session, lastMessage) : null
-      if (measured) calls.push(...measured.calls)
-      const measure = measured ? measured.text : null
-      const git = await gitContext($, session.cwd)
-      const res = await runReview($, { interrupted: false, lastMessage, scan, measure, pending: pendingBlock, debt, git, round: roundsThisTurn + 1 })
-      calls.push(...res.calls)
-      if (!res.ok) return await failClosed(`the review fork failed (${res.why})`)
-      reviewedMark = { work: workAt, proposal: scan.proposalIndex, msg: lastMessage }
-      await clearPending()
-      const report = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness)\n${res.text}`
-      if (!res.block) {
-        logLines($, layoutReport(report).join("\n"))
-        $.ui.status("review: PASS")
-        // PASS is logged only: Stop additionalContext may start a continuation turn (unmeasured), costing a
-        // model turn per changing turn. The report stays in the transcript log for the user.
-        return r
-      }
-      roundsThisTurn++
-      $.ui.status(`review: BLOCK (round ${roundsThisTurn}/${MAX_ROUNDS})`)
-      return { ...r, block: [r.block, `[agentlenspro-review-mod] The harness ran an adversarial review of this turn and it found BLOCKERS. Address each finding: fix it, or state why you reject it. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`].filter(Boolean).join("\n\n") }
-    } catch (err) {
-      return await failClosed(errText(err))
-    } finally {
-      // Usage of every model call this stop made, logged once on every path (PASS, BLOCK, failed review) and only to the user.
-      if (calls.length > 0) await logUsage($, calls)
-    }
+    const r = await next(e)
+    return mine ? { ...r, block: [r.block, mine].filter(Boolean).join("\n\n") } : r
   })
 }

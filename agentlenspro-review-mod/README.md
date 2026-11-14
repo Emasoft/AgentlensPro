@@ -21,8 +21,13 @@ At every main-thread **Stop**:
    conversation (served from the prompt cache), plus the turn's final message, the measure report and the
    `git diff HEAD` the mod reads (so a worker's writes are reviewed too).
 4. **VERDICT: BLOCK** → the stop is blocked with the report; the model must address each finding in the same
-   turn. **VERDICT: PASS** → the report is written to the transcript log (the user sees it; the model is
-   not re-prompted).
+   turn. **VERDICT: PASS** → the model is not re-prompted.
+5. Every report (PASS and BLOCK), the token usage and cost of the review calls, and any review failure are
+   shown to the **user only**, in colour: the mod writes them to
+   `~/.claude/plugins/data/agentlenspro-review-mod/display/<session_id>.txt` before the other Stop hooks run,
+   and the plugin's Stop command hook `hooks/show.py` prints that file as a `systemMessage` (drawn as
+   `Stop says: ...`, never sent to the model) and deletes it. Reports past the 10,000-character hook limit are
+   cut at a line, and the whole text is kept next to it as `full-<timestamp>.txt`.
 
 An **interrupted turn** (Esc) fires no Stop. `turn.complete` with `isAborted` schedules the same review from
 a timer; the report is shown at once, injected into the next prompt, and the next Stop blocks if a BLOCK was
@@ -46,6 +51,7 @@ not addressed.
 
 - The `agentlenspro` CLI on PATH, with `work` and `proposal` in `review-gate --json-verdict`
   (AgentlensPro TRDD-KZCSO0R2). An older CLI is refused on the status line rather than reviewing less.
+- `python3` on PATH for the Stop command hook `hooks/show.py` (standard library only).
 - When this mod is installed, remove the settings hooks `agentlenspro review-gate` (Stop, SubagentStop) and
   `agentlenspro review-supervisor`: they ask the model to spawn review forks, which this mod replaces.
 
