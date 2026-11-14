@@ -17,8 +17,6 @@ split-lineage: 266022327e5e4d3796245d2d1a921c06
 ^YRKGZLDY [desc: "Overview of the testing and process-hygiene hub: field lessons about what flakes, what lies, and what looks broken but is not when running tests and background work on AgentlensPro.", keywords: testing process hygiene overview flaky tests background work looks broken but is not field lessons hub AgentlensPro, lmd: 2026-10-21]
 Field lessons about running tests and background work on this repo: what flakes, what lies, what looks broken but is not. This page is the overview; the detail lives in the component pages listed under Applies to. Page-level lessons that no component owns stay below.
 
-## Applies to
-
 ^DFQ0LLSR [desc: "Outbound-post guard: a file-scanning identity check cannot see a gh comment, and a bare @handle pages a real account; detail on github-outbound-identity-and-mention-guards.", keywords: identity check green but address leaked github comment bare handle paged stranger outbound post guard file scanning cannot see gh, lmd: 2026-10-21]
 - [[github-outbound-identity-and-mention-guards]] — the outbound-post guard: why a file-scanning identity check cannot see a gh comment, and why a bare @handle pages a real account.
 ^PH3MW3R5 [desc: "The freePort time-of-check-to-time-of-use race, its two mitigations, and why no mocha flag isolates one test file here; detail on test-port-race-and-mocha-isolation.", keywords: free port probe flaky CI passes on rerun freePort TOCTOU race mocha does not isolate single test file mitigations, lmd: 2026-10-21]
@@ -31,16 +29,27 @@ Field lessons about running tests and background work on this repo: what flakes,
 - [[background-agent-and-cache-liveness]] — how to tell a blocked background agent from a dead one (transcript mtime), the fork identity anchor, and why every cache-liveness verdict is inferred.
 ^CYPKCMBK [desc: "What breaks in a fresh git worktree: shared CARGO_TARGET_DIR, symlinked node_modules with pnpm, and the unit suite run before node esbuild.js; detail on worktree-test-and-build-hazards.", keywords: rust parity test fails in one worktree passes another cargo old type after code changed pnpm compile-tests aborts no TTY reinstall dependencies, lmd: 2026-10-21]
 - [[worktree-test-and-build-hazards]] — what breaks in a fresh git worktree: shared CARGO_TARGET_DIR, symlinked node_modules with pnpm, and the unit suite before node esbuild.js.
+^WNVEVQE2 [desc: "Related page: memory-scope-leak-detector-false-positives, the lateral see-also for this hub.", keywords: memory scope leak detector false positives lateral see also related page flags PROJECT machine-private data, lmd: 2026-10-21]
+- [[memory-scope-leak-detector-false-positives]]
+^YFLZM5HU [desc: "This hub is governed by agentlenspro-ops-lessons, the operational-doctrine overview that this sub-page details.", keywords: governed by agentlenspro ops lessons operational doctrine overview sub-page parent aspect testing process hygiene hub, lmd: 2026-10-21]
+- [[agentlenspro-ops-lessons]] — the operational-doctrine overview this sub-page details.
+
+## Applies to
+
+- [[github-outbound-identity-and-mention-guards]]
+- [[test-port-race-and-mocha-isolation]]
+- [[test-flaky-and-ci-red-diagnosis]]
+- [[hook-message-bar-and-gate-emitters]]
+- [[background-agent-and-cache-liveness]]
+- [[worktree-test-and-build-hazards]]
 
 ## See also
 
-^WNVEVQE2 [desc: "Related page: memory-scope-leak-detector-false-positives, the lateral see-also for this hub.", keywords: memory scope leak detector false positives lateral see also related page flags PROJECT machine-private data, lmd: 2026-10-21]
 - [[memory-scope-leak-detector-false-positives]]
 
 ## Governed by
 
-^YFLZM5HU [desc: "This hub is governed by agentlenspro-ops-lessons, the operational-doctrine overview that this sub-page details.", keywords: governed by agentlenspro ops lessons operational doctrine overview sub-page parent aspect testing process hygiene hub, lmd: 2026-10-21]
-- [[agentlenspro-ops-lessons]] — the operational-doctrine overview this sub-page details.
+- [[agentlenspro-ops-lessons]]
 
 ## Notes and lessons learned
 
