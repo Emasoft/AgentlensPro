@@ -131,6 +131,18 @@ export const INSTALLED_EVENTS: readonly string[] = [
 // install log line) still need their own edit, because they say something different about each
 // command rather than treating them as a set. Checked by enumerating every reference to the *_CMD
 // constants across src/, standalone/ and skills/; do that again rather than trusting this sentence.
+/** True when the agentlenspro-review-mod plugin is installed (TRDD-KZCSO0R2). That mod runs the adversarial
+ *  review and the measurement ITSELF at every Stop; the review-gate and review-supervisor hooks tell the MODEL
+ *  to spawn review forks, so registering both would give the model contradictory orders and double the cost.
+ *  Read from Claude Code's own installed-plugins registry; an unreadable registry means not installed. */
+export function reviewModInstalled(home: string = os.homedir()): boolean {
+  try {
+    const reg = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8')) as { plugins?: Record<string, unknown> }
+    return Object.keys(reg?.plugins ?? {}).some((k) => k.startsWith('agentlenspro-review-mod@'))
+  } catch {
+    return false
+  }
+}
 export const CURRENT_CMDS: readonly string[] = [HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, DELEGATE_CMD]
 export function isStaleGeneration(command: string): boolean {
   return isOurHookCommand(command) && !CURRENT_CMDS.includes(command)
@@ -262,11 +274,11 @@ export function rebuildEventMatchers(
     out.rebuilt.push(gateMatcher(gateCmd))
     out.installed = true
   }
-  if (!uninstall && REVIEW_EVENTS.includes(ev)) {
+  if (!uninstall && REVIEW_EVENTS.includes(ev) && !reviewModInstalled()) {
     out.rebuilt.push(reviewGateMatcher(reviewCmd))
     out.installed = true
   }
-  if (!uninstall && SUPERVISOR_EVENTS.includes(ev)) {
+  if (!uninstall && SUPERVISOR_EVENTS.includes(ev) && !reviewModInstalled()) {
     out.rebuilt.push(reviewSupervisorMatcher(SUPERVISOR_CMD))
     out.installed = true
   }
@@ -334,10 +346,10 @@ export function buildEventOps(
   if (!uninstall && GATE_EVENTS.includes(ev)) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: gateMatcher(gateCmd), unique_by_substring: gateCmd })
   }
-  if (!uninstall && REVIEW_EVENTS.includes(ev)) {
+  if (!uninstall && REVIEW_EVENTS.includes(ev) && !reviewModInstalled()) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewGateMatcher(reviewCmd), unique_by_substring: reviewCmd })
   }
-  if (!uninstall && SUPERVISOR_EVENTS.includes(ev)) {
+  if (!uninstall && SUPERVISOR_EVENTS.includes(ev) && !reviewModInstalled()) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewSupervisorMatcher(SUPERVISOR_CMD), unique_by_substring: SUPERVISOR_CMD })
   }
   // delegate-gate registration removed until TRDD-SA99VCPZ closes (six accepted review
