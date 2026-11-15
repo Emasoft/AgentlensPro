@@ -1200,7 +1200,7 @@ async function reviewSubagent($, ctx, turn, sink, st, tag) {
 
 export const register = (on, options) => {
   // The user's plugin option (plugin.json userConfig show_reviewed_turn, default true): off leaves the "turn under review" rows out of the box.
-  showReviewedTurn = options.show_reviewed_turn !== false
+  showReviewedTurn = options?.show_reviewed_turn !== false
   // One record per model request, in-process: the transcript file lags (Stop fires before the final reply is written) and repeats a message's usage on every
   // content-block row, whereas turn.step fires once per request. A request is keyed by turnId:index, so a repeated event could only overwrite, never add.
   // The step result carries the four token counts and the model, but no 5m/1h split of the cache writes: those bill by the kind of agent (callCostUsd).
