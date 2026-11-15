@@ -4,7 +4,7 @@ title: Disabled mode stops only telemetry and raw-body collection and nothing el
 column: dev
 status: tasked
 created: 2026-11-03T22:46:18+0100
-updated: 2026-11-04T20:22:26+0100
+updated: 2026-11-15T01:57:13+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -112,6 +112,7 @@ Follows TRDD-8D26QVBC (the review gate ignored the switch).
 
 - 2026-11-03T22:46:18+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-04T02:53:11+0100 — column → dev by main-agent@agentlenspro. c1 (Rust) implementation started from the reviewed spec design/specs/TRDD-RBBEX59R-step-c-no-collection-mode.md at c4b817d0
+2026-11-15 — owner (verbatim): "wrong. i told you that agentlenspro disable must disable only the collection of the telemetry and the logs parsing from claude or the hooks (except the status line hook that must always be recorded and always running). the agentlenspro disable will not block the normal usage (not digesting, use in place) of the jsonl transcripts. in the case of the subagents tokens spawned by the adversarial/measurer reviews, the costs should be inferred from the jsonl sessions transcripts, if possible, so then there is no need of collecting anything: duckdb already can query directly the jsonl files, and its super fast at doing so. even faster than your rust code parser. and any pagination of the dashboard can simply call duckdb on the fly at runtime to paginate the sessions, using queries or queries with sql functions. no need to duplicate data. the jasonl transcripts are already the duckdb database files. enabling the agentlenspro collecting will only reactivate the telemetry collecting and the hooks sending logs of all claude code events. but even when disabled, the agentlenspromcli tool can respond to many queries simply using the jasonl files and the status line hook."
 
 ## Decisions and findings 2026-11-03
 
