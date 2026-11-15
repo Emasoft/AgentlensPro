@@ -159,31 +159,33 @@ function write1hRate(rt) {
   return rt.w > 0 && Math.abs(rt.w - rt.i * 1.25) < 1e-9 ? rt.i * 2 : rt.w
 }
 
-// The usage does not say which TTL a cache write used, so the cost is a bracket: all writes at 5m (lo), all at 1h (hi).
+// One exact cost per call, in USD.
 function callCostUsd(usage, rt) {
   const inp = usage.input_tokens || 0
   const cr = usage.cache_read_input_tokens || 0
   const cw = usage.cache_creation_input_tokens || 0
   const out = usage.output_tokens || 0
   const b = rt.above && inp + cr + cw > rt.above.over ? rt.above : rt
-  const base = (inp * b.i + cr * b.r + out * b.o) / 1e6
-  return { lo: base + (cw * b.w) / 1e6, hi: base + (cw * write1hRate(b)) / 1e6 }
+  // Rule: the API's own split of the cache writes by TTL is exact, so each part is priced at its own rate. Writes the
+  // usage does not split bill at the 5m rate: every call the mod makes is a review/measure FORK or completion, i.e. a
+  // subagent, and measured over 391 review-fork transcripts 99.4% of their cache writes were 5m (71,706,401 vs 425,499 tokens at 1h).
+  const split = usage.cache_creation
+  const w1h = split && typeof split.ephemeral_1h_input_tokens === "number" ? split.ephemeral_1h_input_tokens : 0
+  const w5m = split && typeof split.ephemeral_5m_input_tokens === "number" ? split.ephemeral_5m_input_tokens : 0
+  const rest = Math.max(0, cw - w1h - w5m)
+  return (inp * b.i + cr * b.r + out * b.o + (w5m + rest) * b.w + w1h * write1hRate(b)) / 1e6
 }
 
 const fmtInt = (n) => Math.round(n).toLocaleString("en-US")
-const fmtRange = (lo, hi) => {
-  const a = lo.toFixed(4)
-  const b = hi.toFixed(4)
-  return a === b ? `$${a}` : `$${a}–${b}`
-}
-const emptySessionUsage = () => ({ lo: 0, hi: 0, calls: 0, unpriced: 0 })
+const fmtUsd = (usd) => `$${usd.toFixed(4)}`
+const emptySessionUsage = () => ({ usd: 0, calls: 0, unpriced: 0 })
 
 // calls: [{ label, model (null = the session model), usage | reason }]. Returns the one plain line (the debug log and any
 // host that reads text), the structured rows usageTable lays out for the transcript, and the new session total.
 function formatUsageLine(calls, sessionModel, prev) {
   const parts = []
   const rows = []
-  const tot = { inp: 0, cr: 0, cw: 0, out: 0, lo: 0, hi: 0, billed: 0 }
+  const tot = { inp: 0, cr: 0, cw: 0, out: 0, usd: 0, billed: 0 }
   const models = []
   const unpriced = []
   for (const c of calls) {
@@ -198,17 +200,17 @@ function formatUsageLine(calls, sessionModel, prev) {
     if (!models.includes(id)) models.push(id)
     const rt = lookupRates(id)
     let cost
-    if (rt) { const k = callCostUsd(u, rt); tot.lo += k.lo; tot.hi += k.hi; cost = fmtRange(k.lo, k.hi) } else { unpriced.push(id); cost = `rate unknown for ${id}` }
+    if (rt) { const usd = callCostUsd(u, rt); tot.usd += usd; cost = fmtUsd(usd) } else { unpriced.push(id); cost = `rate unknown for ${id}` }
     parts.push(`${c.label}: in ${fmtInt(inp)} · cache-read ${fmtInt(cr)} · cache-write ${fmtInt(cw)} · out ${fmtInt(out)} · ${cost}`)
     rows.push({ label: c.label, cost, tokens: { inp, cr, cw, out } })
   }
-  const session = { lo: prev.lo + tot.lo, hi: prev.hi + tot.hi, calls: prev.calls + tot.billed, unpriced: prev.unpriced + unpriced.length }
+  const session = { usd: prev.usd + tot.usd, calls: prev.calls + tot.billed, unpriced: prev.unpriced + unpriced.length }
   const unp = unpriced.length ? ` + unpriced call(s) on ${[...new Set(unpriced)].join(", ")}` : ""
   const model = models.join(", ") || sessionModel
-  parts.push(`total this turn: in ${fmtInt(tot.inp)} · cache-read ${fmtInt(tot.cr)} · cache-write ${fmtInt(tot.cw)} · out ${fmtInt(tot.out)} · ${fmtRange(tot.lo, tot.hi)}${unp} (cache writes at 5m–1h) · model ${model}`)
+  parts.push(`total this turn: in ${fmtInt(tot.inp)} · cache-read ${fmtInt(tot.cr)} · cache-write ${fmtInt(tot.cw)} · out ${fmtInt(tot.out)} · ${fmtUsd(tot.usd)}${unp} · model ${model}`)
   const sessionUnp = session.unpriced ? ` (excludes ${session.unpriced} unpriced)` : ""
-  const sessionText = `${fmtRange(session.lo, session.hi)} over ${session.calls} calls${sessionUnp}`
-  const table = { model, rows, total: { cost: `${fmtRange(tot.lo, tot.hi)}${unp}`, tokens: tot }, session: sessionText }
+  const sessionText = `${fmtUsd(session.usd)} over ${session.calls} calls${sessionUnp}`
+  const table = { model, rows, total: { cost: `${fmtUsd(tot.usd)}${unp}`, tokens: tot }, session: sessionText }
   return { line: `[review-mod usage] ${parts.join(" | ")} | session total: ${sessionText}`, table, session }
 }
 
