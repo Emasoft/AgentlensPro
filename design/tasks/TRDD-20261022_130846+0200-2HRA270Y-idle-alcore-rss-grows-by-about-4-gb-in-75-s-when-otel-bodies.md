@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: dev
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-10-23T04:26:50+0200
+updated: 2026-11-15T11:21:35+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -38,6 +38,7 @@ Measured 2026-10-22 (docs_dev/20261022-bodies-discriminator.md, isolated clones,
 - 2026-10-22T13:08:46+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 2026-10-22: deploy gate added. Do not deploy step 4 (cap on mimalloc commit) to the live collector without TRDD-12FGMAEP's whole-process backstop or an explicit owner waiver recorded on 12FGMAEP. Step-4 checks recorded for reviewers: mimalloc dependency has no override feature (Cargo.toml lines 88-92), mi_process_info 6th argument is current_commit in libmimalloc-sys 0.1.49 extended.rs:359-368. package.json version bump plus CHANGELOG are due in the same PR (env var meaning changed).
 2026-10-23: NEXT ACTION blocked by TRDD-R36S0PS9 — the Change 1 binary (TRDD-1FWN9XBS) appears unable to open the clone store (HTTP 500 on the DuckDB spill cap). No clone re-run and no deploy until it is fixed.
+2026-11-15 11:2x — The NEXT ACTION in the STATE block (2026-10-23) is STALE per a read-only worker plan (reports_dev/2HRA270Y/20261115_111342+0100-heap-fill-differential-plan.md, gitignored; 735Q3JF4 claims taken from that plan, not re-read by the main agent): the heap-fill differential ran on 2026-10-23 and its follow-ups are recorded on TRDD-735Q3JF4. New, self-proposed measurement (not previously on any card), RUNNING now: ladder on/off differential on HEAD 580a03db alcore, per-arm APFS copies of ~/agentlens-h3d5zbo1-clone under ~/agentlens-2hra-arms/, log scan OFF, cap 8192, one /api/burn-risk at boot+8 s, 190 s per arm, order L-on, L-off, L-on, L-off, load gate load1 <= 8. L-on = AGENTLENS_PRESSURE_STAGE{1,2,3}_FRAC=0.175/0.2/0.225 (knob names verified at rss_guard.rs:428-434, min 0.05); L-off = AGENTLENS_PRESSURE_LADDER=off (lib.rs:902,930). Question: is run 1's growth to the 2048 MB cap (H3D5ZBO1 run 1) caused by a stage-2 summary clear followed by a rebuild (H_L) or by clone state/time (H_D). Result goes to reports_dev/2HRA270Y/; then refresh this STATE block. Deploy stays gated by TRDD-12FGMAEP.
 
 ## STATE
 
