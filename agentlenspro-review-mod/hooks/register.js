@@ -163,6 +163,33 @@ function write1hRate(rt) {
   return rt.w > 0 && Math.abs(rt.w - rt.i * 1.25) < 1e-9 ? rt.i * 2 : rt.w
 }
 
+
+// The cache-write split of one usage record: the API's own 1h/5m parts (exact) and the remainder it did not split. callCostUsd prices from
+// this and costBasis names it, so the label and the price cannot disagree.
+function cacheWriteSplit(usage) {
+  const cw = usage.cache_creation_input_tokens || 0
+  const split = usage.cache_creation
+  const w1h = split && typeof split.ephemeral_1h_input_tokens === "number" ? split.ephemeral_1h_input_tokens : 0
+  const w5m = split && typeof split.ephemeral_5m_input_tokens === "number" ? split.ephemeral_5m_input_tokens : 0
+  return { w1h, w5m, unsplit: Math.max(0, cw - w1h - w5m) }
+}
+// Writes the usage does not split bill at the harness-reported TTL when known, else at the kind's default (main 1h, subagent 5m).
+const unsplitTtlOf = (kind, ttl) => ttl || (kind === "main" ? "1h" : "5m")
+// What the price of the cache writes of these usage records rests on, for the cost row label; null when they wrote nothing.
+function costBasis(usages, kind, ttl = null) {
+  let hasSplit = false
+  let hasUnsplit = false
+  for (const u of usages) {
+    const s = cacheWriteSplit(u)
+    if (s.w1h + s.w5m > 0) hasSplit = true
+    if (s.unsplit > 0) hasUnsplit = true
+  }
+  const rate = `the ${unsplitTtlOf(kind, ttl)} rate`
+  if (hasSplit && hasUnsplit) return `API TTL split, the rest at ${rate}`
+  if (hasSplit) return "exact, API TTL split"
+  return hasUnsplit ? `cache writes at ${rate}` : null
+}
+
 // One exact cost per call, in USD. `kind` is who made the call and is given by the hook event that triggered the review: "main"
 // (classic.Stop, an interrupted main turn) or "subagent" (classic.SubagentStop, the handback gate, and EVERY call the mod
 // itself makes, since those are forks and completions, i.e. subagents). `ttl` ("1h"/"5m") is the harness-reported cache TTL of the main
@@ -178,11 +205,8 @@ function callCostUsd(usage, rt, kind, ttl = null) {
   // this project on 2026-11-15: the 53 review-fork transcripts carrying the mod's harness markers wrote 24,962,065 cache tokens,
   // all at the 5-minute rate (0 at 1h). Hit or miss needs no input here: a hit is the cache-read bucket (read rate), a
   // miss the cache-write bucket (write rate), and each bucket is priced on its own below.
-  const split = usage.cache_creation
-  const w1h = split && typeof split.ephemeral_1h_input_tokens === "number" ? split.ephemeral_1h_input_tokens : 0
-  const w5m = split && typeof split.ephemeral_5m_input_tokens === "number" ? split.ephemeral_5m_input_tokens : 0
-  const unsplit = Math.max(0, cw - w1h - w5m)
-  const unsplitTtl = ttl || (kind === "main" ? "1h" : "5m")
+  const { w1h, w5m, unsplit } = cacheWriteSplit(usage)
+  const unsplitTtl = unsplitTtlOf(kind, ttl)
   return (inp * b.i + cr * b.r + out * b.o + w5m * b.w + w1h * write1hRate(b) + unsplit * (unsplitTtl === "1h" ? write1hRate(b) : b.w)) / 1e6
 }
 
@@ -239,7 +263,7 @@ function reviewedRow(reviewed, sessionModel) {
     if (rt) usd += callCostUsd(u, rt, reviewed.kind, ttl); else unpriced.push(id)
   }
   const unp = unpriced.length ? ` + unpriced call(s) on ${[...new Set(unpriced)].join(", ")}` : ""
-  return { who: reviewed.who, cost: `${fmtUsd(usd)}${unp}`, tokens, calls: reviewed.calls.length, cacheNote: reviewed.kind === "main" ? cacheNote(reviewed.cache || null) : null }
+  return { who: reviewed.who, cost: `${fmtUsd(usd)}${unp}`, costBasis: unpriced.length ? null : costBasis(reviewed.calls.map((c) => c.usage), reviewed.kind, ttl), tokens, calls: reviewed.calls.length, cacheNote: reviewed.kind === "main" ? cacheNote(reviewed.cache || null) : null }
 }
 
 // calls: [{ label, model (null = the session model), usage | reason }]; reviewed: the turn under review or null (reviewedTurn).
@@ -249,6 +273,7 @@ function formatUsageLine(calls, sessionModel, reviewed) {
   const tot = { inp: 0, cr: 0, cw: 0, out: 0, usd: 0, billed: 0 }
   const models = []
   const unpriced = []
+  const usages = []
   for (const c of calls) {
     if (!c.usage) { parts.push(`${c.label}: no reply (${c.reason}), not billed`); continue }
     const id = c.model || sessionModel
@@ -257,7 +282,7 @@ function formatUsageLine(calls, sessionModel, reviewed) {
     const cr = u.cache_read_input_tokens || 0
     const cw = u.cache_creation_input_tokens || 0
     const out = u.output_tokens || 0
-    tot.inp += inp; tot.cr += cr; tot.cw += cw; tot.out += out; tot.billed++
+    tot.inp += inp; tot.cr += cr; tot.cw += cw; tot.out += out; tot.billed++; usages.push(u)
     if (!models.includes(id)) models.push(id)
     const rt = lookupRates(id)
     let cost
@@ -271,7 +296,7 @@ function formatUsageLine(calls, sessionModel, reviewed) {
   const reviewedPart = row ? ` | turn under review (${row.who}): in ${fmtInt(row.tokens.inp)} · cache-read ${fmtInt(row.tokens.cr)} · cache-write ${fmtInt(row.tokens.cw)} · out ${fmtInt(row.tokens.out)} · ${row.cost} · ${row.calls} call(s)` : ""
   const noReply = calls.filter((c) => !c.usage)
   // Owner layout 2026-11-15: the box shows two sums (the turn under review, the review turn); the per-call breakdown stays in `line`.
-  const table = { model, reviewed: row, review: { cost: `${fmtUsd(tot.usd)}${unp}`, tokens: tot, billed: tot.billed, noReply: noReply.length, noReplyWhy: [...new Set(noReply.map((c) => c.reason))].join("; ") } }
+  const table = { model, reviewed: row, review: { cost: `${fmtUsd(tot.usd)}${unp}`, costBasis: unpriced.length ? null : costBasis(usages, "subagent"), tokens: tot, billed: tot.billed, noReply: noReply.length, noReplyWhy: [...new Set(noReply.map((c) => c.reason))].join("; ") } }
   return { line: `[review-mod usage] ${parts.join(" | ")}${reviewedPart}`, table }
 }
 // The user-only layout of one usage cycle, in the closed-box layout of the token-reporter plugin (owner asked for it, 2026-11-15): a
@@ -295,7 +320,8 @@ function usageTable(table) {
   const render = (segs) => segs.map((s) => (s.code && s.text !== "" ? `\u001b[${s.code}m${s.text}\u001b[0m` : s.text)).join("")
   const bar = render([seg(BLUE, "│")])
   const tokenRow = (t) => [seg(BLUE, "in "), seg(YELLOW, fmtInt(t.inp)), seg(BLUE, " · out "), seg(YELLOW, fmtInt(t.out)), seg(BLUE, " · cache read "), seg(YELLOW, fmtInt(t.cr)), seg(BLUE, " · cache create "), seg(YELLOW, fmtInt(t.cw))]
-  const cost = (c) => [seg(String(c).startsWith("$") ? GREEN : BLUE, c)]
+  // The cost row: a blue label saying what the number is (owner order 2026-11-15), then the value. `basis` names what the cache-write price rests on (costBasis); null = no detail in the label (unpriced model, or no cache writes).
+  const cost = (c, basis) => [seg(BLUE, `cost of this turn${basis ? ` (${basis})` : ""}: `), seg(String(c).startsWith("$") ? GREEN : BLUE, c)]
   // The cache bar (owner orders 2026-11-15: a bi-colored bar = 100% of the tokens, green = cache hits, red = cache misses;
   // one bar for each of the two sections). It measures the cache-read vs cache-write share of the
   // CACHED-PREFIX tokens (cr + cw); uncached input and output are not in it. A call with no tokens, or cr + cw = 0, gets
@@ -304,41 +330,40 @@ function usageTable(table) {
   const barSuffix = (t) => {
     const s = cacheShare(t)
     const pct = (n) => `${((100 * n) / (s.hit + s.miss)).toFixed(1)}%`
-    return [seg(null, " "), seg(GREEN, "hit "), seg(YELLOW, pct(s.hit)), seg(BLUE, " · "), seg(RED, "miss "), seg(YELLOW, pct(s.miss))]
+    return [seg(GREEN, "hit "), seg(YELLOW, pct(s.hit)), seg(BLUE, " · "), seg(RED, "miss "), seg(YELLOW, pct(s.miss))]
   }
   const hasBar = (t) => t !== null && cacheShare(t).hit + cacheShare(t).miss > 0 // tokens is null or an object by construction (formatUsageLine); undefined throws on purpose
   // Layout (owner order 2026-11-15): the body is exactly two sections, the turn under review then the review turn (the sum of every
-  // model call this Stop made). A section is its heading, then three rows: the cache bar, the token breakdown, the cost. Rows use the
+  // model call this Stop made). A section is its heading, then the cache bar, its percentages row, the token breakdown and the cost row. Rows use the
   // FULL inner width. Entries: { full } = full-width row, { bar } = bar row (laid out once `cells` is known).
   const body = []
   const calls = (n) => (n > 1 ? ` · ${n} calls` : "")
-  const section = (heading, t, c, note = null) => {
+  const section = (heading, t, c, basis, note = null) => {
     body.push({ full: [seg(BLUE, clean(heading))] })
     if (note !== null) body.push({ full: [ind, seg(BLUE, clean(note))] })
     if (t === null) return
-    if (hasBar(t)) body.push({ bar: t })
-    body.push({ full: [ind, ...tokenRow(t)] }, { full: [ind, ...cost(c)] })
+    if (hasBar(t)) body.push({ bar: t }, { full: [ind, ...barSuffix(t)] }) // the bar alone on one row, its percentages on their own row right under it (owner order 2026-11-15)
+    body.push({ full: [ind, ...tokenRow(t)] }, { full: [ind, ...cost(c, basis)] })
   }
-  if (table.reviewed) section(`turn under review (${table.reviewed.who})${calls(table.reviewed.calls)}:`, table.reviewed.tokens, table.reviewed.cost, table.reviewed.cacheNote)
+  if (table.reviewed) section(`turn under review (${table.reviewed.who})${calls(table.reviewed.calls)}:`, table.reviewed.tokens, table.reviewed.cost, table.reviewed.costBasis, table.reviewed.cacheNote)
   if (table.reviewed) body.push({ sep: true }) // a ├…┤ rule between the two turns, only when both are present (the review turn is always present)
   const rv = table.review
-  section(`review turn${calls(rv.billed)}:`, rv.billed > 0 ? rv.tokens : null, rv.cost)
+  section(`review turn${calls(rv.billed)}:`, rv.billed > 0 ? rv.tokens : null, rv.cost, rv.costBasis)
   if (rv.noReply > 0) body.push({ full: [ind, seg(BLUE, clean(`${rv.noReply} call${rv.noReply > 1 ? "s" : ""} no reply (${rv.noReplyWhy}), not billed`))] })
   const header = [seg(BLUE, "review-mod usage"), seg(BLUE, " | "), seg(WHITE, table.model)]
   // A breakdown line wider than 76 cells widens the box rather than truncating a number.
   const innerBase = Math.max(width(header), ...body.filter((e) => e.full).map((e) => width(e.full)))
-  // ONE cell count for every bar of the box so they line up and compare: the remaining width of the 76-cell inner (80-cell
-  // box) after the widest suffix (100.0% / 100.0%), or of a wider inner when a breakdown line forced the box wider. Each colour
+  // ONE cell count for every bar of the box so they line up and compare: the 76-cell inner (80-cell
+  // box) less the indent, or of a wider inner when a breakdown line forced the box wider (the percentages sit on their own row, so the bar takes the whole width). Each colour
   // is one closed SGR span of U+2588 (one code point, one cell, so width() holds); a non-zero share always gets at least one
   // cell, so a 1.3% miss stays visible.
-  const widestSuffix = width([seg(null, " hit 100.0% · miss 100.0%")])
-  const cells = Math.max(20, Math.max(innerBase, 76) - widestSuffix - width([ind]))
+  const cells = Math.max(20, Math.max(innerBase, 76) - width([ind]))
   const barSegs = (t) => {
     const s = cacheShare(t)
     let green = Math.round((cells * s.hit) / (s.hit + s.miss))
     if (s.hit > 0) green = Math.max(green, 1)
     if (s.miss > 0) green = Math.min(green, cells - 1)
-    return [ind, seg(GREEN, "█".repeat(green)), seg(RED, "█".repeat(cells - green)), ...barSuffix(t)]
+    return [ind, seg(GREEN, "█".repeat(green)), seg(RED, "█".repeat(cells - green))]
   }
   for (const e of body) if (e.bar) e.full = barSegs(e.bar)
   const inner = Math.max(innerBase, ...body.filter((e) => e.full).map((e) => width(e.full)))
