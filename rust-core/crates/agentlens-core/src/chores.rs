@@ -669,13 +669,49 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // TRDD-2HRA270Y: opens the load_pass_state window; `bp_store_ready` .. here is sync_new_parts.
     static BP_PASS_STATE_START: std::sync::Once = std::sync::Once::new();
     BP_PASS_STATE_START.call_once(|| crate::rss_guard::log_boot_phase("bp_pass_state_start", None));
-    let (mut skip, mut stranded) = match agentlens_store::pass::load_pass_state(&state_file) {
-        Ok(sets) => {
+    // TRDD-2HRA270Y: load and prune in one streaming step. `.pass-state.json` is ~75 MB (~1.49M names) and no pass
+    // completes, so it is never pruned; loading it whole (String, Value tree, two full sets) raised the process net
+    // commit by ~465 MB that the allocator never gave back. The listing is taken first and only names present in the
+    // bodies dirs are kept; an incomplete listing keeps everything (a dropped stranded name loses data).
+    let (mut skip, mut stranded) = match agentlens_store::pass::load_pass_state_pruned(
+        &state_file,
+        &scope.dirs,
+    ) {
+        Ok(loaded) => {
             let n = STATE_LOAD_FAILS.swap(0, std::sync::atomic::Ordering::Relaxed);
             if n > 0 {
                 eprintln!("{} alcore: bodies pass: pass state {} is readable again after {n} ticks it could not be moved aside", crate::log_ts(), state_file.display());
             }
-            sets
+            if let Some(line) = &loaded.summary {
+                eprintln!("{} alcore: bodies pass: {line}", crate::log_ts());
+            }
+            // WHY print only on a change: the pass runs on a 60 s tick, so an unconditional line is one
+            // per minute of identical text; the first tick always prints because the slot starts empty.
+            // Named so clippy::type_complexity passes; the tuple is (kept skip, total skip, kept stranded, total stranded, listing complete).
+            type Kept = (usize, usize, usize, usize, bool);
+            static LAST_KEPT_LINE: Mutex<Option<Kept>> = Mutex::new(None);
+            let kept = (
+                loaded.skip.len(),
+                loaded.total_skip,
+                loaded.stranded.len(),
+                loaded.total_stranded,
+                loaded.listing_complete,
+            );
+            let mut last = LAST_KEPT_LINE.lock().unwrap_or_else(|e| e.into_inner());
+            if *last != Some(kept) {
+                eprintln!(
+                    "{} alcore: bodies pass: pass state kept {}/{} skip, {}/{} stranded (listing {})",
+                    crate::log_ts(),
+                    kept.0,
+                    kept.1,
+                    kept.2,
+                    kept.3,
+                    if kept.4 { "complete" } else { "incomplete" }
+                );
+                *last = Some(kept);
+            }
+            drop(last);
+            (loaded.skip, loaded.stranded)
         }
         Err(e) => {
             let aside = std::path::PathBuf::from(format!("{}.corrupt-{}", state_file.display(), crate::now_ms()));
@@ -740,14 +776,12 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let mut failed = 0u64;
     let mut any_over_cap = false;
 
-    // ONE prune per tick across ALL bodies dirs: the name sets are shared by every dir, so a per-dir prune
-    // would drop the other dirs names. Runs inside the pass lock (taken above) and after the load.
-    // TRDD-2HRA270Y: opens the prune window (prune_pass_names over every bodies dir); `bp_staged_bytes_start` closes it.
+    // The prune is not a separate step any more: `load_pass_state_pruned` above prunes the name sets against ALL the
+    // bodies dirs of the tick while it loads them (the sets are shared by every dir, so a per-dir prune would drop the
+    // other dirs names). TRDD-2HRA270Y: `bp_prune_start` is kept as a marker so the readings stay comparable with
+    // earlier rounds; the window it opens (`bp_staged_bytes_start` closes it) no longer holds the prune.
     static BP_PRUNE_START: std::sync::Once = std::sync::Once::new();
     BP_PRUNE_START.call_once(|| crate::rss_guard::log_boot_phase("bp_prune_start", None));
-    if let Some(line) = agentlens_store::pass::prune_pass_names(&scope.dirs, &mut skip, &mut stranded) {
-        eprintln!("{} alcore: bodies pass: {line}", crate::log_ts());
-    }
     for bodies_dir in &scope.dirs {
         // `ingest_pass` is THROTTLED BY DESIGN — it returns `throttled: true` when it stopped at
         // `max_bytes_per_pass` with work left. One call per tick is therefore not a drain: it is a
