@@ -4,7 +4,7 @@ title: The burn tick holds the state lock across bodies.poll, for 130-576 s on t
 column: testing
 status: tasked
 created: 2026-10-15T00:41:29+0200
-updated: 2026-10-29T06:10:26+0100
+updated: 2026-11-15T10:33:55+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -23,6 +23,7 @@ implementation-commits: [8e0cb02c, 4e095f80, a2c4459d]
 ## Approval log
 
 - 2026-10-15T00:41:29+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-11-15 10:3x — NEXT (3) real-data boot measurement RAN (HEAD 580a03db alcore release build, codesigned; APFS clone ~/agentlens-h3d5zbo1-clone, 185,636 otel-bodies entries, log scan OFF, isolated DATA_DIR/HOME/ports, AGENTLENS_LOCK_TRACE_MS=250, host load 14-110). VERDICT INCONCLUSIVE: the bodies scan took 8,442 ms (run 1) and 7.4 s (run 2), under the spec's > 10 s precondition. No 'lock held' / 'guard split' trace line was emitted in either run (a guard logs only on drop, so a hold in progress at a hard-cap exit leaves none). REPORT-ONLY: run 1 hit the 2048 MB RSS hard cap at boot+81 s with 2556 MB commit — NOT like-for-like with the 925 MB --no-log-scan baseline (summary build likely triggered, possibly by the probe's own early /api/burn-risk call; unresolved confound), not a regression claim. /api/burn-risk figures are HTTP latency, not hold measurements. Run 2 (post-run-1 clone: retention purged, spool drained, DuckDB not cleanly closed; cap 8192) stopped on SIGTERM in 8.14 s, exit 0. Nothing written under media/. Report: reports_dev/H3D5ZBO1/20261115_103231+0100-real-data-boot-measure.md (gitignored). To settle the gate: a cold-cache or larger corpus run where the scan exceeds 10 s, with log scan ON. Deploy still blocked by TRDD-12FGMAEP.
 
 ## Findings (2026-10-15)
 
