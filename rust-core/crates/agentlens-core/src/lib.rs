@@ -463,7 +463,14 @@ impl CoreState {
     pub fn summary_from(inputs: &mut SummaryInputs, now_ms: f64) -> summary_engine::SummaryBuild {
         let _ = now_ms;
         let prev = std::mem::take(&mut inputs.prev);
-        inputs.engine.build(inputs.version, &inputs.spans, &inputs.log_cards, inputs.epoch, &inputs.accounts, prev)
+        let built = inputs.engine.build(inputs.version, &inputs.spans, &inputs.log_cards, inputs.epoch, &inputs.accounts, prev);
+        // TRDD-2HRA270Y: one boot-phase reading after the first summary build through summary_from returns
+        // (callers: ui::rebuild_once, ui::summary_now). Not every build passes here: summary_over is also
+        // called directly (CoreState::build_session_summary, SummaryEngine::build legacy path), and a probe in
+        // summarize_spans never fired in a 150 s log-only boot.
+        static FIRST_SUMMARY: std::sync::Once = std::sync::Once::new();
+        FIRST_SUMMARY.call_once(|| rss_guard::log_boot_phase("first_summary_build", None));
+        built
     }
 
     /// Store a summary built off the lock, together with the attribution map built WITH it. The

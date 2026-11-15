@@ -348,6 +348,57 @@ pub fn mi_commit_bytes() -> u64 {
     current_commit as u64
 }
 
+/// `(current, peak)` mimalloc commit from ONE `mi_process_info` call, so the two numbers are consistent.
+/// The current value is the same counter `mi_commit_bytes` reads. Own fn (not a new `MimallocInfo`
+/// field) so the boot probe allocates no stats-JSON buffer between phases.
+fn mi_commit_and_peak_bytes() -> (u64, u64) {
+    let (mut current_commit, mut peak_commit) = (0usize, 0usize);
+    unsafe {
+        libmimalloc_sys::mi_process_info(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut current_commit,
+            &mut peak_commit,
+            std::ptr::null_mut(),
+        );
+    }
+    (current_commit as u64, peak_commit as u64)
+}
+
+/// Boot-phase reading (TRDD-2HRA270Y): ONE stderr line with the NET mimalloc commit, its peak and the
+/// macOS physical footprint at a named boot point. It is a reading of net commit per window, NOT an
+/// allocation attribution: a phase that allocates and frees inside its window shows only the
+/// residue in `mi_commit`, and shows the transient only if `mi_peak_commit` jumped. `t_open` is
+/// seconds since `open_store` began (`-` outside it). `up` is seconds since the FIRST call of this
+/// fn (alcore calls it with `boot_start` at the top of `main`), NOT the lazily seeded `[up Ns]`
+/// stamp of `uptime_prefix`, so the two clocks differ by the boot work done before that first stamp.
+/// The leading wall-clock stamp lets a line be matched against the footprint sampler.
+pub fn log_boot_phase(phase: &str, t_open: Option<f64>) {
+    static BOOT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let up = BOOT.get_or_init(std::time::Instant::now).elapsed().as_secs_f64();
+    let (commit, peak) = mi_commit_and_peak_bytes();
+    let mb = |b: u64| b as f64 / 1_048_576.0;
+    let t_open = t_open.map_or_else(|| "-".to_owned(), |t| format!("{t:.2}"));
+    let footprint = phys_footprint_bytes().map_or_else(|| "na".to_owned(), |b| format!("{:.1}", mb(b)));
+    eprintln!(
+        "{} [info] boot-phase phase={phase} t_open={t_open} up={up:.2} mi_commit={:.1} mi_peak_commit={:.1} phys_footprint={footprint}",
+        crate::log_ts(),
+        mb(commit),
+        mb(peak)
+    );
+}
+
+/// Install `log_boot_phase` as the `open_store` probe (the slot is set once per process; a second
+/// set is a bug, so it fails loudly).
+pub fn install_open_phase_probe() {
+    agentlens_store::OPEN_PHASE_PROBE
+        .set(|name, t_open| log_boot_phase(name, Some(t_open)))
+        .expect("OPEN_PHASE_PROBE set twice");
+}
+
 /// macOS physical footprint (`proc_pid_rusage` `RUSAGE_INFO_V0`, `ri_phys_footprint`) — dirty +
 /// swapped, the number jetsam and Activity Monitor use. `None` on any other platform, or if the
 /// syscall itself fails (never a fabricated 0 — a missing counter must say so, not lie low).

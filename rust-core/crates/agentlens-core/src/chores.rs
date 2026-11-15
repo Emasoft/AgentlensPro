@@ -807,6 +807,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 Some(&mut raw_facts_extractor),
             );
             ingested += res.ingested;
+            // TRDD-2HRA270Y: one boot-phase reading after the first ingest of the process returns.
+            static FIRST_INGEST: std::sync::Once = std::sync::Once::new();
+            FIRST_INGEST.call_once(|| crate::rss_guard::log_boot_phase("first_bodies_ingest", None));
             deleted += res.deleted;
             bytes_freed += res.bytes_freed;
             reemitted += res.reclaimed_reemitted;

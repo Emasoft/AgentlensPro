@@ -101,6 +101,10 @@ fn usage(msg: &str) -> ! {
 
 fn main() {
     install_exit_on_panic();
+    // TRDD-2HRA270Y: permanent boot diagnostic — the probe slot logs mimalloc commit at each open_store phase;
+    // boot_start seeds the `up=` clock of every boot-phase line.
+    agentlens_core::rss_guard::install_open_phase_probe();
+    agentlens_core::rss_guard::log_boot_phase("boot_start", None);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) != Some("serve") {
         usage("command required (serve)");
