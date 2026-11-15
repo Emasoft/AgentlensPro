@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-11-15T22:49:39+0100
+updated: 2026-11-15T23:18:11+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -93,6 +93,7 @@ evaluate `MIMALLOC_PURGE_DELAY=0` / eager decommit as a one-line knob card, not 
 - 2026-11-01, lesson for the remaining merges: run the targeted checks on the --no-commit merged tree BEFORE committing the merge; after step 9a merges, run spool_tap on the integration branch under the shared lock at low load.
 - 2026-11-01, step 1b revision 2 departed from its round-1 review in three places no review has read: the log sweeper is not lowered at all (M1), m2 done differently, and m4's new exit-1 behaviour; and step 9a overlaps step 1b in lib.rs and log_reader.rs, both tested only on fd5abaae — the 9a merge's pre-commit checks must cover them.
 - 2026-11-15, step 9a is committed (afdd2a8c, 8e1a58f1) and merged into feat/duckdb-is-the-memory as 95de9364. Checks on the --no-commit merged tree before the commit, all --locked: cargo check and clippy -D warnings on the workspace, exit 0, no warnings; targeted tests one invocation per file, all ok (chores_bodies_pressure_defers 1/1, pressure_target_throttle 7/7, rss_children_footprint 2/2, rss_diagnosis_guard 1/1, rss_diagnosis_mcp_wiring 1/1, pressure_ladder 12/12, rss_hard_cap 11/11, spool_tap_collect_deferral 1/1 under the shared lock at load1 7.97); full suite and the src spool_tap unit tests not run on the merged tree. NEXT: step 1a review, commit, merge last, then the full suite on the integration branch.
+- 2026-11-15 23:30 — step 1a (72c0f968) merged into 7yp-integration as 1d9a6fe1 (message amended once; prior sha 1b3ab507 in reflog). Only conflict lib.rs: positionally verified that the merge adds exactly 1a's lib.rs edits plus removal of the `summary_cache.clear()` that c5bb889a introduced and 9a moved, and one doc line. NOT yet cleared: 72c0f968 had no harness review; an outside-model review (reports_dev/7YPQWKPG/llm-ext/20261115_231450+0100-code_task-72c0f968-src.diff-de50f5.md) raised unbounded summary waits, a possible panic-rebuild loop, stale otel_attribution after /api/clear, a changed /api/debug/log-scan-stats shape, and in-flight build inputs the ladder cannot free — under verification. Open: hook_events.rs:296 StopFailure now does a full summary build under the state lock (was a memo hit), unmeasured — move it off the lock; tests run so far (ui, card_pagination, pressure_ladder, burn_alloc, lib filter) ran at load 67-97; full suite not run.
 
 ## WHY
 
