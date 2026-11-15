@@ -4,7 +4,7 @@ title: agentlenspro CLI and dashboard install, uninstall and switch each extensi
 column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T21:15:27+0100
+updated: 2026-11-15T21:18:30+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -45,6 +45,9 @@ Parts inventory (2026-11-15):
 ## Step 0 (gate, before any build; the plugin-per-part checks are superseded, the realtime checks still apply)
 Measure that `/plugin disable` + `/reload-plugins` mid-session stops a plugin's hooks, skills and agents with no restart, and enable brings them back. Not yet verified.
 Also verify (docs found 2026-11-15): plugin skills and agents are renamed `plugin-name:name` (skills reference chapter line 469), which would break every bare-name reference; standalone skills can be hidden with the settings key `skillOverrides` ("off"). On that basis the main agent now recommends standalone elements switched by the agentlenspro CLI and dashboard, with only the mod kept as a plugin; this awaits the owner's answer. Also measure whether settings.json hooks and env telemetry changes apply to a running session or only after restart.
+Found 2026-11-15 (read, not yet traced end to end): README install block (README.md:52-60) says `npm install -g agentlenspro` then `agentlenspro`, with no first-run `agentlenspro setup` step; add it right after the install line.
+Found 2026-11-15: an all-or-nothing `agentlenspro disable` already exists (src/cli/disableCli.ts: flag-file kill switch read by every hook, moves skills/rules aside, removes OTEL_LOG_RAW_API_BODIES, stops the server; `--keep-statusline`). Build per-component switches on it, not beside it.
+Found 2026-11-15: src/cli/autoSetup.ts heals the install at every CLI launch (TRDD-AGZ0XZKW). Check whether it respects a switched-off component; if not, it would undo a per-component off. README.md:334 says the bodies key has 'no switch' and the tool is 'non-functional without it' — each switch must say which features stop with it.
 
 ## Approval log
 
