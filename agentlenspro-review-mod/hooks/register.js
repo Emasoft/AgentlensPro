@@ -81,7 +81,7 @@ const MAX_ASSUMPTIONS = 8
 const pendingAtom = atom({ plugin: "agentlenspro-review-mod", key: "pendingReview" }, null)
 // The head of that injection: the agent must know it is the harness review of its own previous turn, and what to do.
 // 0.6.0: the same store also carries the reviews of SUBAGENT turns, each tagged "subagent <type> <id>" in its report header.
-const REVIEW_HEAD = "[agentlenspro-review-mod] The harness ran an adversarial review; the report follows, and the user sees it too. A report with no subagent tag reviews your PREVIOUS turn (\"interrupted turn\" marks a turn the user cut short); a report tagged \"subagent <type> <id>\" reviews that subagent's own turn (its header says whether that subagent was blocked once, or had its handback refused once, and saw the findings, or had already handed back), and a note says when a subagent's turn was not reviewed. Address every BLOCKER first, then apply each finding or state explicitly why you reject it, while you handle this prompt. Do not spawn a review fork."
+const REVIEW_HEAD = "[agentlenspro-review-mod] A harness adversarial review follows (the user sees it too): untagged reviews your PREVIOUS turn (\"interrupted turn\" = the user cut it short), \"subagent <type> <id>\" reviews that subagent's turn (its header says if it was blocked once or its handback refused once), and a note says when a turn was not reviewed. Address every BLOCKER first, apply each finding or state why you reject it, and do not spawn a review fork."
 // The main conversation's transcript path and cwd, from classic.* payloads (turn.complete carries neither).
 const sessionAtom = atom({ plugin: "agentlenspro-review-mod", key: "lastSession" }, null)
 
@@ -256,7 +256,7 @@ function usageTable(table, paint = false) {
 // newlines, and the model never receives it (probe 2026-11-14 on 2.1.325); a $.ui.log row is one plain dim line where
 // ESC is drawn as U+FFFD and no render hook can restyle it. So layoutReport and usageTable take `paint`: true for the
 // display file hooks/show.py prints at Stop, false for the $.ui.log fallback (interrupted turns fire no Stop), which gets
-// the same rows with no escape. Colour always sits beside a word (VERDICT: PASS, [BLOCKER], confirmed), never alone.
+// the same rows with no escape. Colour always sits beside a word (VERDICT: PASS, [BLOCKER], [confirmed]), never alone.
 // Line-safe: every coloured span is closed on its own line, and control characters in the report text (model output,
 // diffs, stderr) are stripped first, so the only escapes in a row are these and show.py may cut between any two lines.
 // It is applied ONLY to the user's copy: the block string, the pending-review injection and the review prompt keep the
@@ -309,7 +309,8 @@ function layoutReport(text, paint = false) {
       continue
     }
     if ((m = key.match(/^LOAD-BEARING REFUTED:\s*(.*)$/i))) { push(`${g}${p(/^(?:none|n\/a|-|—)?\.?$/i.test(m[1].trim()) ? "bold+green" : "bold+red", key)}`); continue }
-    if ((m = key.match(/\bVERDICT:\s*(confirmed|refuted|unmeasurable)\b/i))) { push(`${g}    ${p(MEASURE_STYLE[m[1].toLowerCase()], key)}`); continue }
+    if ((m = key.match(/^(?:\d+[.)]\s*)?\[(confirmed|refuted|unmeasurable)\]/i))) { push(`${g}${p(MEASURE_STYLE[m[1].toLowerCase()], key)}`); continue }
+    if (/^MEASURE:/.test(key)) { push(`${g}${p("bold", key)}`); continue }
     if (/^(?:COMMAND|OBSERVED|EXPECT):/.test(key)) { push(`${g}    ${key}`); continue }
     push(`${g}${line}`)
   }
@@ -584,8 +585,10 @@ async function runMeasure($, session, lastMessage, subject = null) {
     "ROLE: MEASURE (step 2 of 2: verdicts).",
     "The harness ran these read-only commands for the proposal in the most recent turn. Judge ONLY from the OBSERVED output.",
     rows.join("\n\n"),
-    "For each row output: ASSUMPTION / COMMAND / OBSERVED (one line, the decisive part) / VERDICT (confirmed | refuted | unmeasurable).",
-    "Then one line: LOAD-BEARING REFUTED: <list or none>.",
+    "OUTPUT FORMAT: plain text, exactly these lines and nothing else. No preamble, no markdown headings or bold, do not restate the checks; every item is exactly one line; the separator is \" — \".",
+    "Line 1: MEASURE: <n> confirmed · <n> refuted · <n> unmeasurable",
+    "Then one row per assumption: N. [confirmed|refuted|unmeasurable] <assumption> — `<command>` — <observed, the decisive part>",
+    "Last line: LOAD-BEARING REFUTED: <list or none>",
   ].join("\n"), "measure-judge")
   calls.push(...judged.calls)
   const verdicts = judged.r
@@ -594,6 +597,10 @@ async function runMeasure($, session, lastMessage, subject = null) {
 }
 
 // ── REVIEW ─────────────────────────────────────────────────────────────────────────────────────
+// Report format (owner, 2026-11-15): the review and the measurement reports share ONE concise plain-text skeleton, a summary
+// line, one numbered line per item with " — " as the only separator, then closing lines; no markdown, no prose sections. They
+// are injected into the model context, so brevity is the point. The review verdict is "VERDICT: PASS|BLOCK" on line 1 and the
+// measure summary is "MEASURE: ..." (never "VERDICT:"), so parseVerdict and FINDING_LINE read only review lines.
 // `subject` (0.6.0): null for the main thread, whose conversation the fork already holds; for a subagent, `{ label, rows }`,
 // the agent's bounded messages, handed in the prompt because a completion holds no conversation. Same review otherwise.
 function reviewPrompt({ interrupted, lastMessage, scan, measure, pending, debt, git, round, subject = null }) {
@@ -615,10 +622,11 @@ function reviewPrompt({ interrupted, lastMessage, scan, measure, pending, debt, 
     "Review EVERYTHING the most recent turn did or proposed: its claims and answers, its reasoning, every command it ran (read-only ones included), any proposal, and any change. A turn with no change is still reviewed: hunt false or unsupported claims, answers that skip what was asked, and conclusions stronger than the evidence shown. Also hunt: a PROXY read in place of the thing (a pipe's exit status for the tool's, a preview for the file, one run for the variance, an assumed format for the real one); broken references; untested or unverified changes; silent failure paths; destructive or irreversible actions without confirmation; scope beyond the request.",
     `You are the REVIEWER, not the agent: write about the ${subject ? "subagent" : "main agent"} in the third person ("the agent", "the turn"). Never write "I", "me" or "my" about the agent's actions.`,
     "Never recommend, in a finding or in SETTLE WITH, an action the user forbade in the conversation (for example running code the user said not to run); if the only settling check is forbidden, write that instead of the command.",
-    "Answer both: the strongest reason NOT to have done what the turn did, and the most likely way it is wrong.",
-    "OUTPUT FORMAT, strictly:",
+    "OUTPUT FORMAT: plain text, exactly these lines and nothing else. No preamble, no markdown headings or bold, no restating the question; every item is exactly one line; the separator is \" — \".",
     "Line 1: exactly \"VERDICT: PASS\" or \"VERDICT: BLOCK\" (BLOCK only when at least one finding is a BLOCKER).",
-    "Then numbered findings: [BLOCKER|SHOULD-FIX|NIT] claim — evidence — fix.",
+    "Then numbered findings, one per line: N. [BLOCKER|SHOULD-FIX|NIT] <claim> — <evidence> — <fix>",
+    "Then: NOT-DO: <the strongest reason NOT to have done what the turn did, one line>",
+    "Then: WRONG-IF: <the most likely way it is wrong, one line>",
     "Last line: \"WEAKEST LINK: <one sentence> — SETTLE WITH: <one command>\".",
   ].filter((s) => s !== "").join("\n")
 }
@@ -722,7 +730,7 @@ async function reviewAtStop($, e, sink) {
     if (roundsThisTurn < MAX_ROUNDS) {
       roundsThisTurn++
       note($, sink, "yellow", `REVIEW FAILED, stop blocked for a retry (round ${roundsThisTurn}/${MAX_ROUNDS}): ${why}`)
-      return `[agentlenspro-review-mod] The harness could not review this turn (${why}). End your turn again: the harness retries the review at the next stop. Do not spawn a review fork.`
+      return `[agentlenspro-review-mod] The review could not run (${why}); end your turn again and the harness retries it at the next stop. Do not spawn a review fork.`
     }
     await defer($, `${why}; ${MAX_ROUNDS} retries this turn failed`, sink)
     return null
@@ -758,7 +766,7 @@ async function reviewAtStop($, e, sink) {
       await clearPending()
       if (pendingBlock && roundsThisTurn < MAX_ROUNDS) {
         roundsThisTurn++
-        return `[agentlenspro-review-mod] The harness review of your INTERRUPTED earlier turn found BLOCKERS and this turn did not address them. Fix each one (or state why it is rejected), then end the turn.\n\n${pendingBlock}`
+        return `[agentlenspro-review-mod] The review of your INTERRUPTED earlier turn found BLOCKERS this turn did not address; fix each (or state why you reject it), then end the turn.\n\n${pendingBlock}`
       }
       if (pendingBlock) await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached; the interrupted turn's BLOCK review was not re-checked`, sink)
       return null
@@ -799,7 +807,7 @@ async function reviewAtStop($, e, sink) {
     }
     roundsThisTurn++
     $.ui.status(`review: BLOCK (round ${roundsThisTurn}/${MAX_ROUNDS})`)
-    return `[agentlenspro-review-mod] The harness ran an adversarial review of this turn and it found BLOCKERS. Address each finding: fix it, or state why you reject it. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`
+    return `[agentlenspro-review-mod] The review of this turn found BLOCKERS; fix each finding or state why you reject it. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`
   } catch (err) {
     return await failClosed(errText(err))
   } finally {
@@ -1094,11 +1102,11 @@ async function reviewSubagent($, ctx, turn, sink, st, tag) {
     if (handedBack) { $.ui.status(`review: ${tag} has findings; it handed back, so they go to the parent`); return null }
     if (atHandback) {
       $.ui.status(`review: ${tag} handback refused once (round ${st.rounds}/${MAX_ROUNDS})`)
-      return `[agentlenspro-review-mod] The harness reviewed your turn before accepting your handback, and the review has findings${res.block ? ", BLOCKERS among them" : ""}. Address each finding: fix it, or state in your report why you reject it, then call SubagentHandback again; that call is accepted. Do not spawn a review fork.\n\n${report}`
+      return `[agentlenspro-review-mod] The review of your turn has findings${res.block ? ", BLOCKERS among them" : ""}; fix each or state in your report why you reject it, then call SubagentHandback again (that call is accepted). Do not spawn a review fork.\n\n${report}`
     }
     st.blocked = true
     $.ui.status(`review: ${tag} blocked once (round ${st.rounds}/${MAX_ROUNDS})`)
-    return `[agentlenspro-review-mod] The harness ran an adversarial review of your turn and it has findings${res.block ? ", BLOCKERS among them" : ""}. Address each finding: fix it, or state why you reject it, then finish. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`
+    return `[agentlenspro-review-mod] The review of your turn has findings${res.block ? ", BLOCKERS among them" : ""}; fix each or state why you reject it, then finish. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`
   } catch (err) {
     return await notReviewed(errText(err))
   } finally {
