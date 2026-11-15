@@ -4,7 +4,7 @@ title: Split agentlenspro into one plugin per part so each can be switched on an
 column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T20:55:31+0100
+updated: 2026-11-15T20:57:29+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -12,7 +12,7 @@ min-approval-requirement: none
 assignee: main-agent@agentlenspro
 mandate: true
 mandated-by: none
-approved: true
+approved: false
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-15T20:55:31+0100
 ---
