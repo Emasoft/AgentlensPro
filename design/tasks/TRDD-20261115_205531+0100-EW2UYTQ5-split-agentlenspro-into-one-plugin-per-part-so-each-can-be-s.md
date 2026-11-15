@@ -1,10 +1,10 @@
 ---
 trdd-id: EW2UYTQ5
 title: Split agentlenspro into one plugin per part so each can be switched on and off at runtime
-column: design
+column: backburner
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T20:57:29+0100
+updated: 2026-11-15T21:03:25+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -44,3 +44,4 @@ Also verify (docs found 2026-11-15): plugin skills and agents are renamed `plugi
 ## Approval log
 
 - 2026-11-15T20:55:31+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-15T21:03:25+0100 — column → backburner. plan awaits the owner's answer on standalone vs per-part plugins
