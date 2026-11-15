@@ -175,7 +175,9 @@ function cacheWriteSplit(usage) {
 }
 // Writes the usage does not split bill at the harness-reported TTL when known, else at the kind's default (main 1h, subagent 5m).
 const unsplitTtlOf = (kind, ttl) => ttl || (kind === "main" ? "1h" : "5m")
-// What the price of the cache writes of these usage records rests on, for the cost row label; null when they wrote nothing.
+// What the price of the cache writes of these usage records rests on, for the cost row label; null when they wrote nothing. Every cost in this mod is computed
+// from the usage by callCostUsd (the mod reads no harness-reported cost_usd), so the label names which part of that computation priced the writes: the API's own
+// TTL split (exact), or the rule for writes it did not split, driven by the harness-reported TTL when known, else by the kind (main 1h, subagent 5m).
 function costBasis(usages, kind, ttl = null) {
   let hasSplit = false
   let hasUnsplit = false
@@ -184,7 +186,7 @@ function costBasis(usages, kind, ttl = null) {
     if (s.w1h + s.w5m > 0) hasSplit = true
     if (s.unsplit > 0) hasUnsplit = true
   }
-  const rate = `the ${unsplitTtlOf(kind, ttl)} rate`
+  const rate = `the ${unsplitTtlOf(kind, ttl)} rate, ${ttl ? "harness TTL" : `${kind} rule`}`
   if (hasSplit && hasUnsplit) return `API TTL split, the rest at ${rate}`
   if (hasSplit) return "exact, API TTL split"
   return hasUnsplit ? `cache writes at ${rate}` : null
@@ -212,6 +214,9 @@ function callCostUsd(usage, rt, kind, ttl = null) {
 
 const fmtInt = (n) => Math.round(n).toLocaleString("en-US")
 const fmtUsd = (usd) => `$${usd.toFixed(4)}`
+// A cost as the plain text of the debug line: `{ usd, unpriced }` is the one representation (usageTable draws the same two fields).
+const unpricedText = (ids) => (ids.length ? ` + unpriced call(s) on ${ids.join(", ")}` : "")
+const costText = (c) => `${fmtUsd(c.usd)}${unpricedText(c.unpriced)}`
 
 // The prompt-cache state of THIS project's main conversation as the harness reports it, read from the agentlenspro CLI (not reimplemented
 // here): `agentlenspro cache-state --json`, exit 0 = warm, 1 = cold, 2 = cannot answer (stdout EMPTY). Only a main-conversation turn
@@ -262,8 +267,8 @@ function reviewedRow(reviewed, sessionModel) {
     const rt = lookupRates(id)
     if (rt) usd += callCostUsd(u, rt, reviewed.kind, ttl); else unpriced.push(id)
   }
-  const unp = unpriced.length ? ` + unpriced call(s) on ${[...new Set(unpriced)].join(", ")}` : ""
-  return { who: reviewed.who, cost: `${fmtUsd(usd)}${unp}`, costBasis: unpriced.length ? null : costBasis(reviewed.calls.map((c) => c.usage), reviewed.kind, ttl), tokens, calls: reviewed.calls.length, cacheNote: reviewed.kind === "main" ? cacheNote(reviewed.cache || null) : null }
+  const unpricedIds = [...new Set(unpriced)]
+  return { who: reviewed.who, usd, unpriced: unpricedIds, costBasis: unpricedIds.length ? null : costBasis(reviewed.calls.map((c) => c.usage), reviewed.kind, ttl), tokens, calls: reviewed.calls.length, cacheNote: reviewed.kind === "main" ? cacheNote(reviewed.cache || null) : null }
 }
 
 // calls: [{ label, model (null = the session model), usage | reason }]; reviewed: the turn under review or null (reviewedTurn).
@@ -289,14 +294,14 @@ function formatUsageLine(calls, sessionModel, reviewed) {
     if (rt) { const usd = callCostUsd(u, rt, "subagent"); tot.usd += usd; cost = fmtUsd(usd) } else { unpriced.push(id); cost = `rate unknown for ${id}` }
     parts.push(`${c.label}: in ${fmtInt(inp)} · cache-read ${fmtInt(cr)} · cache-write ${fmtInt(cw)} · out ${fmtInt(out)} · ${cost}`)
   }
-  const unp = unpriced.length ? ` + unpriced call(s) on ${[...new Set(unpriced)].join(", ")}` : ""
+  const unpricedIds = [...new Set(unpriced)]
   const model = models.join(", ") || sessionModel
-  parts.push(`total this turn: in ${fmtInt(tot.inp)} · cache-read ${fmtInt(tot.cr)} · cache-write ${fmtInt(tot.cw)} · out ${fmtInt(tot.out)} · ${fmtUsd(tot.usd)}${unp} · model ${model}`)
+  parts.push(`total this turn: in ${fmtInt(tot.inp)} · cache-read ${fmtInt(tot.cr)} · cache-write ${fmtInt(tot.cw)} · out ${fmtInt(tot.out)} · ${costText({ usd: tot.usd, unpriced: unpricedIds })} · model ${model}`)
   const row = reviewed ? reviewedRow(reviewed, sessionModel) : null
-  const reviewedPart = row ? ` | turn under review (${row.who}): in ${fmtInt(row.tokens.inp)} · cache-read ${fmtInt(row.tokens.cr)} · cache-write ${fmtInt(row.tokens.cw)} · out ${fmtInt(row.tokens.out)} · ${row.cost} · ${row.calls} call(s)` : ""
+  const reviewedPart = row ? ` | turn under review (${row.who}): in ${fmtInt(row.tokens.inp)} · cache-read ${fmtInt(row.tokens.cr)} · cache-write ${fmtInt(row.tokens.cw)} · out ${fmtInt(row.tokens.out)} · ${costText(row)} · ${row.calls} call(s)` : ""
   const noReply = calls.filter((c) => !c.usage)
   // Owner layout 2026-11-15: the box shows two sums (the turn under review, the review turn); the per-call breakdown stays in `line`.
-  const table = { model, reviewed: row, review: { cost: `${fmtUsd(tot.usd)}${unp}`, costBasis: unpriced.length ? null : costBasis(usages, "subagent"), tokens: tot, billed: tot.billed, noReply: noReply.length, noReplyWhy: [...new Set(noReply.map((c) => c.reason))].join("; ") } }
+  const table = { model, reviewed: row, review: { usd: tot.usd, unpriced: unpricedIds, costBasis: unpricedIds.length ? null : costBasis(usages, "subagent"), tokens: tot, billed: tot.billed, noReply: noReply.length, noReplyWhy: [...new Set(noReply.map((c) => c.reason))].join("; ") } }
   return { line: `[review-mod usage] ${parts.join(" | ")}${reviewedPart}`, table }
 }
 // The user-only layout of one usage cycle, in the closed-box layout of the token-reporter plugin (owner asked for it, 2026-11-15): a
@@ -308,20 +313,23 @@ function formatUsageLine(calls, sessionModel, reviewed) {
 // Layout (owner order 2026-11-15, "the box formatting is broken. there is no double column or indenting to distinguish the things relative to one or another turn"): every row under a turn heading is indented 2 cells so it reads as belonging to that turn, headings stay flush, and a ├…┤ rule separates the turn under review from the review turn when both are shown.
 function usageTable(table) {
   const BLUE = "94" // static: border, labels, all unchanging text
-  const YELLOW = "93" // token numbers
-  const GREEN = "92" // costs
+  const YELLOW = "93" // every variable number (tokens, percentages, counts, ages, ttl digits): owner order 2026-11-15, so a number never reads as a fixed label
+  const GREEN = "92" // dollar amounts
   const WHITE = "97" // model
   const RED = "91" // cache misses (cache bar). CONTRACT with hooks/show.py: the bar's miss run is exactly one `\u001b[91m` span of U+2588 closed by `\u001b[0m` (see barSegs); show.py rewrites that shape to U+2591 when colour is off, so do not change the colour code or the glyph here without changing MONO_MISS there
   const clean = (s) => String(s).replace(CONTROL, "")
   const seg = (code, text) => ({ code, text: clean(text) })
   const ind = seg(null, "  ") // owner order 2026-11-15: every row under a section heading starts with this 2-space indent; headings stay flush
   const width = (segs) => segs.reduce((n, s) => n + [...s.text].length, 0)
+  // Free text that may carry numbers (a heading with its call count, the cache-state note, a failure reason, the agent name): each digit run is a variable
+  // number and gets YELLOW, the rest keeps `code`. Units stay in `code` ("2h" is a yellow 2 and a blue h). Fixed labels never go through this.
+  const vars = (text, code = BLUE) => String(text).split(/(\d+(?:[.,]\d+)*)/).filter((p) => p !== "").map((p) => seg(/^\d/.test(p) ? YELLOW : code, p))
   // Every span is closed on its own row, so show.py may cut between any two lines.
   const render = (segs) => segs.map((s) => (s.code && s.text !== "" ? `\u001b[${s.code}m${s.text}\u001b[0m` : s.text)).join("")
   const bar = render([seg(BLUE, "│")])
   const tokenRow = (t) => [seg(BLUE, "in "), seg(YELLOW, fmtInt(t.inp)), seg(BLUE, " · out "), seg(YELLOW, fmtInt(t.out)), seg(BLUE, " · cache read "), seg(YELLOW, fmtInt(t.cr)), seg(BLUE, " · cache create "), seg(YELLOW, fmtInt(t.cw))]
-  // The cost row: a blue label saying what the number is (owner order 2026-11-15), then the value. `basis` names what the cache-write price rests on (costBasis); null = no detail in the label (unpriced model, or no cache writes).
-  const cost = (c, basis) => [seg(BLUE, `cost of this turn${basis ? ` (${basis})` : ""}: `), seg(String(c).startsWith("$") ? GREEN : BLUE, c)]
+  // The cost row: a blue label saying what the number is (owner order 2026-11-15), then the value in GREEN. `basis` names what the cache-write price rests on (costBasis); null = no detail in the label (unpriced model, or no cache writes). An unpriced model keeps its text after the value, the model id in WHITE.
+  const cost = (c, basis) => [seg(BLUE, `cost of this turn${basis ? ` (${basis})` : ""}: `), seg(GREEN, fmtUsd(c.usd)), ...(c.unpriced.length ? [seg(BLUE, " + unpriced call(s) on "), seg(WHITE, c.unpriced.join(", "))] : [])]
   // The cache bar (owner orders 2026-11-15: a bi-colored bar = 100% of the tokens, green = cache hits, red = cache misses;
   // one bar for each of the two sections). It measures the cache-read vs cache-write share of the
   // CACHED-PREFIX tokens (cr + cw); uncached input and output are not in it. A call with no tokens, or cr + cw = 0, gets
@@ -329,8 +337,8 @@ function usageTable(table) {
   const cacheShare = (t) => ({ hit: t.cr, miss: t.cw })
   const barSuffix = (t) => {
     const s = cacheShare(t)
-    const pct = (n) => `${((100 * n) / (s.hit + s.miss)).toFixed(1)}%`
-    return [seg(GREEN, "hit "), seg(YELLOW, pct(s.hit)), seg(BLUE, " · "), seg(RED, "miss "), seg(YELLOW, pct(s.miss))]
+    const pct = (n) => ((100 * n) / (s.hit + s.miss)).toFixed(1)
+    return [seg(GREEN, "hit "), seg(YELLOW, pct(s.hit)), seg(BLUE, "% · "), seg(RED, "miss "), seg(YELLOW, pct(s.miss)), seg(BLUE, "%")]
   }
   const hasBar = (t) => t !== null && cacheShare(t).hit + cacheShare(t).miss > 0 // tokens is null or an object by construction (formatUsageLine); undefined throws on purpose
   // Layout (owner order 2026-11-15): the body is exactly two sections, the turn under review then the review turn (the sum of every
@@ -339,18 +347,18 @@ function usageTable(table) {
   const body = []
   const calls = (n) => (n > 1 ? ` · ${n} calls` : "")
   const section = (heading, t, c, basis, note = null) => {
-    body.push({ full: [seg(BLUE, clean(heading))] })
-    if (note !== null) body.push({ full: [ind, seg(BLUE, clean(note))] })
+    body.push({ full: vars(heading) })
+    if (note !== null) body.push({ full: [ind, ...vars(note)] })
     if (t === null) return
     if (hasBar(t)) body.push({ bar: t }, { full: [ind, ...barSuffix(t)] }) // the bar alone on one row, its percentages on their own row right under it (owner order 2026-11-15)
     body.push({ full: [ind, ...tokenRow(t)] }, { full: [ind, ...cost(c, basis)] })
   }
-  if (table.reviewed) section(`turn under review (${table.reviewed.who})${calls(table.reviewed.calls)}:`, table.reviewed.tokens, table.reviewed.cost, table.reviewed.costBasis, table.reviewed.cacheNote)
+  if (table.reviewed) section(`TURN UNDER REVIEW (${table.reviewed.who})${calls(table.reviewed.calls)}:`, table.reviewed.tokens, table.reviewed, table.reviewed.costBasis, table.reviewed.cacheNote)
   if (table.reviewed) body.push({ sep: true }) // a ├…┤ rule between the two turns, only when both are present (the review turn is always present)
   const rv = table.review
-  section(`review turn${calls(rv.billed)}:`, rv.billed > 0 ? rv.tokens : null, rv.cost, rv.costBasis)
-  if (rv.noReply > 0) body.push({ full: [ind, seg(BLUE, clean(`${rv.noReply} call${rv.noReply > 1 ? "s" : ""} no reply (${rv.noReplyWhy}), not billed`))] })
-  const header = [seg(BLUE, "review-mod usage"), seg(BLUE, " | "), seg(WHITE, table.model)]
+  section(`REVIEW TURN${calls(rv.billed)}:`, rv.billed > 0 ? rv.tokens : null, rv, rv.costBasis)
+  if (rv.noReply > 0) body.push({ full: [ind, seg(YELLOW, String(rv.noReply)), seg(BLUE, ` call${rv.noReply > 1 ? "s" : ""} no reply (`), ...vars(rv.noReplyWhy), seg(BLUE, "), not billed")] })
+  const header = [seg(BLUE, "REVIEW-MOD USAGE"), seg(BLUE, " | "), seg(WHITE, table.model)]
   // A breakdown line wider than 76 cells widens the box rather than truncating a number.
   const innerBase = Math.max(width(header), ...body.filter((e) => e.full).map((e) => width(e.full)))
   // ONE cell count for every bar of the box so they line up and compare: the 76-cell inner (80-cell
@@ -488,7 +496,7 @@ async function logUsage($, calls, sink = null, reviewed = null) {
     if (sink) sink.add(usageTable(table))
     else {
       const t = table.review.tokens
-      $.ui.log(`review-mod: interrupted review ${table.review.cost} · in ${fmtInt(t.inp)} · out ${fmtInt(t.out)} · cache r ${fmtInt(t.cr)} / w ${fmtInt(t.cw)} · box after next reply`)
+      $.ui.log(`review-mod: interrupted review ${costText(table.review)} · in ${fmtInt(t.inp)} · out ${fmtInt(t.out)} · cache r ${fmtInt(t.cr)} / w ${fmtInt(t.cw)} · box after next reply`)
     }
     // The one-line form goes to the debug log too, where one grep finds a whole cycle.
     logLines($, line, { to: "debug" })
