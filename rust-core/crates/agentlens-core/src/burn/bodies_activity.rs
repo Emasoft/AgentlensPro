@@ -389,7 +389,9 @@ pub fn run_bodies_scan_with(state: &Arc<Mutex<CoreState>>, scan_now: f64, merge_
         eprintln!("{} alcore: burn bodies scan {scan_ms} ms, merge {merge_ms} ms, new {new_names}", crate::log_ts());
     }
     // TRDD-2HRA270Y: taken after the scan, merge and commit, whether or not the line above printed (it
-    // prints only at >= 1000 ms); with `burn_scan_start` it splits the one burn bodies scan window.
+    // prints only at >= 1000 ms); with `burn_scan_start` it splits the one burn bodies scan window. NOT reached on the
+    // `!d.listed` early return above (the scan listed nothing), so a later scan can pair this reading with an earlier
+    // `burn_scan_start`: a `burn_scan_start` with no `burn_scan_done` after it means that scan returned early.
     static BURN_SCAN_DONE: std::sync::Once = std::sync::Once::new();
     BURN_SCAN_DONE.call_once(|| crate::rss_guard::log_boot_phase("burn_scan_done", None));
 }

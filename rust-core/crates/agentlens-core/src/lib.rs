@@ -797,8 +797,18 @@ impl CoreState {
     /// data cut — every span is still on disk, `session_summary_sql` aggregates it there, and
     /// `/api/timeline` re-reads one session on demand.
     pub fn open(data_dir: &std::path::Path) -> CoreState {
+        // TRDD-2HRA270Y: one-shot boot-phase reading after a sub-load of `open` (each expansion has its own static
+        // `Once`); with `before_core_open` / `after_core_open` in bin/alcore.rs it splits the CoreState::open window by
+        // sub-load, in struct-literal field order. A reading is NET commit since the previous one, not an attribution.
+        macro_rules! core_open_reading {
+            ($name:literal) => {{
+                static READING: std::sync::Once = std::sync::Once::new();
+                READING.call_once(|| rss_guard::log_boot_phase($name, None));
+            }};
+        }
         let now = now_ms();
         let writer = SpanStoreWriter::open(&data_dir.join("spans"));
+        core_open_reading!("core_open_writer");
         let window = span_window::SpanWindow::new(span_window::summary_window_ms(data_dir));
         CoreState {
             ingest: IngestState::default(),
@@ -812,16 +822,24 @@ impl CoreState {
             media_dir: None,
             // TRDD-TOIM26HP: `<data_dir>/cards.duckdb`, opened EMPTY at every boot — the corpus is
             // on disk so DuckDB's bounded buffer pool decides what is resident, not the process.
-            cards: card_store::CardStore::open(data_dir),
+            cards: {
+                let cards = card_store::CardStore::open(data_dir);
+                core_open_reading!("core_open_cards");
+                cards
+            },
             data_dir: data_dir.to_path_buf(),
             started_at_ms: now,
             ports: server_stats::Ports::default(),
             persist: server_stats::PersistStats::default(),
             // Opened (not created) at boot: `open` seeds its change-detection key from the file's
             // last line, so a restart into an unchanged subscription state re-logs nothing.
-            account_timeline: account_state_timeline::AccountStateTimeline::open(
-                account_state_timeline::account_state_timeline_path(data_dir),
-            ),
+            account_timeline: {
+                let timeline = account_state_timeline::AccountStateTimeline::open(
+                    account_state_timeline::account_state_timeline_path(data_dir),
+                );
+                core_open_reading!("core_open_account_timeline");
+                timeline
+            },
             log_sink_warned: std::collections::HashSet::new(),
             hook_runtime: server_stats::hook_runtime_config(data_dir),
             log_scan: log_reader::LogScanStats::default(),
@@ -835,7 +853,11 @@ impl CoreState {
             composition: context_composition_index::ContextCompositionIndex::default(),
             requests: request_log::RequestLog::new(Some(data_dir.join("requests.log"))),
             otel_attribution: IndexMap::new(),
-            lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
+            lifecycle: {
+                let lifecycle = collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now);
+                core_open_reading!("core_open_lifecycle");
+                lifecycle
+            },
             log_env: agentlens_logscan::discovery::Env::from_process(),
             latest_resident_blobs: Vec::new(),
             pressure_stage: 0,
@@ -846,7 +868,9 @@ impl CoreState {
             embed_key: None,
             burn: {
                 let env = agentlens_logscan::discovery::Env::from_process();
-                burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect(), data_dir)
+                let burn = burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect(), data_dir);
+                core_open_reading!("core_open_burn_runtime");
+                burn
             },
             // Boot-seed the ring from disk so a fresh server isn't blind to a stall/fan-out from
             // 5 minutes ago (server.ts:1029 — last hour, ≤500, reversed to oldest-first).
@@ -856,6 +880,7 @@ impl CoreState {
                     &hook_events::HookEventFilter { since_ms: Some(now - 3_600_000), limit: Some(500), ..Default::default() },
                 );
                 seed.reverse();
+                core_open_reading!("core_open_hook_seed");
                 seed
             },
             advisory_issued: std::collections::HashMap::new(),

@@ -336,7 +336,13 @@ fn main() {
             exit(78);
         }
     };
+    // TRDD-2HRA270Y: opens the CoreState::open window; boot_start .. here is arg parsing, pid lock, embed key.
+    static BEFORE_CORE_OPEN: std::sync::Once = std::sync::Once::new();
+    BEFORE_CORE_OPEN.call_once(|| agentlens_core::rss_guard::log_boot_phase("before_core_open", None));
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
+    // TRDD-2HRA270Y: with `before_core_open` brackets CoreState::open (the largest candidate for the ~780 MB).
+    static AFTER_CORE_OPEN: std::sync::Once = std::sync::Once::new();
+    AFTER_CORE_OPEN.call_once(|| agentlens_core::rss_guard::log_boot_phase("after_core_open", None));
     // Kept outside the state for the final seal in the shutdown sequence below.
     let mut spool_tap: Option<Arc<agentlens_core::spool_tap::SpoolTap>> = None;
     let mut spool_tap_off_reason: Option<String> = None;
@@ -465,6 +471,10 @@ fn main() {
     // TRDD-YH822LDI: `Runtime::new()` ran one worker per core (14 here) and up to 512 blocking
     // threads. Workers now follow the core cap. Blocking threads mostly wait rather than burn CPU,
     // so the cap does not size them: a pool of 4 can starve the span and account flushes.
+    // TRDD-2HRA270Y: splits the unmeasured main window: boot_start .. before_core_open (args, pid lock, key)
+    // | CoreState::open | after_core_open .. before_runtimes | before_runtimes .. after_serve_ui.
+    static BEFORE_RUNTIMES: std::sync::Once = std::sync::Once::new();
+    BEFORE_RUNTIMES.call_once(|| agentlens_core::rss_guard::log_boot_phase("before_runtimes", None));
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cores)
         .max_blocking_threads(64)
@@ -528,6 +538,11 @@ fn main() {
     let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), hub.clone(), |bound| {
         println!("{} alcore: UI/API listening on http://{bound}", agentlens_core::log_ts());
     });
+    // TRDD-2HRA270Y: closes the window opened by `before_runtimes`: both runtimes, the chores boot
+    // (`spawn_all`), serve_otlp, the push/burn/summary spawns and the construction of the serve_ui future. The
+    // listener only binds once block_on runs, so this is NOT a reading at "UI is serving".
+    static AFTER_SERVE_UI: std::sync::Once = std::sync::Once::new();
+    AFTER_SERVE_UI.call_once(|| agentlens_core::rss_guard::log_boot_phase("after_serve_ui", None));
     let mcp_addr: std::net::SocketAddr = format!("{bind}:{mcp_port}").parse().unwrap_or_else(|_| usage("bad bind/mcp-port"));
     let serve_mcp = agentlens_core::ui::serve_mcp(mcp_addr, state.clone(), hub, |bound| {
         println!("{} alcore: MCP listening on http://{bound}/mcp", agentlens_core::log_ts());

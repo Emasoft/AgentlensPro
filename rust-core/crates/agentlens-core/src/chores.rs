@@ -645,6 +645,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             return;
         }
     };
+    // TRDD-2HRA270Y: the shared bodies store is open and its writer locked; opens the sync_new_parts window.
+    static BP_STORE_READY: std::sync::Once = std::sync::Once::new();
+    BP_STORE_READY.call_once(|| crate::rss_guard::log_boot_phase("bp_store_ready", None));
     // Refresh the dedup tables with parts another writer (alstore pass/ingest) added since the last
     // tick. Under `.pass.lock`, so no locked writer is mid-write; an unreadable file is skipped and
     // retried next tick, logged once.
@@ -663,6 +666,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // because the delete gate re-reads the store and the body before any delete, and a stranded name is routed to
     // that same gate. Only a failed move skips the tick, because then the unreadable file is still in place for the
     // save to overwrite. An idle tick returns earlier and never reaches this load, so it never reads the state.
+    // TRDD-2HRA270Y: opens the load_pass_state window; `bp_store_ready` .. here is sync_new_parts.
+    static BP_PASS_STATE_START: std::sync::Once = std::sync::Once::new();
+    BP_PASS_STATE_START.call_once(|| crate::rss_guard::log_boot_phase("bp_pass_state_start", None));
     let (mut skip, mut stranded) = match agentlens_store::pass::load_pass_state(&state_file) {
         Ok(sets) => {
             let n = STATE_LOAD_FAILS.swap(0, std::sync::atomic::Ordering::Relaxed);
@@ -689,6 +695,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             }
         }
     };
+    // TRDD-2HRA270Y: closes the load_pass_state window opened by `bp_pass_state_start`.
+    static BP_PASS_STATE_DONE: std::sync::Once = std::sync::Once::new();
+    BP_PASS_STATE_DONE.call_once(|| crate::rss_guard::log_boot_phase("bp_pass_state_done", None));
     // B-1 (advisor verdict): parquet parts are immutable once written (`agentlens_store::lib.rs`
     // never merges/rewrites one), so a part fsynced on an earlier tick is fsynced for the life of
     // the process — recomputing the set fresh every tick (the old `HashSet::new()` here) made the
@@ -703,6 +712,10 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // fails again (the sources are still on disk and re-ingest). Staging never grows across ticks.
     // Runs while FSYNCED_PARTS is held; the parts it writes are fsynced by the settle barrier
     // (pass.rs sweeps all four part dirs) before any source is deleted.
+    // TRDD-2HRA270Y: opens the leftover-staging flush window; `bp_prune_start` closes it (the max-bytes env read rides in it).
+    // `bp_pass_state_done` .. here is only the FSYNCED_PARTS get_or_init + lock.
+    static BP_FLUSH_LEFTOVERS_START: std::sync::Once = std::sync::Once::new();
+    BP_FLUSH_LEFTOVERS_START.call_once(|| crate::rss_guard::log_boot_phase("bp_flush_leftovers_start", None));
     match agentlens_store::flush_or_clear_leftovers(&mut store) {
         Ok(agentlens_store::Leftovers::Cleared(e)) => {
             let mut last = LEFTOVER_LOGGED.lock().unwrap_or_else(|p| p.into_inner());
@@ -729,6 +742,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
 
     // ONE prune per tick across ALL bodies dirs: the name sets are shared by every dir, so a per-dir prune
     // would drop the other dirs names. Runs inside the pass lock (taken above) and after the load.
+    // TRDD-2HRA270Y: opens the prune window (prune_pass_names over every bodies dir); `bp_staged_bytes_start` closes it.
+    static BP_PRUNE_START: std::sync::Once = std::sync::Once::new();
+    BP_PRUNE_START.call_once(|| crate::rss_guard::log_boot_phase("bp_prune_start", None));
     if let Some(line) = agentlens_store::pass::prune_pass_names(&scope.dirs, &mut skip, &mut stranded) {
         eprintln!("{} alcore: bodies pass: {line}", crate::log_ts());
     }
@@ -743,6 +759,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         for pass_num in 0..DRAIN_MAX_PASSES {
             // Re-evaluated per pass: draining changes the staged size, and a dir that starts over
             // cap should stop draining at age 0 once it is back under.
+            // TRDD-2HRA270Y: opens the staged-size + PassOptions/closure build window; `first_ingest_start` closes it.
+            static BP_STAGED_BYTES_START: std::sync::Once = std::sync::Once::new();
+            BP_STAGED_BYTES_START.call_once(|| crate::rss_guard::log_boot_phase("bp_staged_bytes_start", None));
             let over_cap = staged_body_bytes(bodies_dir) > cap_bytes;
             any_over_cap |= over_cap;
             let opts = agentlens_store::pass::PassOptions {
