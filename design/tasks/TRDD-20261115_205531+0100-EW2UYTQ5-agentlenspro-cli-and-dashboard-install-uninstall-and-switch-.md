@@ -4,7 +4,7 @@ title: agentlenspro CLI and dashboard install, uninstall and switch each extensi
 column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T21:21:14+0100
+updated: 2026-11-15T21:22:37+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -50,6 +50,7 @@ Found 2026-11-15 (read, not yet traced end to end): README install block (README
 Found 2026-11-15: an all-or-nothing `agentlenspro disable` already exists (src/cli/disableCli.ts: flag-file kill switch read by every hook, moves skills/rules aside, removes OTEL_LOG_RAW_API_BODIES, stops the server; `--keep-statusline`). Build per-component switches on it, not beside it.
 Found 2026-11-15: src/cli/autoSetup.ts heals the install at every CLI launch (TRDD-AGZ0XZKW). Check whether it respects a switched-off component; if not, it would undo a per-component off. README.md:334 says the bodies key has 'no switch' and the tool is 'non-functional without it' — each switch must say which features stop with it.
 Found 2026-11-15: no `agentlenspro uninstall` verb exists; the pieces do — `--uninstall-hooks`, `--uninstall-statusline`, `--uninstall-otel` (src/telemetryConfig.ts records each env key's prior state in a marker and restores it: deletes what it added, re-sets what it changed). Open question for the plan: a key agentlenspro set that the user later edited — restore, or leave and report? Proposed: leave it and report it.
+Derived requirement 2026-11-15: autoSetup heals the install at every CLI launch and skips only when the disable flag is set (src/cli/autoSetup.ts:248, agentlensDisabled). uninstall and every per-component off must leave a state autoSetup respects, or the next agentlenspro command re-installs what was removed. Also decide in the plan: how uninstall relates to `agentlenspro disable`, and whether it removes the review-mod plugin. The only existing install/uninstall verbs are `agentlenspro daemon install|uninstall` (src/cli/serverControl.ts:1174-1180, the background service), plus the `--install-*`/`--uninstall-*` flags.
 
 ## Approval log
 
