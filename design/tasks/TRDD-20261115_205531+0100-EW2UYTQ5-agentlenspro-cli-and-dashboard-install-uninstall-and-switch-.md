@@ -4,7 +4,7 @@ title: agentlenspro CLI and dashboard install, uninstall and switch each extensi
 column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T21:18:30+0100
+updated: 2026-11-15T21:21:14+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -32,6 +32,7 @@ Resolution (orchestrator reading of the line above): no repackaging of agentlens
 > packaging? what packaging? agentlenspro is a tool installed via npm. it installs extensions into claude (at user scope) only after being installed.
 > packaging? what packaging? agentlenspro is a tool installed via npm. it installs extensions into claude (at user scope) only after being installed, and it does interactively via a cli command or via a dashboard.
 > i already explained to you that the readme must explicitly tell to run `agentlenspro setup` the first time to install the default components into claude. then the user can switch them on or off individually via the cli or the dashboard.
+> actually i don't remember if it was setup or install. but the opposite command should also exist: `uninstall` should remove all extensions from claude, reverting also the settings.json to the settings (removing the lines that were added, keeping those that were already present at setup time, settings the values that agentlenspro changed back to the values originally found at install time, but leaving the others intact, since they may have been edited by the user for other purpouses)
 
 ## Superseded plan (one plugin per part — replaced by the resolution above; kept as the parts inventory)
 Parts inventory (2026-11-15):
@@ -48,6 +49,7 @@ Also verify (docs found 2026-11-15): plugin skills and agents are renamed `plugi
 Found 2026-11-15 (read, not yet traced end to end): README install block (README.md:52-60) says `npm install -g agentlenspro` then `agentlenspro`, with no first-run `agentlenspro setup` step; add it right after the install line.
 Found 2026-11-15: an all-or-nothing `agentlenspro disable` already exists (src/cli/disableCli.ts: flag-file kill switch read by every hook, moves skills/rules aside, removes OTEL_LOG_RAW_API_BODIES, stops the server; `--keep-statusline`). Build per-component switches on it, not beside it.
 Found 2026-11-15: src/cli/autoSetup.ts heals the install at every CLI launch (TRDD-AGZ0XZKW). Check whether it respects a switched-off component; if not, it would undo a per-component off. README.md:334 says the bodies key has 'no switch' and the tool is 'non-functional without it' — each switch must say which features stop with it.
+Found 2026-11-15: no `agentlenspro uninstall` verb exists; the pieces do — `--uninstall-hooks`, `--uninstall-statusline`, `--uninstall-otel` (src/telemetryConfig.ts records each env key's prior state in a marker and restores it: deletes what it added, re-sets what it changed). Open question for the plan: a key agentlenspro set that the user later edited — restore, or leave and report? Proposed: leave it and report it.
 
 ## Approval log
 
