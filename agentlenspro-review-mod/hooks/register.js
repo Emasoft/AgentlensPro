@@ -211,22 +211,43 @@ function formatUsageLine(calls, sessionModel, prev) {
   return { line: `[review-mod usage] ${parts.join(" | ")} | session total: ${sessionText}`, table, session }
 }
 
-// The user-only layout of one usage cycle: a header, a cost row plus a token row per call, the turn total, and the
-// session total. With `paint` (the Stop display file) the header is bold and every row dim; without it (the $.ui.log
-// fallback) the rows carry no escape. Rows are kept near 53 cells, because a terminal wraps a long row with no gutter.
-// Token counts stay exact.
+// The user-only layout of one usage cycle, in the closed-box layout of the token-reporter plugin (owner asked for it,
+// 2026-11-15): a header (title | model), a label | value row per call (its token row has an empty label), the turn total,
+// the session total and a rate note, all inside one ╭╮╰╯ frame whose right border aligns. With `paint` (the Stop display
+// file) it carries token-reporter's palette; without (the $.ui.log fallback) the same frame has no escape. Width is
+// counted in code points, which holds for every character this box draws. Token counts stay exact.
 function usageTable(table, paint = false) {
-  const p = painter(paint)
-  const pad = Math.max(10, ...table.rows.map((r) => r.label.length))
-  const tok = (t) => `│  in ${fmtInt(t.inp)} · out ${fmtInt(t.out)} · cache r ${fmtInt(t.cr)} / w ${fmtInt(t.cw)}`
-  const lines = ["╭─ [review-mod usage]", `│ model ${table.model}`, "│ $ spans the 5m–1h cache-write rates"]
+  const BLUE = "94" // static: border, labels, all unchanging text
+  const YELLOW = "93" // token numbers
+  const GREEN = "92" // costs
+  const WHITE = "97" // model
+  const clean = (s) => String(s).replace(CONTROL, "")
+  const seg = (code, text) => ({ code, text: clean(text) })
+  const width = (segs) => segs.reduce((n, s) => n + [...s.text].length, 0)
+  // Every span is closed on its own row, so show.py may cut between any two lines.
+  const render = (segs) => segs.map((s) => (paint && s.code && s.text !== "" ? `\u001b[${s.code}m${s.text}\u001b[0m` : s.text)).join("")
+  const bar = render([seg(BLUE, "│")])
+  const tokens = (t) => [seg(BLUE, "in "), seg(YELLOW, fmtInt(t.inp)), seg(BLUE, " · out "), seg(YELLOW, fmtInt(t.out)), seg(BLUE, " · cache r "), seg(YELLOW, fmtInt(t.cr)), seg(BLUE, " / w "), seg(YELLOW, fmtInt(t.cw))]
+  const cost = (c) => [seg(String(c).startsWith("$") ? GREEN : BLUE, c)]
+  const body = [] // [label, value segments]; an empty label is a continuation row
   for (const r of table.rows) {
-    lines.push(`│ ${r.label.padEnd(pad)}  ${r.cost}`)
-    if (r.tokens) lines.push(tok(r.tokens))
+    body.push([clean(r.label), cost(r.cost)])
+    if (r.tokens) body.push(["", tokens(r.tokens)])
   }
-  lines.push(`│ ${"this turn".padEnd(pad)}  ${table.total.cost}`, tok(table.total.tokens))
-  lines.push(`╰─ session total ${table.session}`)
-  return lines.map((l, i) => p(i === 0 ? "bold+dim" : "dim", l))
+  body.push(["this turn", cost(table.total.cost)], ["", tokens(table.total.tokens)], ["session", cost(table.session)])
+  const header = [seg(BLUE, "review-mod usage"), seg(BLUE, " | "), seg(WHITE, table.model)]
+  const note = [seg(BLUE, "$ spans 5m–1h cache-write rates")]
+  const labelW = Math.max(...body.map(([l]) => [...l].length))
+  const inner = Math.max(width(header), width(note), ...body.map(([, v]) => labelW + 3 + width(v)))
+  const row = (segs) => `${bar} ${render([...segs, seg(null, " ".repeat(inner - width(segs)))])} ${bar}`
+  const rule = (l, r) => render([seg(BLUE, `${l}${"─".repeat(inner + 2)}${r}`)])
+  const lines = [rule("╭", "╮"), row(header), rule("├", "┤")]
+  for (const [label, value] of body) {
+    const lead = label ? [seg(BLUE, `${label}${" ".repeat(labelW - [...label].length)} │ `)] : [seg(null, " ".repeat(labelW + 3))]
+    lines.push(row([...lead, ...value]))
+  }
+  lines.push(row(note), rule("╰", "╯"))
+  return lines
 }
 // ── END USAGE / COST (pure part) ──────────────────────────────────────────────────────────────────
 
@@ -295,6 +316,15 @@ function layoutReport(text, paint = false) {
   close()
   return out
 }
+
+
+// The user copy of a Stop report (owner, 2026-11-15): the report text exactly as the reviewer wrote it, one row per line,
+// no gutter and no colour; only control characters (model output, diffs, stderr) are stripped so a row can never carry an
+// escape that show.py's line cut or the terminal would misread.
+function plainReport(text) {
+  return String(text).split(/\r?\n/).map((l) => l.replace(CONTROL, "").trimEnd())
+}
+
 // ── END REPORT LAYOUT (pure part) ─────────────────────────────────────────────────────────────────
 
 // Running total for this session, reset on classic.SessionStart.
@@ -755,10 +785,10 @@ async function reviewAtStop($, e, sink) {
     reviewedMark = { work: workAt, proposal: scan.proposalIndex, msg: lastMessage }
     await clearPending()
     const report = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness)\n${res.text}`
-    // The user sees every report, PASS and BLOCK (before 0.5.0 a BLOCK report reached only the model); the debug log
-    // keeps a plain copy, since show.py cuts a report past the hook output cap.
-    sink.add(layoutReport(report, true))
-    logLines($, layoutReport(report).join("\n"), { to: "debug" })
+    // The user sees every report, PASS and BLOCK (before 0.5.0 a BLOCK report reached only the model); the sink copy and
+    // the debug-log copy are both the plain text (plainReport), since show.py cuts a report past the hook output cap.
+    sink.add(plainReport(report))
+    logLines($, plainReport(report).join("\n"), { to: "debug" })
     if (!res.block) {
       $.ui.status("review: PASS")
       // A PASS report is not put in Stop additionalContext (that may start a continuation turn, unmeasured, costing a
@@ -1057,8 +1087,8 @@ async function reviewSubagent($, ctx, turn, sink, st, tag) {
       : handedBack ? "it ended with SubagentHandback, which ends its run, so it was not blocked: these findings are for its parent"
       : "the subagent was blocked once with these findings"
     const report = `${measured ? measured.text + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, ${tag}: ${outcome})\n${res.text}`
-    sink.add(layoutReport(report, true))
-    logLines($, layoutReport(report).join("\n"), { to: "debug" })
+    sink.add(plainReport(report))
+    logLines($, plainReport(report).join("\n"), { to: "debug" })
     await storeForModel($, report, false)
     if (!findings) { $.ui.status(`review: ${tag} PASS`); return null }
     if (handedBack) { $.ui.status(`review: ${tag} has findings; it handed back, so they go to the parent`); return null }

@@ -35,15 +35,37 @@ KEEP = ".gitignore"
 BUDGET = 9000
 RESET = "\x1b[0m"
 NOTE = RESET + "\n(truncated)"
+TRUNCATED = "… report truncated"
+ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def fit(text):
-    """Drop whole trailing lines until the serialized payload, note included, fits BUDGET.
+    """Drop whole trailing lines until the serialized payload fits BUDGET; the usage box is never cut.
+
+    The box is the trailing block starting at the last line whose ANSI-stripped text starts with "╭" (the mod puts it
+    last). Its size is reserved: only the lines before it are trimmed, from the end, and a "… report truncated" line
+    replaces what was dropped (no RESET follows: the box rows close their own spans). If the box alone does not fit, there
+    is no box, or the message does not end in a "╰" line, trailing lines are dropped as before and NOTE is appended.
 
     Line-safe: an SGR escape never contains a newline, so a cut at a line boundary never splits one, and the mod
     closes every coloured span on its own line. The RESET in the note closes anything left open anyway. Nothing of the
     cut text is kept (owner: once printed, it can be deleted)."""
     lines = text.split("\n")
+    box_at = next((i for i in range(len(lines) - 1, -1, -1) if ANSI_SGR.sub("", lines[i]).startswith("╭")), None)
+    # A "╭" line in report text (a pasted box, a diff) is not the usage box: the real one ends the message with "╰".
+    # Trailing blank lines are ignored in that test, so a text that ends in "\n" still keeps its box.
+    if box_at is not None and not ANSI_SGR.sub("", next(l for l in reversed(lines) if l.strip())).startswith("╰"):
+        box_at = None
+    if box_at is not None:
+        head, box = lines[:box_at], lines[box_at:]
+        while head:
+            head.pop()
+            candidate = "\n".join(head + [TRUNCATED] + box)
+            if len(json.dumps({"systemMessage": candidate})) <= BUDGET:
+                return candidate
+        candidate = "\n".join([TRUNCATED] + box)
+        if len(json.dumps({"systemMessage": candidate})) <= BUDGET:
+            return candidate
     while lines:
         candidate = "\n".join(lines) + NOTE
         if len(json.dumps({"systemMessage": candidate})) <= BUDGET:
