@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: dev
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-11-15T18:09:16+0100
+updated: 2026-11-15T21:45:33+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -41,6 +41,7 @@ Measured 2026-10-22 (docs_dev/20261022-bodies-discriminator.md, isolated clones,
 - 2026-11-15 — da49f000: the non-test code of pass.rs (present_names, the streaming NodeSeed visitor, load_pass_state_pruned and its error mapping) was read on 2026-11-15 with no defect found; its tests and the chores.rs half were not re-read this session.
 - 2026-11-15 — Not deployed: the live collector stays stopped and bin-native/ is untouched.
 - 2026-11-15 — Evidence: reports_dev/2HRA270Y/20261115_160801+0100-boot-phase-probe3.md, reports_dev/2HRA270Y/20261115_164233+0100-boot-phase-probe4.md, reports_dev/2HRA270Y/20261115_175755+0100-pruned-load-keep-path.md.
+- 2026-11-15 21:44 deploy gate + empty-dir arms (reports_dev/2HRA270Y/20261115_214450+0100-deploy-gate-and-empty-dir.md, MEASURED, both load-contaminated load1>12, n=1): LIVE (log scan ON, ladder default, no cap override, real otel-bodies, 1800 s, real transcripts read: log scan files=69687 parsed=18617 cards=80453 in 361.6 s): alive to end, SIGTERM exit 0, no cap/OOM/abort/panic line; max mi_commit 1797 MB (stepped up inside the last 300 s, unchanged at 2 later sparse samples), max rss 5134 MB, max phys_footprint 3653 MB, rss and footprint noisy with positive fitted slopes (+35/+31 MB/min), no plateau and no steady rise shown, not a clean deploy gate (load cause host-vs-arm unknown); pressure ladder fired stage 0->1->2 at ~612/647 s (summarization window halved). EMPTY otel-bodies (ladder off, no log scan, cap 8192, 300 s): burn_scan_done printed at 0.94 s, NO open_*/bp_*/first_* phases, commit max 869, footprint 901, rss max 1238 (equal to the old WITHOUT dir-missing numbers within a few MB; n=1, load-contaminated), consistent with (not proof; n=1, load-contaminated, near-idle process) the old WITH delta not being the dir merely existing but the bodies open/pass path; starvation not excluded, mechanism and trigger not established.
 
 ## Approval log
 
