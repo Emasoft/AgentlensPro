@@ -4,7 +4,7 @@ title: agentlenspro CLI and dashboard install, uninstall and switch each extensi
 column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T21:22:37+0100
+updated: 2026-11-15T21:27:46+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -33,6 +33,7 @@ Resolution (orchestrator reading of the line above): no repackaging of agentlens
 > packaging? what packaging? agentlenspro is a tool installed via npm. it installs extensions into claude (at user scope) only after being installed, and it does interactively via a cli command or via a dashboard.
 > i already explained to you that the readme must explicitly tell to run `agentlenspro setup` the first time to install the default components into claude. then the user can switch them on or off individually via the cli or the dashboard.
 > actually i don't remember if it was setup or install. but the opposite command should also exist: `uninstall` should remove all extensions from claude, reverting also the settings.json to the settings (removing the lines that were added, keeping those that were already present at setup time, settings the values that agentlenspro changed back to the values originally found at install time, but leaving the others intact, since they may have been edited by the user for other purpouses)
+> yes, all those install and uninstall commands are good. the more the better. the user must be able to install/uninstall the extensions totaly, by function, by type, one by one, etc. so multiple ovenrlapping install/uninstall commands must be included in the cli. the dashboard should also include a profile saver/reloader to quickly load presets. remember that enable/disable is a sepaarate independent switch. no matter the profile, disable will prevent the collection (except for statusline hook and review/measure hooks). All alerts and warnings or hooks blocking should be configurable in the dashboard side panel as well, with the option to be only warnings or to block, and the option to set tresholds for warnings and tresholds for blocking of all tracked parameters and events. the cli won't allow to create profiles but it should have an option to load a profile dynamically by its name.
 
 ## Superseded plan (one plugin per part — replaced by the resolution above; kept as the parts inventory)
 Parts inventory (2026-11-15):
