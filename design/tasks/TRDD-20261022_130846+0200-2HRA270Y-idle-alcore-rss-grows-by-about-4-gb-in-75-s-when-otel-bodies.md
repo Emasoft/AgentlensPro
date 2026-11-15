@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: dev
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-11-15T15:37:55+0100
+updated: 2026-11-15T18:09:16+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T13:08:46+0200
 eht: [12FGMAEP]
+implementation-commits: [f4b7ec83, 4a1151b8, b08fbe8d, da49f000]
 ---
 
 # Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
@@ -32,7 +33,14 @@ eht: [12FGMAEP]
 - Note: the measurement lines under "## Approval log" are left in place because that section is append-only; this block supersedes them where they differ.
 
 Measured 2026-10-22 (docs_dev/20261022-bodies-discriminator.md, isolated clones, --no-log-scan, no ingest, one run per arm): RSS +4255 MB over 2-75 s with <data_dir>/otel-bodies present (21,495 files, 2.92 GB), +50 MB with it moved out. The burn bodies watcher retains only a few MB; the reader is now identified (open_store): see the STATE block and the Plan 2026-10-22 section (docs_dev/20261022-climb-stacks.md). This is step 1 of the conversion order on TRDD-KBM09XHB and the largest single contributor to the TRDD-2JOIAH2G crash loop measured so far. Owner rule (KBM09XHB, 2026-10-22): body data is digested into DuckDB tables and read back as query answers; nothing corpus-sized resident in alcore's heap.
-- NEXT ACTION (2026-11-15, supersedes every earlier NEXT): three runs on 2026-11-15 (ladder arms, early-boot stacks) ended "not established" because CPU stack samples cannot attribute allocation and the composition line fires only every 60 s (chores.rs:1680). Next: log mimalloc commit and phys_footprint at each store-open phase boundary (blob seed, known_part seed, body_durable load, index build) and run the no-request arm once; check whether those deltas explain the 847 -> 1340 MB commit step (up103 -> up122). Keep commit (what the 2048 MB cap kills on) apart from the ~3 GB RSS outside mimalloc (TRDD-12FGMAEP). The instrumentation is a code change: propose it before writing.
+- NEXT ACTION (2026-11-15, supersedes every earlier NEXT): propose a fix for the 6.2 → 737.4 MB net commit inside the CoreState cards initializer (CardStore::open keeping every parsed card resident), coordinated with TRDD-7YPQWKPG; then explain the unexplained +43 MB between after_serve_ui and burn_scan_start.
+- 2026-11-15 — Boot-phase probe (n=1 boot probe; net mimalloc commit per window, not allocation attribution): net commit rose from 6.2 MB to 737.4 MB inside the CoreState cards initializer (CardStore::open, resident parsed cards). Not fixed; a follow-up proposal, related to TRDD-7YPQWKPG.
+- 2026-11-15 — load_pass_state added about +465 MB (the whole 75 MB .pass-state.json parsed to a Value tree and two full sets). Fixed by da49f000: load_pass_state_pruned streams the file and keeps only names present in the bodies-dir listing; measured best case +52.3 MB. On an incomplete or empty listing it keeps every name.
+- 2026-11-15 — About +43 MB between after_serve_ui and burn_scan_start is unexplained.
+- 2026-11-15 — phys_footprint growth during store open is DuckDB outside mimalloc, tracked by TRDD-12FGMAEP.
+- 2026-11-15 — da49f000: the non-test code of pass.rs (present_names, the streaming NodeSeed visitor, load_pass_state_pruned and its error mapping) was read on 2026-11-15 with no defect found; its tests and the chores.rs half were not re-read this session.
+- 2026-11-15 — Not deployed: the live collector stays stopped and bin-native/ is untouched.
+- 2026-11-15 — Evidence: reports_dev/2HRA270Y/20261115_160801+0100-boot-phase-probe3.md, reports_dev/2HRA270Y/20261115_164233+0100-boot-phase-probe4.md, reports_dev/2HRA270Y/20261115_175755+0100-pruned-load-keep-path.md.
 
 ## Approval log
 
