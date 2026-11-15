@@ -4,7 +4,7 @@ title: agentlenspro CLI and dashboard install, uninstall and switch each extensi
 column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T21:38:00+0100
+updated: 2026-11-15T21:41:51+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -54,6 +54,8 @@ Found 2026-11-15: src/cli/autoSetup.ts heals the install at every CLI launch (TR
 Found 2026-11-15: no `agentlenspro uninstall` verb exists; the pieces do — `--uninstall-hooks`, `--uninstall-statusline`, `--uninstall-otel` (src/telemetryConfig.ts records each env key's prior state in a marker and restores it: deletes what it added, re-sets what it changed). Open question for the plan: a key agentlenspro set that the user later edited — restore, or leave and report? Proposed: leave it and report it.
 Derived requirement 2026-11-15: autoSetup heals the install at every CLI launch and skips only when the disable flag is set (src/cli/autoSetup.ts:248, agentlensDisabled). uninstall and every per-component off must leave a state autoSetup respects, or the next agentlenspro command re-installs what was removed. Also decide in the plan: how uninstall relates to `agentlenspro disable`, and whether it removes the review-mod plugin. The only existing install/uninstall verbs are `agentlenspro daemon install|uninstall` (src/cli/serverControl.ts:1174-1180, the background service), plus the `--install-*`/`--uninstall-*` flags.
 Conflict found 2026-11-15: today's `agentlenspro disable` (src/cli/disableCli.ts) violates the owner's model above — it moves skills and rules aside and removes OTEL_LOG_RAW_API_BODIES from settings.json, i.e. it uninstalls. Under the model, disable only flips the flag file (and values agentlenspro itself added, never pre-existing ones); removal belongs to profiles and uninstall.
+> also stop assuming where exactly the settings are placed in the settings.json. you must use jq to navigate the settings.json and change the values. lines numbers are not constants. (owner, verbatim, 2026-11-15)
+Limits of the flag-file model, to settle in Step 0: (1) hooks can check a flag file; skills have a documented in-place switch (settings key skillOverrides = off); no in-place switch is known for agents or rules — Claude reads those files directly. (2) A settings.json value flip reaches only NEW sessions — disableCli.ts records that editing settings.json stopped 0 of 13 running sessions (2026-07-14) — so disable must keep stopping the server, and the dashboard must say running sessions keep exporting until restarted. (3) disableCli.ts calls removeRawBodiesKey() (read 2026-11-15); under the owner's model this becomes a value flip of an agentlenspro-added entry, or stays a removal only via profile/uninstall.
 
 ## Approval log
 
