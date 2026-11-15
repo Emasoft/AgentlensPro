@@ -222,6 +222,7 @@ function usageTable(table) {
   const YELLOW = "93" // token numbers
   const GREEN = "92" // costs
   const WHITE = "97" // model
+  const RED = "91" // cache misses (cache bar)
   const clean = (s) => String(s).replace(CONTROL, "")
   const seg = (code, text) => ({ code, text: clean(text) })
   const width = (segs) => segs.reduce((n, s) => n + [...s.text].length, 0)
@@ -235,11 +236,33 @@ function usageTable(table) {
     body.push([clean(r.label), cost(r.cost)])
     if (r.tokens) body.push(["", tokens(r.tokens)])
   }
-  body.push(["this turn", cost(table.total.cost)], ["", tokens(table.total.tokens)], ["session", cost(table.session)])
+  body.push(["this turn", cost(table.total.cost)], ["", tokens(table.total.tokens)])
+  const cacheAt = body.length
+  body.push(["session", cost(table.session)])
   const header = [seg(BLUE, "review-mod usage"), seg(BLUE, " | "), seg(WHITE, table.model)]
   const note = [seg(BLUE, "$ spans 5m–1h cache-write rates")]
   const labelW = Math.max(...body.map(([l]) => [...l].length))
-  const inner = Math.max(width(header), width(note), ...body.map(([, v]) => labelW + 3 + width(v)))
+  const innerBase = Math.max(width(header), width(note), ...body.map(([, v]) => labelW + 3 + width(v)))
+  // The cache bar (owner order 2026-11-15: a bi-colored bar = 100% of the turn's tokens, green = cache hits, red = cache
+  // misses). It measures the cache-read vs cache-write share of the turn's CACHED-PREFIX tokens (cr + cw); uncached input
+  // and output are not in it. No row when cr + cw is 0. Its length is derived from the widest other row so the box does not
+  // widen (floor 20 cells): a fixed 40 cells would widen it by ~20. Each colour is one closed SGR span of U+2588 (one
+  // code point, one cell, so width() holds); a non-zero share always gets at least one cell, so a 1.3% miss stays visible.
+  const tk = table.total.tokens
+  const cacheShare = (t) => ({ hit: t.cr, miss: t.cw }) // the ONE place that picks what the bar measures (today cr vs cw; owner has not confirmed all-tokens)
+  const share = cacheShare(tk)
+  const cached = share.hit + share.miss
+  if (cached > 0) {
+    const pct = (n) => `${((100 * n) / cached).toFixed(1)}%`
+    const suffix = [seg(null, " "), seg(GREEN, "hit "), seg(YELLOW, pct(share.hit)), seg(BLUE, " · "), seg(RED, "miss "), seg(YELLOW, pct(share.miss))]
+    // box width = inner + 4: cap the bar so the box stays <= 80 cells, floor 20 cells
+    const cells = Math.max(20, Math.min(innerBase, 76) - labelW - 3 - width(suffix))
+    let green = Math.round((cells * share.hit) / cached)
+    if (share.hit > 0) green = Math.max(green, 1)
+    if (share.miss > 0) green = Math.min(green, cells - 1)
+    body.splice(cacheAt, 0, ["cache r/w", [seg(GREEN, "█".repeat(green)), seg(RED, "█".repeat(cells - green)), ...suffix]])
+  }
+  const inner = Math.max(innerBase, ...body.map(([, v]) => labelW + 3 + width(v)))
   const row = (segs) => `${bar} ${render([...segs, seg(null, " ".repeat(inner - width(segs)))])} ${bar}`
   const rule = (l, r) => render([seg(BLUE, `${l}${"─".repeat(inner + 2)}${r}`)])
   const lines = [rule("╭", "╮"), row(header), rule("├", "┤")]
