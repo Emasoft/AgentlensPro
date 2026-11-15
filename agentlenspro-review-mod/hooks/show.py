@@ -37,6 +37,35 @@ RESET = "\x1b[0m"
 NOTE = RESET + "\n(truncated)"
 TRUNCATED = "… report truncated"
 ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
+# CONTRACT with register.js (usageTable, RED + barSegs): the cache bar's miss run is exactly one `ESC[91m` span of U+2588 closed by
+# `ESC[0m`. That shape is what MISS_RUN matches; changing the colour code or the glyph there breaks the monochrome bar here.
+MISS_RUN = re.compile(r"\x1b\[91m(█+)\x1b\[0m")
+MONO_MISS = "░"  # U+2591, East Asian Width N (U+2026 is A); hit cells stay U+2588, so `██░░░░ 28% hit` reads without colour
+# Hosts that do not draw ANSI in a systemMessage (owner: VS Code). Only the value the owner named; an unmeasured host is not guessed.
+NO_COLOUR_ENTRYPOINTS = ("claude-vscode",)
+
+
+def colour_off(env):
+    """True when the host shows no colour; no signal at all means colour ON (the CLI default).
+
+    FORCE_COLOR set to anything but 0/false forces colour on (the no-color.org / Node convention, so it beats NO_COLOR);
+    FORCE_COLOR 0/false, a non-empty NO_COLOR, TERM=dumb and CLAUDE_CODE_ENTRYPOINT naming an IDE host turn it off. A hook
+    inherits Claude Code's own environment (measured, 2.1.325 probe: NO_COLOR, FORCE_COLOR and CLAUDE_CODE_ENTRYPOINT
+    reach a Stop command hook)."""
+    force = env.get("FORCE_COLOR")
+    if force is not None and force.strip().lower() not in ("0", "false"):
+        return False
+    return (
+        force is not None
+        or env.get("NO_COLOR", "") != ""
+        or env.get("TERM") == "dumb"
+        or env.get("CLAUDE_CODE_ENTRYPOINT") in NO_COLOUR_ENTRYPOINTS
+    )
+
+
+def monochrome(text):
+    """Colour-off rendering: each red bar run becomes the same count of U+2591, then every SGR code is stripped."""
+    return ANSI_SGR.sub("", MISS_RUN.sub(lambda m: MONO_MISS * len(m.group(1)), text))
 
 
 def fit(text):
@@ -142,6 +171,8 @@ def main():
     text = text.rstrip("\n")
     if text.strip() == "":
         return 0
+    if colour_off(os.environ):
+        text = monochrome(text)
     if len(json.dumps({"systemMessage": text})) > BUDGET:
         text = fit(text)
     print(json.dumps({"systemMessage": text}))

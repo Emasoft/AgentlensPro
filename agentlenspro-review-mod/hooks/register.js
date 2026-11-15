@@ -214,7 +214,7 @@ function formatUsageLine(calls, sessionModel, prev) {
 
 // The user-only layout of one usage cycle, in the closed-box layout of the token-reporter plugin (owner asked for it,
 // 2026-11-15): a header (title | model), a label | value row per call (its token row has an empty label), the turn total,
-// the session total and a rate note, all inside one ╭╮╰╯ frame whose right border aligns. Always painted with token-reporter's
+// and the session total, all inside one ╭╮╰╯ frame whose right border aligns. Always painted with token-reporter's
 // palette: it only ever goes to the Stop display file. Width is counted in code points, which holds for every character
 // this box draws. Token counts stay exact.
 function usageTable(table) {
@@ -222,7 +222,7 @@ function usageTable(table) {
   const YELLOW = "93" // token numbers
   const GREEN = "92" // costs
   const WHITE = "97" // model
-  const RED = "91" // cache misses (cache bar)
+  const RED = "91" // cache misses (cache bar). CONTRACT with hooks/show.py: the bar's miss run is exactly one `\u001b[91m` span of U+2588 closed by `\u001b[0m` (see barSegs); show.py rewrites that shape to U+2591 when colour is off, so do not change the colour code or the glyph here without changing MONO_MISS there
   const clean = (s) => String(s).replace(CONTROL, "")
   const seg = (code, text) => ({ code, text: clean(text) })
   const width = (segs) => segs.reduce((n, s) => n + [...s.text].length, 0)
@@ -258,12 +258,11 @@ function usageTable(table) {
   billed("this turn", table.total.cost, table.total.tokens)
   body.push({ label: "session", value: cost(table.session) })
   const header = [seg(BLUE, "review-mod usage"), seg(BLUE, " | "), seg(WHITE, table.model)]
-  const note = [seg(BLUE, "$ spans 5m–1h cache-write rates")]
   const labelRows = body.filter((e) => e.label)
   const labelW = Math.max(...labelRows.map((e) => [...e.label].length))
   const labelRowW = (e) => labelW + 3 + width(e.value)
   // A breakdown line wider than 76 cells widens the box rather than truncating a number.
-  const innerBase = Math.max(width(header), width(note), ...labelRows.map(labelRowW), ...body.filter((e) => e.full).map((e) => width(e.full)))
+  const innerBase = Math.max(width(header), ...labelRows.map(labelRowW), ...body.filter((e) => e.full).map((e) => width(e.full)))
   // ONE cell count for every bar of the box so they line up and compare: the remaining width of the 76-cell inner (80-cell
   // box) after the widest suffix (100.0% / 100.0%), or of a wider inner when a breakdown line forced the box wider. Each colour
   // is one closed SGR span of U+2588 (one code point, one cell, so width() holds); a non-zero share always gets at least one
@@ -286,7 +285,7 @@ function usageTable(table) {
     if (e.full) lines.push(row(e.full))
     else lines.push(row([seg(BLUE, `${e.label}${" ".repeat(labelW - [...e.label].length)} │ `), ...e.value]))
   }
-  lines.push(row(note), rule("╰", "╯"))
+  lines.push(rule("╰", "╯"))
   return lines
 }
 // ── END USAGE / COST (pure part) ──────────────────────────────────────────────────────────────────
