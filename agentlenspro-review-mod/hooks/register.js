@@ -319,7 +319,12 @@ async function writeDisplay($, cwd, sessionId, lines, agentId = null) {
   const at = displayPath(cwd, sessionId, agentId)
   if (!at) throw new Error(`no display path (cwd ${JSON.stringify(cwd)}, session_id ${JSON.stringify(sessionId)}${agentId === null ? "" : `, agent_id ${JSON.stringify(agentId)}`})`)
   await ensureDisplayDir($, at.dir)
-  await $.fs.write(`${at.dir}/${at.file}`, lines.length > 0 ? `${lines.join("\n")}\n` : "")
+  // Claude Code 2.1.325 cuts a systemMessage line at its first U+2502 "│" and drops the rest of the line (probed
+  // 2026-11-15: a "x │ …" line showed only "x"; U+254E and nine other bars render). Every box row starts with "│", so
+  // the 0.7 token box showed only its rules. Mapped here, the one point every display line passes, so a reviewer
+  // report that quotes a box keeps its lines too. U+254E is a light bar centred in its cell, one code point wide.
+  const text = lines.join("\n").replaceAll("│", "╎")
+  await $.fs.write(`${at.dir}/${at.file}`, lines.length > 0 ? `${text}\n` : "")
 }
 
 // One user-only message: into the Stop display (coloured, plus a plain copy in the debug log) when a sink is given,

@@ -38,7 +38,7 @@ At every main-thread **Stop**:
 
 An **interrupted turn** (Esc) fires no Stop. `turn.complete` with `isAborted` schedules the same review from
 a timer. At once the user sees one summary row; the report and its usage box are held in memory and shown,
-oldest first, ahead of the next Stop's own display (any Stop, janitor turns included), and dropped at
+oldest first, ahead of the next main-thread Stop's own display (janitor turns included; a subagent's Stop never flushes them), and dropped at
 SessionStart. The report is injected into the next prompt, and the next Stop blocks if a BLOCK was not addressed.
 
 ## Subagents (0.6.0)
