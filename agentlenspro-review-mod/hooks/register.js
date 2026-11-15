@@ -280,6 +280,7 @@ function formatUsageLine(calls, sessionModel, reviewed) {
 // turn only), the cache bar, the token breakdown and the cost. Every cost is for one turn: no session total. Always painted with
 // token-reporter's palette: it only ever goes to the Stop display file. Width is counted in code points, which holds for every character
 // this box draws. Token counts stay exact.
+// Layout (owner order 2026-11-15, "the box formatting is broken. there is no double column or indenting to distinguish the things relative to one or another turn"): every row under a turn heading is indented 2 cells so it reads as belonging to that turn, headings stay flush, and a ├…┤ rule separates the turn under review from the review turn when both are shown.
 function usageTable(table) {
   const BLUE = "94" // static: border, labels, all unchanging text
   const YELLOW = "93" // token numbers
@@ -288,6 +289,7 @@ function usageTable(table) {
   const RED = "91" // cache misses (cache bar). CONTRACT with hooks/show.py: the bar's miss run is exactly one `\u001b[91m` span of U+2588 closed by `\u001b[0m` (see barSegs); show.py rewrites that shape to U+2591 when colour is off, so do not change the colour code or the glyph here without changing MONO_MISS there
   const clean = (s) => String(s).replace(CONTROL, "")
   const seg = (code, text) => ({ code, text: clean(text) })
+  const ind = seg(null, "  ") // owner order 2026-11-15: every row under a section heading starts with this 2-space indent; headings stay flush
   const width = (segs) => segs.reduce((n, s) => n + [...s.text].length, 0)
   // Every span is closed on its own row, so show.py may cut between any two lines.
   const render = (segs) => segs.map((s) => (s.code && s.text !== "" ? `\u001b[${s.code}m${s.text}\u001b[0m` : s.text)).join("")
@@ -312,15 +314,16 @@ function usageTable(table) {
   const calls = (n) => (n > 1 ? ` · ${n} calls` : "")
   const section = (heading, t, c, note = null) => {
     body.push({ full: [seg(BLUE, clean(heading))] })
-    if (note !== null) body.push({ full: [seg(BLUE, clean(note))] })
+    if (note !== null) body.push({ full: [ind, seg(BLUE, clean(note))] })
     if (t === null) return
     if (hasBar(t)) body.push({ bar: t })
-    body.push({ full: tokenRow(t) }, { full: cost(c) })
+    body.push({ full: [ind, ...tokenRow(t)] }, { full: [ind, ...cost(c)] })
   }
   if (table.reviewed) section(`turn under review (${table.reviewed.who})${calls(table.reviewed.calls)}:`, table.reviewed.tokens, table.reviewed.cost, table.reviewed.cacheNote)
+  if (table.reviewed) body.push({ sep: true }) // a ├…┤ rule between the two turns, only when both are present (the review turn is always present)
   const rv = table.review
   section(`review turn${calls(rv.billed)}:`, rv.billed > 0 ? rv.tokens : null, rv.cost)
-  if (rv.noReply > 0) body.push({ full: [seg(BLUE, clean(`${rv.noReply} call${rv.noReply > 1 ? "s" : ""} no reply (${rv.noReplyWhy}), not billed`))] })
+  if (rv.noReply > 0) body.push({ full: [ind, seg(BLUE, clean(`${rv.noReply} call${rv.noReply > 1 ? "s" : ""} no reply (${rv.noReplyWhy}), not billed`))] })
   const header = [seg(BLUE, "review-mod usage"), seg(BLUE, " | "), seg(WHITE, table.model)]
   // A breakdown line wider than 76 cells widens the box rather than truncating a number.
   const innerBase = Math.max(width(header), ...body.filter((e) => e.full).map((e) => width(e.full)))
@@ -329,20 +332,20 @@ function usageTable(table) {
   // is one closed SGR span of U+2588 (one code point, one cell, so width() holds); a non-zero share always gets at least one
   // cell, so a 1.3% miss stays visible.
   const widestSuffix = width([seg(null, " hit 100.0% · miss 100.0%")])
-  const cells = Math.max(20, Math.max(innerBase, 76) - widestSuffix)
+  const cells = Math.max(20, Math.max(innerBase, 76) - widestSuffix - width([ind]))
   const barSegs = (t) => {
     const s = cacheShare(t)
     let green = Math.round((cells * s.hit) / (s.hit + s.miss))
     if (s.hit > 0) green = Math.max(green, 1)
     if (s.miss > 0) green = Math.min(green, cells - 1)
-    return [seg(GREEN, "█".repeat(green)), seg(RED, "█".repeat(cells - green)), ...barSuffix(t)]
+    return [ind, seg(GREEN, "█".repeat(green)), seg(RED, "█".repeat(cells - green)), ...barSuffix(t)]
   }
   for (const e of body) if (e.bar) e.full = barSegs(e.bar)
   const inner = Math.max(innerBase, ...body.filter((e) => e.full).map((e) => width(e.full)))
   const row = (segs) => `${bar} ${render([...segs, seg(null, " ".repeat(inner - width(segs)))])} ${bar}`
   const rule = (l, r) => render([seg(BLUE, `${l}${"─".repeat(inner + 2)}${r}`)])
   const lines = [rule("╭", "╮"), row(header), rule("├", "┤")]
-  for (const e of body) lines.push(row(e.full))
+  for (const e of body) lines.push(e.sep ? rule("├", "┤") : row(e.full))
   lines.push(rule("╰", "╯"))
   return lines
 }
