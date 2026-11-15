@@ -100,9 +100,10 @@ this card can close.
 ## Approval log
 
 - 2026-09-03T10:48:30+0200 — APPROVED by USER (verbatim order above).
-2026-11-15 — blocked-by pruned per this card's own STATE rule (ids outside dev|testing|todo|blocked|plan|dispatch): removed 7NHUU6GK (backburner), ZSX34J8F (backburner), 2R0AXCKL (backburner), 2TQHNMEC (backburner), 9SYRK6SW (deploy); 13 remain.
+- 2026-11-15 — blocked-by pruned per this card's own STATE rule (ids outside dev|testing|todo|blocked|plan|dispatch): removed 7NHUU6GK (backburner), ZSX34J8F (backburner), 2R0AXCKL (backburner), 2TQHNMEC (backburner), 9SYRK6SW (deploy); 13 remain.
 
 ## Blocking cards (must reach a terminal column before this gate opens)
+> SUPERSEDED 2026-11-15: this list is historical; the live gate is the frontmatter blocked-by field (13 ids after the 2026-11-15 prune).
 
 | id | column | title (file) |
 |---|---|---|
