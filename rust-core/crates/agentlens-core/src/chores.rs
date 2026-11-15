@@ -796,6 +796,10 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             let mut raw_facts_extractor = |raw: &str| {
                 crate::burn::investigator_scan::extract_raw_facts(raw, 6 * 1024 * 1024)
             };
+            // TRDD-2HRA270Y: taken with the store in hand, immediately before the first ingest pass of the
+            // process; the window to the existing `first_bodies_ingest` reading is that one pass.
+            static FIRST_INGEST_START: std::sync::Once = std::sync::Once::new();
+            FIRST_INGEST_START.call_once(|| crate::rss_guard::log_boot_phase("first_ingest_start", None));
             let res = agentlens_store::pass::ingest_pass_observed_with(
                 &mut store,
                 &opts,

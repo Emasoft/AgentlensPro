@@ -406,8 +406,14 @@ fn main() {
         // the same thread then re-sweeps every LOG_SWEEP_INTERVAL, touching only files whose
         // stat moved (P5d tail + offset gate).
         let env = agentlens_logscan::discovery::Env::from_process();
+        // TRDD-2HRA270Y: opens the start_sweeper window; the wall time to `sweeper_restore_start` is thread spawn + DurableState::open.
+        static BEFORE_START_SWEEPER: std::sync::Once = std::sync::Once::new();
+        BEFORE_START_SWEEPER.call_once(|| agentlens_core::rss_guard::log_boot_phase("before_start_sweeper", None));
         match agentlens_core::log_reader::start_sweeper(state.clone(), env, std::path::PathBuf::from(&data_dir), LOG_SWEEP_INTERVAL) {
             Ok((boot, handle)) => {
+                // TRDD-2HRA270Y: closes the start_sweeper window (restore + boot sweep, synchronous).
+                static AFTER_START_SWEEPER: std::sync::Once = std::sync::Once::new();
+                AFTER_START_SWEEPER.call_once(|| agentlens_core::rss_guard::log_boot_phase("after_start_sweeper", None));
                 if boot.restored_cards > 0 || boot.offsets_imported > 0 {
                     println!(
                         "{} alcore: resumed {} log tail offsets ({} invalid/rotated → cold read); restored {} session cards",

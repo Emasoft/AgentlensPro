@@ -1585,10 +1585,17 @@ pub fn start_sweeper(
         .spawn(move || {
             let mut tailer = LogTailer::default();
             let mut durable = DurableState::open(&data_dir);
+            // TRDD-2HRA270Y: opens the DurableState restore window; the window from `before_start_sweeper`
+            // (alcore.rs) to here is thread spawn + `DurableState::open`.
+            static RESTORE_START: std::sync::Once = std::sync::Once::new();
+            RESTORE_START.call_once(|| crate::rss_guard::log_boot_phase("sweeper_restore_start", None));
             let restored = {
                 let mut st = state.lock_timed();
                 durable.restore(&mut tailer, &mut st, &env)
             };
+            // TRDD-2HRA270Y: closes the DurableState restore window (opened by `sweeper_restore_start`).
+            static RESTORE_DONE: std::sync::Once = std::sync::Once::new();
+            RESTORE_DONE.call_once(|| crate::rss_guard::log_boot_phase("sweeper_restore_done", None));
             let (restored_cards, offsets_imported, offsets_skipped) = match restored {
                 Ok(r) => r,
                 Err(e) => {
@@ -1614,6 +1621,10 @@ pub fn start_sweeper(
             if !scanned.is_empty() {
                 durable.ingest_chunk(&state, scanned);
             }
+            // TRDD-2HRA270Y: closes the boot-sweep window (sweep_with_flush + remainder ingest), taken
+            // before the state lock below; with `sweeper_restore_done` it splits the sweeper thread boot.
+            static BOOT_SWEEP_DONE: std::sync::Once = std::sync::Once::new();
+            BOOT_SWEEP_DONE.call_once(|| crate::rss_guard::log_boot_phase("sweeper_boot_sweep_done", None));
             {
                 let mut st = state.lock_timed();
                 st.log_scan.add(&sweep);
