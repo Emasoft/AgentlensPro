@@ -1,10 +1,10 @@
 ---
 trdd-id: EW2UYTQ5
-title: Split agentlenspro into one plugin per part so each can be switched on and off at runtime
-column: backburner
+title: agentlenspro CLI and dashboard install, uninstall and switch each extension it ships one by one in realtime
+column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T21:03:25+0100
+updated: 2026-11-15T21:05:49+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -17,7 +17,7 @@ approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-15T20:55:31+0100
 ---
 
-# Split agentlenspro into one plugin per part so each can be switched on and off at runtime
+# agentlenspro CLI and dashboard install, uninstall and switch each extension it ships one by one in realtime
 
 ## Owner decision (verbatim, 2026-11-15)
 > agentlenspro should not be a plugin. all components should be installed as standalone user scoped elements. each one indipendently. skill, hooks, agents, mods, etc. no plugin.
@@ -27,6 +27,8 @@ approval-datetime: 2026-11-15T20:55:31+0100
 
 ## Owner directive (verbatim, 2026-11-15, later)
 > every skill, every hook, every agent, every mod, every rule: each one of them must be installable and uninstallable atomically via the agentlenspro cli. or using the dashboard right panel. all in realtime. including all changes to the settings.json file (maybe aggregated per functionality to make easier for the user to switch them on or off). disable as an option should be a similar realtime change. not only it must uninstall the hooks (except those of the statusline and the adversarial and measurer reviews) but it must change the settings.json to remove or switch off the telemetry options so that claude will not keep saving logs or raw bodies that nobody is collecting.
+> packaging? what packaging? agentlenspro it its a tool installed via npm. it installs extensions only after being installed.
+Resolution (orchestrator reading of the line above): no repackaging of agentlenspro itself. The npm-installed CLI stays the installer and manager; each extension it installs (skill, agent, hook group, rule, settings.json telemetry group) is a standalone user-scoped element switched one by one from the CLI and the dashboard's right panel. The review mod stays the one plugin, because a mod loads only from a plugin. The per-part-plugins plan below is superseded.
 
 ## Proposed plan (pending owner answer, not approved)
 Parts inventory (2026-11-15):
@@ -45,3 +47,4 @@ Also verify (docs found 2026-11-15): plugin skills and agents are renamed `plugi
 
 - 2026-11-15T20:55:31+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-15T21:03:25+0100 — column → backburner. plan awaits the owner's answer on standalone vs per-part plugins
+- 2026-11-15T21:05:49+0100 — column → design. owner resolved the packaging question
