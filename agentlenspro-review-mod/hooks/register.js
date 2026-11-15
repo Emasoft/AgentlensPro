@@ -30,6 +30,10 @@
 // and the diff show it.
 // USAGE. The token usage and the deduced cost of every model call the mod makes are shown to the user only; they are
 // never put in a block string or a context injection.
+// USAGE BOX (0.7.6, owner 2026-11-15): two sections of three rows each (cache bar, token breakdown, cost), every cost for ONE turn, no session total:
+// "turn under review" (the previous main or subagent turn, summed from the turn.step requests it made; option show_reviewed_turn) and
+// "review turn" (the sum of every model call this Stop made). The price of a cache write the API did not split by TTL follows the hook
+// event: Stop and an interrupted main turn = main = 1h; SubagentStop and every call the mod makes = subagent = 5m (callCostUsd).
 // DISPLAY (0.5.0). At a Stop the user-only rows (every report, PASS and BLOCK, the usage table, failures) are written in
 // ANSI colour to a per-session temp file under <cwd>/.claude/tmp/ (0.5.1) that the plugin's Stop command hook
 // (hooks/show.py) prints as a systemMessage, which the model never receives (see USER DISPLAY); the review therefore
@@ -159,37 +163,94 @@ function write1hRate(rt) {
   return rt.w > 0 && Math.abs(rt.w - rt.i * 1.25) < 1e-9 ? rt.i * 2 : rt.w
 }
 
-// One exact cost per call, in USD.
-function callCostUsd(usage, rt) {
+// One exact cost per call, in USD. `kind` is who made the call and is given by the hook event that triggered the review: "main"
+// (classic.Stop, an interrupted main turn) or "subagent" (classic.SubagentStop, the handback gate, and EVERY call the mod
+// itself makes, since those are forks and completions, i.e. subagents). `ttl` ("1h"/"5m") is the harness-reported cache TTL of the main
+// conversation when known (the price follows the harness-reported ttl); it replaces the kind's default for writes the usage does not split.
+function callCostUsd(usage, rt, kind, ttl = null) {
   const inp = usage.input_tokens || 0
   const cr = usage.cache_read_input_tokens || 0
   const cw = usage.cache_creation_input_tokens || 0
   const out = usage.output_tokens || 0
   const b = rt.above && inp + cr + cw > rt.above.over ? rt.above : rt
-  // Rule: the API's own split of the cache writes by TTL is exact, so each part is priced at its own rate. Writes the
-  // usage does not split bill at the 5m rate: every call the mod makes is a review/measure FORK or completion, i.e. a
-  // subagent, and measured over 391 review-fork transcripts 99.4% of their cache writes were 5m (71,706,401 vs 425,499 tokens at 1h).
+  // Rule: the API's own split of the cache writes by TTL is exact, so each part is priced at its own rate. Writes the usage does
+  // not split bill at the TTL of the kind: a main conversation on a subscription writes at 1h, a subagent at 5m. Measured in
+  // this project on 2026-11-15: the 53 review-fork transcripts carrying the mod's harness markers wrote 24,962,065 cache tokens,
+  // all at the 5-minute rate (0 at 1h). Hit or miss needs no input here: a hit is the cache-read bucket (read rate), a
+  // miss the cache-write bucket (write rate), and each bucket is priced on its own below.
   const split = usage.cache_creation
   const w1h = split && typeof split.ephemeral_1h_input_tokens === "number" ? split.ephemeral_1h_input_tokens : 0
   const w5m = split && typeof split.ephemeral_5m_input_tokens === "number" ? split.ephemeral_5m_input_tokens : 0
-  const rest = Math.max(0, cw - w1h - w5m)
-  return (inp * b.i + cr * b.r + out * b.o + (w5m + rest) * b.w + w1h * write1hRate(b)) / 1e6
+  const unsplit = Math.max(0, cw - w1h - w5m)
+  const unsplitTtl = ttl || (kind === "main" ? "1h" : "5m")
+  return (inp * b.i + cr * b.r + out * b.o + w5m * b.w + w1h * write1hRate(b) + unsplit * (unsplitTtl === "1h" ? write1hRate(b) : b.w)) / 1e6
 }
 
 const fmtInt = (n) => Math.round(n).toLocaleString("en-US")
 const fmtUsd = (usd) => `$${usd.toFixed(4)}`
-const emptySessionUsage = () => ({ usd: 0, calls: 0, unpriced: 0 })
 
-// calls: [{ label, model (null = the session model), usage | reason }]. Returns the one plain line (the debug log and any
-// host that reads text), the structured rows usageTable lays out for the transcript, and the new session total.
-function formatUsageLine(calls, sessionModel, prev) {
+// The prompt-cache state of THIS project's main conversation as the harness reports it, read from the agentlenspro CLI (not reimplemented
+// here): `agentlenspro cache-state --json`, exit 0 = warm, 1 = cold, 2 = cannot answer (stdout EMPTY). Only a main-conversation turn
+// asks (Stop, an interrupted main turn); a subagent's never does. An answer is accepted only for this session (session_id equal to the
+// Stop payload's) and the snapshot is not older than the reviewed turn's first request (captured_at, ms); an exit 2, any other exit, an
+// unreadable, another session's or a stale answer is null = unknown, never guessed cold.
+// cwd/sessionId null = read them from the session (the interrupted-turn timer has no Stop payload).
+async function mainCacheState($, cwd, sessionId, notBeforeMs) {
+  try {
+    const sid = sessionId ?? (await $.session.id())
+    const dir = cwd ?? (await $.session.cwd())
+    const r = await $.process.run(["agentlenspro", "cache-state", "--json"], { cwd: dir || undefined, timeoutMs: 20000 })
+    if (r.exitCode !== 0 && r.exitCode !== 1) return null
+    const v = JSON.parse(r.stdout)
+    if (!v || v.session_id !== sid || (v.state !== "warm" && v.state !== "cold")) return null
+    // Freshness: a snapshot captured before the reviewed turn's first request describes an earlier turn (captured_at is in ms).
+    if (typeof v.captured_at !== "number" || v.captured_at < notBeforeMs) return null
+    return {
+      warm: v.state === "warm",
+      ttl: v.prompt_cache_ttl === "1h" || v.prompt_cache_ttl === "5m" ? v.prompt_cache_ttl : null,
+      lastMissAt: typeof v.prompt_cache_last_miss_at === "number" ? v.prompt_cache_last_miss_at : null,
+      lastMissCause: Array.isArray(v.prompt_cache_last_miss_cause_causes) && v.prompt_cache_last_miss_cause_causes.length > 0 ? v.prompt_cache_last_miss_cause_causes.join(", ") : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+const agoText = (sec) => (sec < 3600 ? `${Math.max(1, Math.round(sec / 60))}m` : sec < 172800 ? `${Math.round(sec / 3600)}h` : `${Math.round(sec / 86400)}d`)
+// The first row of the turn-under-review section: `cache warm · ttl 1h · last miss messages_rewritten 2h ago` (the miss part only when there was one).
+function cacheNote(cache) {
+  if (!cache) return "cache state unknown"
+  const miss = cache.lastMissAt === null ? "" : ` · last miss ${cache.lastMissCause || "cause unknown"} ${agoText(Date.now() / 1000 - cache.lastMissAt)} ago`
+  return `cache ${cache.warm ? "warm" : "cold"}${cache.ttl ? ` · ttl ${cache.ttl}` : ""}${miss}`
+}
+
+// The turn under review as a usageTable row: its requests summed (not part of the review's totals), priced with its own kind. The harness-reported
+// cache TTL (main turns only) decides the price of its unsplit cache writes when known; the kind's rule is the fallback.
+function reviewedRow(reviewed, sessionModel) {
+  const tokens = { inp: 0, cr: 0, cw: 0, out: 0 }
+  let usd = 0
+  const unpriced = []
+  const ttl = reviewed.cache ? reviewed.cache.ttl : null
+  for (const c of reviewed.calls) {
+    const u = c.usage
+    tokens.inp += u.input_tokens || 0; tokens.cr += u.cache_read_input_tokens || 0; tokens.cw += u.cache_creation_input_tokens || 0; tokens.out += u.output_tokens || 0
+    const id = c.model || sessionModel
+    const rt = lookupRates(id)
+    if (rt) usd += callCostUsd(u, rt, reviewed.kind, ttl); else unpriced.push(id)
+  }
+  const unp = unpriced.length ? ` + unpriced call(s) on ${[...new Set(unpriced)].join(", ")}` : ""
+  return { who: reviewed.who, cost: `${fmtUsd(usd)}${unp}`, tokens, calls: reviewed.calls.length, cacheNote: reviewed.kind === "main" ? cacheNote(reviewed.cache || null) : null }
+}
+
+// calls: [{ label, model (null = the session model), usage | reason }]; reviewed: the turn under review or null (reviewedTurn).
+// Returns the one plain line (the debug log and any host that reads text) and the two sums usageTable lays out.
+function formatUsageLine(calls, sessionModel, reviewed) {
   const parts = []
-  const rows = []
   const tot = { inp: 0, cr: 0, cw: 0, out: 0, usd: 0, billed: 0 }
   const models = []
   const unpriced = []
   for (const c of calls) {
-    if (!c.usage) { parts.push(`${c.label}: no reply (${c.reason}), not billed`); rows.push({ label: c.label, cost: `no reply (${c.reason}), not billed`, tokens: null }); continue }
+    if (!c.usage) { parts.push(`${c.label}: no reply (${c.reason}), not billed`); continue }
     const id = c.model || sessionModel
     const u = c.usage
     const inp = u.input_tokens || 0
@@ -200,24 +261,24 @@ function formatUsageLine(calls, sessionModel, prev) {
     if (!models.includes(id)) models.push(id)
     const rt = lookupRates(id)
     let cost
-    if (rt) { const usd = callCostUsd(u, rt); tot.usd += usd; cost = fmtUsd(usd) } else { unpriced.push(id); cost = `rate unknown for ${id}` }
+    if (rt) { const usd = callCostUsd(u, rt, "subagent"); tot.usd += usd; cost = fmtUsd(usd) } else { unpriced.push(id); cost = `rate unknown for ${id}` }
     parts.push(`${c.label}: in ${fmtInt(inp)} · cache-read ${fmtInt(cr)} · cache-write ${fmtInt(cw)} · out ${fmtInt(out)} · ${cost}`)
-    rows.push({ label: c.label, cost, tokens: { inp, cr, cw, out } })
   }
-  const session = { usd: prev.usd + tot.usd, calls: prev.calls + tot.billed, unpriced: prev.unpriced + unpriced.length }
   const unp = unpriced.length ? ` + unpriced call(s) on ${[...new Set(unpriced)].join(", ")}` : ""
   const model = models.join(", ") || sessionModel
   parts.push(`total this turn: in ${fmtInt(tot.inp)} · cache-read ${fmtInt(tot.cr)} · cache-write ${fmtInt(tot.cw)} · out ${fmtInt(tot.out)} · ${fmtUsd(tot.usd)}${unp} · model ${model}`)
-  const sessionUnp = session.unpriced ? ` (excludes ${session.unpriced} unpriced)` : ""
-  const sessionText = `${fmtUsd(session.usd)} over ${session.calls} calls${sessionUnp}`
-  const table = { model, rows, total: { cost: `${fmtUsd(tot.usd)}${unp}`, tokens: tot }, session: sessionText }
-  return { line: `[review-mod usage] ${parts.join(" | ")} | session total: ${sessionText}`, table, session }
+  const row = reviewed ? reviewedRow(reviewed, sessionModel) : null
+  const reviewedPart = row ? ` | turn under review (${row.who}): in ${fmtInt(row.tokens.inp)} · cache-read ${fmtInt(row.tokens.cr)} · cache-write ${fmtInt(row.tokens.cw)} · out ${fmtInt(row.tokens.out)} · ${row.cost} · ${row.calls} call(s)` : ""
+  const noReply = calls.filter((c) => !c.usage)
+  // Owner layout 2026-11-15: the box shows two sums (the turn under review, the review turn); the per-call breakdown stays in `line`.
+  const table = { model, reviewed: row, review: { cost: `${fmtUsd(tot.usd)}${unp}`, tokens: tot, billed: tot.billed, noReply: noReply.length, noReplyWhy: [...new Set(noReply.map((c) => c.reason))].join("; ") } }
+  return { line: `[review-mod usage] ${parts.join(" | ")}${reviewedPart}`, table }
 }
-
-// The user-only layout of one usage cycle, in the closed-box layout of the token-reporter plugin (owner asked for it,
-// 2026-11-15): a header (title | model), a label | value row per call (its token row has an empty label), the turn total,
-// and the session total, all inside one ╭╮╰╯ frame whose right border aligns. Always painted with token-reporter's
-// palette: it only ever goes to the Stop display file. Width is counted in code points, which holds for every character
+// The user-only layout of one usage cycle, in the closed-box layout of the token-reporter plugin (owner asked for it, 2026-11-15): a
+// header (title | model), then two sections, "turn under review" (when there is one) and "review turn" (the sum of every model call this
+// Stop made), all inside one ╭╮╰╯ frame whose right border aligns. A section is its heading, a cache-state row (turn under review of a main
+// turn only), the cache bar, the token breakdown and the cost. Every cost is for one turn: no session total. Always painted with
+// token-reporter's palette: it only ever goes to the Stop display file. Width is counted in code points, which holds for every character
 // this box draws. Token counts stay exact.
 function usageTable(table) {
   const BLUE = "94" // static: border, labels, all unchanging text
@@ -231,10 +292,10 @@ function usageTable(table) {
   // Every span is closed on its own row, so show.py may cut between any two lines.
   const render = (segs) => segs.map((s) => (s.code && s.text !== "" ? `\u001b[${s.code}m${s.text}\u001b[0m` : s.text)).join("")
   const bar = render([seg(BLUE, "│")])
-  const breakdown = (t, c) => [seg(BLUE, "in "), seg(YELLOW, fmtInt(t.inp)), seg(BLUE, " · out "), seg(YELLOW, fmtInt(t.out)), seg(BLUE, " · cache read "), seg(YELLOW, fmtInt(t.cr)), seg(BLUE, " · cache create "), seg(YELLOW, fmtInt(t.cw)), seg(BLUE, " · "), ...cost(c)]
+  const tokenRow = (t) => [seg(BLUE, "in "), seg(YELLOW, fmtInt(t.inp)), seg(BLUE, " · out "), seg(YELLOW, fmtInt(t.out)), seg(BLUE, " · cache read "), seg(YELLOW, fmtInt(t.cr)), seg(BLUE, " · cache create "), seg(YELLOW, fmtInt(t.cw))]
   const cost = (c) => [seg(String(c).startsWith("$") ? GREEN : BLUE, c)]
   // The cache bar (owner orders 2026-11-15: a bi-colored bar = 100% of the tokens, green = cache hits, red = cache misses;
-  // one bar for each call row plus one for the turn total). It measures the cache-read vs cache-write share of the
+  // one bar for each of the two sections). It measures the cache-read vs cache-write share of the
   // CACHED-PREFIX tokens (cr + cw); uncached input and output are not in it. A call with no tokens, or cr + cw = 0, gets
   // no bar. cacheShare is the ONE place that picks what the bar measures (owner confirmed 2026-11-15: 100% = cache read + cache write).
   const cacheShare = (t) => ({ hit: t.cr, miss: t.cw })
@@ -244,27 +305,25 @@ function usageTable(table) {
     return [seg(null, " "), seg(GREEN, "hit "), seg(YELLOW, pct(s.hit)), seg(BLUE, " · "), seg(RED, "miss "), seg(YELLOW, pct(s.miss))]
   }
   const hasBar = (t) => t !== null && cacheShare(t).hit + cacheShare(t).miss > 0 // tokens is null or an object by construction (formatUsageLine); undefined throws on purpose
-  // Layout (owner order 2026-11-15): a billed call and the turn total are three rows. Row 1 is the label alone, row 2 the
-  // five-value breakdown (in, out, cache read, cache create, cost) directly above the bar, row 3 the bar. Rows 2 and 3 use the
-  // FULL inner width (no label column). A call with no tokens (no reply) keeps one `label │ text` row, no breakdown, no bar.
-  // Entries: { label, value } = label column row, { full } = full-width row, { bar } = bar row (laid out once `cells` is known).
+  // Layout (owner order 2026-11-15): the body is exactly two sections, the turn under review then the review turn (the sum of every
+  // model call this Stop made). A section is its heading, then three rows: the cache bar, the token breakdown, the cost. Rows use the
+  // FULL inner width. Entries: { full } = full-width row, { bar } = bar row (laid out once `cells` is known).
   const body = []
-  const billed = (label, c, t) => {
-    body.push({ full: [seg(BLUE, clean(label))] }, { full: breakdown(t, c) })
+  const calls = (n) => (n > 1 ? ` · ${n} calls` : "")
+  const section = (heading, t, c, note = null) => {
+    body.push({ full: [seg(BLUE, clean(heading))] })
+    if (note !== null) body.push({ full: [seg(BLUE, clean(note))] })
+    if (t === null) return
     if (hasBar(t)) body.push({ bar: t })
+    body.push({ full: tokenRow(t) }, { full: cost(c) })
   }
-  for (const r of table.rows) {
-    if (r.tokens) billed(r.label, r.cost, r.tokens)
-    else body.push({ label: clean(r.label), value: cost(r.cost) })
-  }
-  billed("this turn", table.total.cost, table.total.tokens)
-  body.push({ label: "session", value: cost(table.session) })
+  if (table.reviewed) section(`turn under review (${table.reviewed.who})${calls(table.reviewed.calls)}:`, table.reviewed.tokens, table.reviewed.cost, table.reviewed.cacheNote)
+  const rv = table.review
+  section(`review turn${calls(rv.billed)}:`, rv.billed > 0 ? rv.tokens : null, rv.cost)
+  if (rv.noReply > 0) body.push({ full: [seg(BLUE, clean(`${rv.noReply} call${rv.noReply > 1 ? "s" : ""} no reply (${rv.noReplyWhy}), not billed`))] })
   const header = [seg(BLUE, "review-mod usage"), seg(BLUE, " | "), seg(WHITE, table.model)]
-  const labelRows = body.filter((e) => e.label)
-  const labelW = Math.max(...labelRows.map((e) => [...e.label].length))
-  const labelRowW = (e) => labelW + 3 + width(e.value)
   // A breakdown line wider than 76 cells widens the box rather than truncating a number.
-  const innerBase = Math.max(width(header), ...labelRows.map(labelRowW), ...body.filter((e) => e.full).map((e) => width(e.full)))
+  const innerBase = Math.max(width(header), ...body.filter((e) => e.full).map((e) => width(e.full)))
   // ONE cell count for every bar of the box so they line up and compare: the remaining width of the 76-cell inner (80-cell
   // box) after the widest suffix (100.0% / 100.0%), or of a wider inner when a breakdown line forced the box wider. Each colour
   // is one closed SGR span of U+2588 (one code point, one cell, so width() holds); a non-zero share always gets at least one
@@ -283,10 +342,7 @@ function usageTable(table) {
   const row = (segs) => `${bar} ${render([...segs, seg(null, " ".repeat(inner - width(segs)))])} ${bar}`
   const rule = (l, r) => render([seg(BLUE, `${l}${"─".repeat(inner + 2)}${r}`)])
   const lines = [rule("╭", "╮"), row(header), rule("├", "┤")]
-  for (const e of body) {
-    if (e.full) lines.push(row(e.full))
-    else lines.push(row([seg(BLUE, `${e.label}${" ".repeat(labelW - [...e.label].length)} │ `), ...e.value]))
-  }
+  for (const e of body) lines.push(row(e.full))
   lines.push(rule("╰", "╯"))
   return lines
 }
@@ -313,8 +369,25 @@ function plainReport(text) {
 
 // ── END REPORT LAYOUT (pure part) ─────────────────────────────────────────────────────────────────
 
-// Running total for this session, reset on classic.SessionStart.
-let sessionUsage = emptySessionUsage()
+// The model requests of the turn under review, per agent: "main" for the main conversation, else the agent id; each a Map of
+// "turnId:index" -> { model, usage }, filled by the turn.step hook in register(). Dropped at that turn's turn.complete.
+const stepUsage = new Map()
+// Set from the show_reviewed_turn option in register().
+let showReviewedTurn = true
+function recordStep(key, result) {
+  let steps = stepUsage.get(key)
+  if (!steps) stepUsage.set(key, (steps = new Map()))
+  // The model id is in the step result's usage (`usage.model`, the model that answered; read live 2026-11-15, probe-step). `at` = when the request
+  // finished: the earliest one is the turn's start for the cache-state freshness check (mainCacheState).
+  steps.set(`${result.turnId}:${result.index}`, { model: result.usage.model || null, usage: result.usage, at: Date.now() })
+}
+// The turn under review as formatUsageLine takes it, or null (option off, or no request seen). `kind` comes from the hook
+// event that triggered the review ("main": classic.Stop and an interrupted main turn; "subagent": classic.SubagentStop and
+// the handback gate); `who` is the box label. A copy: the review's own calls must not change what was read.
+function reviewedTurn(key, kind, who = kind) {
+  const steps = stepUsage.get(key)
+  return showReviewedTurn && steps && steps.size > 0 ? { kind, who, calls: [...steps.values()], startedAt: Math.min(...[...steps.values()].map((s) => s.at)) } : null
+}
 // Interrupted-turn boxes waiting for the next Stop display: [{ at: "HH:MM", table, report }] (table and report may be null).
 // An interrupted turn fires no Stop, and a $.ui.log row is one plain host-prefixed line, so its box cannot be drawn at the
 // time (owner complaint 2026-11-15); classic.Stop prepends these to its display, classic.SessionStart drops them.
@@ -381,14 +454,13 @@ function note($, sink, style, text) {
 // caller can hold the box for the next Stop display. Owner complaint 2026-11-15: the interrupted turn used to print the
 // whole box as many $.ui.log rows, each prefixed by the host, with no colour. Returns the table, or null when it could not
 // be computed. A failure here is reported, never thrown: it must not turn a finished review into a failed one.
-async function logUsage($, calls, sink = null) {
+async function logUsage($, calls, sink = null, reviewed = null) {
   try {
-    const { line, table, session } = formatUsageLine(calls, await $.session.model(), sessionUsage)
-    sessionUsage = session
+    const { line, table } = formatUsageLine(calls, await $.session.model(), reviewed)
     if (sink) sink.add(usageTable(table))
     else {
-      const t = table.total.tokens
-      $.ui.log(`review-mod: interrupted review ${table.total.cost} · in ${fmtInt(t.inp)} · out ${fmtInt(t.out)} · cache r ${fmtInt(t.cr)} / w ${fmtInt(t.cw)} · session ${table.session} · box after next reply`)
+      const t = table.review.tokens
+      $.ui.log(`review-mod: interrupted review ${table.review.cost} · in ${fmtInt(t.inp)} · out ${fmtInt(t.out)} · cache r ${fmtInt(t.cr)} / w ${fmtInt(t.cw)} · box after next reply`)
     }
     // The one-line form goes to the debug log too, where one grep finds a whole cycle.
     logLines($, line, { to: "debug" })
@@ -668,7 +740,7 @@ async function storeForModel($, text, block) {
 
 // The interrupted turn's review, from a timer: outside the aborted event, so the fork is not cut by it. `mark` is what
 // this turn's last Stop review covered (captured at turn.complete); work it already covered is not reviewed twice.
-async function reviewInterrupted($, prompt, mark) {
+async function reviewInterrupted($, prompt, mark, reviewedUsage) {
   if (isJanitorPrompt(prompt)) return // owner: janitor turns are never reviewed (the scheduler checks too)
   const calls = []
   let heldReport = null // the plain-text report, set once the review ran; held with the usage box until the next Stop
@@ -705,7 +777,8 @@ async function reviewInterrupted($, prompt, mark) {
   } finally {
     // The box is held, not printed: one plain row now, the report and the box in the next Stop display (heldInterrupted).
     if (calls.length > 0) {
-      const table = await logUsage($, calls)
+      if (reviewedUsage) reviewedUsage.cache = await mainCacheState($, null, null, reviewedUsage.startedAt)
+      const table = await logUsage($, calls, null, reviewedUsage)
       heldInterrupted.push({ at: new Date().toTimeString().slice(0, 5), table, report: heldReport })
     }
   }
@@ -742,6 +815,9 @@ async function reviewAtStop($, e, sink) {
     return null
   }
   const calls = []
+  // Read before any review call: the turn under review is the main agent's, Stop is the event, so its cache writes bill as the main conversation's (1h).
+  const reviewed = reviewedTurn("main", "main")
+  if (reviewed) reviewed.cache = await mainCacheState($, e.cwd, e.session_id, reviewed.startedAt)
   try {
     await rememberSession($, e)
     const session = await read($, sessionAtom)
@@ -818,7 +894,7 @@ async function reviewAtStop($, e, sink) {
     return await failClosed(errText(err))
   } finally {
     // Usage of every model call this stop made, shown once on every path (PASS, BLOCK, failed review) and only to the user.
-    if (calls.length > 0) await logUsage($, calls, sink)
+    if (calls.length > 0) await logUsage($, calls, sink, reviewed)
   }
 }
 // ── SUBAGENT REVIEW (0.6.0) ─────────────────────────────────────────────────────────────────────
@@ -1061,6 +1137,8 @@ async function gateSubagentTurn($, ctx, sink, st, tag) {
 // read by the next MAIN Stop as an interrupted main turn's). The usage table goes to the display only.
 async function reviewSubagent($, ctx, turn, sink, st, tag) {
   const calls = []
+  // Read before any review call: the turn under review is the agent's own, SubagentStop is the event, so its cache writes bill as a subagent's (5m).
+  const reviewed = reviewedTurn(ctx.agentId, "subagent", tag.slice(0, tag.lastIndexOf(" "))) // no cache-state call: that is the main conversation's, and a subagent's writes are 5m
   const notReviewed = async (why) => { await skipSubagent($, sink, tag, why); return null }
   const { rows, lastMessage } = turn
   const atHandback = ctx.handback !== null
@@ -1116,13 +1194,23 @@ async function reviewSubagent($, ctx, turn, sink, st, tag) {
   } catch (err) {
     return await notReviewed(errText(err))
   } finally {
-    if (calls.length > 0) await logUsage($, calls, sink)
+    if (calls.length > 0) await logUsage($, calls, sink, reviewed)
   }
 }
 
-export const register = (on) => {
+export const register = (on, options) => {
+  // The user's plugin option (plugin.json userConfig show_reviewed_turn, default true): off leaves the "turn under review" rows out of the box.
+  showReviewedTurn = options.show_reviewed_turn !== false
+  // One record per model request, in-process: the transcript file lags (Stop fires before the final reply is written) and repeats a message's usage on every
+  // content-block row, whereas turn.step fires once per request. A request is keyed by turnId:index, so a repeated event could only overwrite, never add.
+  // The step result carries the four token counts and the model, but no 5m/1h split of the cache writes: those bill by the kind of agent (callCostUsd).
+  on("turn.step", async function* ($, e, next) {
+    const result = yield* next(e)
+    if (reviewDepth === 0 && result && result.usage) recordStep(e.agentId || "main", result)
+    return result
+  })
   on("classic.SessionStart", async ($, e, next) => {
-    sessionUsage = emptySessionUsage()
+    stepUsage.clear()
     heldInterrupted.length = 0 // a held interrupted-turn box belongs to the session that produced it
     try { await rememberSession($, e) } catch (err) { $.ui.status(`review: session not remembered — ${errText(err)}`) }
     return next(e)
@@ -1166,7 +1254,11 @@ export const register = (on) => {
     const mark = reviewedMark
     if (e && !e.agentId) { roundsThisTurn = 0; reviewedMark = { work: -1, proposal: -1, msg: null } }
     // The prompt is captured now: a new prompt may overwrite turnPrompt before the timer fires.
-    if (e && e.isAborted && !e.agentId && !isJanitorPrompt(turnPrompt)) { const prompt = turnPrompt; $.clock.after(1500, () => reviewInterrupted($, prompt, mark)) }
+    // The aborted turn's usage is snapshotted now too (an interrupted turn fires no Stop), before the bucket is dropped. The aborted request may have
+    // reported no usage, so it is then a lower bound. The usage of a finished turn or agent is dropped here; Stop and SubagentStop have already read it.
+    const reviewedUsage = e && !e.agentId ? reviewedTurn("main", "main") : null
+    stepUsage.delete(e && e.agentId ? e.agentId : "main")
+    if (e && e.isAborted && !e.agentId && !isJanitorPrompt(turnPrompt)) { const prompt = turnPrompt; $.clock.after(1500, () => reviewInterrupted($, prompt, mark, reviewedUsage)) }
     // A subagent's turn is over: its per-agent state goes, unless a block of ours is still waiting for its continuation
     // (whether turn.complete fires between a SubagentStop block and the continuation is not measured, so this cannot reset
     // the round cap mid-loop either way).
