@@ -4,7 +4,7 @@ title: agentlenspro CLI and dashboard install, uninstall and switch each extensi
 column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T21:07:15+0100
+updated: 2026-11-15T21:08:05+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -30,6 +30,7 @@ approval-datetime: 2026-11-15T20:55:31+0100
 > packaging? what packaging? agentlenspro it its a tool installed via npm. it installs extensions only after being installed.
 Resolution (orchestrator reading of the line above): no repackaging of agentlenspro itself. The npm-installed CLI stays the installer and manager; each extension it installs (skill, agent, hook group, rule, settings.json telemetry group) is a standalone user-scoped element switched one by one from the CLI and the dashboard's right panel. The review mod stays the one plugin, because a mod loads only from a plugin. The per-part-plugins plan below is superseded.
 > packaging? what packaging? agentlenspro is a tool installed via npm. it installs extensions into claude (at user scope) only after being installed.
+> packaging? what packaging? agentlenspro is a tool installed via npm. it installs extensions into claude (at user scope) only after being installed, and it does interactively via a cli command or via a dashboard.
 
 ## Superseded plan (one plugin per part — replaced by the resolution above; kept as the parts inventory)
 Parts inventory (2026-11-15):
