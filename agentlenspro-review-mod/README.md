@@ -35,6 +35,7 @@ At every main-thread **Stop**:
    120 seconds (a leftover of a crashed session). A message past the 10,000-character hook limit loses whole report
    lines from its end, replaced by `… report truncated`; the usage box is never cut, and nothing dropped is kept. If the file cannot be written (no cwd in the payload, a
    refused write), the rows go to the transcript log, plain.
+   Each billed model call and the turn total take three rows in the usage box: the label alone, one breakdown line directly above the bar with `in <n> · out <n> · cache read <n> · cache create <n> · <cost>`, and a `cache r/w` bar line (full inner width; green = cache read, red = cache create/write, 100% = cache read + cache write; percentages printed beside the bar). Uncached input and output are not in the bar. A call with no reply keeps one `label │ no reply (...)` row. The box is 80 columns wide or less unless a breakdown line is wider than 76 cells, in which case the box widens rather than truncating a number.
 
 An **interrupted turn** (Esc) fires no Stop. `turn.complete` with `isAborted` schedules the same review from
 a timer. At once the user sees one summary row; the report and its usage box are held in memory and shown,

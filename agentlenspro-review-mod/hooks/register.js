@@ -229,12 +229,12 @@ function usageTable(table) {
   // Every span is closed on its own row, so show.py may cut between any two lines.
   const render = (segs) => segs.map((s) => (s.code && s.text !== "" ? `\u001b[${s.code}m${s.text}\u001b[0m` : s.text)).join("")
   const bar = render([seg(BLUE, "│")])
-  const tokens = (t) => [seg(BLUE, "in "), seg(YELLOW, fmtInt(t.inp)), seg(BLUE, " · out "), seg(YELLOW, fmtInt(t.out)), seg(BLUE, " · cache r "), seg(YELLOW, fmtInt(t.cr)), seg(BLUE, " / w "), seg(YELLOW, fmtInt(t.cw))]
+  const breakdown = (t, c) => [seg(BLUE, "in "), seg(YELLOW, fmtInt(t.inp)), seg(BLUE, " · out "), seg(YELLOW, fmtInt(t.out)), seg(BLUE, " · cache read "), seg(YELLOW, fmtInt(t.cr)), seg(BLUE, " · cache create "), seg(YELLOW, fmtInt(t.cw)), seg(BLUE, " · "), ...cost(c)]
   const cost = (c) => [seg(String(c).startsWith("$") ? GREEN : BLUE, c)]
   // The cache bar (owner orders 2026-11-15: a bi-colored bar = 100% of the tokens, green = cache hits, red = cache misses;
   // one bar for each call row plus one for the turn total). It measures the cache-read vs cache-write share of the
   // CACHED-PREFIX tokens (cr + cw); uncached input and output are not in it. A call with no tokens, or cr + cw = 0, gets
-  // no bar. cacheShare is the ONE place that picks what the bar measures (owner has not confirmed all-tokens).
+  // no bar. cacheShare is the ONE place that picks what the bar measures (owner confirmed 2026-11-15: 100% = cache read + cache write).
   const cacheShare = (t) => ({ hit: t.cr, miss: t.cw })
   const barSuffix = (t) => {
     const s = cacheShare(t)
@@ -242,27 +242,34 @@ function usageTable(table) {
     return [seg(null, " "), seg(GREEN, "hit "), seg(YELLOW, pct(s.hit)), seg(BLUE, " · "), seg(RED, "miss "), seg(YELLOW, pct(s.miss))]
   }
   const hasBar = (t) => t !== null && cacheShare(t).hit + cacheShare(t).miss > 0 // tokens is null or an object by construction (formatUsageLine); undefined throws on purpose
-  // Bar rows are marked { bar: tokens } and laid out once the common cell count is known (see below).
-  const body = [] // [label, value segments | { bar }]; an empty label is a continuation row
-  for (const r of table.rows) {
-    body.push([clean(r.label), cost(r.cost)])
-    if (r.tokens) body.push(["", tokens(r.tokens)])
-    if (hasBar(r.tokens)) body.push(["cache r/w", { bar: r.tokens }])
+  // Layout (owner order 2026-11-15): a billed call and the turn total are three rows. Row 1 is the label alone, row 2 the
+  // five-value breakdown (in, out, cache read, cache create, cost) directly above the bar, row 3 the bar. Rows 2 and 3 use the
+  // FULL inner width (no label column). A call with no tokens (no reply) keeps one `label │ text` row, no breakdown, no bar.
+  // Entries: { label, value } = label column row, { full } = full-width row, { bar } = bar row (laid out once `cells` is known).
+  const body = []
+  const billed = (label, c, t) => {
+    body.push({ full: [seg(BLUE, clean(label))] }, { full: breakdown(t, c) })
+    if (hasBar(t)) body.push({ bar: t })
   }
-  body.push(["this turn", cost(table.total.cost)], ["", tokens(table.total.tokens)])
-  if (hasBar(table.total.tokens)) body.push(["cache r/w", { bar: table.total.tokens }])
-  body.push(["session", cost(table.session)])
+  for (const r of table.rows) {
+    if (r.tokens) billed(r.label, r.cost, r.tokens)
+    else body.push({ label: clean(r.label), value: cost(r.cost) })
+  }
+  billed("this turn", table.total.cost, table.total.tokens)
+  body.push({ label: "session", value: cost(table.session) })
   const header = [seg(BLUE, "review-mod usage"), seg(BLUE, " | "), seg(WHITE, table.model)]
   const note = [seg(BLUE, "$ spans 5m–1h cache-write rates")]
-  const labelW = Math.max(...body.map(([l]) => [...l].length))
-  const innerBase = Math.max(width(header), width(note), ...body.filter(([, v]) => !v.bar).map(([, v]) => labelW + 3 + width(v)))
-  // ONE cell count for every bar of the box so they line up and compare: derived from the widest non-bar row (a fixed 40
-// would widen the box by ~20), capped so the box stays <= 80 cells (box width = inner + 4) UNLESS a label is longer than 28 chars:
-  // the floor of 20 cells wins over the cap, so such a box is labelW + 52 wide. The suffix is
-  // measured at its widest (100.0% / 100.0%). Each colour is one closed SGR span of U+2588 (one code point, one cell, so
-  // width() holds); a non-zero share always gets at least one cell, so a 1.3% miss stays visible.
+  const labelRows = body.filter((e) => e.label)
+  const labelW = Math.max(...labelRows.map((e) => [...e.label].length))
+  const labelRowW = (e) => labelW + 3 + width(e.value)
+  // A breakdown line wider than 76 cells widens the box rather than truncating a number.
+  const innerBase = Math.max(width(header), width(note), ...labelRows.map(labelRowW), ...body.filter((e) => e.full).map((e) => width(e.full)))
+  // ONE cell count for every bar of the box so they line up and compare: the remaining width of the 76-cell inner (80-cell
+  // box) after the widest suffix (100.0% / 100.0%), or of a wider inner when a breakdown line forced the box wider. Each colour
+  // is one closed SGR span of U+2588 (one code point, one cell, so width() holds); a non-zero share always gets at least one
+  // cell, so a 1.3% miss stays visible.
   const widestSuffix = width([seg(null, " hit 100.0% · miss 100.0%")])
-  const cells = Math.max(20, Math.min(innerBase, 76) - labelW - 3 - widestSuffix)
+  const cells = Math.max(20, Math.max(innerBase, 76) - widestSuffix)
   const barSegs = (t) => {
     const s = cacheShare(t)
     let green = Math.round((cells * s.hit) / (s.hit + s.miss))
@@ -270,14 +277,14 @@ function usageTable(table) {
     if (s.miss > 0) green = Math.min(green, cells - 1)
     return [seg(GREEN, "█".repeat(green)), seg(RED, "█".repeat(cells - green)), ...barSuffix(t)]
   }
-  for (const entry of body) if (entry[1].bar) entry[1] = barSegs(entry[1].bar)
-  const inner = Math.max(innerBase, ...body.map(([, v]) => labelW + 3 + width(v)))
+  for (const e of body) if (e.bar) e.full = barSegs(e.bar)
+  const inner = Math.max(innerBase, ...body.filter((e) => e.full).map((e) => width(e.full)))
   const row = (segs) => `${bar} ${render([...segs, seg(null, " ".repeat(inner - width(segs)))])} ${bar}`
   const rule = (l, r) => render([seg(BLUE, `${l}${"─".repeat(inner + 2)}${r}`)])
   const lines = [rule("╭", "╮"), row(header), rule("├", "┤")]
-  for (const [label, value] of body) {
-    const lead = label ? [seg(BLUE, `${label}${" ".repeat(labelW - [...label].length)} │ `)] : [seg(null, " ".repeat(labelW + 3))]
-    lines.push(row([...lead, ...value]))
+  for (const e of body) {
+    if (e.full) lines.push(row(e.full))
+    else lines.push(row([seg(BLUE, `${e.label}${" ".repeat(labelW - [...e.label].length)} │ `), ...e.value]))
   }
   lines.push(row(note), rule("╰", "╯"))
   return lines
