@@ -25,19 +25,21 @@ At every main-thread **Stop**:
    the next prompt (typed, sent by a mod, or a hand-back; janitor prompts included), raw and once, with a head
    asking the model to apply each finding or say why it rejects it.
 5. The user sees every report too (PASS and BLOCK), plus the token usage and cost of the review calls and any
-   review failure. The **usage table is shown to the user only** and never reaches the model. The user's copy is
-   in colour: the mod writes it to a temp file,
+   review failure. The **usage table is shown to the user only** and never reaches the model. The report is plain
+   text; the token usage is one closed box in the token-reporter plugin's frame and colours, printed last. The mod
+   writes the user's copy to a temp file,
    `<cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>.txt` (cwd and session id from the Stop payload),
    before the other Stop hooks run, and the plugin's Stop command hook `hooks/show.py` prints that file as a
    `systemMessage` (drawn as `Stop says: ...`, never sent to the model) and deletes it. The folder holds temp
    files only: a `*` `.gitignore` keeps it out of git status, and every run deletes any file there older than
-   120 seconds (a leftover of a crashed session). A report past the 10,000-character hook limit is cut at a line
-   and ends with `(truncated)`; nothing of it is kept. If the file cannot be written (no cwd in the payload, a
+   120 seconds (a leftover of a crashed session). A message past the 10,000-character hook limit loses whole report
+   lines from its end, replaced by `… report truncated`; the usage box is never cut, and nothing dropped is kept. If the file cannot be written (no cwd in the payload, a
    refused write), the rows go to the transcript log, plain.
 
 An **interrupted turn** (Esc) fires no Stop. `turn.complete` with `isAborted` schedules the same review from
-a timer; the report is shown at once, injected into the next prompt, and the next Stop blocks if a BLOCK was
-not addressed.
+a timer. At once the user sees one summary row; the report and its usage box are held in memory and shown,
+oldest first, ahead of the next Stop's own display (any Stop, janitor turns included), and dropped at
+SessionStart. The report is injected into the next prompt, and the next Stop blocks if a BLOCK was not addressed.
 
 ## Subagents (0.6.0)
 
