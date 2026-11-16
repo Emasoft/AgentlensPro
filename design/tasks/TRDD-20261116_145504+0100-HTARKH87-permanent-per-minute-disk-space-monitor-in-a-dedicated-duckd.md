@@ -4,7 +4,7 @@ title: Permanent per-minute disk-space monitor in a dedicated DuckDB table with 
 column: dev
 status: tasked
 created: 2026-11-16T14:55:04+0100
-updated: 2026-11-16T18:45:40+0100
+updated: 2026-11-16T19:02:59+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -47,3 +47,4 @@ Owner-confirmed: ONLY the two AskUserQuestion answers above (watch-list slower; 
 
 Build 2026-11-16 on branch feat/disk-monitor (worktree AgentlensPro-worktrees/disk-monitor), uncommitted when the worker returned. Measured: du/walk of ~ and ~/Code do not finish in 40 s (about 19k files/s), so folder walks are RESUMABLE (disk_walk_state, disk_walk_pending) and re-walk after max(15 min, 4x last walk cost). check-duckdb-only non-test opener cap raised 26 to 27 for src/cli/diskStore.ts (the test cap was already 12 > 11 at HEAD, not caused by this work).
 Default watch-list no longer seeds ~ (the spec listed it): its walk did not finish in about 27 runs of 40 s and its follow totals roughly doubled the plain ones; ~/Code finished in about 26 runs. Owner can opt in with disk-watch add ~. Not committed by the worker; check-duckdb-only non-test cap raised 26 to 27 is an orchestrator/owner decision (revertible hunk).
+- 2026-11-16 — Merged (e1548cf6 on fix/setup-agent-preflight; merge into main pending), CLI rebuilt, launchd job installed by the owner's decision (0eb1a2ee made the whole disk-monitor verb DISABLED-exempt). SUPERSEDES Plan step 4's 'install and uninstall stay GATED (exit 69)'. Verified live: launchd run exit 0, new rows at 18:58:44. Trash scope as built = all trashes (~/.Trash, ~/Code/**/.trashcan, /Volumes/*/.Trashes/<uid>). OPEN owner decision: disk-monitor install/uninstall now also skip the launch self-heal (READ_ONLY_VERBS), which the owner's answer did not explicitly cover. Derived: TRDD-L9F3I0TC (purgeable_b / important_avail_b still NULL — likely the 'virtual' half of the order).
