@@ -516,70 +516,16 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
 
-<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=f943de2ad1b9 generated=2026-10-14T15:50:45+0200
+<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=19b40b9d716c generated=2026-11-16T12:58:25+0100
 ## Wikimem index (PROJECT scope) — recall by symptom, read on demand
 
-Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "<symptom>" .claude/project/memory`.
+Root topics only; pages beneath them are not listed. Entry point: `memgrep overview .claude/project/memory`. Search: `memgrep recall "<symptom>" .claude/project/memory`.
 
-**agentlens-burn-token-model** — 5h/7d account window drained fast
 - [agentlens-burn-token-model](.claude/project/memory/agentlens-burn-token-model.md) — 5h/7d account window drained fast
-  - [agentlens-account-window-budget](.claude/project/memory/agentlens-account-window-budget.md) — window budget mixes multiple accounts after rotation
-  - [burn-seismic-statistical-model](.claude/project/memory/burn-seismic-statistical-model.md) — burn_seismic reports wrong/implausible p-values
-  - [agent-fleet-cache-economics](.claude/project/memory/agent-fleet-cache-economics.md) — a wave of subagents burned way more than expected
-  - [image-resident-cost-guard](.claude/project/memory/image-resident-cost-guard.md) — why did reading a screenshot make the session expensive
-  - [agentlenspro-ops-lessons](.claude/project/memory/agentlenspro-ops-lessons.md) — how to deploy agentlenspro on a machine
-  - [cache-ttl-model](.claude/project/memory/cache-ttl-model.md) — keepWarm says cold turns but the session felt warm
-  - [claude-code-surface-inferences](.claude/project/memory/claude-code-surface-inferences.md) — the model id says claude-opus-5 not claude-opus-5[1m]
-  - [cumulative-vs-per-turn-fields](.claude/project/memory/cumulative-vs-per-turn-fields.md) — is total_cost_usd per turn or cumulative
-  - [memory-scope-leak-detector-false-positives](.claude/project/memory/memory-scope-leak-detector-false-positives.md) — janitor flags a PROJECT memory page as leaking machine-private data
-  - [cache-risk-command-detection](.claude/project/memory/cache-risk-command-detection.md) — what actually broke my prompt cache
-
-**agentlenspro-identity** — what is this repo
 - [agentlenspro-identity](.claude/project/memory/agentlenspro-identity.md) — what is this repo
-
-**agentlenspro-ops-lessons-testing-and-process-hygiene** — background agent shows running but does nothing
 - [agentlenspro-ops-lessons-testing-and-process-hygiene](.claude/project/memory/agentlenspro-ops-lessons-testing-and-process-hygiene.md) — background agent shows running but does nothing
-  - [github-outbound-identity-and-mention-guards](.claude/project/memory/github-outbound-identity-and-mention-guards.md) — check-identities is green but an address is public
-  - [test-port-race-and-mocha-isolation](.claude/project/memory/test-port-race-and-mocha-isolation.md) — a free-port probe is flaky in CI but passes on rerun
-  - [test-flaky-and-ci-red-diagnosis](.claude/project/memory/test-flaky-and-ci-red-diagnosis.md) — a test is flaky under load but fails in isolation too
-  - [hook-message-bar-and-gate-emitters](.claude/project/memory/hook-message-bar-and-gate-emitters.md) — what may a hook say to a model
-  - [background-agent-and-cache-liveness](.claude/project/memory/background-agent-and-cache-liveness.md) — background agent shows running but does nothing
-  - [worktree-test-and-build-hazards](.claude/project/memory/worktree-test-and-build-hazards.md) — a rust parity test fails in one worktree and passes in another with no source change
-
-**agentlenspro-publish-pipeline** — how do I release
 - [agentlenspro-publish-pipeline](.claude/project/memory/agentlenspro-publish-pipeline.md) — how do I release
-  - [dashboard-tree-render-topology](.claude/project/memory/dashboard-tree-render-topology.md) — where does the session timeline
-
-**always-on-ingestion-model** — how does no-loss ingestion work
 - [always-on-ingestion-model](.claude/project/memory/always-on-ingestion-model.md) — how does no-loss ingestion work
-
-**hook-events-pipeline** — how does AgentLens capture Claude Code lifecycle events
 - [hook-events-pipeline](.claude/project/memory/hook-events-pipeline.md) — how does AgentLens capture Claude Code lifecycle events
-  - [hook-burn-gate](.claude/project/memory/hook-burn-gate.md) — why does the burn gate deny an agent launch
-  - [hook-install-and-timeouts](.claude/project/memory/hook-install-and-timeouts.md) — how do I install or change hook registration
-  - [review-gate-per-turn-scan](.claude/project/memory/review-gate-per-turn-scan.md) — review gate demands a review for an old command
-  - [review-gate-credit-and-isolation](.claude/project/memory/review-gate-credit-and-isolation.md) — review fork in a worktree credited
-  - [review-gate-stop-hook-cap](.claude/project/memory/review-gate-stop-hook-cap.md) — goal paused hook blocked the turn 9 times
-  - [claude-code-transcript-turn-shapes](.claude/project/memory/claude-code-transcript-turn-shapes.md) — how do I find the start of a turn in a Claude Code transcript
-
-**otlp-ingest-topology** — which OTLP ingest path is actually live
 - [otlp-ingest-topology](.claude/project/memory/otlp-ingest-topology.md) — which OTLP ingest path is actually live
-
-**Other topics**
-- [agent-context-integrity-false-positives](.claude/project/memory/agent-context-integrity-false-positives.md) — the janitor flags injection/authority-override patterns in CLAUDE.md or .claude/project/memory and says conte…
-- [agentlenspro-ops-lessons-concurrency-and-event-loop](.claude/project/memory/agentlenspro-ops-lessons-concurrency-and-event-loop.md) — server hangs at 100% cpu and every request times out or SIGTERM is ignored
-- [agentlenspro-ops-lessons-deploy-and-install](.claude/project/memory/agentlenspro-ops-lessons-deploy-and-install.md) — how to deploy agentlenspro on a machine
-- [agentlenspro-ops-lessons-store-durability-and-memory](.claude/project/memory/agentlenspro-ops-lessons-store-durability-and-memory.md) — a span segment over 512MB breaks setup or silently drops a day of results
-- [ctxmap-exact-measurement-cost](.claude/project/memory/ctxmap-exact-measurement-cost.md) — ctxmap/ctxvis exact token measurement is slow
-- [dependency-typosquat-alerts-are-false-positives](.claude/project/memory/dependency-typosquat-alerts-are-false-positives.md) — janitor says preact is a typosquat of react
-- [loaded-plugin-version-detection](.claude/project/memory/loaded-plugin-version-detection.md) — which plugin version is a session actually running
-- [log-scan-performance](.claude/project/memory/log-scan-performance.md) — the boot scan of the jsonl corpus is slow
-- [memory-scope-leak-proposed](.claude/project/memory/memory-scope-leak-proposed.md)
-- [rust-fixture-filesystem-portability](.claude/project/memory/rust-fixture-filesystem-portability.md) — the test passes locally but fails only on CI
-- [ssd-write-economics](.claude/project/memory/ssd-write-economics.md) — is SSD life spent by write operations or by bytes
-- [standalone-server-security-model](.claude/project/memory/standalone-server-security-model.md) — can a website read my local agentlens data
-- [statusline-capture-and-store](.claude/project/memory/statusline-capture-and-store.md) — how do I get rate_limits without hitting the usage endpoint
-- [trdd-board-review-hygiene](.claude/project/memory/trdd-board-review-hygiene.md) — which commits belong in implementation-commits
-- [ts-dead-code-vs-rust-parity-oracles](.claude/project/memory/ts-dead-code-vs-rust-parity-oracles.md) — is this TypeScript file dead
-- [vmmap-ioaccelerator-is-the-mimalloc-heap](.claude/project/memory/vmmap-ioaccelerator-is-the-mimalloc-heap.md) — vmmap says IOAccelerator dominates alcore's memory
 <+-+-JANITOR-WIKIMEM-INDEX-END-(do-not-modify)-+-+>
