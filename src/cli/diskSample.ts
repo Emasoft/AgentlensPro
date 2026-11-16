@@ -102,6 +102,13 @@ async function openSeeded(): Promise<DiskDb> {
   }
 }
 
+/** One stderr line when this process held the writer lock for over a second, measured from db.lockedAtMs (stamped before the lock was taken) to after close().
+ *  TRDD-T16ZQH9F: a starved low-priority walk job held the only writer lock past the sampler's wait and the phase (plan or store) that held it could only be inferred, never read from the log. */
+function logLongHold(phase: "plan" | "store", db: DiskDb): void {
+  const heldMs = Date.now() - db.lockedAtMs
+  if (heldMs > 1000) console.error(`disk-sample: held disk.duckdb ${heldMs} ms (${phase}), opened ${new Date(db.lockedAtMs).toISOString()}`)
+}
+
 /** Step 2: insert one row per volume. Touches no walk table except to READ the latest finished trash walks, so it never waits on a walk. */
 export async function recordVolumes(volumes: readonly VolumeSample[], nowMs: number): Promise<void> {
   const db = await openSeeded()
@@ -146,6 +153,7 @@ export async function planWalks(nowMs: number): Promise<Plan[]> {
     return plans.sort((a, b) => a.activityMs - b.activityMs)
   } finally {
     db.close()
+    logLongHold("plan", db)
   }
 }
 
@@ -248,6 +256,7 @@ export async function storeOutcomes(outcomes: readonly Outcome[]): Promise<void>
     throw e
   } finally {
     db.close()
+    logLongHold("store", db)
   }
 }
 
