@@ -1,8 +1,9 @@
-// src/cli/diskSample.ts — `agentlenspro disk-sample`: one sample, then exit (TRDD-HTARKH87, TRDD-RU9A8H7A).
+// src/cli/diskSample.ts — `agentlenspro disk-sample`: one sample then exit, or with `--volumes-only --resident` a 5-minute loop (TRDD-HTARKH87, TRDD-RU9A8H7A, TRDD-T16ZQH9F).
 //
-// Run by TWO launchd jobs that `disk-monitor install` writes: `--volumes-only` every 60 s and `--walks-only` every 300 s. They are
+// Run by TWO launchd jobs that `disk-monitor install` writes: `--volumes-only --resident` (kept alive, one sample per wall-clock 5-minute boundary) and `--walks-only` every 300 s. They are
 // separate because a run that also walked folders took up to ~41 s, and launchd counts StartInterval from the previous run's exit
-// (measured: a steady ~101.5 s gap between volume rows) — the minute job must be as short as possible. No flag = both, in one run.
+// (measured: a steady ~101.5 s gap between volume rows). No flag = both, in one run. The sampler job
+// itself is now the resident loop (`--volumes-only --resident`): see runResident for why it is no longer a fresh process per minute.
 // Exempt from the DISABLED kill switch (foreignTelemetry.ts READ_ONLY_VERBS) by owner decision 2026-11-16: the monitor exists to
 // watch a disk filling up, and the disk filling up is exactly when everything else has been switched off. It never touches the
 // DISABLED file and never talks to the server or cards.duckdb.
@@ -17,7 +18,7 @@
 
 import { assertKnownFlags } from "./argHelpers"
 import { EXIT, UsageError } from "./cliErrors"
-import { insertRows, openWritable, type DiskDb, type SqlValue } from "./diskStore"
+import { insertRows, isWriterLockError, openWritable, type DiskDb, type SqlValue } from "./diskStore"
 import { sampleVolumes, type VolumeSample } from "./diskVolumes"
 import { startWalk, runSegment, WALK_MAX_AGE_MS, type PendingDir, type WalkState } from "./diskWalk"
 import { defaultWatch, effectiveWatch, type WatchEntry, type WatchKind } from "./diskWatch"
@@ -27,6 +28,9 @@ import * as fs from "fs"
 export const WALK_BUDGET_MS = 40_000
 /** A folder is walked again this long after its last walk ended. */
 export const WALK_INTERVAL_MS = 15 * 60_000
+/** How often the resident sampler takes a volume sample: every 5 minutes, on wall-clock boundaries (:00, :05, ...). Owner, 2026-11-16: "the disk monitoring
+ *  frequency should be 5 minutes, otherwise it would become too heavy for the system" (TRDD-T16ZQH9F). */
+export const SAMPLE_PERIOD_MS = 5 * 60_000
 /** A folder is walked again no sooner than this many times its last walk cost: measured 2026-11-16, ~ and ~/Code take minutes of walking
  *  each, so a flat 15 min would keep the sampler walking nearly all the time (~19k files/s, mostly system time). 4x caps that at 25% duty. */
 export const WALK_COOLDOWN_FACTOR = 4
@@ -87,9 +91,9 @@ async function loadState(db: DiskDb, path: string, r: Record<string, unknown>): 
   }
 }
 
-/** Open disk.duckdb read-write, seeding the default watch list exactly when the file was just created (both jobs may be the first to run). */
-async function openSeeded(): Promise<DiskDb> {
-  const db = await openWritable()
+/** Open disk.duckdb read-write, seeding the default watch list exactly when the file was just created (both jobs may be the first to run). `waitMs` bounds the writer-lock wait (openWritable's default when absent). */
+async function openSeeded(waitMs?: number): Promise<DiskDb> {
+  const db = await openWritable(waitMs)
   try {
     if (db.created) {
       await insertRows(db.con, "disk_watch", [["path", "TEXT"], ["kind", "TEXT"]], defaultWatch().map(w => [w.path, w.kind]))
@@ -101,28 +105,51 @@ async function openSeeded(): Promise<DiskDb> {
   }
 }
 
-/** Step 2: insert one row per volume. Touches no walk table except to READ the latest finished trash walks, so it never waits on a walk. */
-export async function recordVolumes(volumes: readonly VolumeSample[], nowMs: number): Promise<void> {
-  const db = await openSeeded()
+/** One stderr line when this process held the writer lock for over a second, measured from db.lockedAtMs (stamped before the lock was taken) to after close().
+ *  TRDD-T16ZQH9F: a starved low-priority walk job held the only writer lock past the sampler's wait and the phase (plan or store) that held it could only be inferred, never read from the log. */
+function logLongHold(phase: "plan" | "store", db: DiskDb): void {
+  const heldMs = Date.now() - db.lockedAtMs
+  if (heldMs > 1000) console.error(`disk-sample: held disk.duckdb ${heldMs} ms (${phase}), opened ${new Date(db.lockedAtMs).toISOString()}`)
+}
+
+/** Step 2: insert the volume rows of every batch item (each with its own timestamp) in ONE open and ONE transaction: either all of them land or none.
+ *  Touches no walk table except to READ the latest finished trash walks, so it never waits on a walk. The trash lookup runs once per batch, so a
+ *  carried-over row (TRDD-T16ZQH9F) takes its trash_b from the walks finished at WRITE time, not at the time it was sampled. `waitMs` bounds the writer-lock wait. */
+export async function recordVolumeBatch(batch: readonly { volumes: readonly VolumeSample[]; tsMs: number }[], waitMs = 5000): Promise<void> {
+  const db = await openSeeded(waitMs)
   try {
     // Latest FINISHED walk of each trash folder — the trash_b of this sample is that, not a fresh walk.
     const trash = (await rows(db,
       "SELECT t.path, t.allocated_b FROM disk_tree t JOIN (SELECT path, max(ts_end) AS m FROM disk_tree WHERE kind = 'trash' GROUP BY path) l ON t.path = l.path AND t.ts_end = l.m WHERE t.kind = 'trash' AND t.allocated_b IS NOT NULL"))
       .map(r => ({ path: String(r.path), allocated: n(r.allocated_b) }))
-    const trashBy = trashPerVolume(volumes, trash)
-    const ts = new Date(nowMs)
-    await insertRows(db.con, "disk_volume", [
-      ["ts", "TIMESTAMPTZ"], ["mount", "TEXT"], ["device", "TEXT"], ["fs_type", "TEXT"], ["container", "TEXT"], ["volume_uuid", "TEXT"],
-      ["total_b", "BIGINT"], ["used_b", "BIGINT"], ["free_b", "BIGINT"], ["avail_b", "BIGINT"], ["vol_used_b", "BIGINT"], ["container_free_b", "BIGINT"],
-      ["purgeable_b", "BIGINT"], ["important_avail_b", "BIGINT"], ["trash_b", "BIGINT"], ["used_minus_trash_b", "BIGINT"], ["error", "TEXT"],
-    ], volumes.map((v): SqlValue[] => {
-      const t = trashBy.get(v.mount) ?? null
-      return [ts, v.mount, v.device, v.fsType, v.container, v.volumeUuid, v.totalB, v.usedB, v.freeB, v.availB, v.volUsedB, v.containerFreeB,
-        v.purgeableB, v.importantAvailB, t, v.usedB !== null && t !== null ? v.usedB - t : null, v.error]
-    }))
+    await db.con.run("BEGIN")
+    try {
+      for (const { volumes, tsMs } of batch) {
+        const trashBy = trashPerVolume(volumes, trash)
+        const ts = new Date(tsMs)
+        await insertRows(db.con, "disk_volume", [
+          ["ts", "TIMESTAMPTZ"], ["mount", "TEXT"], ["device", "TEXT"], ["fs_type", "TEXT"], ["container", "TEXT"], ["volume_uuid", "TEXT"],
+          ["total_b", "BIGINT"], ["used_b", "BIGINT"], ["free_b", "BIGINT"], ["avail_b", "BIGINT"], ["vol_used_b", "BIGINT"], ["container_free_b", "BIGINT"],
+          ["purgeable_b", "BIGINT"], ["important_avail_b", "BIGINT"], ["trash_b", "BIGINT"], ["used_minus_trash_b", "BIGINT"], ["error", "TEXT"],
+        ], volumes.map((v): SqlValue[] => {
+          const t = trashBy.get(v.mount) ?? null
+          return [ts, v.mount, v.device, v.fsType, v.container, v.volumeUuid, v.totalB, v.usedB, v.freeB, v.availB, v.volUsedB, v.containerFreeB,
+            v.purgeableB, v.importantAvailB, t, v.usedB !== null && t !== null ? v.usedB - t : null, v.error]
+        }))
+      }
+      await db.con.run("COMMIT")
+    } catch (e) {
+      try { await db.con.run("ROLLBACK") } catch { /* the original error is the one to report */ }
+      throw e
+    }
   } finally {
     db.close()
   }
+}
+
+/** Step 2 of the one-shot run: one sample, one row set. */
+export async function recordVolumes(volumes: readonly VolumeSample[], nowMs: number): Promise<void> {
+  await recordVolumeBatch([{ volumes, tsMs: nowMs }])
 }
 
 /** Step 2b: work out which watch-list folders are due (a resumable cursor, or never walked, or past the cooldown). */
@@ -145,6 +172,7 @@ export async function planWalks(nowMs: number): Promise<Plan[]> {
     return plans.sort((a, b) => a.activityMs - b.activityMs)
   } finally {
     db.close()
+    logLongHold("plan", db)
   }
 }
 
@@ -247,10 +275,11 @@ export async function storeOutcomes(outcomes: readonly Outcome[]): Promise<void>
     throw e
   } finally {
     db.close()
+    logLongHold("store", db)
   }
 }
 
-/** `all` = today's single run; `volumes` = the minute job (volume rows only, never delayed by a walk); `walks` = the slow job (folder walks only). */
+/** `all` = today's single run; `volumes` = the 5-minute sampler job (volume rows only, never delayed by a walk); `walks` = the slow job (folder walks only). */
 export type SampleMode = "all" | "volumes" | "walks"
 
 export async function runDiskSample(opts: { budgetMs?: number; mode?: SampleMode } = {}): Promise<SampleSummary> {
@@ -272,7 +301,135 @@ export async function runDiskSample(opts: { budgetMs?: number; mode?: SampleMode
   return { volumes: volumeCount, due: plans.length, finished: outcomes.filter(o => o.finished).length, elapsedMs: Date.now() - t0 }
 }
 
-const KNOWN: ReadonlySet<string> = new Set(["--quiet", "--volumes-only", "--walks-only"])
+/** The first wall-clock boundary of `periodMs` strictly after `nowMs` (12:03:10 with the default 5 minutes gives 12:05:00). */
+export function nextSampleBoundary(nowMs: number, periodMs: number = SAMPLE_PERIOD_MS): number {
+  return Math.floor(nowMs / periodMs) * periodMs + periodMs
+}
+
+/** One finished sample whose row is not yet written: `slotMs` is the period slot it was taken for, `tsMs` the clock read before probing (the row's ts). */
+export interface PendingSample<S> {
+  slotMs: number
+  tsMs: number
+  sample: S
+}
+
+export interface ResidentDeps<S> {
+  now(): number
+  sleep(ms: number): Promise<void>
+  /** One probe of the machine; its result is carried to `record`. */
+  sample(): Promise<S>
+  /** Writes every sample of `batch` (oldest first) in one go, waiting at most `waitMs` for the writer lock. A writer-lock refusal (isWriterLockError) keeps the batch for the next tick. */
+  record(batch: readonly PendingSample<S>[], waitMs: number): Promise<void>
+  log(line: string): void
+  /** A hard deadline for one tick: `expired` resolves after `ms`; `cancel` disarms it. */
+  deadline(ms: number): { expired: Promise<void>; cancel(): void }
+  /** Ends the process (the injected form in tests just records the code). */
+  exit(code: number): void
+  /** Stop after this many ticks, the immediate first one included (tests); absent = run forever. */
+  maxTicks?: number
+  /** Longest writer-lock wait of one tick; default RESIDENT_LOCK_WAIT_MS. */
+  lockWaitMs?: number
+  /** A tick still running after this long is stuck; default TICK_WATCHDOG_MS. */
+  watchdogMs?: number
+  /** Time between two samples; default SAMPLE_PERIOD_MS. */
+  periodMs?: number
+  /** Registers the callback that runs when the process is told to stop (SIGTERM); the callback logs the buffered slots that will be lost. */
+  onTerminate?(cb: () => void): void
+}
+
+/** The sample loop: one sample immediately at start (so a restart leaves no blind spot), then one per wall-clock period boundary (SAMPLE_PERIOD_MS, 5 minutes). A sample whose write
+ *  is refused by the writer lock (another job holds disk.duckdb) is kept in memory (at most MAX_PENDING, oldest dropped and logged) and written with the
+ *  next tick, each with its own timestamp; a sample() failure or any other write failure is logged as one line and the loop goes on. The next
+ *  slot is always computed from now() (never slot += period), so after a system sleep or clock jump the loop skips to the next boundary: a gap, no backlog of ticks.
+ *  A tick that outlives the watchdog is stuck: log one line and exit non-zero so launchd KeepAlive restarts the job — a live process that no longer samples would never be restarted.
+ *  The lock wait of a tick shrinks as its sample took longer, so sample + write always ends 10 s before the watchdog.
+ *  WHY resident and not a fresh process per minute: measured 2026-11-16 (TRDD-T16ZQH9F) under load 194-258, a fresh node process
+ *  per minute missed its 60 s slot (runs took 24-47 s; startup and sampling were both slow), while a resident node loop with a minute-boundary
+ *  timer woke 0-5 ms late and finished every sample in under 12 s (that scratch loop left out the DuckDB write; unproven with it under load).
+ *  WHY the carry-over (TRDD-T16ZQH9F): the low-priority walk job held the writer lock past the old fixed 5 s wait and that minute's row was lost for good. */
+export async function runResident<S>(deps: ResidentDeps<S>): Promise<void> {
+  const watchdogMs = deps.watchdogMs ?? TICK_WATCHDOG_MS
+  const lockWaitMs = deps.lockWaitMs ?? RESIDENT_LOCK_WAIT_MS
+  const periodMs = deps.periodMs ?? SAMPLE_PERIOD_MS
+  /** Samples whose write the writer lock refused, oldest first. */
+  let pending: PendingSample<S>[] = []
+  const slotList = (list: readonly { slotMs: number }[]): string => list.map(p => new Date(p.slotMs).toISOString()).join(", ")
+  deps.onTerminate?.(() => {
+    if (pending.length > 0) deps.log(`disk-sample resident: stopping with ${pending.length} buffered sample(s) not written, slots ${slotList(pending)}`)
+  })
+  const tick = async (slot: number): Promise<void> => {
+    // The stamp is read BEFORE the probes (as the one-shot path does), so a slow probe does not shift the row.
+    const tickStart = deps.now()
+    const sample = await deps.sample()
+    const sampleMs = deps.now() - tickStart
+    const waitMs = Math.min(lockWaitMs, Math.max(1000, watchdogMs - 10_000 - sampleMs))
+    const batch = [...pending, { slotMs: slot, tsMs: tickStart, sample }]
+    const writeStart = deps.now()
+    try {
+      await deps.record(batch, waitMs)
+      pending = []
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (isWriterLockError(e)) {
+        pending = batch
+        while (pending.length > MAX_PENDING) {
+          const lost = pending.shift()
+          if (lost) deps.log(`disk-sample resident: buffer full, sample for slot ${new Date(lost.slotMs).toISOString()} dropped`)
+        }
+        deps.log(`disk-sample resident: write deferred, ${pending.length} sample(s) buffered: ${msg}`)
+      } else {
+        // Not a lock: retrying the same batch would fail the same way and block every later sample, so it is dropped (and said).
+        pending = []
+        deps.log(`disk-sample resident: write failed, ${batch.length} sample(s) dropped, slots ${slotList(batch)}: ${msg}`)
+      }
+    }
+    const writeMs = deps.now() - writeStart
+    const tickMs = deps.now() - tickStart
+    if (tickMs > SLOW_TICK_MS || writeMs > SLOW_WRITE_MS) {
+      deps.log(`disk-sample resident: tick ${new Date(slot).toISOString()} took ${tickMs} ms (sample ${sampleMs} ms, write ${writeMs} ms)`)
+    }
+  }
+  /** false = the watchdog fired and the process was told to exit. */
+  const runTick = async (slot: number): Promise<boolean> => {
+    const dog = deps.deadline(watchdogMs)
+    try {
+      const outcome = await Promise.race([tick(slot).then(() => "done" as const), dog.expired.then(() => "stuck" as const)])
+      if (outcome === "stuck") {
+        // The buffered samples and the one in flight die with the process.
+        deps.log(`disk-sample resident: tick ${new Date(slot).toISOString()} still running after ${watchdogMs} ms; exiting so launchd restarts the sampler; samples lost, slots ${slotList([...pending, { slotMs: slot }])}`)
+        deps.exit(1)
+        return false
+      }
+    } catch (e) {
+      deps.log(`disk-sample resident: tick ${new Date(slot).toISOString()} failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      dog.cancel()
+    }
+    return true
+  }
+  let lastSlot = deps.now()
+  if (!(await runTick(lastSlot))) return
+  for (let ticks = 1; deps.maxTicks === undefined || ticks < deps.maxTicks; ticks++) {
+    // max(now, lastSlot): a timer that fires a few ms before its boundary must not make the next boundary the same slot again.
+    const slot = nextSampleBoundary(Math.max(deps.now(), lastSlot), periodMs)
+    // A real setTimeout can fire a few ms early: sleep again until the boundary is reached, so a tick never runs (or stamps its row) before its slot.
+    while (deps.now() < slot) await deps.sleep(slot - deps.now())
+    lastSlot = slot
+    if (!(await runTick(slot))) return
+  }
+}
+
+/** A resident tick running this long is stuck (every probe is capped at 5 s; the writer-lock wait is capped by RESIDENT_LOCK_WAIT_MS and shrinks so sample + write ends 10 s before this): the process exits so launchd restarts it. */
+const TICK_WATCHDOG_MS = 45_000
+/** Longest writer-lock wait of one resident tick. Longer than the one-shot 5 s because a refused write is no longer lost, but still far below the watchdog. */
+const RESIDENT_LOCK_WAIT_MS = 30_000
+/** Samples kept in memory while the writer lock is refused; beyond it the oldest is dropped (and logged). */
+const MAX_PENDING = 10
+/** A tick longer than this, or a write longer than SLOW_WRITE_MS, logs one line with the sample and write times. */
+const SLOW_TICK_MS = 15_000
+const SLOW_WRITE_MS = 3000
+
+const KNOWN: ReadonlySet<string> = new Set(["--quiet", "--volumes-only", "--walks-only", "--resident"])
 
 /** `--quiet`: print nothing on success — the launchd jobs pass it so their log stays small. (`--help` never gets here: main.ts answers it.) */
 export async function runDiskSampleCli(argv: string[]): Promise<number> {
@@ -280,6 +437,26 @@ export async function runDiskSampleCli(argv: string[]): Promise<number> {
   const volumesOnly = argv.includes("--volumes-only")
   const walksOnly = argv.includes("--walks-only")
   if (volumesOnly && walksOnly) throw new UsageError("disk-sample: --volumes-only and --walks-only are mutually exclusive")
+  if (argv.includes("--resident")) {
+    if (!volumesOnly) throw new UsageError("disk-sample: --resident is only valid with --volumes-only")
+    // Never returns: launchd (KeepAlive) owns its lifetime. recordVolumeBatch opens disk.duckdb and closes it per tick, so the writer lock is free between samples.
+    await runResident({
+      now: Date.now,
+      sleep: ms => new Promise<void>(resolve => setTimeout(resolve, ms)),
+      sample: sampleVolumes,
+      record: (batch, waitMs) => recordVolumeBatch(batch.map(b => ({ volumes: b.sample, tsMs: b.tsMs })), waitMs),
+      // A launchd stop (SIGTERM) loses whatever is still buffered: say which slots before the process ends.
+      onTerminate: cb => { process.on("SIGTERM", () => { cb(); process.exit(143) }) },
+      log: line => console.error(line),
+      deadline: ms => {
+        let timer: NodeJS.Timeout | undefined
+        const expired = new Promise<void>(resolve => { timer = setTimeout(resolve, ms) })
+        return { expired, cancel: () => clearTimeout(timer) }
+      },
+      exit: code => process.exit(code),
+    })
+    return EXIT.OK
+  }
   try {
     const s = await runDiskSample({ mode: volumesOnly ? "volumes" : walksOnly ? "walks" : "all" })
     if (!argv.includes("--quiet")) console.log(`disk-sample: ${s.volumes} volume(s); ${s.finished}/${s.due} due folder walk(s) finished; ${s.elapsedMs} ms`)

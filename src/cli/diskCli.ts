@@ -19,10 +19,10 @@ export const DISK_USAGE = `usage: agentlenspro disk <view> [flags]      (read-on
   history [--volume V] [--since 6h] [--every 1m|1h|1d]
                                        used/free per volume, bucketed (last sample of each bucket)
   changes [--volume V] [--since 6h] [--min 1M]
-                                       every minute-to-minute change of used or free space of at least --min,
+                                       every sample-to-sample change of used or free space of at least --min,
                                        with the exact sample time, the signed delta and the gap since the previous sample
   top-change [--volume V] [--since 6h] [--top 10]
-                                       the biggest single minute-to-minute changes
+                                       the biggest single sample-to-sample changes
   trees [--folder PATH] [--since 7d] [--progress]
                                        watch-list folder sizes (apparent/allocated, with/without symlinks); no --folder =
                                        the latest finished walk of each; --folder = that folder's history; --progress = walks in flight
@@ -30,7 +30,7 @@ export const DISK_USAGE = `usage: agentlenspro disk <view> [flags]      (read-on
   flags: --json (raw bytes, machine-readable)  --limit N (rows, default 500)  --volume matches mount, device, volume UUID or volume name
   sizes: --min takes 512, 10K, 1M, 2.5G, 1T (binary multiples). --since takes 90s, 30m, 6h, 2d, 1w or a date.
 tables: disk_volume(ts, mount, device, fs_type, container, volume_uuid, total_b, used_b, free_b, avail_b, vol_used_b,
-        container_free_b, purgeable_b, important_avail_b, trash_b, used_minus_trash_b, error)  one row per volume per minute
+        container_free_b, purgeable_b, important_avail_b, trash_b, used_minus_trash_b, error)  one row per volume per sample (every 5 minutes)
         disk_tree(ts_start, ts_end, path, kind, apparent_b, allocated_b, apparent_follow_b, allocated_follow_b, files, partial, elapsed_ms, error)
         disk_watch(path, kind)`
 
@@ -107,7 +107,7 @@ function volumeFilter(volume: string | undefined): Query {
 /** The newest `limit` rows of `inner`, shown oldest first — a time series reads top to bottom. */
 const newest = (inner: string, limit: number): string => `SELECT * FROM (${inner} ORDER BY ts DESC LIMIT ${limit}) ORDER BY ts, mount`
 
-/** Consecutive-sample deltas per volume. `gap_s` is the time since the previous sample, so a missed minute is visible rather than hidden inside a delta. */
+/** Consecutive-sample deltas per volume. `gap_s` is the time since the previous sample, so a missed sample is visible rather than hidden inside a delta. */
 function deltaCte(since: Date, volume: string | undefined): Query {
   const v = volumeFilter(volume)
   return {

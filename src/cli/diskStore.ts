@@ -1,6 +1,6 @@
 // src/cli/diskStore.ts — the dedicated DuckDB file of the disk-space monitor (TRDD-HTARKH87).
 //
-// `<dataDir>/disk.duckdb` is its OWN file, never cards.duckdb: the sampler runs every minute from
+// `<dataDir>/disk.duckdb` is its OWN file, never cards.duckdb: the sampler runs every 5 minutes from
 // launchd, and a writer that shared the cards store would contend with the collector for the one
 // DuckDB writer lock. DuckDB allows ONE read-write process OR several read-only ones, never both, so
 // every opener here holds the file only for the milliseconds it needs: the sampler opens, inserts and
@@ -44,6 +44,8 @@ const SCHEMA: readonly string[] = [
 export interface DiskDb {
   con: DuckDBConnection
   close: () => void
+  /** When the writer lock was taken: stamped just BEFORE the successful DuckDBInstance.create (the lock is taken inside it), so the hold also covers the schema work done under it. */
+  lockedAtMs: number
 }
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
@@ -60,9 +62,10 @@ async function openWithRetry(access: "READ_WRITE" | "READ_ONLY", waitMs: number)
       // enable_external_access=false on the READ_ONLY side: `disk sql` takes a user-typed query, and
       // without it a SELECT could read any file the user can (read_text, read_csv, ...).
       const options: Record<string, string> = access === "READ_ONLY" ? { access_mode: "READ_ONLY", enable_external_access: "false" } : { access_mode: "READ_WRITE" }
+      const lockedAtMs = Date.now()
       const inst = await DuckDBInstance.create(file, options)
       const con = await inst.connect()
-      return { con, close: () => { con.closeSync(); inst.closeSync() } }
+      return { con, close: () => { con.closeSync(); inst.closeSync() }, lockedAtMs }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (!/lock/i.test(msg) || Date.now() >= deadline) throw e
@@ -90,7 +93,7 @@ export async function openWritable(waitMs = 5000): Promise<DiskDb & { created: b
 /** Read-only open for the query verbs. A missing file is its own answer, not a lock to wait on. */
 export async function openReadOnly(waitMs = 5000): Promise<DiskDb> {
   if (!fs.existsSync(diskDbPath())) {
-    throw new DiskDbMissingError(`no disk monitor data yet (${diskDbPath()} does not exist) — run: agentlenspro disk-sample, or install the minute job: agentlenspro disk-monitor install`)
+    throw new DiskDbMissingError(`no disk monitor data yet (${diskDbPath()} does not exist) — run: agentlenspro disk-sample, or install the monitor jobs: agentlenspro disk-monitor install`)
   }
   return openWithRetry("READ_ONLY", waitMs)
 }
@@ -100,6 +103,12 @@ export class DiskDbMissingError extends Error {
     super(message)
     this.name = "DiskDbMissingError"
   }
+}
+
+/** True for the DuckDB refusal to take the writer lock held by another process ("IO Error: Could not set lock on file ..."). Narrower than the retry test in openWithRetry
+ *  on purpose: /lock/i also matches "block", "deadlock" and "clock", and the resident sampler keeps a batch only for a real lock refusal (TRDD-T16ZQH9F). */
+export function isWriterLockError(e: unknown): boolean {
+  return /could not set lock/i.test(e instanceof Error ? e.message : String(e))
 }
 
 export type SqlValue = string | number | boolean | Date | null

@@ -51,11 +51,11 @@
 // subagent turn stop. that would become an infinite recursion of reviews. be careful."; "once it is been printed on
 // screen, it can be deleted."). A typed subagent's turn (Agent-tool forks included) is reviewed with $.model.complete on
 // the pinned COMPLETION_MODEL over that agent's own messages, measuring when its last message carries the proposal line.
-// An agent that ends with text is reviewed at classic.SubagentStop: a report with findings blocks it once (it continues
+// An agent that ends with text is reviewed at classic.SubagentStop: a report with a BLOCKER or SHOULD-FIX holds it once (it continues
 // and reads "Stop hook feedback"). An agent that reports with SubagentHandback is reviewed at that tool call (tool.call):
-// a report with findings refuses the call once, the agent reads it as the tool's error and can fix or reject each finding,
+// a report with a BLOCKER or SHOULD-FIX refuses the call once, the agent reads it as the tool's error and can fix or reject each finding,
 // and its retried handback goes through (the engine discards a SubagentStop block after a turn that ended on a tool
-// result, measured live, so the stop is too late for it). A clean PASS does not block; a harness failure never blocks.
+// result, measured live, so the stop is too late for it). A clean PASS or a NIT-only PASS does not hold it (TRDD-U38HC114); a harness failure never blocks.
 // Every report, and a note for every turn it did not review, also goes to the parent's next prompt.submit. The coloured
 // copy goes to <cwd>/.claude/tmp/agentlenspro-review-mod/<session_id>__<agent_id>.txt, which show.py, registered on
 // SubagentStop too, prints in that subagent's view and deletes. Reviews are completions, which fire no SubagentStop, so a
@@ -85,7 +85,7 @@ const MAX_ASSUMPTIONS = 8
 const pendingAtom = atom({ plugin: "agentlenspro-review-mod", key: "pendingReview" }, null)
 // The head of that injection: the agent must know it is the harness review of its own previous turn, and what to do.
 // 0.6.0: the same store also carries the reviews of SUBAGENT turns, each tagged "subagent <type> <id>" in its report header.
-const REVIEW_HEAD = "[agentlenspro-review-mod] A harness adversarial review follows (the user sees it too): untagged reviews your PREVIOUS turn (\"interrupted turn\" = the user cut it short), \"subagent <type> <id>\" reviews that subagent's turn (its header says if it was blocked once or its handback refused once), and a note says when a turn was not reviewed. Address every BLOCKER first, apply each finding or state why you reject it, and do not spawn a review fork."
+const REVIEW_HEAD = "[agentlenspro-review-mod] A harness adversarial review follows (the user sees it too): untagged reviews your PREVIOUS turn (\"interrupted turn\" = the user cut it short), \"subagent <type> <id>\" reviews that subagent's turn (its header says if it was blocked or held once, or its handback refused once), and a note says when a turn was not reviewed. Address every BLOCKER first, apply each finding or state why you reject it, and do not spawn a review fork."
 // The main conversation's transcript path and cwd, from classic.* payloads (turn.complete carries neither).
 const sessionAtom = atom({ plugin: "agentlenspro-review-mod", key: "lastSession" }, null)
 
@@ -1030,10 +1030,16 @@ function declaresReviewRole(text) {
   return /^(?:Your directive: )?ROLE: (?:REVIEW|MEASURE)(?![\w-])/.test(line.trimStart())
 }
 
-// A finding line of a report. "any finding" (BLOCKER, SHOULD-FIX or NIT) blocks the subagent once.
+// A finding line of a report (BLOCKER, SHOULD-FIX or NIT). Every finding is reported; only a BLOCKER or SHOULD-FIX holds the subagent (hasHoldFindings below).
 const FINDING_LINE = /^(?:\d+[.)]\s*)?\[?(?:BLOCKER|SHOULD-FIX|NIT)\]?(?=[\s:—–-]|$)/
 function hasFindings(text) {
   return String(text).split("\n").some((l) => FINDING_LINE.test(l.replace(/\*\*/g, "").trim().replace(/^(?:[#>]+\s*|[-•]\s+)/, "")))
+}
+// A finding that HOLDS the subagent (TRDD-U38HC114): BLOCKER or SHOULD-FIX. A NIT alone does not hold it: a hold costs the
+// subagent one more turn and one more review, and a NIT-only report goes to the parent instead.
+const HOLD_LINE = /^(?:\d+[.)]\s*)?\[?(?:BLOCKER|SHOULD-FIX)\]?(?=[\s:—–-]|$)/
+function hasHoldFindings(text) {
+  return String(text).split("\n").some((l) => HOLD_LINE.test(l.replace(/\*\*/g, "").trim().replace(/^(?:[#>]+\s*|[-•]\s+)/, "")))
 }
 
 function subagentTag(e) {
@@ -1204,6 +1210,7 @@ async function reviewSubagent($, ctx, turn, sink, st, tag) {
     if (!res.ok) return await notReviewed(`the review failed (${res.why})`)
     st.seen = turn.seen
     const findings = res.block || hasFindings(res.text)
+    const hold = res.block || hasHoldFindings(res.text)
     // At a SubagentStop, an agent that ended with a SubagentHandback call has no final text (the event's message is ""),
     // and the engine DISCARDS a SubagentStop block after a turn that ended on a tool result: measured live 2026-11-14 on
     // 2.1.325, debug log "[end-turn] Stop hook block discarded (turn ended by tool result, no model re-invoke)", no "Stop
@@ -1211,21 +1218,24 @@ async function reviewSubagent($, ctx, turn, sink, st, tag) {
     // gate (tool.call) reviews that agent BEFORE the call instead, where a refusal does reach it.
     const handedBack = !atHandback && ctx.eventMessage === null && lastMessage !== null
     const outcome = !findings ? "it passed with no findings"
+      : !hold ? "its only findings are NITs, so it was not held: these findings are for its parent"
       : atHandback ? "its SubagentHandback was refused once with these findings; it can fix each one or state why it rejects it, then hand back again"
       : handedBack ? "it ended with SubagentHandback, which ends its run, so it was not blocked: these findings are for its parent"
-      : "the subagent was blocked once with these findings"
+      : res.block ? "the subagent was blocked once with these findings (verdict BLOCK)"
+      : "the subagent was held once to answer these findings (verdict PASS)"
     const report = `${measured ? measured.text + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, ${tag}: ${outcome})\n${res.text}`
     sink.add(plainReport(report))
     logLines($, plainReport(report).join("\n"), { to: "debug" })
     await storeForModel($, report, false)
     if (!findings) { $.ui.status(`review: ${tag} PASS`); return null }
+    if (!hold) { $.ui.status(`review: ${tag} PASS with NITs only; not held, they go to the parent`); return null }
     if (handedBack) { $.ui.status(`review: ${tag} has findings; it handed back, so they go to the parent`); return null }
     if (atHandback) {
       $.ui.status(`review: ${tag} handback refused once (round ${st.rounds}/${MAX_ROUNDS})`)
       return `[agentlenspro-review-mod] The review of your turn has findings${res.block ? ", BLOCKERS among them" : ""}; fix each or state in your report why you reject it, then call SubagentHandback again (that call is accepted). Do not spawn a review fork.\n\n${report}`
     }
     st.blocked = true
-    $.ui.status(`review: ${tag} blocked once (round ${st.rounds}/${MAX_ROUNDS})`)
+    $.ui.status(`review: ${tag} ${res.block ? "blocked" : "held"} once (round ${st.rounds}/${MAX_ROUNDS})`)
     return `[agentlenspro-review-mod] The review of your turn has findings${res.block ? ", BLOCKERS among them" : ""}; fix each or state why you reject it, then finish. Do not spawn a review fork: the harness reviews again when you stop.\n\n${report}`
   } catch (err) {
     return await notReviewed(errText(err))

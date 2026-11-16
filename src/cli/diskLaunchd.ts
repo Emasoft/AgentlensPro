@@ -1,9 +1,9 @@
 // src/cli/diskLaunchd.ts — `agentlenspro disk-monitor install|uninstall|status`: the two disk-monitor jobs (TRDD-HTARKH87, TRDD-RU9A8H7A).
 //
 // Their OWN launchd agents, not threads of the collector: the monitor must keep recording while the
-// collector is stopped, crashed or DISABLED — that is when a disk quietly fills. `disk-sample --volumes-only` runs every 60 s and
-// `disk-sample --walks-only` every 300 s; there is no KeepAlive, so nothing restarts a failing sampler in a
-// tight loop, the next interval simply tries again.
+// collector is stopped, crashed or DISABLED — that is when a disk quietly fills. `disk-sample --volumes-only --resident` is a resident 5-minute loop and
+// `disk-sample --walks-only` runs every 300 s. The sampler job has KeepAlive because a fresh node process per minute missed its 60 s slot under
+// load (runs of 24-47 s at load 194-258) while a resident loop woke 0-5 ms late (TRDD-T16ZQH9F). ThrottleInterval 60 means a crashing sampler restarts at most once a minute.
 
 import * as fs from "fs"
 import * as os from "os"
@@ -17,22 +17,25 @@ import { cliJsPath } from "./serverControl"
 export const DISK_LABEL = "com.agentlens.disk-sample"
 export const DISK_WALK_LABEL = "com.agentlens.disk-walk"
 
-/** One launchd job. Two exist because the minute job must stay short: launchd counts StartInterval from the previous run's exit, so a run
- *  that also walked folders (up to ~41 s) made the volume rows land every ~101 s instead of 60 s (TRDD-RU9A8H7A). */
+/** One launchd job. Two exist so the sampler job never waits on a folder walk: an interval job counts from the previous run's exit, so a run
+ *  that also walked folders (up to ~41 s) made the volume rows land every ~101 s instead of 60 s (TRDD-RU9A8H7A). The fields below are exactly what differs between them. */
 export interface DiskJob {
   label: string
-  /** The `disk-sample` mode flag the job passes. */
-  flag: "--volumes-only" | "--walks-only"
-  intervalS: number
+  /** The `disk-sample` arguments the job passes before `--quiet`. */
+  args: readonly string[]
+  /** How launchd runs it: `interval` = a fresh process every `seconds`; `keepAlive` = one resident process, restarted at most once per `throttleS`. */
+  schedule: { kind: "interval"; seconds: number } | { kind: "keepAlive"; throttleS: number }
   logFile: string
   /** launchd's ProcessType for this job. */
   processType: "Standard" | "Background"
+  /** Nice 10 + LowPriorityIO. The resident sampler runs at default priority: that is how the measured winner ran (TRDD-T16ZQH9F). */
+  lowPriority: boolean
 }
 
 export const DISK_JOBS: readonly DiskJob[] = [
-  // SUSPECTED, not established: Background lets launchd throttle and coalesce the timer under heavy load. On 2026-11-16 at load 128-169 the minute job ran 3 times in 8 minutes, one gap exactly 7 x 60 s with no sleep (TRDD-RU9A8H7A). The minute job is a cheap statfs read, so it runs Standard; the 5-minute folder walk stays Background.
-  { label: DISK_LABEL, flag: "--volumes-only", intervalS: 60, logFile: "disk-sample.log", processType: "Standard" },
-  { label: DISK_WALK_LABEL, flag: "--walks-only", intervalS: 300, logFile: "disk-walk.log", processType: "Background" },
+  // Resident, KeepAlive, Standard, default priority: measured 2026-11-16 under load 194-258 (TRDD-T16ZQH9F) — a fresh process per minute missed its slot, a resident loop did not.
+  { label: DISK_LABEL, args: ["--volumes-only", "--resident"], schedule: { kind: "keepAlive", throttleS: 60 }, logFile: "disk-sample.log", processType: "Standard", lowPriority: false },
+  { label: DISK_WALK_LABEL, args: ["--walks-only"], schedule: { kind: "interval", seconds: 300 }, logFile: "disk-walk.log", processType: "Background", lowPriority: true },
 ]
 
 const xml = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -43,6 +46,22 @@ export function diskLogPath(job: DiskJob, dir: string = dataDir()): string {
 
 export function diskPlist(p: { node: string; cli: string; dataDir: string; job: DiskJob }): string {
   const log = xml(diskLogPath(p.job, p.dataDir))
+  const schedule = p.job.schedule.kind === "interval"
+    ? `  <key>StartInterval</key>
+  <integer>${p.job.schedule.seconds}</integer>
+`
+    : `  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>${p.job.schedule.throttleS}</integer>
+`
+  const priority = p.job.lowPriority
+    ? `  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+`
+    : ""
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -54,20 +73,13 @@ export function diskPlist(p: { node: string; cli: string; dataDir: string; job: 
     <string>${xml(p.node)}</string>
     <string>${xml(p.cli)}</string>
     <string>disk-sample</string>
-    <string>${p.job.flag}</string>
-    <string>--quiet</string>
+${p.job.args.map(a => `    <string>${xml(a)}</string>\n`).join("")}    <string>--quiet</string>
   </array>
-  <key>StartInterval</key>
-  <integer>${p.job.intervalS}</integer>
-  <key>RunAtLoad</key>
+${schedule}  <key>RunAtLoad</key>
   <true/>
   <key>ProcessType</key>
   <string>${p.job.processType}</string>
-  <key>LowPriorityIO</key>
-  <true/>
-  <key>Nice</key>
-  <integer>10</integer>
-  <key>StandardOutPath</key>
+${priority}  <key>StandardOutPath</key>
   <string>${log}</string>
   <key>StandardErrorPath</key>
   <string>${log}</string>
@@ -91,10 +103,45 @@ function launchctl(args: string[]): string {
   return execFileSync("launchctl", args, { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] })
 }
 
-/** Write both plists and (unless `load: false`) bootstrap them; a re-install replaces them (bootout first). `launchAgentsDir` + `load: false` make it testable without touching the real system. */
-export function diskMonitorInstall(opts: { launchAgentsDir?: string; load?: boolean; launchctl?: (args: string[]) => string } = {}): { jobs: { label: string; path: string; loaded: boolean }[] } {
+/** Synchronous sleep: launchctl is called with execFileSync, so the wait between two probes cannot be a promise. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+const BOOTOUT_POLL_MS = 200
+const BOOTOUT_WAIT_MS = 15_000
+const BOOTSTRAP_TRIES = 3
+const BOOTSTRAP_RETRY_MS = 500
+
+/** Replace a job that may be loaded: bootout, WAIT until launchd no longer knows the label, then bootstrap (up to BOOTSTRAP_TRIES).
+ *  WHY the wait (TRDD-77TSOX08): bootout returns before launchd has removed the service (measured 2026-11-16 in launchd's log: the bootstrap arrived 4.7 ms after the bootout and was refused with 37: Operation already in progress; the service was removed 6.6 ms later), and a
+ *  bootstrap of the same label in that gap fails with "Bootstrap failed: 5: Input/output error" (launchctl's text for that refusal) — which left the always-alive resident sampler unloaded.
+ *  `launchctl print` failing is the sign that the service is gone. */
+function reloadJob(ctl: (args: string[]) => string, sleep: (ms: number) => void, label: string, file: string): void {
+  try { ctl(["bootout", `${domain()}/${label}`]) } catch { /* not loaded yet */ }
+  for (let waited = 0; ; waited += BOOTOUT_POLL_MS) {
+    try { ctl(["print", `${domain()}/${label}`]) } catch { break }
+    if (waited >= BOOTOUT_WAIT_MS) {
+      throw new Error(`disk-monitor install: ${label} is still loaded ${BOOTOUT_WAIT_MS / 1000} s after bootout; it was told to stop and was NOT loaded again — run agentlenspro disk-monitor install once more`)
+    }
+    sleep(BOOTOUT_POLL_MS)
+  }
+  for (let attempt = 1; ; attempt++) {
+    try {
+      ctl(["bootstrap", domain(), file])
+      return
+    } catch (e) {
+      if (attempt >= BOOTSTRAP_TRIES) throw e
+      sleep(BOOTSTRAP_RETRY_MS)
+    }
+  }
+}
+
+/** Write both plists and (unless `load: false`) bootstrap them; a re-install replaces them (bootout first). `launchAgentsDir` + `load: false` make it testable without touching the real system. `sleep` is injectable for the same reason. */
+export function diskMonitorInstall(opts: { launchAgentsDir?: string; load?: boolean; launchctl?: (args: string[]) => string; sleep?: (ms: number) => void } = {}): { jobs: { label: string; path: string; loaded: boolean }[] } {
   if (process.platform !== "darwin") throw new Error("disk-monitor install: launchd is macOS-only — nothing was installed")
-const ctl = opts.launchctl ?? launchctl // injectable so the rollback path is testable without touching the real launchd
+  const ctl = opts.launchctl ?? launchctl // injectable so the rollback path is testable without touching the real launchd
+  const sleep = opts.sleep ?? sleepSync
   const bootstrapped: string[] = []
   const jobs = DISK_JOBS.map(job => {
     const file = plistPath(job, opts.launchAgentsDir)
@@ -106,19 +153,19 @@ const ctl = opts.launchctl ?? launchctl // injectable so the rollback path is te
     fs.renameSync(tmp, file)
     let loaded = false
     if (opts.load !== false) {
-      try { ctl(["bootout", `${domain()}/${job.label}`]) } catch { /* not loaded yet */ }
       try {
-        ctl(["bootstrap", domain(), file])
+        reloadJob(ctl, sleep, job.label, file)
       } catch (e) {
 // Half-installed is worse than not installed (one job recording, the other silent): unload what this call already loaded, then fail loudly.
-        // On a RE-install the old copy of each job was already booted out above, so after a failure nothing is loaded; the plists stay on disk and the error says why.
+        // On a RE-install the old copy of each job was already booted out (inside reloadJob), so a job whose reload failed may not be loaded, and a job LATER in the list was not reached and keeps its old registration. The plists stay on disk and the error says why.
         for (const done of bootstrapped) { try { ctl(["bootout", `${domain()}/${done}`]) } catch { /* best effort; the original error is the one to report */ } }
         throw e
       }
       bootstrapped.push(job.label)
       loaded = true
     }
-    console.log(`disk-monitor install: ${file} (${opts.load === false ? "written, not loaded" : "loaded"}); ${job.flag === "--volumes-only" ? "volume rows" : "folder walks"} every ${job.intervalS} s into ${path.join(dataDir(), "disk.duckdb")}`)
+    const cadence = job.schedule.kind === "interval" ? `folder walks every ${job.schedule.seconds} s` : "volume rows every 5 minutes (resident sampler)"
+    console.log(`disk-monitor install: ${file} (${opts.load === false ? "written, not loaded" : "loaded"}); ${cadence} into ${path.join(dataDir(), "disk.duckdb")}`)
     return { label: job.label, path: file, loaded }
   })
   return { jobs }
@@ -168,7 +215,7 @@ async function status(): Promise<number> {
 }
 
 export const DISK_MONITOR_USAGE = `usage: agentlenspro disk-monitor install | uninstall | status
-  install    write ~/Library/LaunchAgents/${DISK_LABEL}.plist (volume rows every 60 s) and ${DISK_WALK_LABEL}.plist (folder walks
+  install    write ~/Library/LaunchAgents/${DISK_LABEL}.plist (resident sampler, volume rows every 5 minutes) and ${DISK_WALK_LABEL}.plist (folder walks
              every 300 s) and load both, even with no Claude session and even while agentlenspro is DISABLED (macOS only)
   uninstall  unload and delete both plists; the recorded history is kept
   status     both plists, their launchd state, and the time of the newest recorded row (exit 0 = both installed and loaded)`

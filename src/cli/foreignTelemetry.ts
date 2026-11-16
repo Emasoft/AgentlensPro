@@ -36,7 +36,7 @@ export const HOOK_PATH_VERBS: ReadonlySet<string> = new Set([
  *
  *  The disk monitor (TRDD-HTARKH87) is exempt as a whole, BY OWNER DECISIONS 2026-11-16 ("Exempt the sampler"; "Install, even when
  *  DISABLED (Recommended)"): disk-sample, disk, disk-watch and disk-monitor (install, uninstall, status). A filling disk is exactly
- *  when everything else is switched off. All of them also skip the launch self-heal: the sampler fires every minute and must never
+ *  when everything else is switched off. All of them also skip the launch self-heal: the sampler fires every 5 minutes and must never
  *  write settings.json. */
 export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history", "disk-sample", "disk", "disk-watch", "disk-monitor"])
 
