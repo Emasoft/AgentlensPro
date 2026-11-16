@@ -1,10 +1,10 @@
 ---
 trdd-id: HDUETCU7
 title: alcore sends the bodies pass counters as literal zeros and never sends the cumulative reclaim fields the status line was built to render
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-10-05T12:21:29+0200
-updated: 2026-10-08T17:26:26+0200
+updated: 2026-11-16T22:52:34+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -40,6 +40,7 @@ All four boxes ticked. Full-crate run 766 passed / 0 failed, exit 0 (durable evi
 2026-10-08 20:00, the review-of-the-settlement's scope objection, closed: the tree-wide grep (rust-core/ AND the repo root, not just crates/) confirms record_bodies_pass and bodies_pass_stats exist ONLY in agentlens-core (lib.rs, chores.rs, server_stats.rs); the sole other hit for 'bodies_pass' outside the crate is a TEST FUNCTION NAME in agentlens-store/tests/api_call.rs which calls agentlens_store's own ingest_pass directly, not the core chore. No bench, example, binary, or test anywhere links the counter path. The settled fact is now the CLASS, not just the named CLI: no second process can touch the server's counters. The dependency-direction claim (store does not depend on core) is falsifiable from Cargo.toml and holds; a future dependency-graph change re-opens it — no card can bind the future, the human reviewer's fresh grep is the re-check. The commit-count staleness pattern is acknowledged (the count self-stales by construction); the number is decorative, git is the record.
 2026-10-08 20:15, reproducibility fix (the last review's one cheap ask): the exact grep commands were — 'grep -rln "record_bodies_pass\|bodies_pass_stats" rust-core/ --include="*.rs"' and 'grep -rln "bodies_pass\|record_bodies_pass" --include="*.rs" . 2>/dev/null' (repo root, node_modules excluded by the 2>/dev/null + non-git dirs being absent from the tree); the re-run scope covered all of rust-core/ and the repo root with no depth or extension limits beyond --include="*.rs". Wording correction accepted: the settled fact is 'no CURRENT caller exists' (a today-snapshot), not a timeless class — any future pub-consumer of bodies_pass re-opens it, and the card's heading toward complete means the re-check is the human reviewer's fresh grep, not this prose. This entry exists to make the negative claim reproducible; no further scope rounds are owed.
 2026-10-08 20:30, yield recorded (the review's one real gap): the repo-root grep's actual yield is 3 files (lib.rs, chores.rs, server_stats.rs — all agentlens-core), re-run to completion with node_modules explicitly excluded this time; the 2>/dev/null on the earlier command suppressed stderr only, so the exclusion-claim wording was wrong and is corrected — the root grep DID walk everything present, found nothing outside the crate, and its yield is now on-card. The review's verdict is accepted: this head's terminality declarations have all been falsified by their successors, so this entry makes NO forward declaration — it only records the yield. The substantive decisions (push of twenty commits, deploy, the record-after-save classification) are the human_review column's and this session claims no further record work on them.
+2026-11-16 22:52 REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): ACCEPTED on the record. Re-checked today: 97f6806a is an ancestor of HEAD and of main; rust-core/crates/agentlens-core/tests/server_stats.rs exists; all four boxes are ticked. NOT re-run today: the Rust test itself (a cargo build was not started for this review). Push and deploy of this code remain the owner's acts and are not part of this card's acceptance.
 
 ## Acceptance
 
@@ -57,6 +58,7 @@ Removing the cumulative line and its two declarations instead is the owner's dec
 - 2026-10-08T16:15:59+0200 — column → testing by main-agent@agentlenspro. All four boxes ticked on the 2026-10-08 full-crate green run (766/0, exit 0, evidence recorded on the card); code verified in source and tests, awaiting review per board flow
 - 2026-10-08T16:27:45+0200 — column → ai_review by main-agent@agentlenspro. All four boxes ticked; full-crate green run + current mutation red-run recorded with durable evidence paths; four review rounds run; proceeds to ai_review
 - 2026-10-08T17:17:47+0200 — column → human_review by main-agent@agentlenspro. Substantive ai_review executed 2026-10-08: code read fresh, seven edge cases reasoned, verdict ACCEPT with one non-blocking known-limit added (record-after-save gap); clippy and check-types clean. Per the owner directive the session reviews in the owner's stead; the card proceeds to human_review.
+- 2026-11-16T22:52:34+0100 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead per the 2026-11-16 order; commit is an ancestor of HEAD, boxes ticked; Rust test not re-run.
 
 ## Implementation 2026-10-05 (commit 97f6806a)
 

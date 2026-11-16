@@ -1,9 +1,9 @@
 ---
 trdd-id: 2CYTNLY1
 title: Delete the review gate's dead breakers and give the supervisor the gate's work definition
-column: human_review
+column: complete
 created: 2026-09-09T14:38:59+0200
-updated: 2026-10-05T10:12:00+0200
+updated: 2026-11-16T22:52:33+0100
 current-owner: main
 task-type: refactor
 priority: medium
@@ -18,7 +18,10 @@ npt: []
 eht: []
 implementation-commits: [53a30222, 86abd4ef]
 release-via: none
-status: tasked
+status: archived
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-16T22:52:33+0100
 ---
 
 # Delete the review gate's dead breakers and give the supervisor the gate's work definition
@@ -26,6 +29,7 @@ status: tasked
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative for column and next action) — 2026-10-05
 
 Column `human_review`. Reviewed 2026-10-05 under TRDD-AVUGZV1K. The head below opens with the pull into `dev`; that is history. Its advice to navigate by symbol still applies. What is open: the kill-switch question in the Approval log, which this session treats as the owner's (the agent's reading of the directive, not the owner's words). Rules the review found untested are carried by TRDD-GI1LC8FX. NEXT ACTION: none on this card until that question is answered.
+2026-11-16 22:52 REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): ACCEPTED. Re-checked today: 53a30222 and 86abd4ef are ancestors of HEAD and of main; check-types exit 0; unit test files reviewSupervisor 38 passing, reviewGate 201 passing, reviewGateTriggers 78 passing. src/test/reviewGateEffects.test.ts, named in box 2, no longer exists: commit 268f3080 (TRDD-A37YM37G) deleted it later on purpose, so box 2 describes the tree at 86abd4ef. The kill-switch question stays open on TRDD-8D26QVBC, which owns it.
 
 ## Earlier head (2026-09-10 04:30) - kept; its column and next action are superseded above
 
@@ -204,6 +208,7 @@ verified against the live source, not restated from memory.
 2026-10-04: worker wA re-review at HEAD plus the PNB9FNJ0 diff -- VERDICT APPROVE. Acceptance re-checked: check-types, lint, compile-tests exit 0; scoped runs reviewGate|reviewSupervisor 105 passing, review-gate triggers|review-loop 66 passing, killSwitch 27 passing, 0 failing. scanSupervision reuses toolUseWork/textArms (parity test for sed -i, git push, proposal present), killSwitchHalf is the single truth and the stderr-line test names the env half, dead breaker plumbing absent. The new import reviewGate to delegateGate is a cycle (delegateGate imports readTranscriptTail); safe because the constant is read inside a function. Owner kill-switch question stays OPEN. Owner moves human_review to complete.
 - 2026-10-05T02:55:26+0200 — column → deploy by main-agent@agentlenspro. reviewed in the owner's stead 2026-10-05: five boxes verified in source and tests; takes effect only when the installed bundle is rebuilt
 - 2026-10-05T03:21:57+0200 — column → human_review. returned by the main agent - nothing on this card waits for a deploy; an owner question is open.
+- 2026-11-16T22:52:33+0100 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead per the 2026-11-16 order; three review-gate test files re-run today.
 
 ## Notes and lessons learned
 
