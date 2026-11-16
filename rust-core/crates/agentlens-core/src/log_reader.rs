@@ -855,6 +855,8 @@ pub struct DurableState {
     /// The TS durable-save timer fires every offsets_save; both cadences are measured from it.
     last_timer: Instant,
     last_cards_save: Instant,
+    /// False until the first card save of this run (see `tick`).
+    first_cards_saved: bool,
     offsets_dirty: bool,
     cards_dirty: bool,
     /// `(session_id, transcript path)` flagged this boot for the usage-only 1h-tier backfill
@@ -892,6 +894,7 @@ impl DurableState {
             cards_save: env_ms("AGENTLENS_CARDS_SAVE_MS", 300_000, 30_000),
             last_timer: now,
             last_cards_save: now,
+            first_cards_saved: false,
             offsets_dirty: false,
             cards_dirty: false,
             pending_1h_backfill: Vec::new(),
@@ -1385,6 +1388,7 @@ impl DurableState {
         if force {
             self.save_offsets(tailer, state);
             self.save_cards(state);
+            self.first_cards_saved = true;
             self.offsets_dirty = false;
             self.cards_dirty = false;
             return;
@@ -1398,9 +1402,13 @@ impl DurableState {
             self.offsets_dirty = false;
             self.save_offsets(tailer, state);
         }
-        if self.cards_dirty && now.duration_since(self.last_cards_save) >= self.cards_save {
+        // WHY `!self.first_cards_saved`: last_cards_save starts at boot, so without it no card save
+        // can happen in a run's first 300 s, and runs killed by the RSS hard cap after 4 to 11
+        // minutes left a card snapshot days old (TRDD-WCG7I5D8). One early save, then the old cadence.
+        if self.cards_dirty && (!self.first_cards_saved || now.duration_since(self.last_cards_save) >= self.cards_save) {
             self.cards_dirty = false;
             self.save_cards(state);
+            self.first_cards_saved = true;
         }
     }
 }
@@ -1844,7 +1852,7 @@ pub fn strip_timeline_value(card: &mut Map<String, Value>) {
 
 #[cfg(test)]
 mod sweeper_backstop_tests {
-    use super::should_full_sweep;
+    use super::{should_full_sweep, DurableState, LogTailer};
     use std::time::{Duration, Instant};
 
     /// The pre-streaming whole-file implementation, kept verbatim as the oracle (TRDD-735Q3JF4).
@@ -1920,5 +1928,31 @@ mod sweeper_backstop_tests {
         let rearmed_now = start + Duration::from_millis(150);
         let rearmed_next_full = rearmed_now + Duration::from_secs(60);
         assert!(!should_full_sweep(rearmed_now, rearmed_next_full), "must not fire again immediately after being re-armed");
+    }
+
+    /// TRDD-WCG7I5D8: with the default 300 s cards cadence, the first offsets timer after cards turn
+    /// dirty must already write them to the card delta log (a run killed by the RSS cap within its
+    /// first minutes used to leave a days-old snapshot).
+    #[test]
+    fn the_first_timer_tick_saves_dirty_cards_without_waiting_for_the_cards_cadence() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("alcore-early-cards-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = std::sync::Mutex::new(crate::CoreState::open(&dir));
+        state.lock().unwrap().cards.put(&serde_json::json!({
+            "sessionId": "early-save-card", "source": "claude_code",
+            "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": []
+        }));
+        let mut durable = DurableState::open(&dir);
+        // Set explicitly: AGENTLENS_CARDS_SAVE_MS in the environment must not change what this test proves.
+        durable.cards_save = std::time::Duration::from_millis(300_000);
+        durable.offsets_save = std::time::Duration::from_millis(1);
+        durable.mark_dirty();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        durable.tick(&LogTailer::default(), &state, false);
+        let saved = crate::delta_log::DeltaLog::new(&dir, "log-sessions").load().unwrap();
+        assert!(saved.contains_key("early-save-card"), "the card is on disk after the first timer tick");
+        drop(state);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
