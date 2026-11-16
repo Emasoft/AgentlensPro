@@ -4,7 +4,7 @@ title: disk-sample minute run stalled about 5 minutes before sampling under heav
 column: todo
 status: tasked
 created: 2026-11-16T20:02:01+0100
-updated: 2026-11-16T21:08:13+0100
+updated: 2026-11-16T21:17:37+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-16T20:02:01+0100
+implementation-commits: [c05b537a, e7a74ebb]
 ---
 
 # disk-sample minute run stalled about 5 minutes before sampling under heavy load (7-minute gap)
@@ -37,3 +38,4 @@ PASS BAR for the second load window (written before the run; owner answer: "Yes,
 PASS BAR addendum (before the run): the live job L has no wall-clock slot (launchd counts StartInterval from the last exit), so for L a minute passes when launchd's 'ran for' is under 30 s; R and P use the 30 s-from-the-minute rule. R's figures exclude the per-minute DuckDB write (it only samples and logs); P includes it (full CLI run into a scratch AGENTLENS_DATA_DIR).
 2026-11-16 20:50–21:02 second window (normal-priority perl loops, 120 on 14 cores; 1-min load above 100 from 20:52:22 to 21:00:24, peak 258). Loaded minutes 20:53–21:00 (8, not the 10 the pass bar assumed — its '9 of' threshold was unreachable; reported per minute instead). R (resident node loop, default priority, minute-boundary timer, no DuckDB write): 8/8 under 30 s — wake lateness 0–5 ms, finish 1.9 / 2.9 / 2.6 / 1.7 / 11.2 / 8.5 / 6.7 / 5.6 s. P (fresh CLI process per minute, default priority, scratch data dir, includes the DuckDB write): 6/8 — 7 / 13 / 7 / 4 / 47 / 39 / 20 / 14 s. L (live job: Standard, Nice 10, LowPriorityIO): 4/7 'ran for' under 30 s — 24.3 / 23.9 / 40.4 / 24.2 / 25.5 / 32.6 / 32.1 s. The variants overlapped and shared diskutil, so they are not independent. In 4 loaded minutes every diskutil and osascript call timed out (5 s) even for R, so those rows carry NULL fields with the error. Conclusion: a resident sampler holds the minute under heavy load; a fresh process per minute does not, with or without Nice. P's minute labels in its log are blank (date -r failed); order gives the minute. No perl loop survived (command-line match).
 2026-11-16 21:10 — design choices for the resident build, stated as untested where they are: (1) dropping Nice 10 and LowPriorityIO is an INFERRED choice — no variant ran resident at Nice 10, so residency and priority changed together; (2) KeepAlive reverses the old no-KeepAlive rule, whose stated reason (no tight respawn loop) is met by ThrottleInterval 60; (3) R excluded the DuckDB write and P, which included it, missed 2 of 8, so the resident build is unproven with its write. This card stays open until a load window with the BUILT resident sampler (write included) passes; a normal-load cadence check does not close it. The loop re-anchors to the next minute boundary from the current time on every tick, so a sleep or clock jump leaves a gap, never a backlog. The build was dispatched before any harness review of the proposal arrived (the advisor's condition was set aside after two turns without one); the measure reports that then arrived confirmed its load-bearing facts.
+2026-11-16 21:20 — e7a74ebb (resident sampler) built and installed on fix/setup-agent-preflight, NOT yet merged into main. The minute job is now an always-on KeepAlive process at default priority; 'agentlenspro disk-monitor uninstall' removes it. Origin of the 'Could not set lock … PID 10359' line in disk-sample.log is unknown (the log has no timestamps); the live check decides whether resident ticks hit the lock.
