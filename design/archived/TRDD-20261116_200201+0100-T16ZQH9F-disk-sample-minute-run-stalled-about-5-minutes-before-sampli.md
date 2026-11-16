@@ -1,10 +1,10 @@
 ---
 trdd-id: T16ZQH9F
 title: disk-sample minute run stalled about 5 minutes before sampling under heavy load (7-minute gap)
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-16T20:02:01+0100
-updated: 2026-11-16T22:11:04+0100
+updated: 2026-11-16T22:55:55+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-16T20:02:01+0100
-implementation-commits: [c05b537a, e7a74ebb]
+implementation-commits: [c05b537a, e7a74ebb, e75acf1f, 38df4734, e8a4eb33, c00f6491]
 ---
 
 # disk-sample minute run stalled about 5 minutes before sampling under heavy load (7-minute gap)
@@ -26,6 +26,7 @@ Derived from TRDD-RU9A8H7A. On 2026-11-16 the minute job's last run before the g
 
 - 2026-11-16T20:02:01+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-16T20:05:46+0100 — column → todo by main-agent@agentlenspro. measured: a stalled run inside RU9A8H7A scope
+- 2026-11-16T22:55:55+0100 — COMPLETE by main-agent@agentlenspro. lock loss fixed and proven under load; 5-minute period live and observed on two boundaries.
 
 ## Measurements
 
@@ -47,3 +48,13 @@ PASS BAR, final window (owner answer: "Yes, run it"; written before the run): 12
 2026-11-16 22:05 FIX LANDED: e75acf1f (walk-job hold log, timed from before the open) and 38df4734 (carry-over, lock wait from the watchdog budget, one-transaction batch write, narrow lock test, exit logs). Checks: check-types 0, eslint 0 errors on the three files, diskSample.test.js 25 passing, diskLaunchd.test.js 3 passing. Tests added (src/test/diskSample.test.ts): 23 s sample + lock refusal leaves a wait of at most 12 s, no exit, next tick writes both; a REAL second process holds the lock, first tick defers, second writes both after the holder's exit event; eleven refusals keep the buffer at 10 and log the drop; a non-lock write error drops and logs the slots and a failing second batch item leaves zero rows; the terminate callback logs buffered slots. Not tested: the SIGTERM wiring line in runDiskSampleCli. PASS BAR for the next loaded window, set BEFORE the run (120 normal-priority loops, 10 min, 1-min load above 100): (a) every loaded minute has disk_volume rows stamped with its own sample time, within 2 s of the minute; (b) rows may land late, with the next tick, only where the sampler log shows 'write deferred' for that minute; (c) the sampler never exits (launchd runs unchanged, no 'still running after' line); (d) forced collision: a separate process holds the writer lock for 45 s across one minute boundary — that minute's rows must be present after the next tick and the log must show 'write deferred, 1 sample(s) buffered'; (e) any walk-job hold over 1 s appears in disk-walk.log with its phase. FAIL: any loaded minute without rows, or any sampler exit. If no natural walk-job collision happens in the window, only (d) proves the carry-over live, and the report must say so.
 2026-11-16 22:10 OWNER DIRECTIVE (verbatim): "the disk monitoring frequency should be 5 minutes, otherwise it would become too heavy for the system". Decision (delegated, verbatim: "review in my stead. decide yourself. base your decisions on verified facts."): keep the resident sampler and its carry-over, change its period from 1 minute to 5 minutes (wall-clock boundaries :00, :05, ...). Why not one launchd job for volumes and walks: the walk part needs low priority and LowPriorityIO, which launchd sets per job, and a low-priority fresh process is what stalled 369 s under load. Consequence: a sample deferred by a lock refusal lands with the next tick, up to 5 minutes late, with its own correct timestamp. The loaded window started 21:59:45 at the 1-minute period still counts as the load proof of the carry-over (the harder case); the 5-minute period is then checked at normal load. Correction: the 'FIX LANDED' line above is stamped 22:05 but was written at about 21:57.
 2026-11-16 21:59:46–22:10:16 LOADED WINDOW with the fix (38df4734, sampler pid 22653), scored against the bar in 4e4c0914: PASS on (a)-(e). 120 normal-priority loops, 1-min load 131–243 from 22:00:50. (a) rows at 22:00 … 22:10, every one stamped within 70 ms of its minute (read-only query). (b) and (e) NATURAL collision, measured: the walk job (pid 22704) logged 'held disk.duckdb 110093 ms (store), opened 21:00:01.788Z' — its STORE held the writer lock 110 s; the sampler logged 'write deferred, 1 sample(s) buffered' at 22:00 and '2 sample(s) buffered' at 22:01, and the 22:02 tick wrote all three (rows 22:00 and 22:01 present with their own timestamps). (d) FORCED collision: holder pid 33229 held the lock 22:03:58–22:04:53; the 22:04 tick logged 'write deferred, 1 sample(s) buffered' and its row is present. (c) launchd runs = 1, 'never exited', no 'still running after' line. The deferred ticks took 35.1–35.5 s (sample 5.6–6.5 s, lock wait 28.8–29.8 s): the wait stayed inside the 45 s watchdog as designed. Perl survivors 0. So the 21:31 loss mechanism is fixed and proven live for both a walk-job hold and a foreign hold. New fact: the phase holding the lock under load here was the walk STORE (110 s), not the plan; the plan inference for 21:31 stays unproven. Remaining on this card: the 5-minute period (owner directive), its deploy, and one check at normal load. Deploy defect found on the way: TRDD-77TSOX08.
+
+## Acceptance
+
+- [x] a sample taken while another process holds disk.duckdb is kept and written later, not lost (loaded window 2026-11-16 21:59:46 to 22:10:16, load 131 to 243: ticks 22:00 and 22:01 deferred, both written by 22:02; rows 22:00 to 22:10 all present)
+- [x] a forced lock holder (22:03:58 to 22:04:53) does not lose the 22:04 sample
+- [x] a deferred tick ends inside the 45 s watchdog (measured 35.1 to 35.5 s: sample 5.6 to 6.5 s, lock wait 28.8 to 29.8 s)
+- [x] the resident sampler is not restarted by the fix (runs=1 over the window) and no helper process is left behind (0)
+- [x] the sampler takes a volume sample every 5 minutes (owner directive 2026-11-16; commit e8a4eb33, deployed 22:47:39): rows at 22:50:00.005 and 22:55:00.000, none between, 4 rows per tick
+- [x] re-installing over the running sampler works on the first run (TRDD-77TSOX08, commit c00f6491, live 22:47:39)
+(This list was written at closing time from the measurements already recorded in STATE; the card had no checkbox list before.)
