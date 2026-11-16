@@ -1,10 +1,10 @@
 ---
 trdd-id: U38HC114
 title: review mod reports a subagent as blocked when its review verdict is PASS with findings
-column: todo
+column: publish
 status: tasked
 created: 2026-11-16T22:07:40+0100
-updated: 2026-11-16T22:53:45+0100
+updated: 2026-11-16T22:55:20+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-16T22:07:40+0100
+implementation-commits: [43e4c862]
 ---
 
 # review mod reports a subagent as blocked when its review verdict is PASS with findings
@@ -41,8 +42,10 @@ By design (comment at lines 54-58): a subagent whose review carries ANY finding 
 ## Approval log
 
 - 2026-11-16T22:07:40+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T22:55:20+0100 — column → publish by main-agent@agentlenspro. code committed in 43e4c862; going live needs a push, which is the owner's act
 
 ## STATE
 
 2026-11-16 22:53 — DECIDED SCOPE: a NIT-only review no longer holds the subagent at EITHER gate: its SubagentStop is not held and its SubagentHandback is not refused (before, a NIT-only review refused the handback once). This handback case is a behaviour change the three acceptance boxes did not name; it is intended. Edits are in the tree (register.js, README.md, plugin.json 0.7.11), not yet verified by the main agent, not committed. The runtime path is NOT tested: the mod has no test suite; the only check so far covers the two regexes.
 2026-11-16 22:53 — OBSERVED, not acted on: agentlenspro-review-mod/tsconfig.json is untracked (56 bytes, dated 2026-11-14 23:00, content: extends ./.claude-plugin/types/tsconfig.json). Its origin is not known. It is neither committed nor removed.
+2026-11-16 22:55 — CODE COMMITTED in 43e4c862 (0.7.11). NOT LIVE: this machine runs the installed 0.7.10 from the GitHub marketplace emasoft-plugins (cache path .../agentlenspro-review-mod/0.7.10), so the fix runs only after a push, a marketplace update and a plugin reload; pushing is the owner's act. The three acceptance boxes stay unticked until a live review shows each case. NEXT ACTION: after the owner pushes, update the plugin and watch one NIT-only review, one SHOULD-FIX review and one BLOCK review.
