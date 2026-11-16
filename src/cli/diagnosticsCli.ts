@@ -78,6 +78,19 @@ usage:
                                               from the PreCompact hook, off disk (server may be
                                               down). No compaction on record = exit 2, stdout EMPTY
                                               (never "0s ago", which is the opposite claim)
+  agentlenspro disk now|history|changes|top-change|trees|sql [--volume V] [--since 6h] [--json]
+                                              the disk-space history the minute monitor records: used/free/avail
+                                              per volume, with and without the trash, and the exact minute and size
+                                              of every change; 'disk sql "<SELECT>"' queries the tables directly.
+                                              Read-only, off disk, works with the server down and while DISABLED.
+                                              'agentlenspro disk' with no argument lists the views, flags and tables
+  agentlenspro disk-sample [--quiet]          one sample of every volume + due folder walks into disk.duckdb (run every
+                                              minute by the job below; runs even while DISABLED)
+  agentlenspro disk-watch add <path> [--kind folder|trash] | remove <path> | list
+                                              the folders whose size (apparent/allocated, with/without symlinks) is measured
+  agentlenspro disk-monitor install|uninstall|status
+                                              the launchd job (macOS) that runs disk-sample every 60 s, even with no Claude
+                                              session. Opt-in: setup prints the command, never installs it
   agentlenspro search <pattern> --session ID [--role R] [--type T] [--regex] [--limit N] [--json]
                                               search one session's transcript .jsonl (tool outputs,
                                               agent responses, prompts) with DuckDB's streaming NDJSON

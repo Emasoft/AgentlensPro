@@ -44,6 +44,9 @@ import { runLastCompactCli } from './lastCompactCli'
 import { runModelHeadroomCli } from './modelHeadroomCli'
 import { runSearchCli } from './searchCli'
 import { runHookContextCostCli } from './hookContextCostCli'
+import { runDiskSampleCli } from './diskSample'
+import { runDiskCli, runDiskWatchCli } from './diskCli'
+import { runDiskMonitorCli } from './diskLaunchd'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -114,7 +117,7 @@ export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'review-gate', 'review-supervisor', 'delegate-gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
   'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'cache-state', 'last-compact',
   'budget', 'watch', 'heartbeat-cost', 'config', 'env', 'ctxmap', 'ctxvis', 'list',
-  'search', 'model-headroom', 'hook-context-cost',
+  'search', 'model-headroom', 'hook-context-cost', 'disk-sample', 'disk', 'disk-watch', 'disk-monitor',
 ])
 
 export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
@@ -141,6 +144,12 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'model-headroom': 'FETCHES the OAuth usage endpoint (10-minute cached), so it is network-bound by design and cannot carry a hot-path ceiling. It is not on any per-turn path: an agent calls it ONCE before deciding whether to spawn the advisor, which is itself a minutes-long operation — the check cannot be the expensive half',
   store: 'operator repair verb (repair-parked STAGES and fully re-verifies the whole bodies table) — run with the server stopped, a human watching',
   'hook-context-cost': 'an analysis verb that streams the day buckets of the log-event sink (~170 MB/day); asked deliberately, never per turn',
+  // The four disk-monitor verbs (TRDD-HTARKH87). disk-sample, disk, disk-watch and 'disk-monitor status' are DISABLED-exempt by owner
+  // decision 2026-11-16 (foreignTelemetry.ts READ_ONLY_VERBS, isDiskMonitorStatus); install/uninstall stay gated. None is on a harness hot path.
+  'disk-sample': 'run by its own launchd job once a minute, never by Claude Code; it is bounded by its own budget (statfs/diskutil 5 s each, folder walks 40 s in total) and exits via exitNow',
+  disk: 'an investigation verb a human or agent invokes deliberately; read-only DuckDB queries over the monitor history, retrying briefly on the sampler writer lock',
+  'disk-watch': 'edits the watch list in the monitor DuckDB file; an operator action, not on any per-turn path',
+  'disk-monitor': 'installs/removes the launchd job and reads launchctl; one-shot operator action a human waits for',
 }
 
 /** Test seams for the server/daemon verbs — the verb itself and the install check that follows it — so a test can
@@ -162,7 +171,7 @@ export const DISPATCHED_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'review-gate', 'review-supervisor', 'delegate-gate', 'statusline', 'statusline-history',
   'get_account_status', 'disable', 'enable', 'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired',
   'cache-state', 'last-compact', 'model-headroom', 'hook-context-cost', 'search', 'budget', 'watch',
-  'heartbeat-cost', 'config', 'store', 'env', 'ctxmap', 'ctxvis',
+  'heartbeat-cost', 'config', 'store', 'env', 'ctxmap', 'ctxvis', 'disk-sample', 'disk', 'disk-watch', 'disk-monitor',
 ])
 
 /** Does this invocation go to the diagnostics surface (runDiagnosticsCli) — the only place a tool can refuse? */
@@ -425,6 +434,18 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
       // says what changed on the agent's SECOND turn and whether that broke the cache prefix —
       // which is what decides whether the agent is cheap to keep running or only cheap to start.
       return runCtxvisCli(argv.slice(1))
+    case 'disk-sample':
+      // ONE sample of every volume into disk.duckdb, then exit (TRDD-HTARKH87). Run each minute by the launchd job
+      // `disk-monitor install` writes. Exits via exitNow: a statfs stuck on a dead mount cannot be cancelled, and it
+      // must not hold the process (or the next minute) open.
+      return exitNow(await runDiskSampleCli(argv.slice(1)))
+    case 'disk':
+      // Read-only queries over the recorded history (now/history/changes/top-change/trees/sql); disk-only, no server.
+      return runDiskCli(argv.slice(1))
+    case 'disk-watch':
+      return runDiskWatchCli(argv.slice(1))
+    case 'disk-monitor':
+      return runDiskMonitorCli(argv.slice(1))
     case undefined:
       // Bare `agentlenspro` / `npx agentlenspro`: the original behavior — run the server in
       // the foreground; it serves the dashboard (and opens the browser unless
