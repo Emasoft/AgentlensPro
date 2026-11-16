@@ -1,10 +1,10 @@
 ---
 trdd-id: YL3EWT6N
 title: agentlenspro detects and reinstalls missing or outdated hooks skills agents and rules in user scope
-column: human_review
+column: todo
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-10-16T11:13:20+0200
+updated: 2026-11-16T23:05:54+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -24,6 +24,7 @@ implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc
 
 - 2026-10-14T16:43:38+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-16T11:13:20+0200 — column → human_review by main-agent@agentlenspro. owner answers to decisions (a)-(d), asked 2026-10-14; row 13
+- 2026-11-16T23:05:54+0100 — column → todo by main-agent@agentlenspro. decisions (a)-(d) made in the owner's stead on 2026-11-16; items 4 to 6 are now buildable
 
 ## Owner request
 
@@ -59,3 +60,10 @@ NOT PLANNED, proposal only. Follow-up (review of 42017224): with the read-only h
 2026-10-14 17:29: items 1-3 and follow-up 3b landed (ab5b1274, 87440d7e + d73b20cc, a065129a, 1069f1c8); 3b runs the server-start check AFTER the verb (concurrent would still run its synchronous prefix first). Correction: the previous STATE line is stamped 17:35 but was written at 17:21. Items 4-6 still wait for the owner's decisions (a)-(d). Next: plan item 7 and the red-suite findings.
 2026-10-14 17:36: items 1-3, 3b and 3c landed. MEASURED (3c, isolated HOME/DATA_DIR on free ports): `daemon start --supervise` restores a deleted skill 2 s after the start while the supervisor keeps running, so the check runs under launchd. Next: the red-suite findings (two cliDispatch failures, cliUsageContract stray alcore) and plan item 7. Items 4-6 still wait for the owner's decisions (a)-(d).
 2026-10-14 18:10: plan item 7 landed (6a31062d): a refused single tool call leaves one JSON object on stderr, launch notices folded in as `notices`. The three pre-existing red-suite failures are fixed: A by 6a31062d, B by ae4979be (stale test), C by 403b1137 (help never runs the launch check). Review follow-ups of those three commits in dev. Items 4-6 still wait for the owner's decisions (a)-(d); one more owner question below (batch).
+2026-11-16 23:05 — DECISIONS (a)-(d) MADE IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."). The owner can overrule any of them; the card stays open because items 4 to 6 are not built.
+(a) Agent names: KEEP the shipped names as they are. Reason: a rename breaks every prompt and rule that names an agent, and nothing measured shows a name clash.
+(b) The hookInstall.ts AGENT_NAMES hunk: no longer a question. On 2026-11-16 git status shows no uncommitted change in src/cli/hookInstall.ts.
+(c) Downgrades: NEVER downgrade. An installed component that is a known NEWER release than the running CLI is left in place with one warning line. Reason: the owner asked for a reinstall when a component is missing or outdated, and two CLI versions on one machine would otherwise overwrite each other on every launch.
+(d) Running from a git checkout: the checkout's own files are what gets installed, and the known-hash check of item 4 applies to release builds only. Reason: a developer's edited skill has no release hash by definition.
+Batch question: a batch with a refusing member must leave ONE JSON object on stderr that lists each member's error; its stdout keeps the results of the members that succeeded. Reason: several objects back to back cannot be parsed as one document. This is new work and needs its own card.
+NOT decided, left for the owner: whether agentlenspro ships the review part of ~/.claude/rules/turn-protocol-and-review.md as a versioned rule. That file is written by the owner and holds much that is not about agentlenspro, so installing over it is the owner's call.
