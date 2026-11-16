@@ -4,7 +4,7 @@ title: disk-sample minute run stalled about 5 minutes before sampling under heav
 column: todo
 status: tasked
 created: 2026-11-16T20:02:01+0100
-updated: 2026-11-16T20:20:38+0100
+updated: 2026-11-16T20:25:37+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -30,3 +30,4 @@ Derived from TRDD-RU9A8H7A. On 2026-11-16 the minute job's last run before the g
 
 2026-11-16 20:10 — CORRECTS the card body and the closed TRDD-RU9A8H7A. /var/log/com.apple.xpc.launchd/launchd.log: launchd DID spawn the minute job at 19:32:51.106 (pid 54588, because interval); it exited 0 at 19:38:14.015 after 369618 ms. Its row ts is 19:38:03.453, so the run stalled about 5 min before taking its sample. No walk job ran 19:30:44–19:37:18 (walk pids 16465, 97339), so it was not the DuckDB writer lock. Load at the time 128–169; ProcessType Background + Nice 10. The unified-log 'service inactive' lines are exit events only, which is why the earlier reading ('launchd never fired') was wrong. Also corrects RU9A8H7A's 'load ~100–170 for 19:38–19:49': measured 84.8 at 19:39 falling to 27.2 at 19:49:59 (15-min avg 53.8). So RU9A8H7A's fix is INCOMPLETE: ProcessType Standard (c05b537a) is the candidate fix and is untested at load above 100. Acceptance: under Standard, at a 1-min load average above 100, no volume-job run longer than 30 s (launchd.log 'ran for') across 10+ runs.
 Passive check for any later high-load window (no need to create load): grep -h 'agentlens.disk-sample' /var/log/com.apple.xpc.launchd/launchd.log* | grep 'ran for' — any run above 30000 ms under ProcessType Standard (installed 2026-11-16 19:49:47) at a 1-min load above 100 fails acceptance; pair each with the load from 'agentlenspro statusline-history' or sysctl vm.loadavg samples.
+Correction to the passive check above: 'agentlenspro statusline-history' reports session cost and context, not host load — pair each launchd 'ran for' line with sysctl vm.loadavg samples only.

@@ -20,7 +20,9 @@ suite('test-data cap coverage', () => {
 
 suite('test-data cap trip', () => {
   // WHY: the other tests in this file prove coverage only; this proves the trip mechanism itself, with only CAP_KB lowered in a copy, so no test writes 4 GB (owner order 2026-11-16, 4 GB cap).
-  test('the cap trips: a copy with only CAP_KB lowered stops a writer with exit 3, kills its background child and removes the run dir', async function (this: Mocha.Context) {
+  // Covers the trip and the PROCESS-GROUP kill only: the backgrounded child shares the group, so it dies even with kill_stragglers
+  // disabled (mutation run 2026-11-16 stayed green). The straggler net for setsid daemons is NOT covered here.
+  test('the cap trips: a copy with only CAP_KB lowered stops a writer with exit 3, kills its same-group background child and removes the run dir', async function (this: Mocha.Context) {
     this.timeout(90000)
     const scriptPath = path.resolve(__dirname, '..', '..', '..', 'scripts', 'test-data-cap.sh')
     const original = fs.readFileSync(scriptPath, 'utf8')
