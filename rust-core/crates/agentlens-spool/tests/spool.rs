@@ -19,7 +19,9 @@ const BLOCKED_FOR: Duration = Duration::from_millis(400);
 // ---------------------------------------------------------------- helpers
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("alspool").join(name);
+    // temp_dir(), not env!("CARGO_TARGET_TMPDIR"): that path is baked in at COMPILE time, so it escapes the
+    // TMPDIR redirect of scripts/test-data-cap.sh and its 4 GB cap; temp_dir() follows the run dir.
+    let dir = std::env::temp_dir().join("alspool").join(name);
     if dir.exists() {
         std::fs::remove_dir_all(&dir).unwrap();
     }

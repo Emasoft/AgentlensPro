@@ -1,6 +1,32 @@
 // Mocha bootstrap (referenced by .mocharc.cjs `require`).
 //
 // ---------------------------------------------------------------------------------------------
+// 4 GB TEST-DATA CAP SELF-WRAP — must stay the very first statement, before the isolation block
+// below reads os.tmpdir(). WHY: scripts/test-data-cap.sh redirects TMPDIR/TMP/TEMP into a per-run dir
+// and kills the run above 4 GB, but only `pnpm run test:unit` went through it; a bare `npx mocha`
+// (ci.yml, hand runs) wrote to the system temp with no cap at all. When no cap is active
+// (AGENTLENS_TEST_CAP_DIR unset), re-run THIS mocha invocation (same node, same flags, same
+// arguments) under the wrapper and exit with its status. When the wrapper already set the variable
+// (pnpm script, cargo runner, nested mocha, parallel worker) this is a no-op, so there is never a
+// second budget. The wrapper is a bash script, so this requires bash on PATH (CI and macOS have it).
+{
+  // existsSync mirrors the wrapper's own -d test: a stale exported variable (run dir already removed) must not skip the cap.
+  const capDir = process.env.AGENTLENS_TEST_CAP_DIR
+  if (!(capDir && require('fs').existsSync(capDir))) {
+    const capScript = require('path').join(__dirname, '..', '..', 'scripts', 'test-data-cap.sh')
+    const res = require('child_process').spawnSync(
+      'bash',
+      [capScript, process.execPath, ...process.execArgv, ...process.argv.slice(1)],
+      { stdio: 'inherit' }
+    )
+    if (res.error) throw res.error
+    // A signal-killed child has status null: report 128+signo (shell convention), not a bare 1.
+    const sig = res.signal ? require('os').constants.signals[res.signal] : 0
+    process.exit(res.status ?? (sig ? 128 + sig : 1))
+  }
+}
+//
+// ---------------------------------------------------------------------------------------------
 // ROUND-2 DEFAULT TEST ISOLATION — kept FIRST in this file, before anything else (including the
 // vscode-mock/timeline blocks below), because any module a LATER require() pulls in could itself
 // capture os.homedir()/dataDir() at ITS OWN load time, before our override took effect.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # test-data-cap.sh <command> [args...] — run a test command with a SAMPLED 4 GB cap on the data it generates.
 # SAMPLED, not hard: the size is checked every 5 s, so a fast writer can overshoot the cap between two
-# samples before the run is killed. COVERS only files under TMPDIR/TMP/TEMP (redirected below); cargo
-# test is covered only when run through this wrapper; writes a test makes to its own DATA_DIR/HOME
-# outside TMPDIR are NOT counted.
+# samples before the run is killed. COVERS only files under TMPDIR/TMP/TEMP (redirected below); mocha
+# (src/test/setup.js self-wrap), cargo test (.cargo/config.toml runner) and nested runs all route through
+# this script; writes a test makes to its own DATA_DIR/HOME outside TMPDIR are NOT counted.
 #
 # Owner order 2026-11-16: "add a permanent cap to tests to limit to 4 GB any generated fake data
 # for tests!" and "no, the cap is 4GB. i don't care about testing full data size."
@@ -19,6 +19,15 @@ if [ "$#" -lt 1 ]; then
   exit 2
 fi
 
+# Nesting: when an outer wrapper already set AGENTLENS_TEST_CAP_DIR (and that run dir still exists), run
+# the command directly. WHY: a nested wrapper would open a SECOND 4 GB budget with its own TMPDIR, so
+# `outer(4 GB) -> inner(4 GB)` could write 8 GB while each du stayed under the cap; joining the outer run
+# keeps one directory, one budget, one du. A stale variable (dir already removed) must NOT skip the cap,
+# hence the -d test.
+if [ -n "${AGENTLENS_TEST_CAP_DIR:-}" ] && [ -d "$AGENTLENS_TEST_CAP_DIR" ]; then
+  exec "$@"
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # Fresh per-run dir under the gitignored tests_dev/: one directory holds ALL test temp data, so one
 # `du` measures everything the run generated, and cleanup is one rm of a dir this script created.
@@ -26,6 +35,9 @@ RUN_DIR="$ROOT/tests_dev/tmp/run-$(date +%Y%m%d_%H%M%S)-$$"
 mkdir -p "$RUN_DIR" || exit 2
 # Redirect every temp-dir convention into it, otherwise tests would write to the system temp and escape the cap.
 export TMPDIR="$RUN_DIR" TMP="$RUN_DIR" TEMP="$RUN_DIR"
+# Published so every nested launcher (mocha self-wrap in src/test/setup.js, the cargo runner, a test
+# that spawns another test run) can see it is already under a cap and join it instead of opening its own.
+export AGENTLENS_TEST_CAP_DIR="$RUN_DIR"
 
 CMD_PID=""
 # Kill what the process-group kill cannot reach. Test-spawned daemons (alcore e2e servers, anything that
