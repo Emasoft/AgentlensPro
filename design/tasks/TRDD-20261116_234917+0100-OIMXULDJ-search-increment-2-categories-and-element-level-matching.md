@@ -4,7 +4,7 @@ title: search - increment 2 categories and element level matching
 column: backburner
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-16T23:49:17+0100
+updated: 2026-11-17T00:56:45+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -55,3 +55,7 @@ Increment 1 matches the raw JSON line. Categories need the PARTS of an entry: on
 ## Approval log
 
 - 2026-11-16T23:49:17+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Engine plan after increment 1
+
+- 2026-11-17 00:56 — PROPOSED, NOT BUILT. Increment 1 landed with a two-stage engine (commits 6584d2dd, 4f134558), so the Plan above is carried out inside it. Binding over the Plan where they differ. (A) Element mode starts with --kind, --tool, --file or --commit; without them line mode is unchanged. (B) Stage 1 keeps the scan groups, thread counts, object caps, ignore_errors and the invalid-line count of line mode. In the same statement it applies the raw prefilter (only when the pattern is prefilter-safe, Plan item 1) and the scope filters, splits each kept line into elements with UNNEST, matches the pattern against the element's own text, and inserts one small row per matching element: filename, ts, type, role, kind, tool name (calls), tool_use id (calls and outputs), element index, md5 of the raw line. No element text is stored. If that one statement fails at the 2GB no-spill limit on this project, the worker measures the alternative (line-mode stage 1, then the split restricted to the lines kept) and reports both; adopted only at 0 failures in 10 runs of --kind tool-output with a common pattern. (C) --tool: a first scan builds a small table of tool_use blocks whose name matches (filename, id, name); outputs are kept by a semi-join on filename and tool_use id. The tool name printed for an output comes from that table when --tool is given, otherwise from stage 2. (D) --kind model-change: its own statement over assistant entries only (filename, ts, model, md5), previous model by a window ordered by ts inside each file; line numbers from stage 2. (E) Stage 2, shown hits only, one pass per file: the line number by md5 as today, the excerpt cut from the element's own unescaped text, and the tool name of a shown output looked up by tool_use id in that file. (F) total and --count count elements, not lines. (G) Every expected value in a test comes from the fixture read in JavaScript, never from a second SQL query. (H) Measured and recorded before the boxes are ticked: wall time, peak RSS and failures in 10 runs for --kind tool-output, --tool Bash and --kind model-change, on a frozen file set, with the result compared to an independent count for at least one of them. (I) Not in this increment: an index or cache of any kind; masks and fuzzy matching (TRDD-O3U0K4HY); docs and the bundle (TRDD-G2GGBQ0U).
