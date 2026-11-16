@@ -87,7 +87,7 @@
     "check-guards": "node scripts/test-deny-playwright-init-agents.js && node scripts/test-deny-identity-leak-to-github.js && node scripts/test-deny-unscoped-measurement.js && node scripts/test-stop-spawn-review-fork.js && node scripts/test-deny-pkgmanager-symlink-purge.js && node scripts/test-deny-symlink-paths.js && node scripts/check-no-monitor-persistent.js && node scripts/check-duckdb-only.js --self-test && node scripts/test-flood-transcripts-guard.js && node scripts/test-flood-bench-args.js",
     "check-dist-contents": "node scripts/check-dist-contents.js",
     "lint": "eslint src media/src",
-    "test:unit": "pnpm run compile-tests && mocha",
+    "test:unit": "pnpm run compile-tests && bash scripts/test-data-cap.sh mocha",
     "test:browser": "pnpm run compile-tests && node esbuild.js && AGENTLENSPRO_BROWSER_TESTS=1 mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js"
   },
   "devDependencies": {

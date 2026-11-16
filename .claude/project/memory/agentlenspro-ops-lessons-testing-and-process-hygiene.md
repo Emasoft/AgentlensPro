@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-testing-and-process-hygiene
 description: "background agent shows running but does nothing / a fork started acting like the orchestrator / does cache-expired or last-compact cost tokens / is a cache-liveness check free / a free-port probe is flaky in CI but passes on rerun / mocha does not isolate a single test file / a test is flaky under load but fails in isolation too / CI is red while local slices were green / a background pipeline shows no output for 20 minutes and looks hung / recurring maximum call stack size exceeded RangeError / an identity check is green but an address leaked into a github comment / a bare @handle paged a stranger on github / what may a hook say to a model / removed a hook advisory but it still fires / a baseline ruleset restore reverted an owner-approved bypass / a rust parity test fails in one worktree and passes in another with no source change / cargo says the library still returns the old type after the code changed / pnpm run compile-tests aborts with no TTY in a worktree / pnpm tries to reinstall dependencies in a worktree"
 ocd: 2026-07-11
-lmd: 2026-10-21
+lmd: 2026-11-16
 metadata:
   node_type: memory
   type: project
@@ -33,6 +33,14 @@ Field lessons about running tests and background work on this repo: what flakes,
 - [[memory-scope-leak-detector-false-positives]]
 ^YFLZM5HU [desc: "This hub is governed by agentlenspro-ops-lessons, the operational-doctrine overview that this sub-page details.", keywords: governed by agentlenspro ops lessons operational doctrine overview sub-page parent aspect testing process hygiene hub, lmd: 2026-10-21]
 - [[agentlenspro-ops-lessons]] — the operational-doctrine overview this sub-page details.
+
+
+^ATOM-S5PX-FWCU [desc: "Disk full / out of space after tests or measurement scripts cloned the data folder (29 copies of the 43 GB folder): test data is capped at 4 GB, use scripts/test-data-cap.sh and a 4 GB sample", keywords: disk_full out_of_space no_space_left_on_device test_copies_huge measurement_clones_the_data_folder 43_GB_data_folder_cloned 29_clones free_disk_space_ran_down test_data_cap 4_GB_limit test-data-cap.sh cp_-c_clone_counted_in_full, type: feedback, ocd: 2026-11-16, lmd: 2026-11-16]
+Test, fixture and measurement data is capped at 4 GB. Owner order 2026-11-16: "add a permanent cap to tests to limit to 4 GB any generated fake data for tests!" and "no, the cap is 4GB. i don't care about testing full data size."
+
+Why: measurement scripts cloned the 43 GB data folder 29 times (cp -c clones) and free space on the main disk fell to 41 GB.
+
+Rules: never create or copy more than 4 GB; measurement runs use a sample of at most 4 GB, never a full-size data clone. Run tests through `scripts/test-data-cap.sh <command>` (wired into `test:unit`): it points TMPDIR/TMP/TEMP at a per-run dir under tests_dev/tmp, samples it with `du -sk` every 5 s, kills the command (its process group, its descendants, and any process naming the run dir) and exits 3 above the cap, and removes the dir. The cap is SAMPLED (a fast writer can overshoot) and a constant with no env override. It does NOT cover clones made outside TMPDIR (the incident clones lived in a folder in the home directory): a measurement script must size-check (`du -sk`) before any copy. Running `mocha <file>` also loads the .mocharc spec glob, i.e. the whole suite: pass --no-config for a single file.
 
 ## Applies to
 
