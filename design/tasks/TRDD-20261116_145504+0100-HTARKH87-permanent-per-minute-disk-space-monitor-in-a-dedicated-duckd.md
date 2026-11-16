@@ -1,10 +1,10 @@
 ---
 trdd-id: HTARKH87
 title: Permanent per-minute disk-space monitor in a dedicated DuckDB table with CLI queries
-column: dev
+column: human_review
 status: tasked
 created: 2026-11-16T14:55:04+0100
-updated: 2026-11-16T19:11:31+0100
+updated: 2026-11-16T20:03:04+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -29,6 +29,7 @@ Owner order 2026-11-16 (verbatim): "you must add a permanent monitor of the disk
 - 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Approve 26 → 27 (Recommended)" to the question about the DuckDB opener cap (main uses 26 of 26; the disk monitor's dedicated disk.duckdb is the 27th). The launchd-install, install-while-DISABLED and trash-scope questions, asked in the same prompt, were left unanswered.
 - 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Install, even when DISABLED (Recommended)" to installing the launchd job that runs disk-sample every 60 s. Trash scope and the 4.5 GB cap trip test, asked in the same prompt, were left unanswered.
 - 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Merge the whole branch (Recommended)" — merge fix/setup-agent-preflight into main with --no-ff after a full compile, nothing pushed. Trip-test and self-heal questions in the same prompt were left unanswered.
+- 2026-11-16T20:03:04+0100 — column → human_review by main-agent@agentlenspro. delivered, merged to main 16010e8b, live; owner questions open
 
 ## Owner decisions
 
@@ -49,3 +50,4 @@ Owner-confirmed: ONLY the two AskUserQuestion answers above (watch-list slower; 
 Build 2026-11-16 on branch feat/disk-monitor (worktree AgentlensPro-worktrees/disk-monitor), uncommitted when the worker returned. Measured: du/walk of ~ and ~/Code do not finish in 40 s (about 19k files/s), so folder walks are RESUMABLE (disk_walk_state, disk_walk_pending) and re-walk after max(15 min, 4x last walk cost). check-duckdb-only non-test opener cap raised 26 to 27 for src/cli/diskStore.ts (the test cap was already 12 > 11 at HEAD, not caused by this work).
 Default watch-list no longer seeds ~ (the spec listed it): its walk did not finish in about 27 runs of 40 s and its follow totals roughly doubled the plain ones; ~/Code finished in about 26 runs. Owner can opt in with disk-watch add ~. Not committed by the worker; check-duckdb-only non-test cap raised 26 to 27 is an orchestrator/owner decision (revertible hunk).
 - 2026-11-16 — Merged (e1548cf6 on fix/setup-agent-preflight; merge into main pending), CLI rebuilt, launchd job installed by the owner's decision (0eb1a2ee made the whole disk-monitor verb DISABLED-exempt). SUPERSEDES Plan step 4's 'install and uninstall stay GATED (exit 69)'. Verified live: launchd run exit 0, new rows at 18:58:44. Trash scope as built = all trashes (~/.Trash, ~/Code/**/.trashcan, /Volumes/*/.Trashes/<uid>). OPEN owner decision: disk-monitor install/uninstall now also skip the launch self-heal (READ_ONLY_VERBS), which the owner's answer did not explicitly cover. Derived: TRDD-L9F3I0TC (purgeable_b / important_avail_b still NULL — likely the 'virtual' half of the order).
+- 2026-11-16 20:05 — Merged into main with --no-ff as 16010e8b (in a temporary worktree, since removed; nothing pushed). Full compile on the branch tip passed first (0 errors). Cadence fix landed as 4fdee385 + c05b537a (TRDD-RU9A8H7A, closed); purgeable/important columns verified live (TRDD-L9F3I0TC, closed). Unexplained 7-minute launchd skip tracked as TRDD-T16ZQH9F. Moving to human_review: three owner questions remain unanswered and their recommended defaults are in effect — trash scope = all trashes; disk-monitor install/uninstall skip the launch self-heal; the 4.5 GB cap trip test was NOT run.
