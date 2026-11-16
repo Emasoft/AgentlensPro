@@ -103,10 +103,45 @@ function launchctl(args: string[]): string {
   return execFileSync("launchctl", args, { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] })
 }
 
-/** Write both plists and (unless `load: false`) bootstrap them; a re-install replaces them (bootout first). `launchAgentsDir` + `load: false` make it testable without touching the real system. */
-export function diskMonitorInstall(opts: { launchAgentsDir?: string; load?: boolean; launchctl?: (args: string[]) => string } = {}): { jobs: { label: string; path: string; loaded: boolean }[] } {
+/** Synchronous sleep: launchctl is called with execFileSync, so the wait between two probes cannot be a promise. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+const BOOTOUT_POLL_MS = 200
+const BOOTOUT_WAIT_MS = 15_000
+const BOOTSTRAP_TRIES = 3
+const BOOTSTRAP_RETRY_MS = 500
+
+/** Replace a job that may be loaded: bootout, WAIT until launchd no longer knows the label, then bootstrap (up to BOOTSTRAP_TRIES).
+ *  WHY the wait (TRDD-77TSOX08): bootout returns before launchd has removed the service (measured 2026-11-16 in launchd's log: the bootstrap arrived 4.7 ms after the bootout and was refused with 37: Operation already in progress; the service was removed 6.6 ms later), and a
+ *  bootstrap of the same label in that gap fails with "Bootstrap failed: 5: Input/output error" (launchctl's text for that refusal) — which left the always-alive resident sampler unloaded.
+ *  `launchctl print` failing is the sign that the service is gone. */
+function reloadJob(ctl: (args: string[]) => string, sleep: (ms: number) => void, label: string, file: string): void {
+  try { ctl(["bootout", `${domain()}/${label}`]) } catch { /* not loaded yet */ }
+  for (let waited = 0; ; waited += BOOTOUT_POLL_MS) {
+    try { ctl(["print", `${domain()}/${label}`]) } catch { break }
+    if (waited >= BOOTOUT_WAIT_MS) {
+      throw new Error(`disk-monitor install: ${label} is still loaded ${BOOTOUT_WAIT_MS / 1000} s after bootout; it was told to stop and was NOT loaded again — run agentlenspro disk-monitor install once more`)
+    }
+    sleep(BOOTOUT_POLL_MS)
+  }
+  for (let attempt = 1; ; attempt++) {
+    try {
+      ctl(["bootstrap", domain(), file])
+      return
+    } catch (e) {
+      if (attempt >= BOOTSTRAP_TRIES) throw e
+      sleep(BOOTSTRAP_RETRY_MS)
+    }
+  }
+}
+
+/** Write both plists and (unless `load: false`) bootstrap them; a re-install replaces them (bootout first). `launchAgentsDir` + `load: false` make it testable without touching the real system. `sleep` is injectable for the same reason. */
+export function diskMonitorInstall(opts: { launchAgentsDir?: string; load?: boolean; launchctl?: (args: string[]) => string; sleep?: (ms: number) => void } = {}): { jobs: { label: string; path: string; loaded: boolean }[] } {
   if (process.platform !== "darwin") throw new Error("disk-monitor install: launchd is macOS-only — nothing was installed")
-const ctl = opts.launchctl ?? launchctl // injectable so the rollback path is testable without touching the real launchd
+  const ctl = opts.launchctl ?? launchctl // injectable so the rollback path is testable without touching the real launchd
+  const sleep = opts.sleep ?? sleepSync
   const bootstrapped: string[] = []
   const jobs = DISK_JOBS.map(job => {
     const file = plistPath(job, opts.launchAgentsDir)
@@ -118,12 +153,11 @@ const ctl = opts.launchctl ?? launchctl // injectable so the rollback path is te
     fs.renameSync(tmp, file)
     let loaded = false
     if (opts.load !== false) {
-      try { ctl(["bootout", `${domain()}/${job.label}`]) } catch { /* not loaded yet */ }
       try {
-        ctl(["bootstrap", domain(), file])
+        reloadJob(ctl, sleep, job.label, file)
       } catch (e) {
 // Half-installed is worse than not installed (one job recording, the other silent): unload what this call already loaded, then fail loudly.
-        // On a RE-install the old copy of each job was already booted out above, so after a failure nothing is loaded; the plists stay on disk and the error says why.
+        // On a RE-install the old copy of each job was already booted out (inside reloadJob), so a job whose reload failed may not be loaded, and a job LATER in the list was not reached and keeps its old registration. The plists stay on disk and the error says why.
         for (const done of bootstrapped) { try { ctl(["bootout", `${domain()}/${done}`]) } catch { /* best effort; the original error is the one to report */ } }
         throw e
       }

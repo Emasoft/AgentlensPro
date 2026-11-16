@@ -80,7 +80,7 @@ export function realMounts(entries: readonly MountEntry[]): MountEntry[] {
 }
 
 /** Top-level `<key>K</key><integer|string|true/|false/>` pairs of a diskutil plist; first occurrence wins.
- *  A regex, not an XML parser: the keys read here are flat scalars, and a plutil spawn per volume per minute is cost for nothing. */
+ *  A regex, not an XML parser: the keys read here are flat scalars, and a plutil spawn per volume per sample is cost for nothing. */
 export function parsePlistScalars(xml: string): Map<string, string | number | boolean> {
   const out = new Map<string, string | number | boolean>()
   const re = /<key>([^<]+)<\/key>\s*(?:<(integer|real|string)>([^<]*)<\/\2>|<(true|false)\/>)/g

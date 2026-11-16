@@ -253,7 +253,7 @@ suite("diskSample — run modes", () => {
   })
 })
 
-suite("diskSample — the resident minute loop", () => {
+suite("diskSample — the resident sample loop", () => {
   const T0 = Date.UTC(2026, 10, 16, 12, 0, 30) // 30 s past a minute boundary
   const at = (m: number): number => Date.UTC(2026, 10, 16, 12, m, 0)
   const iso = (ms: number): string => new Date(ms).toISOString()

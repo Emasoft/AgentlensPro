@@ -2,7 +2,7 @@
 //
 // Run by TWO launchd jobs that `disk-monitor install` writes: `--volumes-only --resident` (kept alive, one sample per wall-clock 5-minute boundary) and `--walks-only` every 300 s. They are
 // separate because a run that also walked folders took up to ~41 s, and launchd counts StartInterval from the previous run's exit
-// (measured: a steady ~101.5 s gap between volume rows). No flag = both, in one run. The minute job
+// (measured: a steady ~101.5 s gap between volume rows). No flag = both, in one run. The sampler job
 // itself is now the resident loop (`--volumes-only --resident`): see runResident for why it is no longer a fresh process per minute.
 // Exempt from the DISABLED kill switch (foreignTelemetry.ts READ_ONLY_VERBS) by owner decision 2026-11-16: the monitor exists to
 // watch a disk filling up, and the disk filling up is exactly when everything else has been switched off. It never touches the

@@ -437,7 +437,7 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
     case 'disk-sample':
       // ONE sample of every volume into disk.duckdb, then exit (TRDD-HTARKH87). Run every 5 minutes by the resident launchd job
       // `disk-monitor install` writes. Exits via exitNow: a statfs stuck on a dead mount cannot be cancelled, and it
-      // must not hold the process (or the next minute) open.
+      // must not hold the process (or the next sample) open.
       return exitNow(await runDiskSampleCli(argv.slice(1)))
     case 'disk':
       // Read-only queries over the recorded history (now/history/changes/top-change/trees/sql); disk-only, no server.

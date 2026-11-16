@@ -1795,7 +1795,7 @@ export async function runSetupCli(argv: string[], forceInstall = false): Promise
   const json = argv.includes('--json')
   const outcome = await runSetup({ dryRun: argv.includes('--dry-run'), yes: argv.includes('--yes'), forceInstall, json })
   if (json) console.log(JSON.stringify(outcome.json, null, 2))
-  // Offered, never installed (TRDD-HTARKH87): a standing launchd job that samples the disks every minute is the owner's choice, like daemon install.
-  else if (outcome.exitCode === 0 && !argv.includes('--dry-run')) console.log('opt-in: agentlenspro disk-monitor install — record every disk used/free space each minute, even with no Claude session (then query: agentlenspro disk)')
+  // Offered, never installed (TRDD-HTARKH87): a standing launchd job that samples the disks every 5 minutes is the owner's choice, like daemon install.
+  else if (outcome.exitCode === 0 && !argv.includes('--dry-run')) console.log('opt-in: agentlenspro disk-monitor install — record every disk used/free space every 5 minutes, even with no Claude session (then query: agentlenspro disk)')
   return outcome.exitCode
 }

@@ -119,7 +119,7 @@ suite("disk CLI — views over a real database", () => {
     assert.ok(rows.every(r => r.mount === "/Volumes/A"))
   }))
 
-  test("top-change ranks by the biggest single minute-to-minute move", withDb(async () => {
+  test("top-change ranks by the biggest single sample-to-sample move", withDb(async () => {
     const rows = await json(["top-change", "--since", LONG_AGO, "--top", "1"])
     assert.strictEqual(rows.length, 1)
     assert.strictEqual(Number(rows[0].delta_used_b), 5 * GIB)
