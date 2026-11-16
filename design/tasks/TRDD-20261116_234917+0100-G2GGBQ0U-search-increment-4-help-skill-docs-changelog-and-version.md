@@ -4,7 +4,7 @@ title: search - increment 4 help skill docs changelog and version
 column: backburner
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-16T23:49:17+0100
+updated: 2026-11-16T23:53:53+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -39,3 +39,7 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 ## Approval log
 
 - 2026-11-16T23:49:17+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+- 2026-11-16 23:53 — Item 5 corrected: 'search' is in the verb lists of src/cli/main.ts (lines 120, 173) but NOT in READ_ONLY_VERBS of src/cli/foreignTelemetry.ts (measured by the harness). This increment must read what READ_ONLY_VERBS gates and DECIDE whether search belongs in it, with the reason recorded.

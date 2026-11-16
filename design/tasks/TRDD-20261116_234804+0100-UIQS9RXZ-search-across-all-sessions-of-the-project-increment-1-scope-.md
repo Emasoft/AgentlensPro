@@ -4,7 +4,7 @@ title: search across all sessions of the project - increment 1 scope filters and
 column: dev
 status: tasked
 created: 2026-11-16T23:48:04+0100
-updated: 2026-11-16T23:51:54+0100
+updated: 2026-11-16T23:53:52+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -70,3 +70,4 @@ Files: src/cli/searchCli.ts, src/test/searchCli.test.ts (and the one-line verb s
 
 - 2026-11-16 23:49 — The .tmp folder in the repo root is dated 2026-10-03 and empty, so the probes did not create it. The probe's peak memory figure is unreliable (unit not confirmed); the acceptance box asks for a real measurement.
 - 2026-11-16 23:51 — Checked before dispatch: src/projectSlug.ts exports projectSlugOf and resolveProjectSlugs (use the second: slugs over 200 chars are resolved from disk); claudeProjectsDirs() in src/logReader.ts gives the projects dirs and honours CLAUDE_CONFIG_DIR; 'search' is already in the verb lists of src/cli/main.ts (lines 120, 173); no test line in src/test/searchCli.test.ts mentions that --session is required (grep found none, the worker confirms by reading).
+- 2026-11-16 23:53 — CORRECTIONS after the harness review, sent to the worker and binding over the text above. (a) WRONG NOTE: src/test/searchCli.test.ts lines 81 to 85 DO assert that a missing --session is a UsageError; that test is rewritten and named in the commit. (b) Order: one transcript in scope and no --order means file order, as today; otherwise newest first. (c) Literal patterns are JSON-escaped before the raw-line match, so a pattern with a double quote, backslash, newline or tab is found; --regex stays raw. (d) Attachments are 1332078600 of 3154310844 chars; by default only hook attachment types and queued_command, edited_text_file, file, diagnostics, task_status are searched; --include-attachments or --type attachment searches all. (e) memory_limit is instance config and SET temp_directory = '' runs on the connection; src/transcriptSql.ts lacks the second and is not the model. (f) Timings are single runs on a loaded host and spread widely: raw scan 1764 to 2544 ms, mask 3220 ms, group-by scans 4086 to 5057 ms, one content-type query 20897 ms, the explode path 2543 and 9704 ms. The index decision stays OPEN until element mode is timed. (g) 'api-request-blob repeats the conversation' rests on ONE sample row. (h) The dispatch went ahead before the proposal's review had arrived; the worker's result is unreviewed until these points are checked in its diff. (i) trddgrep printed 'no project-id: design/requirements/PRRD.md carries no project-id field' when the card was minted.
