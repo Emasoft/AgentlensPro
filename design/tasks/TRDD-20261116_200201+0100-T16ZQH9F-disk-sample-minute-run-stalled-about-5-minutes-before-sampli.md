@@ -4,7 +4,7 @@ title: disk-sample minute run stalled about 5 minutes before sampling under heav
 column: todo
 status: tasked
 created: 2026-11-16T20:02:01+0100
-updated: 2026-11-16T21:20:39+0100
+updated: 2026-11-16T21:32:15+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -41,3 +41,4 @@ PASS BAR addendum (before the run): the live job L has no wall-clock slot (launc
 2026-11-16 21:20 — e7a74ebb (resident sampler) built and installed on fix/setup-agent-preflight, NOT yet merged into main. The minute job is now an always-on KeepAlive process at default priority; 'agentlenspro disk-monitor uninstall' removes it. Origin of the 'Could not set lock … PID 10359' line in disk-sample.log is unknown (the log has no timestamps); the live check decides whether resident ticks hit the lock.
 2026-11-16 21:15–21:19 live check at normal load (e7a74ebb installed): first immediate sample 21:15:57.048, then 21:16:00.002, 21:17:00.004, 21:18:00.004, 21:19:00.001 (gaps 60.000 ±0.004 s); launchd runs=1, never exited; RSS 148 MB (not the ~50 MB guessed). disk-sample.log stayed at 1 line, so no resident tick hit the writer lock in these 4 minutes. Not yet tested under heavy load with the write included.
 PASS BAR, final window (owner answer: "Yes, run it"; written before the run): 120 normal-priority self-ending perl loops, 1-min load above 100 for at least 8 minutes. The resident row ts is the slot time, so write completion is measured from disk.duckdb's mtime, sampled every 2 s with /usr/bin/stat. A loaded minute M passes when (a) a disk_volume row with ts in [M, M+1 s) exists afterwards and (b) the file's mtime changes within [M, M+30 s]. The card closes if every loaded minute passes and the resident process never restarted (launchd runs stays 1).
+2026-11-16 21:20:52–21:31:33 FINAL WINDOW (owner answer "Yes, run it"): 120 normal-priority loops, 1-min load above 100 from 21:21:52 (peak 256). No .wal file exists (each tick closes the store), and disk.duckdb mtime moved at 21:22:08, 21:23:08, 21:24:07, 21:25:07, 21:26:07, 21:27:10, 21:28:08, 21:29:08, 21:30:07 — rows 21:22:00–21:30:00 all present: 9 loaded minutes PASS (write done 7–10 s after the minute). 21:31:00 FAILED: 'disk-sample resident: tick 2026-11-16T20:31:00.000Z failed: IO Error: Could not set lock' — the walk job (pid 56941, spawned 21:22:09, still running 10 min later under load) held the writer lock longer than the tick's 5 s retry. launchd runs=1, never exited; perl survivors 0. Verdict: cadence fixed under load; NEW defect — writer-lock contention with a slow walk drops a minute. Next: the resident tick should retry the lock for most of its 45 s watchdog instead of 5 s (or the walk should hold the lock only for its final insert). Card stays open.
