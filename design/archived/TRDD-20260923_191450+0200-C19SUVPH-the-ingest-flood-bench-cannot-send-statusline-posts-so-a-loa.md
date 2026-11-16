@@ -1,9 +1,9 @@
 ---
 trdd-id: C19SUVPH
 title: The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
-column: human_review
+column: complete
 created: 2026-09-23T19:14:50+0200
-updated: 2026-10-17T20:18:32+0200
+updated: 2026-11-16T22:51:13+0100
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -15,7 +15,7 @@ approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T19:14:50+0200
 implementation-commits: [bbf40fdf, ea835fdf, d18dc9a1, fb61c4f4, 9b599f21, 79dd2828, d35de9f2, 782cab31, 17ed1ce4, 3f698179]
-status: tasked
+status: archived
 ---
 
 # The ingest flood bench cannot send statusline POSTs so a load arm cannot vary statusline alone
@@ -45,6 +45,7 @@ status: tasked
 
 scripts/bench/alcore-ingest-flood.mjs drives OTLP only. TRDD-EQCGAVGV's isolated run needs arms that vary statusline and OTLP independently, so the tool must: send POST /api/statusline-samples with a realistic payload at a configurable rate (including low rates, e.g. 1 per 10 s); pace OTLP independently; target a given port set (UI/API and OTLP) so it never touches the live collector's canonical ports by default.
 Known gap, not fixed: the bench's live-port refusal is keyed on the literal UI port 3000 (OTLP 4318 never moves) and does not read <dataDir>/ports.json, so a live collector whose UI port moved off 3000 is protected only by the dataDir refusal. On 2026-10-17 nothing listened on 3000 at the probe; the cause is unexplained (a moved port, or no collector running).
+2026-11-16 22:52 REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): ACCEPTED. Re-checked today: all ten implementation commits are ancestors of HEAD and of main; node scripts/test-flood-bench-args.js exit 0 (16 passed, 1 skipped, 0 failed); that test is named in package.json and ci.yml; src/test/floodBenchRate.test.ts exists. NOT observed and still open as a fact, not a blocker: the three new test steps and the rate test have never run on CI because nothing is pushed (pushing is the owner's act).
 
 ## Acceptance
 
@@ -68,6 +69,7 @@ related: [EQCGAVGV, PLK9JWTF].
 - 2026-10-17T17:26:08+0200 — column → dev by main-agent@agentlenspro. Part 2 implementation started
 - 2026-10-17T20:12:05+0200 — column → testing by main-agent@agentlenspro. Part 2 committed (17ed1ce4, 3f698179): real-alcore rate test green locally, mutations MB1-MB4 as expected; boxes 1-2 ticked
 - 2026-10-17T20:12:06+0200 — column → human_review by main-agent@agentlenspro. all three boxes ticked with disclosures in ## Evidence; owner to push so CI observes the new test steps and the rate test
+- 2026-11-16T22:51:13+0100 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead per the 2026-11-16 order; arg test re-run today; CI still unobserved (no push).
 
 ## Evidence
 
