@@ -53,7 +53,7 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 installs the server itself; the CLI starts it on demand.
 
 If any agentlenspro command prints "agentlenspro is DISABLED", run the reactivate command it prints; do not retry the original command.
-While disabled, the reads that need no server still answer without enabling: `get_account_status --all` (every account's status; it also sends one billed probe per CLAUDE_CODE_LONG_OAUTH_KEY_* key, even while disabled, unless `--no-refresh`), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`. Server-only verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) refuse with exit 69; for account status use `get_account_status --all` instead of re-enabling.
+While disabled, the reads that need no server still answer without enabling: `get_account_status --all` (every account's status; it also sends one billed probe per CLAUDE_CODE_LONG_OAUTH_KEY_* key, even while disabled, unless `--no-refresh`), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`, and the disk monitor: `disk`, `disk-sample`, `disk-watch`, `disk-monitor status` (`disk-monitor install|uninstall` stay gated). Server-only verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) refuse with exit 69; for account status use `get_account_status --all` instead of re-enabling.
 `server`/`daemon` restarts do not self-heal the install: run any other agentlenspro command, or `agentlenspro enable`, to repair.
 
 ## Version floor — check this FIRST if a command is "unknown"
@@ -180,6 +180,7 @@ text refers to in **bold** are listed here with the file that holds them.
 | the full `budget` flag surface and the abort recipe | [references/budget.md](references/budget.md) — **Budgeting a timed run** |
 | the full `watch` flag surface, metrics, and durable logging | [references/watch.md](references/watch.md) — **Watching ANY metric for peaks** |
 | why a 20-minute gap is NOT a cold cache; `cache-expired`, `cache-state`, `last-compact` | [references/cache-ttl.md](references/cache-ttl.md) — **Cache TTL tracking** |
+| disk space over time: free/used per volume, when exactly it changed, the trash, folder sizes; `disk`, `disk-sample`, `disk-watch`, `disk-monitor` | [references/disk-monitor.md](references/disk-monitor.md) — **Disk-space monitor** |
 | the per-call cache ledger, Anthropic's own window usage, every account's headroom | [references/windows-and-ledger.md](references/windows-and-ledger.md) — **The per-call ledger**, **Authoritative window usage**, **Every account** |
 | what is running in THIS project and what it cost; per-subagent context fill | [references/statusline-history.md](references/statusline-history.md) — **Per-project and per-subagent history** |
 | every tool, by the question it answers | [references/tool-cheat-sheet.md](references/tool-cheat-sheet.md) — **High-value tools (cheat-sheet)**, **Context-composition & session-drill tools** |
