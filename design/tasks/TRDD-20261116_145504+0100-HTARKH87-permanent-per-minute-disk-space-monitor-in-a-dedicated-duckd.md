@@ -4,7 +4,7 @@ title: Permanent per-minute disk-space monitor in a dedicated DuckDB table with 
 column: human_review
 status: tasked
 created: 2026-11-16T14:55:04+0100
-updated: 2026-11-16T20:03:04+0100
+updated: 2026-11-16T20:06:02+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -30,6 +30,7 @@ Owner order 2026-11-16 (verbatim): "you must add a permanent monitor of the disk
 - 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Install, even when DISABLED (Recommended)" to installing the launchd job that runs disk-sample every 60 s. Trash scope and the 4.5 GB cap trip test, asked in the same prompt, were left unanswered.
 - 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Merge the whole branch (Recommended)" — merge fix/setup-agent-preflight into main with --no-ff after a full compile, nothing pushed. Trip-test and self-heal questions in the same prompt were left unanswered.
 - 2026-11-16T20:03:04+0100 — column → human_review by main-agent@agentlenspro. delivered, merged to main 16010e8b, live; owner questions open
+- 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "All trashes (Recommended)" — trash scope stays ~/.Trash, ~/Code/**/.trashcan, /Volumes/*/.Trashes/<uid>. The self-heal-skip and 4.5 GB trip-test questions in the same prompt were left unanswered; the trip test was NOT run.
 
 ## Owner decisions
 
