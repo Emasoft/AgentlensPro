@@ -4,7 +4,7 @@ title: rss_guard primary_metric test fails intermittently when parallel tests fr
 column: human_review
 status: tasked
 created: 2026-10-15T14:53:47+0200
-updated: 2026-10-15T18:49:35+0200
+updated: 2026-11-16T23:02:03+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -55,6 +55,7 @@ Confirm the cause first with --test-threads=1 runs on Linux against default thre
 Box 1 asks for the cause to be confirmed or refuted by --test-threads=1 runs against default threads. Those runs were made (Results, the 8a9e472f line) and did not reproduce the failure in either arm, so they can neither confirm nor refute it. Proposed: move box 1 word for word to a new backburner card carrying the 8a9e472f and mechanism-probe Results lines, to reopen if the failure recurs; this card then closes without it. Alternative: reword box 1 to say a large concurrent free is shown sufficient and its link to the two observed failures is not established.
 Box 3 asks for 20 consecutive full lib runs on Linux with zero failures of this test. Since cc0cee02 the test is no longer in the lib binary. Proposed: accept the 20 of 20 Linux runs of its own binary at cc0cee02 in its place, since that binary is what CI runs. Twenty clean runs bound the failure rate only below about 14% at 95% confidence.
 The card moves to human_review for this decision.
+2026-11-16 23:02 — DECIDED IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."); the card stays open until the next review so the owner can overrule. (1) Box 1: the proposal is taken. Box 1 moves word for word to the new backburner card TRDD-6FHDDCY6, with the 8a9e472f and mechanism-probe Results lines copied whole; this card closes without it. (2) Box 3: the proposal is taken. The 20 of 20 Linux runs of the test's own binary at cc0cee02 stand in its place; they bound the failure rate only below about 14% at 95% confidence. Re-checked today: cc0cee02 is an ancestor of HEAD; cargo test of the rss_guard_metric binary on macOS, 1 passed, 0 failed. NOT re-run: the Linux runs and the two mutations.
 
 ## Notes
 
