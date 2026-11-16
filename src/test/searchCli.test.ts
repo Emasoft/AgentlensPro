@@ -7,7 +7,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
-  searchTranscript, searchTranscripts, discoverTranscripts, parseTimeArg, runSearchCli,
+  searchTranscript, searchTranscripts, discoverTranscripts, parseTimeArg, runSearchCli, TranscriptFile,
   SearchScopeError, SearchHit, SearchOptions, ScopeOptions,
 } from '../cli/searchCli'
 import { UsageError } from '../cli/cliErrors'
@@ -139,13 +139,14 @@ const run = (pattern: string, opts: SearchOptions = {}, scope: ScopeOptions = {}
   searchTranscripts(discoverTranscripts(PROJECT, scope), pattern, { limit: 500, ...opts })
 
 async function runCli(argv: string[]): Promise<{ code: number; out: string; err: string }> {
-  const log = console.log
-  const error = console.error
+  // The verb writes through process.stdout/stderr (not console), so those are what the capture swaps.
+  const stdoutWrite = process.stdout.write
+  const stderrWrite = process.stderr.write
   let out = ''
   let err = ''
-  console.log = (...a: unknown[]) => { out += `${a.join(' ')}\n` }
-  console.error = (...a: unknown[]) => { err += `${a.join(' ')}\n` }
-  try { return { code: await runSearchCli(argv), out, err } } finally { console.log = log; console.error = error }
+  process.stdout.write = ((chunk: string | Uint8Array) => { out += String(chunk); return true }) as typeof process.stdout.write
+  process.stderr.write = ((chunk: string | Uint8Array) => { err += String(chunk); return true }) as typeof process.stderr.write
+  try { return { code: await runSearchCli(argv), out, err } } finally { process.stdout.write = stdoutWrite; process.stderr.write = stderrWrite }
 }
 
 let savedConfigDir: string | undefined
@@ -258,6 +259,18 @@ suite('searchCli — project-wide search (TRDD-UIQS9RXZ)', () => {
     assert.match(text.out.split('\n')[0], /^[a-z0-9]{8}(:[a-z0-9]{8})?\t#\d+\t\S+\t\[[a-z]+\]\t/)
   })
 
+  test('the CLI names the invalid lines it skipped on stderr and stays silent for a clean scope', async function () {
+    this.timeout(60_000)
+    const badDir = path.join(CFG, 'projects', projectSlugOf('/fake/bad-proj'))
+    fs.mkdirSync(badDir, { recursive: true })
+    fs.writeFileSync(path.join(badDir, 'bbbbbbbb-1111-2222-3333-444444444444.jsonl'), [JSON.stringify(DUP), '{"type":"user","message":{"content":"NEEDLE torn', JSON.stringify(DUP)].join('\n') + '\n')
+    const bad = await runCli(['NEEDLE', '--project', '/fake/bad-proj'])
+    assert.strictEqual(bad.code, 0)
+    assert.ok(bad.err.includes('1 invalid line(s) in 1 transcript(s) skipped'), bad.err)
+    const clean = await runCli(['NEEDLE', '--project', PROJECT])
+    assert.ok(!clean.err.includes('invalid line'), clean.err)
+  })
+
   test('a single quote in any string flag does not break the SQL or the scope lookup', async function () {
     this.timeout(60_000)
     const r = await run('NEEDLE', { role: "x'y", type: "x'y", branch: "x'y", cwd: "x'y", worktree: "x'y", model: "x'y", since: '2026-01-01T00:00:00.000Z' })
@@ -310,5 +323,81 @@ suite('searchCli — usage contract', () => {
   test('a non-numeric --limit is refused', async () => {
     await assert.rejects(() => runSearchCli(['needle', '--session', 'abc123', '--limit', 'lots']),
       (e: unknown) => e instanceof UsageError)
+  })
+})
+
+suite('searchCli — timing, stage-2 numbering and torn lines (TRDD-UIQS9RXZ)', () => {
+  const entry = (content: string): string => JSON.stringify({ type: 'user', timestamp: '2026-08-18T10:00:00.000Z', message: { role: 'user', content } })
+  const rawFile = (name: string, text: string): TranscriptFile => {
+    const p = path.join(tmpDir, name)
+    fs.writeFileSync(p, text)
+    return { path: p, session: name.replace(/\.jsonl$/, ''), agent: null, size: Buffer.byteLength(text), mtimeMs: 0 }
+  }
+  /** Ground truth in JS: the 1-based lines that parse as JSON and contain NEEDLE (a torn or malformed line yields no hit). */
+  const validNeedleLines = (f: TranscriptFile): number[] =>
+    fs.readFileSync(f.path, 'utf8').split('\n').flatMap((l, i) => {
+      try { JSON.parse(l) } catch { return [] }
+      return l.includes('NEEDLE') ? [i + 1] : []
+    })
+  const other = (): TranscriptFile => rawFile('other-file.jsonl', entry('NEEDLE elsewhere') + '\n')
+
+  test('the engine result carries timing with two non-negative numbers', async function () {
+    this.timeout(30_000)
+    const r = await searchTranscripts([rawFile('timing.jsonl', entry('NEEDLE t') + '\n'), other()], 'NEEDLE')
+    assert.ok(Number.isFinite(r.timing.scanMs) && r.timing.scanMs >= 0)
+    assert.ok(Number.isFinite(r.timing.linesMs) && r.timing.linesMs >= 0)
+  })
+
+  test('stage-2 line numbers stay true among repeated lines that share a long prefix (the match filter itself is a pure speed-up)', async function () {
+    this.timeout(30_000)
+    const shared = 'shared prefix of a long line '.repeat(20)
+    const f = rawFile('prefix.jsonl', [entry(shared), entry(shared + 'NEEDLE'), entry(shared), entry(shared + 'NEEDLE')].join('\n') + '\n')
+    const r = await searchTranscripts([f, other()], 'NEEDLE')
+    assert.deepStrictEqual(r.hits.filter(h => h.session === 'prefix').map(h => h.line).sort(), validNeedleLines(f), 'lines 2 and 4')
+    assert.deepStrictEqual(r.skipped, { lines: 0, files: 0 }, 'a clean scope skips nothing')
+    assert.deepStrictEqual((await searchTranscripts([f, other()], 'NEEDLE', { mode: 'count' })).skipped, { lines: 0, files: 0 }, 'count mode too')
+  })
+
+  test('a torn last line (live transcript) does not fail the search and earlier hits keep their true lines', async function () {
+    this.timeout(30_000)
+    const f = rawFile('torn-tail.jsonl', [entry('NEEDLE 1'), entry('plain'), entry('NEEDLE 3')].join('\n') + '\n{"type":"user","message":{"content":"NEEDLE torn')
+    for (const files of [[f], [f, other()]]) {
+      const r = await searchTranscripts(files, 'NEEDLE')
+      assert.deepStrictEqual(r.hits.filter(h => h.session === 'torn-tail').map(h => h.line).sort(), validNeedleLines(f), `${files.length} file(s)`)
+      assert.deepStrictEqual(r.skipped, { lines: 1, files: 1 }, `${files.length} file(s)`)
+    }
+  })
+
+  test('a malformed line in the middle is skipped and the lines after it keep their physical numbers', async function () {
+    this.timeout(30_000)
+    const f = rawFile('torn-mid.jsonl', [entry('NEEDLE 1'), entry('NEEDLE 2'), '{"type":"user","message":{"content":"NEEDLE bad', entry('NEEDLE 4'), entry('plain'), entry('NEEDLE 6')].join('\n') + '\n')
+    for (const files of [[f], [f, other()]]) {
+      const r = await searchTranscripts(files, 'NEEDLE')
+      assert.deepStrictEqual(r.hits.filter(h => h.session === 'torn-mid').map(h => h.line).sort(), validNeedleLines(f), `${files.length} file(s)`)
+      assert.deepStrictEqual(r.skipped, { lines: 1, files: 1 }, `${files.length} file(s)`)
+      const c = await searchTranscripts(files, 'NEEDLE', { mode: 'count' })
+      assert.strictEqual(c.counts.find(x => x.session === 'torn-mid')?.count, validNeedleLines(f).length, 'count mode does not count the invalid line')
+      assert.strictEqual(c.total, validNeedleLines(f).length + files.length - 1, 'count mode total')
+      assert.deepStrictEqual(c.skipped, { lines: 1, files: 1 }, 'count mode')
+      assert.deepStrictEqual((await searchTranscripts(files, 'NEEDLE', { role: 'user' })).skipped, { lines: 1, files: 1 }, 'a role filter keeps the invalid line in the count')
+    }
+  })
+
+  test('multi-MB small files (4-thread scan group): single and two-file scopes report the physical lines of every needle', async function () {
+    this.timeout(60_000)
+    // ~6 MB each, a needle on every 97th line: spans many reader buffers, so a thread-ordering slip in row_number() would show.
+    const bulk = (name: string): TranscriptFile => {
+      const lines = Array.from({ length: 3000 }, (_, i) => entry(`${(i + 1) % 97 === 0 ? 'NEEDLE ' : 'plain '}${i} ${'z'.repeat(2000)}`))
+      return rawFile(name, lines.join('\n') + '\n')
+    }
+    const a = bulk('bulk-a.jsonl')
+    const b = bulk('bulk-b.jsonl')
+    assert.ok(a.size > 5_000_000 && a.size < 32 * 1048576, 'fixture must land in the small-file group')
+    const want = validNeedleLines(a)
+    const one = await searchTranscripts([a], 'NEEDLE', { limit: 500 })
+    assert.deepStrictEqual(one.hits.map(h => h.line), want, 'one transcript: file order, physical lines')
+    const two = await searchTranscripts([a, b], 'NEEDLE', { limit: 500 })
+    assert.deepStrictEqual(two.hits.filter(h => h.session === 'bulk-a').map(h => h.line).sort((x, y) => (x ?? 0) - (y ?? 0)), want, 'two transcripts: stage 2 lines')
+    assert.deepStrictEqual(two.hits.filter(h => h.session === 'bulk-b').map(h => h.line).sort((x, y) => (x ?? 0) - (y ?? 0)), validNeedleLines(b))
   })
 })
