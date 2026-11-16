@@ -105,6 +105,12 @@ export class DiskDbMissingError extends Error {
   }
 }
 
+/** True for the DuckDB refusal to take the writer lock held by another process ("IO Error: Could not set lock on file ..."). Narrower than the retry test in openWithRetry
+ *  on purpose: /lock/i also matches "block", "deadlock" and "clock", and the resident sampler keeps a batch only for a real lock refusal (TRDD-T16ZQH9F). */
+export function isWriterLockError(e: unknown): boolean {
+  return /could not set lock/i.test(e instanceof Error ? e.message : String(e))
+}
+
 export type SqlValue = string | number | boolean | Date | null
 
 /** One multi-row INSERT with a CAST per column, so JS numbers land as BIGINT/TIMESTAMPTZ exactly

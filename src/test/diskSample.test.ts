@@ -12,9 +12,9 @@ import * as os from "os"
 import * as path from "path"
 import { spawn, spawnSync, type ChildProcess } from "child_process"
 import { disabledNotice } from "../cli/foreignTelemetry"
-import { nextMinuteBoundary, planWalks, recordVolumes, runDiskSample, runDiskSampleCli, runResident, storeOutcomes } from "../cli/diskSample"
+import { nextMinuteBoundary, planWalks, recordVolumeBatch, recordVolumes, runDiskSample, runDiskSampleCli, runResident, storeOutcomes } from "../cli/diskSample"
 import { openReadOnly, openWritable } from "../cli/diskStore"
-import { derivePurgeable, parseMount, parsePlistScalars, realMounts, sampleVolumes, usableImportant } from "../cli/diskVolumes"
+import { derivePurgeable, parseMount, parsePlistScalars, realMounts, sampleVolumes, usableImportant, type VolumeSample } from "../cli/diskVolumes"
 import { runSegment, startWalk, type WalkState } from "../cli/diskWalk"
 
 const FAR = Date.now() + 3_600_000
@@ -256,6 +256,9 @@ suite("diskSample — run modes", () => {
 suite("diskSample — the resident minute loop", () => {
   const T0 = Date.UTC(2026, 10, 16, 12, 0, 30) // 30 s past a minute boundary
   const at = (m: number): number => Date.UTC(2026, 10, 16, 12, m, 0)
+  const iso = (ms: number): string => new Date(ms).toISOString()
+  // The exact text DuckDB gives when another process holds the writer lock (what isWriterLockError recognises).
+  const LOCK_ERROR = "IO Error: Could not set lock on file \"disk.duckdb\": Conflicting lock is held in /usr/bin/node (PID 1) by user u"
 
   // A fake clock: sleep advances it by exactly the requested time (plus lateMs), so ticks land where the loop aimed them, with no real waiting.
   function fakeClock(startMs: number, lateMs = 0): { now(): number; sleep(ms: number): Promise<void> } {
@@ -264,6 +267,7 @@ suite("diskSample — the resident minute loop", () => {
   }
   // A watchdog that never fires and an exit that must never be called.
   const calm = { deadline: () => ({ expired: new Promise<void>(() => {}), cancel: () => {} }), exit: (): void => { throw new Error("unexpected exit") } }
+  const sampled = async (): Promise<number> => 1
 
   test("nextMinuteBoundary is the first minute boundary strictly after the given time", () => {
     assert.strictEqual(nextMinuteBoundary(T0), at(1))
@@ -274,7 +278,7 @@ suite("diskSample — the resident minute loop", () => {
   test("the first tick runs immediately at the start time, then one tick per minute boundary, and maxTicks stops the loop", async () => {
     const clock = fakeClock(T0, 3) // every wake is 3 ms late
     const slots: number[] = []
-    await runResident({ ...clock, ...calm, tick: async slot => { slots.push(slot) }, log: () => { throw new Error("nothing to log") }, maxTicks: 4 })
+    await runResident({ ...clock, ...calm, sample: sampled, record: async batch => { slots.push(...batch.map(b => b.slotMs)) }, log: () => { throw new Error("nothing to log") }, maxTicks: 4 })
     assert.deepStrictEqual(slots, [T0, at(1), at(2), at(3)], "no blind spot after a start: the first sample is at the start time itself")
     assert.ok(slots.slice(1).every(s => s % 60_000 === 0))
   })
@@ -283,7 +287,14 @@ suite("diskSample — the resident minute loop", () => {
     let t = T0
     const clock = { now: () => t, sleep: async (ms: number) => { t += ms > 5 ? ms - 2 : ms } } // the long sleep wakes 2 ms early, the short top-up is exact
     const slots: number[] = []
-    await runResident({ ...clock, ...calm, tick: async slot => { slots.push(slot); assert.strictEqual(t, slot, "never before the boundary") }, log: () => {}, maxTicks: 3 })
+    await runResident({
+      ...clock,
+      ...calm,
+      sample: sampled,
+      record: async batch => { const s = batch[batch.length - 1].slotMs; slots.push(s); assert.strictEqual(t, s, "never before the boundary") },
+      log: () => {},
+      maxTicks: 3,
+    })
     assert.deepStrictEqual(slots, [T0, at(1), at(2)])
   })
 
@@ -294,27 +305,29 @@ suite("diskSample — the resident minute loop", () => {
       now: () => t,
       sleep: async ms => { t += ms },
       ...calm,
-      tick: async slot => { slots.push(slot); if (slots.length === 1) t += 5 * 60_000 }, // the machine slept through the next 5 minutes during the first tick
+      sample: sampled,
+      record: async batch => { slots.push(...batch.map(b => b.slotMs)); if (slots.length === 1) t += 5 * 60_000 }, // the machine slept through the next 5 minutes during the first tick
       log: () => {},
       maxTicks: 2,
     })
     assert.deepStrictEqual(slots, [T0, at(6)], "12:01-12:05 are skipped, not replayed")
   })
 
-  test("a tick that throws is logged as one line and the next tick still runs", async () => {
+  test("a sample that throws is logged as one line and the next tick still runs", async () => {
     const clock = fakeClock(T0)
-    const slots: number[] = []
+    let samples = 0
     const lines: string[] = []
     await runResident({
       ...clock,
       ...calm,
-      tick: async slot => { slots.push(slot); if (slots.length === 1) throw new Error("writer lock timeout") },
+      sample: async () => { samples++; if (samples === 1) throw new Error("probe failed"); return 1 },
+      record: async () => {},
       log: line => lines.push(line),
       maxTicks: 2,
     })
-    assert.strictEqual(slots.length, 2, "the loop survived the failed tick")
+    assert.strictEqual(samples, 2, "the loop survived the failed tick")
     assert.strictEqual(lines.length, 1)
-    assert.match(lines[0], /2026-11-16T12:00:30\.000Z failed: writer lock timeout/)
+    assert.match(lines[0], /2026-11-16T12:00:30\.000Z failed: probe failed/)
   })
 
   test("a tick that never settles trips the watchdog: one stderr line, exit code 1, and no further tick", async () => {
@@ -324,7 +337,8 @@ suite("diskSample — the resident minute loop", () => {
     let ticks = 0
     await runResident({
       ...clock,
-      tick: () => { ticks++; return new Promise<void>(() => {}) }, // never resolves
+      sample: () => { ticks++; return new Promise<number>(() => {}) }, // never resolves
+      record: async () => {},
       log: line => lines.push(line),
       deadline: () => ({ expired: Promise.resolve(), cancel: () => {} }), // the deadline has already passed
       exit: code => { exits.push(code) },
@@ -333,6 +347,127 @@ suite("diskSample — the resident minute loop", () => {
     assert.deepStrictEqual(exits, [1])
     assert.strictEqual(lines.length, 1)
     assert.match(lines[0], /still running after \d+ ms; exiting so launchd restarts the sampler/)
+    assert.ok(lines[0].includes(iso(T0)), "the slot lost with the process is named")
+  })
+
+  test("a 23 s sample leaves the write at most 12 s of lock wait; a lock refusal buffers the sample (no exit) and the next tick writes both", async () => {
+    let t = T0
+    const exits: number[] = []
+    const lines: string[] = []
+    const calls: { waitMs: number; slots: number[] }[] = []
+    await runResident({
+      now: () => t,
+      sleep: async ms => { t += ms },
+      deadline: calm.deadline,
+      exit: code => { exits.push(code) },
+      sample: async () => { t += 23_000; return 1 }, // a probe starved by load
+      record: async (batch, waitMs) => {
+        calls.push({ waitMs, slots: batch.map(b => b.slotMs) })
+        if (calls.length === 1) throw new Error(LOCK_ERROR)
+      },
+      log: line => lines.push(line),
+      maxTicks: 2,
+    })
+    assert.deepStrictEqual(exits, [], "a refused write is not a stuck tick")
+    assert.ok(calls[0].waitMs >= 1000 && calls[0].waitMs <= 12_000, `the lock wait fits what the watchdog leaves: ${calls[0].waitMs} ms`)
+    assert.deepStrictEqual(calls[1].slots, [T0, at(1)], "the next tick writes the carried sample and its own")
+    assert.ok(lines.some(l => /write deferred, 1 sample\(s\) buffered/.test(l)), lines.join("\n"))
+    assert.ok(lines.some(l => /took 2\d{4} ms \(sample 23000 ms, write 0 ms\)/.test(l)), "a tick past 15 s logs its sample and write times")
+  })
+
+  test("a REAL second process holding the writer lock: the first tick defers its row, the second writes both once the holder has exited", withTempEnv(async (_env, ctx) => {
+    if (process.platform !== "darwin") ctx.skip()
+    await planWalks(Date.now()) // creates the file and schema
+    const volumes = await sampleVolumes() // probed before the holder starts: nothing below depends on how long a probe takes
+    // Held far longer than the test needs: the FIRST tick must run while the holder is alive, and the second only after its exit event — no elapsed-time race.
+    const holder = await holdWriterLock(120_000)
+    const holderExited = new Promise<void>(resolve => holder.once("exit", () => resolve()))
+    let t = T0
+    const lines: string[] = []
+    try {
+      await runResident({
+        now: () => t,
+        sleep: async ms => { holder.kill("SIGKILL"); await holderExited; t += ms }, // the wait for the next minute ends when the holder is gone
+        ...calm,
+        sample: async () => volumes,
+        record: (batch, waitMs) => recordVolumeBatch(batch.map(b => ({ volumes: b.sample, tsMs: b.tsMs })), waitMs),
+        lockWaitMs: 1000,
+        log: line => lines.push(line),
+        maxTicks: 2,
+      })
+    } finally { holder.kill("SIGKILL") }
+    assert.ok(lines.some(l => /write deferred, 1 sample\(s\) buffered/.test(l)), `the first tick met the real lock: ${lines.join(" | ")}`)
+    assert.strictEqual(lines.length, 1, lines.join(" | "))
+    const stamps = (await query("SELECT epoch_ms(ts) AS ms FROM disk_volume GROUP BY ts ORDER BY ts")).map(r => Number(r.ms))
+    assert.deepStrictEqual(stamps, [T0, at(1)], "both samples are in disk_volume, each with its own ts")
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n), 2 * volumes.length)
+  }))
+
+  test("eleven consecutive lock refusals: the oldest sample is dropped and logged, the buffer stays at 10, the next write carries the 10 newest plus its own", async () => {
+    const clock = fakeClock(T0)
+    const lines: string[] = []
+    const batches: number[][] = []
+    await runResident({
+      ...clock,
+      ...calm,
+      sample: sampled,
+      record: async batch => { batches.push(batch.map(b => b.slotMs)); if (batches.length <= 11) throw new Error(LOCK_ERROR) },
+      log: line => lines.push(line),
+      maxTicks: 12,
+    })
+    assert.deepStrictEqual(lines.filter(l => /buffer full/.test(l)), [`disk-sample resident: buffer full, sample for slot ${iso(T0)} dropped`])
+    assert.ok(!lines.some(l => /write deferred, 11 /.test(l)), "the buffer never holds more than 10")
+    assert.strictEqual(batches[10].length, 11, "the 11th refused batch held 10 carried samples and its own")
+    assert.strictEqual(batches[11].length, 11, "after the drop: 10 buffered plus the 12th tick's own")
+    assert.deepStrictEqual([batches[11][0], batches[11][10]], [at(1), at(11)], "the first slot is the one that was dropped")
+  })
+
+  test("a write failure that is not the lock drops and logs the slots and empties the buffer; a failing second batch item leaves no row at all", withTempEnv(async () => {
+    const clock = fakeClock(T0)
+    const lines: string[] = []
+    const batches: number[][] = []
+    await runResident({
+      ...clock,
+      ...calm,
+      sample: sampled,
+      record: async batch => { batches.push(batch.map(b => b.slotMs)); if (batches.length === 1) throw new Error("Out of Memory Error: block clock deadlock") }, // matches /lock/i, is not a lock refusal
+      log: line => lines.push(line),
+      maxTicks: 2,
+    })
+    assert.strictEqual(lines.length, 1)
+    assert.match(lines[0], new RegExp(`write failed, 1 sample\\(s\\) dropped, slots ${iso(T0)}: Out of Memory Error`))
+    assert.deepStrictEqual(batches, [[T0], [at(1)]], "nothing is carried over after a non-lock failure")
+
+    const vol: VolumeSample = { mount: "/t", device: "disk0", fsType: "apfs", dev: null, container: null, volumeUuid: null, totalB: 100, usedB: 40, freeB: 60, availB: 60, volUsedB: 40, containerFreeB: 60, purgeableB: null, importantAvailB: null, error: null }
+    const bad = { ...vol, totalB: "not a number" as unknown as number } // the database refuses to cast it to BIGINT
+    await assert.rejects(recordVolumeBatch([{ volumes: [vol], tsMs: T0 }, { volumes: [bad], tsMs: at(1) }]))
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n), 0, "the first item's rows were rolled back with the second")
+    await recordVolumeBatch([{ volumes: [vol], tsMs: T0 }, { volumes: [vol], tsMs: at(1) }])
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n), 2, "control: the same call with two good items commits both")
+  }))
+
+  test("the terminate callback logs the slots still buffered, and logs nothing when the buffer is empty", async () => {
+    const run = async (refuse: boolean): Promise<string[]> => {
+      const reg: { cb: (() => void) | undefined } = { cb: undefined }
+      const lines: string[] = []
+      await runResident({
+        ...fakeClock(T0),
+        ...calm,
+        sample: sampled,
+        record: async () => { if (refuse) throw new Error(LOCK_ERROR) },
+        onTerminate: c => { reg.cb = c },
+        log: line => lines.push(line),
+        maxTicks: 2,
+      })
+      lines.length = 0 // keep only what the callback adds
+      assert.ok(reg.cb, "runResident registered the terminate callback")
+      reg.cb()
+      return lines
+    }
+    const buffered = await run(true)
+    assert.strictEqual(buffered.length, 1)
+    assert.strictEqual(buffered[0], `disk-sample resident: stopping with 2 buffered sample(s) not written, slots ${iso(T0)}, ${iso(at(1))}`)
+    assert.deepStrictEqual(await run(false), [])
   })
 
   test("--resident without --volumes-only is a usage error", async () => {
