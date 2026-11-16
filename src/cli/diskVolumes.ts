@@ -10,6 +10,7 @@ import { execFile } from "child_process"
 const CALL_TIMEOUT_MS = 5000
 const MOUNT_BIN = "/sbin/mount"
 const DISKUTIL_BIN = "/usr/sbin/diskutil"
+const OSASCRIPT_BIN = "/usr/bin/osascript"
 
 /** Filesystems that hold user data on a local disk. Network (nfs, smbfs, afpfs), autofs, devfs and
  *  friends are absent on purpose: statfs on a dead network mount is the classic hang. */
@@ -42,7 +43,9 @@ export interface VolumeSample {
   /** This volume's OWN bytes (diskutil CapacityInUse); used_b is container-wide on APFS. */
   volUsedB: number | null
   containerFreeB: number | null
+  /** DERIVED: importantAvailB - availB (see derivePurgeable); not a value any API returns. */
   purgeableB: number | null
+  /** NSURLVolumeAvailableCapacityForImportantUsageKey, one osascript call for all volumes. */
   importantAvailB: number | null
   error: string | null
 }
@@ -91,10 +94,40 @@ export function parsePlistScalars(xml: string): Map<string, string | number | bo
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null)
 
-/** First numeric value whose key matches `re` — only a key diskutil really returned is used, else NULL. */
-function firstNumeric(plist: Map<string, string | number | boolean>, re: RegExp): number | null {
-  for (const [k, v] of plist) if (re.test(k)) return num(v)
-  return null
+/** purgeable_b is DERIVED, not read from the OS: important_avail_b minus avail_b — the space macOS would free on demand (purgeable
+ *  caches, local snapshots) that statfs does not count as available. NULL when either input is unknown or the difference is negative
+ *  (never 0 for "could not tell"). */
+export function derivePurgeable(importantAvailB: number | null, availB: number | null): number | null {
+  if (importantAvailB === null || availB === null) return null
+  const d = importantAvailB - availB
+  return d >= 0 ? d : null
+}
+
+/** An important-usage figure of 0 beside a positive statfs avail is an API non-answer, not "nothing is available" — observed on the VM
+ *  volume, which macOS answers 0 for while statfs shows the container's free space. It becomes NULL (the caller records why), never 0. */
+export function usableImportant(importantAvailB: number | null, availB: number | null): number | null {
+  return importantAvailB === 0 && (availB ?? 0) > 0 ? null : importantAvailB
+}
+
+// ONE JavaScript-for-Automation call reads NSURLVolumeAvailableCapacityForImportantUsageKey for every mount (argv). A `swift -e` call
+// costs seconds; osascript costs ~0.3 s measured. Apple's documented meaning (URLResourceKey.volumeAvailableCapacityForImportantUsageKey):
+// "the volume's available capacity in bytes for storing important resources". The sibling ...ForOpportunisticUsageKey ("for storing
+// nonessential resources") is not read: disk_volume has no column for it.
+const IMPORTANT_JXA = `function run(argv) {
+  ObjC.import("Foundation")
+  const key = "NSURLVolumeAvailableCapacityForImportantUsageKey"
+  const out = {}
+  for (const m of argv) {
+    const d = $.NSURL.fileURLWithPath(m).resourceValuesForKeysError($([key]), null)
+    out[m] = d.isNil() ? null : ObjC.unwrap(d.objectForKey(key))
+  }
+  return JSON.stringify(out)
+}`
+
+/** mount -> important-usage available bytes (null where macOS returned none). Rejects on a timeout or osascript failure. */
+async function importantAvailable(mounts: readonly string[]): Promise<Map<string, number | null>> {
+  const out = JSON.parse(await run(OSASCRIPT_BIN, ["-l", "JavaScript", "-e", IMPORTANT_JXA, ...mounts])) as Record<string, unknown>
+  return new Map(mounts.map(m => [m, num(out[m])]))
 }
 
 async function sampleOne(e: MountEntry): Promise<VolumeSample> {
@@ -122,9 +155,6 @@ async function sampleOne(e: MountEntry): Promise<VolumeSample> {
     s.container = typeof container === "string" ? container : null
     s.volUsedB = num(plist.get("CapacityInUse"))
     s.containerFreeB = num(plist.get("APFSContainerFree"))
-    // diskutil returns no purgeable/important-usage figure on the macOS builds checked; take one only if a key by that name appears, else NULL.
-    s.purgeableB = firstNumeric(plist, /purgeable/i)
-    s.importantAvailB = firstNumeric(plist, /important/i)
   })().catch((err: unknown) => { errors.push(err instanceof Error ? err.message : String(err)) })
   await Promise.all([statfs, util])
   s.error = errors.length ? errors.join("; ") : null
@@ -135,7 +165,20 @@ async function sampleOne(e: MountEntry): Promise<VolumeSample> {
 export async function sampleVolumes(): Promise<VolumeSample[]> {
   if (process.platform !== "darwin") throw new Error("disk-sample: the volume probe is macOS only (mount table + diskutil)")
   const mounts = realMounts(parseMount(await run(MOUNT_BIN, [])))
+  // Started before the per-volume probes so the osascript call overlaps them; settled into a value so a failure here can never be an unhandled rejection.
+  const important = importantAvailable(mounts.map(m => m.mount)).then(v => ({ v }), (e: unknown) => ({ err: e instanceof Error ? e.message : String(e) }))
   const samples = await Promise.all(mounts.map(sampleOne))
+  const imp = await important
+  for (const s of samples) {
+    // Failure keeps NULL and records why — never 0 (a 0 would read as "nothing is available").
+    if ("err" in imp) s.error = [s.error, `important-usage: ${imp.err}`].filter(Boolean).join("; ")
+    else {
+      const raw = imp.v.get(s.mount) ?? null
+      s.importantAvailB = usableImportant(raw, s.availB)
+      if (s.importantAvailB === null) s.error = [s.error, raw === null ? "important-usage: macOS returned no value" : "important-usage: macOS returned 0 while statfs avail is positive"].filter(Boolean).join("; ")
+    }
+    s.purgeableB = derivePurgeable(s.importantAvailB, s.availB)
+  }
   const seen = new Set<string>()
   return samples.filter(s => {
     const key = s.volumeUuid ? `${s.container ?? ""}/${s.volumeUuid}` : `dev:${s.device}`

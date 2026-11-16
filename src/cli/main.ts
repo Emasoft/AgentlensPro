@@ -146,7 +146,7 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'hook-context-cost': 'an analysis verb that streams the day buckets of the log-event sink (~170 MB/day); asked deliberately, never per turn',
   // The four disk-monitor verbs (TRDD-HTARKH87) — disk-sample, disk, disk-watch and disk-monitor install/uninstall/status — are all
   // DISABLED-exempt by owner decision 2026-11-16 (foreignTelemetry.ts READ_ONLY_VERBS). None is on a harness hot path.
-  'disk-sample': 'run by its own launchd job once a minute, never by Claude Code; it is bounded by its own budget (statfs/diskutil 5 s each, folder walks 40 s in total) and exits via exitNow',
+  'disk-sample': 'run by its own launchd jobs (--volumes-only every minute, --walks-only every 5 minutes), never by Claude Code; it is bounded by its own budget (statfs/diskutil/osascript 5 s each, folder walks 40 s in total) and exits via exitNow',
   disk: 'an investigation verb a human or agent invokes deliberately; read-only DuckDB queries over the monitor history, retrying briefly on the sampler writer lock',
   'disk-watch': 'edits the watch list in the monitor DuckDB file; an operator action, not on any per-turn path',
   'disk-monitor': 'installs/removes the launchd job and reads launchctl; one-shot operator action a human waits for',

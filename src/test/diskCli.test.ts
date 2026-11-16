@@ -10,7 +10,7 @@ import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
 import { spawn } from "child_process"
-import { assertSingleSelect, parseEvery, parseSince, parseSize, renderTable, runDiskCli, runDiskWatchCli } from "../cli/diskCli"
+import { assertSingleSelect, formatInterval, parseEvery, parseSince, parseSize, renderTable, runDiskCli, runDiskWatchCli } from "../cli/diskCli"
 import { EXIT, UsageError } from "../cli/cliErrors"
 import { insertRows, openWritable } from "../cli/diskStore"
 import { disabledNotice } from "../cli/foreignTelemetry"
@@ -142,6 +142,28 @@ suite("disk CLI — views over a real database", () => {
     assert.match(sql.out, new RegExp(String(GIB)))
     assert.doesNotMatch(sql.out, /GiB/)
     assert.strictEqual(renderTable([], true), "(no rows)")
+  }))
+
+  test("a DuckDB INTERVAL renders as HH:MM:SS.mmm in the table, never [object Object]; --json keeps the raw value", withDb(async () => {
+    const q = "select ts - lag(ts) over (order by ts) as gap from (select distinct ts from disk_volume) order by ts desc limit 1"
+    const table = await capture(() => runDiskCli(["sql", q]))
+    assert.strictEqual(table.code, EXIT.OK, table.err)
+    assert.doesNotMatch(table.out, /object Object/)
+    assert.match(table.out, /^gap\n00:01:00\.000\n$/)
+    assert.deepStrictEqual((await json(["sql", q]))[0].gap, { months: 0, days: 0, micros: "60000000" })
+  }))
+
+  test("formatInterval covers days, months, sub-second digits and negative spans; renderTable uses it", () => {
+    assert.strictEqual(formatInterval({ months: 0, days: 1, micros: "7384500000" }), "1d 02:03:04.500")
+    assert.strictEqual(formatInterval({ months: 2, days: 0, micros: "0" }), "2mo 00:00:00.000")
+    assert.strictEqual(formatInterval({ months: 0, days: 0, micros: "-90000000" }), "-00:01:30.000")
+    assert.strictEqual(formatInterval({ months: 0, days: 0, micros: 101_500_000 }), "00:01:41.500")
+    assert.strictEqual(renderTable([{ gap: { months: 0, days: 0, micros: "101500000" } }], true), "gap\n00:01:41.500")
+  })
+
+  test("now lists purgeable_b and important_avail_b next to avail_b", withDb(async () => {
+    const r = (await json(["now"]))[0]
+    assert.ok("purgeable_b" in r && "important_avail_b" in r && "avail_b" in r)
   }))
 })
 

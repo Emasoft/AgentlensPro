@@ -15,7 +15,7 @@ const KNOWN: ReadonlySet<string> = new Set(["--json", "--volume", "--since", "--
 const VALUED: ReadonlySet<string> = new Set(["--volume", "--since", "--every", "--min", "--top", "--folder", "--limit"])
 
 export const DISK_USAGE = `usage: agentlenspro disk <view> [flags]      (read-only; works with the server down and while DISABLED)
-  now                                  latest sample of every volume: used, free, avail, trash, used-minus-trash
+  now                                  latest sample of every volume: used, free, avail, purgeable (derived), important-usage avail, trash, used-minus-trash
   history [--volume V] [--since 6h] [--every 1m|1h|1d]
                                        used/free per volume, bucketed (last sample of each bucket)
   changes [--volume V] [--since 6h] [--min 1M]
@@ -127,7 +127,7 @@ export function buildQuery(view: string, o: { volume?: string; since: Date; ever
     case "now":
       return {
         sql: `WITH last AS (SELECT mount AS m, max(ts) AS mts FROM disk_volume GROUP BY mount)
-          SELECT ts, mount, used_b, free_b, avail_b, vol_used_b, trash_b, used_minus_trash_b, error FROM disk_volume JOIN last ON mount = m AND ts = mts WHERE ${v.sql} ORDER BY mount`,
+          SELECT ts, mount, used_b, free_b, avail_b, purgeable_b, important_avail_b, vol_used_b, trash_b, used_minus_trash_b, error FROM disk_volume JOIN last ON mount = m AND ts = mts WHERE ${v.sql} ORDER BY mount`,
         params: v.params,
       }
     case "history":
@@ -169,13 +169,28 @@ export function buildQuery(view: string, o: { volume?: string; since: Date; ever
 
 type Row = Record<string, unknown>
 
+interface IntervalJson { months: number; days: number; micros: string | number }
+
+const isInterval = (v: unknown): v is IntervalJson =>
+  typeof v === "object" && v !== null && "months" in v && "days" in v && "micros" in v
+
+/** A DuckDB INTERVAL as `[Nmo ][Nd ][-]HH:MM:SS.mmm` (`--json` keeps the raw {months, days, micros}). Without this the table printed `[object Object]`. */
+export function formatInterval(v: IntervalJson): string {
+  const micros = BigInt(v.micros)
+  const abs = micros < 0n ? -micros : micros
+  const p = (n: bigint, w: number): string => n.toString().padStart(w, "0")
+  const clock = `${micros < 0n ? "-" : ""}${p(abs / 3_600_000_000n, 2)}:${p((abs / 60_000_000n) % 60n, 2)}:${p((abs / 1_000_000n) % 60n, 2)}.${p((abs / 1000n) % 1000n, 3)}`
+  return [v.months !== 0 ? `${v.months}mo` : "", v.days !== 0 ? `${v.days}d` : "", clock].filter(Boolean).join(" ")
+}
+
 function cell(col: string, v: unknown, human: boolean): string {
   if (v === null || v === undefined) return "-"
+  if (isInterval(v)) return formatInterval(v)
   if (human && col.endsWith("_b") && /^-?\d+$/.test(String(v))) {
     const n = Number(v)
     return col.startsWith("delta_") && n > 0 ? `+${formatBytes(n)}` : formatBytes(n)
   }
-  return String(v)
+  return typeof v === "object" ? JSON.stringify(v) : String(v)
 }
 
 export function renderTable(rows: readonly Row[], human: boolean): string {

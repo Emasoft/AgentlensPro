@@ -10,10 +10,11 @@ import * as assert from "assert"
 import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
+import { spawn, type ChildProcess } from "child_process"
 import { disabledNotice } from "../cli/foreignTelemetry"
-import { recordVolumesAndPlan, runDiskSample, storeOutcomes } from "../cli/diskSample"
+import { planWalks, recordVolumes, runDiskSample, runDiskSampleCli, storeOutcomes } from "../cli/diskSample"
 import { openReadOnly, openWritable } from "../cli/diskStore"
-import { parseMount, parsePlistScalars, realMounts, sampleVolumes } from "../cli/diskVolumes"
+import { derivePurgeable, parseMount, parsePlistScalars, realMounts, sampleVolumes, usableImportant } from "../cli/diskVolumes"
 import { runSegment, startWalk, type WalkState } from "../cli/diskWalk"
 
 const FAR = Date.now() + 3_600_000
@@ -42,6 +43,17 @@ function withTempEnv(body: (t: { home: string; data: string }, ctx: Mocha.Contex
 async function query(sql: string): Promise<Record<string, unknown>[]> {
   const db = await openReadOnly()
   try { return (await db.con.runAndReadAll(sql)).getRowObjectsJson() as Record<string, unknown>[] } finally { db.close() }
+}
+
+async function capture(fn: () => Promise<number>): Promise<{ code: number; err: string }> {
+  const error = console.error
+  let err = ""
+  console.error = (...a: unknown[]) => { err += `${a.join(" ")}\n` }
+  try {
+    return { code: await fn(), err }
+  } finally {
+    console.error = error
+  }
 }
 
 suite("diskVolumes — parsing", () => {
@@ -87,6 +99,36 @@ suite("diskVolumes — the real machine", () => {
   })
 })
 
+suite("diskVolumes — important-usage and derived purgeable", () => {
+  test("derivePurgeable is important minus avail, NULL when either side is unknown or the difference is negative", () => {
+    assert.strictEqual(derivePurgeable(150, 100), 50)
+    assert.strictEqual(derivePurgeable(100, 100), 0)
+    assert.strictEqual(derivePurgeable(90, 100), null)
+    assert.strictEqual(derivePurgeable(null, 100), null)
+    assert.strictEqual(derivePurgeable(150, null), null)
+  })
+
+  test("usableImportant turns a 0 beside a positive avail into NULL and leaves every other figure alone", () => {
+    assert.strictEqual(usableImportant(0, 1000), null)
+    assert.strictEqual(usableImportant(0, 0), 0)
+    assert.strictEqual(usableImportant(0, null), 0)
+    assert.strictEqual(usableImportant(5, 1000), 5)
+    assert.strictEqual(usableImportant(null, 1000), null)
+  })
+
+  test("sampleVolumes fills important_avail_b from macOS in one call, and purgeable_b is exactly important minus avail", async function (this: Mocha.Context) {
+    if (process.platform !== "darwin") this.skip()
+    this.timeout(30_000)
+    const vols = await sampleVolumes()
+    const withImportant = vols.filter(v => v.importantAvailB !== null)
+    assert.ok(withImportant.length >= 1, `no volume got an important-usage figure: ${vols.map(v => `${v.mount}: ${v.error}`).join(" | ")}`)
+    for (const v of withImportant) {
+      assert.ok((v.importantAvailB ?? 0) > 0, `${v.mount}: important ${v.importantAvailB}`) // a 0 beside a positive avail was turned into NULL + error
+      assert.strictEqual(v.purgeableB, derivePurgeable(v.importantAvailB, v.availB))
+    }
+    for (const v of vols.filter(x => x.importantAvailB === null)) assert.ok(v.purgeableB === null && v.error !== null, `${v.mount}: a missing figure is NULL plus an error, never 0`)
+  })
+})
 suite("diskSample — persistence and the DISABLED exemption", () => {
   test("a walk cut mid-way is stored, resumed from disk.duckdb, and finishes into disk_tree", withTempEnv(async ({ home }) => {
     const tree = path.join(home, "tree")
@@ -98,20 +140,20 @@ suite("diskSample — persistence and the DISABLED exemption", () => {
     fs.mkdirSync(outside)
     fs.writeFileSync(path.join(outside, "o.bin"), Buffer.alloc(900, 1))
     fs.symlinkSync(outside, path.join(tree, "link"))
-    await recordVolumesAndPlan([], Date.now()) // creates and seeds disk.duckdb
+    await planWalks(Date.now()) // creates and seeds disk.duckdb
     const db = await openWritable()
     try {
       await db.con.run("DELETE FROM disk_watch")
       await db.con.run("INSERT INTO disk_watch VALUES (?, ?)", [tree, "folder"])
     } finally { db.close() }
 
-    const first = (await recordVolumesAndPlan([], Date.now())).find(p => p.entry.path === tree)
+    const first = (await planWalks(Date.now())).find(p => p.entry.path === tree)
     assert.ok(first && first.resume === null, "a never-walked folder is due, with nothing to resume")
     const cut = startWalk(tree, Date.now()) as WalkState
     assert.strictEqual(runSegment(cut, FAR, 4), false)
     await storeOutcomes([{ plan: first, state: cut, finished: false, partial: false, error: null, tsEndMs: Date.now() }])
 
-    const second = (await recordVolumesAndPlan([], Date.now())).find(p => p.entry.path === tree)
+    const second = (await planWalks(Date.now())).find(p => p.entry.path === tree)
     assert.ok(second?.resume, "the unfinished walk is due again and carries its cursor")
     assert.deepStrictEqual(second.resume.pending, cut.pending)
     assert.strictEqual(cut.followed.length, 1, "the outside link was taken on in the first segment")
@@ -128,7 +170,7 @@ suite("diskSample — persistence and the DISABLED exemption", () => {
     assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_walk_state"))[0].n), 0)
     assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_walk_pending"))[0].n), 0)
     assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_walk_followed"))[0].n), 0, "the dedupe state is cleared when the walk completes")
-    assert.ok(!(await recordVolumesAndPlan([], Date.now())).some(p => p.entry.path === tree), "a just-finished folder is not due for 15 minutes")
+    assert.ok(!(await planWalks(Date.now())).some(p => p.entry.path === tree), "a just-finished folder is not due for 15 minutes")
   }))
 
   test("runs with DISABLED armed without touching it, and trash_b joins the latest finished trash walk", withTempEnv(async ({ home, data }, ctx) => {
@@ -161,5 +203,81 @@ suite("diskSample — persistence and the DISABLED exemption", () => {
       assert.strictEqual(Number(r.used_minus_trash_b), Number(r.used_b) - Number(r.trash_b))
     }
     assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_volume WHERE ts = (SELECT min(ts) FROM disk_volume) AND trash_b IS NOT NULL"))[0].n), 0, "the first sample had no finished trash walk yet: NULL, not 0")
+  }))
+})
+
+// ── run modes and the writer lock ──────────────────────────────────────────────────────────────────────
+
+/** A REAL second process holding the READ_WRITE lock on disk.duckdb for `ms` — what the other launchd job looks like to this one. */
+async function holdWriterLock(ms: number): Promise<ChildProcess> {
+  // The child opens through the product entry point (diskStore.openWritable), not its own DuckDB handle: the data dir comes from the inherited env.
+  const child = spawn(process.execPath, ["-e",
+    "require(process.argv[1]).openWritable().then(db => { console.log(\"locked\"); setTimeout(() => db.close(), Number(process.argv[2])) })",
+    require.resolve("../cli/diskStore"), String(ms)], { stdio: ["ignore", "pipe", "inherit"] })
+  await new Promise<void>((resolve, reject) => {
+    child.stdout?.on("data", d => { if (String(d).includes("locked")) resolve() })
+    child.on("exit", code => reject(new Error(`lock holder exited early (${code})`)))
+  })
+  return child
+}
+
+suite("diskSample — run modes", () => {
+  test("--volumes-only writes volume rows and touches no walk table; --walks-only walks and writes no volume row", withTempEnv(async ({ home }, ctx) => {
+    if (process.platform !== "darwin") ctx.skip()
+    const tree = path.join(home, "tree")
+    fs.mkdirSync(path.join(tree, "d"), { recursive: true })
+    fs.writeFileSync(path.join(tree, "d", "f.bin"), Buffer.alloc(1000, 1))
+    await planWalks(Date.now()) // creates and seeds disk.duckdb
+    const db = await openWritable()
+    try {
+      await db.con.run("DELETE FROM disk_watch")
+      await db.con.run("INSERT INTO disk_watch VALUES (?, ?)", [tree, "folder"])
+    } finally { db.close() }
+
+    const v = await runDiskSample({ mode: "volumes" })
+    assert.ok(v.volumes >= 1)
+    assert.deepStrictEqual([v.due, v.finished], [0, 0], "a volumes-only run plans and walks nothing")
+    assert.ok(Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n) >= 1)
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_tree"))[0].n), 0)
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_walk_state"))[0].n), 0)
+
+    const volumeRows = Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n)
+    const w = await runDiskSample({ mode: "walks", budgetMs: 4000 })
+    assert.strictEqual(w.volumes, 0, "a walks-only run probes no volume")
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n), volumeRows, "and adds no volume row")
+    assert.strictEqual(Number((await query(`SELECT count(*) AS n FROM disk_tree WHERE path = '${tree}'`))[0].n), 1, "the due folder was walked to the end")
+  }))
+
+  test("--volumes-only together with --walks-only is a usage error", async () => {
+    await assert.rejects(runDiskSampleCli(["--volumes-only", "--walks-only"]), /mutually exclusive/)
+  })
+})
+
+suite("diskSample — the other job holds the writer lock", () => {
+  test("a lock held for 1.5 s is waited out: the volume row still lands", withTempEnv(async ({ data }, ctx) => {
+    if (process.platform !== "darwin") ctx.skip()
+    await planWalks(Date.now()) // creates the file and schema
+    const volumes = await sampleVolumes()
+    const holder = await holdWriterLock(1500)
+    try {
+      const t0 = Date.now()
+      await recordVolumes(volumes, Date.now())
+      assert.ok(Date.now() - t0 >= 800, "the insert had to wait for the other process")
+    } finally { holder.kill("SIGKILL") }
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n), volumes.length)
+    assert.ok(fs.existsSync(data))
+  }))
+
+  test("a lock held past the 5 s wait fails the run: exit code 1 and a line on stderr (the launchd log), never a silent drop", withTempEnv(async (_env, ctx) => {
+    if (process.platform !== "darwin") ctx.skip()
+    ctx.timeout(60_000)
+    await planWalks(Date.now())
+    const holder = await holdWriterLock(20_000)
+    try {
+      const r = await capture(() => runDiskSampleCli(["--volumes-only", "--quiet"]))
+      assert.strictEqual(r.code, 1)
+      assert.match(r.err, /disk-sample failed: .*lock/i)
+    } finally { holder.kill("SIGKILL") }
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n), 0, "no half-written row")
   }))
 })

@@ -1,18 +1,22 @@
-// src/cli/diskSample.ts — `agentlenspro disk-sample`: ONE sample of every volume, then exit (TRDD-HTARKH87).
+// src/cli/diskSample.ts — `agentlenspro disk-sample`: one sample, then exit (TRDD-HTARKH87, TRDD-RU9A8H7A).
 //
-// Run every 60 s by the launchd job `disk-monitor install` writes. Exempt from the DISABLED kill switch
-// (foreignTelemetry.ts READ_ONLY_VERBS) by owner decision 2026-11-16: the monitor exists to watch a
-// disk filling up, and the disk filling up is exactly when everything else has been switched off. It
-// never touches the DISABLED file and never talks to the server or cards.duckdb.
+// Run by TWO launchd jobs that `disk-monitor install` writes: `--volumes-only` every 60 s and `--walks-only` every 300 s. They are
+// separate because a run that also walked folders took up to ~41 s, and launchd counts StartInterval from the previous run's exit
+// (measured: a steady ~101.5 s gap between volume rows) — the minute job must be as short as possible. No flag = both, in one run.
+// Exempt from the DISABLED kill switch (foreignTelemetry.ts READ_ONLY_VERBS) by owner decision 2026-11-16: the monitor exists to
+// watch a disk filling up, and the disk filling up is exactly when everything else has been switched off. It never touches the
+// DISABLED file and never talks to the server or cards.duckdb.
 //
-// Shape of one run (the DuckDB file lock is held only in steps 2 and 4):
-//   1. probe the volumes (statfs + diskutil, every call time-boxed)
-//   2. open, insert the volume rows FIRST, read what is due, close
-//   3. walk the watch-list folders that are due, inside a total time budget, no DB held
-//   4. open, store finished walks and the cursor of unfinished ones, close
+// Shape of one run (the DuckDB file lock is held only in steps 2 and 4; a lock held by the other job is retried for 5 s, then the
+// run exits non-zero with a line in the log — a volume row is never silently dropped):
+//   1. probe the volumes (statfs + diskutil + one osascript call, every call time-boxed)      [volumes]
+//   2. open, insert the volume rows, close                                                      [volumes]
+//   2b. open, read what is due, close                                                           [walks]
+//   3. walk the watch-list folders that are due, inside a total time budget, no DB held        [walks]
+//   4. open, store finished walks and the cursor of unfinished ones, close                      [walks]
 
 import { assertKnownFlags } from "./argHelpers"
-import { EXIT } from "./cliErrors"
+import { EXIT, UsageError } from "./cliErrors"
 import { insertRows, openWritable, type DiskDb, type SqlValue } from "./diskStore"
 import { sampleVolumes, type VolumeSample } from "./diskVolumes"
 import { startWalk, runSegment, WALK_MAX_AGE_MS, type PendingDir, type WalkState } from "./diskWalk"
@@ -83,15 +87,24 @@ async function loadState(db: DiskDb, path: string, r: Record<string, unknown>): 
   }
 }
 
-/** Steps 1b–2: insert the volume rows, then work out which folders are due. */
-export async function recordVolumesAndPlan(volumes: readonly VolumeSample[], nowMs: number): Promise<Plan[]> {
+/** Open disk.duckdb read-write, seeding the default watch list exactly when the file was just created (both jobs may be the first to run). */
+async function openSeeded(): Promise<DiskDb> {
   const db = await openWritable()
   try {
     if (db.created) {
       await insertRows(db.con, "disk_watch", [["path", "TEXT"], ["kind", "TEXT"]], defaultWatch().map(w => [w.path, w.kind]))
     }
-    const stored = (await rows(db, "SELECT path, kind FROM disk_watch ORDER BY path")).map(r => ({ path: String(r.path), kind: String(r.kind) as WatchKind }))
-    const lastEnd = new Map((await rows(db, "SELECT path, epoch_ms(max(ts_end)) AS ms, arg_max(elapsed_ms, ts_end) AS took FROM disk_tree GROUP BY path")).map(r => [String(r.path), { endMs: n(r.ms), walkMs: n(r.took) }]))
+    return db
+  } catch (e) {
+    db.close()
+    throw e
+  }
+}
+
+/** Step 2: insert one row per volume. Touches no walk table except to READ the latest finished trash walks, so it never waits on a walk. */
+export async function recordVolumes(volumes: readonly VolumeSample[], nowMs: number): Promise<void> {
+  const db = await openSeeded()
+  try {
     // Latest FINISHED walk of each trash folder — the trash_b of this sample is that, not a fresh walk.
     const trash = (await rows(db,
       "SELECT t.path, t.allocated_b FROM disk_tree t JOIN (SELECT path, max(ts_end) AS m FROM disk_tree WHERE kind = 'trash' GROUP BY path) l ON t.path = l.path AND t.ts_end = l.m WHERE t.kind = 'trash' AND t.allocated_b IS NOT NULL"))
@@ -107,6 +120,17 @@ export async function recordVolumesAndPlan(volumes: readonly VolumeSample[], now
       return [ts, v.mount, v.device, v.fsType, v.container, v.volumeUuid, v.totalB, v.usedB, v.freeB, v.availB, v.volUsedB, v.containerFreeB,
         v.purgeableB, v.importantAvailB, t, v.usedB !== null && t !== null ? v.usedB - t : null, v.error]
     }))
+  } finally {
+    db.close()
+  }
+}
+
+/** Step 2b: work out which watch-list folders are due (a resumable cursor, or never walked, or past the cooldown). */
+export async function planWalks(nowMs: number): Promise<Plan[]> {
+  const db = await openSeeded()
+  try {
+    const stored = (await rows(db, "SELECT path, kind FROM disk_watch ORDER BY path")).map(r => ({ path: String(r.path), kind: String(r.kind) as WatchKind }))
+    const lastEnd = new Map((await rows(db, "SELECT path, epoch_ms(max(ts_end)) AS ms, arg_max(elapsed_ms, ts_end) AS took FROM disk_tree GROUP BY path")).map(r => [String(r.path), { endMs: n(r.ms), walkMs: n(r.took) }]))
     const states = new Map<string, Record<string, unknown>>()
     for (const r of await rows(db, "SELECT *, epoch_ms(ts_start) AS start_ms, epoch_ms(last_segment) AS seg_ms FROM disk_walk_state")) states.set(String(r.path), r)
     const plans: Plan[] = []
@@ -124,7 +148,6 @@ export async function recordVolumesAndPlan(volumes: readonly VolumeSample[], now
   }
 }
 
-/** Step 3: walk the due folders, each in its share of what is left of the budget. No DB held. */
 /** Step 3: walk the due folders inside the budget. No DB held.
  *  Two passes, because most folders are tiny and a few are enormous: pass 1 gives EVERY due folder a short slice, which
  *  finishes the small ones at once and returns their unused time; pass 2 splits what is left evenly among the folders still
@@ -227,22 +250,38 @@ export async function storeOutcomes(outcomes: readonly Outcome[]): Promise<void>
   }
 }
 
-export async function runDiskSample(opts: { budgetMs?: number } = {}): Promise<SampleSummary> {
+/** `all` = today's single run; `volumes` = the minute job (volume rows only, never delayed by a walk); `walks` = the slow job (folder walks only). */
+export type SampleMode = "all" | "volumes" | "walks"
+
+export async function runDiskSample(opts: { budgetMs?: number; mode?: SampleMode } = {}): Promise<SampleSummary> {
   const t0 = Date.now()
-  const volumes = await sampleVolumes()
-  const plans = await recordVolumesAndPlan(volumes, t0)
-  const outcomes = walkDue(plans, opts.budgetMs ?? WALK_BUDGET_MS)
-  await storeOutcomes(outcomes)
-  return { volumes: volumes.length, due: plans.length, finished: outcomes.filter(o => o.finished).length, elapsedMs: Date.now() - t0 }
+  const mode = opts.mode ?? "all"
+  let volumeCount = 0
+  if (mode !== "walks") {
+    const volumes = await sampleVolumes()
+    await recordVolumes(volumes, t0)
+    volumeCount = volumes.length
+  }
+  let plans: Plan[] = []
+  let outcomes: Outcome[] = []
+  if (mode !== "volumes") {
+    plans = await planWalks(t0)
+    outcomes = walkDue(plans, opts.budgetMs ?? WALK_BUDGET_MS)
+    await storeOutcomes(outcomes)
+  }
+  return { volumes: volumeCount, due: plans.length, finished: outcomes.filter(o => o.finished).length, elapsedMs: Date.now() - t0 }
 }
 
-const KNOWN: ReadonlySet<string> = new Set(["--quiet"])
+const KNOWN: ReadonlySet<string> = new Set(["--quiet", "--volumes-only", "--walks-only"])
 
-/** `--quiet`: print nothing on success — the launchd job passes it so its log stays small. (`--help` never gets here: main.ts answers it.) */
+/** `--quiet`: print nothing on success — the launchd jobs pass it so their log stays small. (`--help` never gets here: main.ts answers it.) */
 export async function runDiskSampleCli(argv: string[]): Promise<number> {
   assertKnownFlags(argv, KNOWN, new Set(), "agentlenspro disk-sample")
+  const volumesOnly = argv.includes("--volumes-only")
+  const walksOnly = argv.includes("--walks-only")
+  if (volumesOnly && walksOnly) throw new UsageError("disk-sample: --volumes-only and --walks-only are mutually exclusive")
   try {
-    const s = await runDiskSample()
+    const s = await runDiskSample({ mode: volumesOnly ? "volumes" : walksOnly ? "walks" : "all" })
     if (!argv.includes("--quiet")) console.log(`disk-sample: ${s.volumes} volume(s); ${s.finished}/${s.due} due folder walk(s) finished; ${s.elapsedMs} ms`)
     return EXIT.OK
   } catch (e) {
