@@ -4,7 +4,7 @@ title: Disk monitor samples volumes every minute even when folder walks are slow
 column: todo
 status: tasked
 created: 2026-11-16T19:05:14+0100
-updated: 2026-11-16T19:05:14+0100
+updated: 2026-11-16T19:39:27+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,7 @@ Derived from TRDD-HTARKH87. Measured 2026-11-16 19:00-19:04 under host load 31-5
 ## Approval log
 
 - 2026-11-16T19:05:14+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Measurements
+
+2026-11-16 19:40 — after the 60/300 s split (4fdee385) one post-install gap of 61.7 s (the 67.7 s gap spans the reinstall), then one 7:00.019 gap (exactly 7×60 s); launchctl showed runs=3, pmset showed no sleep, load average 128–169. Inferred cause: ProcessType Background lets launchd throttle/coalesce the timer under load. Next: volume job set to ProcessType Standard (walk stays Background), reinstall, re-measure. Card stays open until a 10-minute window shows ~60 s gaps.
