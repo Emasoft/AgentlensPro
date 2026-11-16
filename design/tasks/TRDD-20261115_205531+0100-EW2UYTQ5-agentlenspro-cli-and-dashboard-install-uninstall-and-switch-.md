@@ -4,7 +4,7 @@ title: agentlenspro CLI and dashboard install, uninstall and switch each extensi
 column: design
 status: tasked
 created: 2026-11-15T20:55:31+0100
-updated: 2026-11-15T21:42:40+0100
+updated: 2026-11-16T01:05:11+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -63,3 +63,7 @@ Correction 2026-11-15 to limit (1): agents DO have a settings switch — permiss
 - 2026-11-15T20:55:31+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-15T21:03:25+0100 — column → backburner. plan awaits the owner's answer on standalone vs per-part plugins
 - 2026-11-15T21:05:49+0100 — column → design. owner resolved the packaging question
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-16
+
+- 2026-11-16 — build plan revision 2 written to design/specs/EW2UYTQ5-build-plan.md (PROPOSED, not approved; 13 child cards; open owner questions in its section 7, which supersedes section 6 Q1 jq, Q2 statusline, Q10 delegate-gate). Owner defaults pending: uninstall keeps and lists edited items; dashboard stays up while disabled. No code started.
