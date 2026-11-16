@@ -1,9 +1,9 @@
 ---
 trdd-id: 7NHUU6GK
 title: The archive retention gate keeps a volume forever when it holds a re-emitted body
-column: backburner
+column: dev
 created: 2026-08-27T19:50:55+0200
-updated: 2026-09-05T07:32:41+0200
+updated: 2026-11-16T23:30:52+0100
 current-owner: main
 task-type: bugfix
 severity: LOW
@@ -12,6 +12,10 @@ labels: [store, retention, bodies]
 relevant-rules: []
 created-by: TRDD-6SPXOV0P option-A advisor consult
 parent-trdd: 6SPXOV0P
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-16T23:30:52+0100
+status: tasked
 ---
 
 ## The gap (verified 2026-08-27 at file:line, not inferred)
@@ -66,3 +70,11 @@ archive exists to preserve. Do NOT do this by loosening `TS_TOLERANCE_MS` or
 ## Related
 
 - [[TRDD-6SPXOV0P]] — the parent: the same reclassification, in the live ingest pass.
+
+## STATE
+
+2026-11-16 23:30 — CODE READ and PLAN (main agent, deciding in the owner's stead; overrulable). FACTS: the card's standalone/server.ts lines no longer exist (the TS server was retired in 567fc5c2) and the age-out sweep purgeArchiveVolumes was never ported (rust-core/crates/agentlens-core/src/body_archive.rs line 6). The only live delete gate is the operator route POST /api/bodies/purge (body_archive.rs, the loop at about line 371), which keeps any volume where verify_volume_in_store returns ok false. A ts-only failure is recognised in the live pass by its reason text (agentlens-store/src/pass.rs about line 658: contains 'stored ts ' and '!= capture time'), and that text is only reached after the sha256 reconstruction and the row lookup passed. PLAN: (1) export one predicate is_ts_only_failure(reason) from agentlens-store and use it in pass.rs too, so there is one definition; (2) add a count ts_only to VolumeVerifyResult WITHOUT changing ok, verified or failed, so the parity test against the TS oracle (tests/bodyarchive_parity.rs) is untouched; (3) in the purge loop a volume is deletable when ok, OR when every failed reason is ts-only and verified + ts_only equals entries; (4) the reply shape removed/kept/freedBytes is frozen and stays as it is; the distinction goes in the log line: per kept volume, how many lumps have unproven bytes and how many only a moved ts row; (5) verify_bodies_in_store_cached and TS_TOLERANCE_MS are not touched. DECISION FLAGGED TO THE OWNER: the header of body_archive.rs records a USER directive of 2026-07-15 (TRDD-K3WDPR7M) that a volume is deleted only after bytes AND the capture-ts row are proven. This plan relaxes the ts half for a re-emitted body, as TRDD-6SPXOV0P already did for the live pass. Grounds: the bytes are proven bit-exact, the store already holds a row for the same name, and the .idx sidecar that carries the capture time is never deleted. The purge stays an operator act. The acceptance wording 'purges on age-out' is read as 'is deleted by the purge route', since no age-out sweep exists.
+
+## Approval log
+
+- 2026-11-16T23:30:52+0100 — column → dev by main-agent@agentlenspro. taken off backburner: it is the only card holding TRDD-6SPXOV0P open
