@@ -13,6 +13,7 @@ import { spawn } from "child_process"
 import { assertSingleSelect, parseEvery, parseSince, parseSize, renderTable, runDiskCli, runDiskWatchCli } from "../cli/diskCli"
 import { EXIT, UsageError } from "../cli/cliErrors"
 import { insertRows, openWritable } from "../cli/diskStore"
+import { disabledNotice } from "../cli/foreignTelemetry"
 
 const T0 = Date.parse("2026-11-16T10:00:00.000Z")
 const GIB = 1024 ** 3
@@ -198,7 +199,7 @@ suite("disk family under DISABLED (real CLI)", () => {
     })
   }
 
-  test("disk-watch list and disk-monitor status run while DISABLED is armed, install/uninstall exit 69, the DISABLED file is untouched", async function () {
+  test("disk-watch list, disk-monitor status, and the disk-monitor install/uninstall gate pass while DISABLED is armed; the DISABLED file is untouched", async function () {
     this.timeout(60_000)
     const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "al-diskcli-disabled-")))
     const data = path.join(home, "data")
@@ -219,8 +220,18 @@ suite("disk family under DISABLED (real CLI)", () => {
 assert.strictEqual(status.code, EXIT.UNKNOWN, status.stderr + status.stdout) // nothing is installed under the temp HOME: exit 2 is status's own "not installed" answer, never 69 (DISABLED)
         assert.ok(/plist:\s+not installed/.test(status.stdout), status.stdout)
       }
-      // The owner exempted only the sampler: installing or removing a launchd job under an armed kill switch stays gated.
-      for (const sub of ["install", "uninstall"]) assert.strictEqual((await runCli(["disk-monitor", sub], env)).code, EXIT.DISABLED, `disk-monitor ${sub} stays gated`)
+      // The owner exempted the whole disk monitor (owner decision 2026-11-16). The gate is checked in-process with the switch REALLY armed
+      // (the DISABLED flag above, in AGENTLENS_DATA_DIR), so a null can only come from the exemption. The real install/uninstall are NOT
+      // run: they would load or unload the REAL launchd label com.agentlens.disk-sample on this machine.
+      const savedDataDir = process.env.AGENTLENS_DATA_DIR
+      process.env.AGENTLENS_DATA_DIR = data
+      try {
+        assert.notStrictEqual(disabledNotice(["budget"]), null, "precondition: the switch is armed in this process")
+        for (const sub of ["install", "uninstall"]) assert.strictEqual(disabledNotice(["disk-monitor", sub]), null, `disk-monitor ${sub} passes the DISABLED gate`)
+      } finally {
+        if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
+        else process.env.AGENTLENS_DATA_DIR = savedDataDir
+      }
       assert.strictEqual(fs.statSync(flag).mtimeMs, before, "the exempt verbs must never touch the DISABLED file")
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })

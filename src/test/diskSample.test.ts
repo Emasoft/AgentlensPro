@@ -141,8 +141,8 @@ suite("diskSample — persistence and the DISABLED exemption", () => {
     assert.strictEqual(disabledNotice(["disk", "now"]), null, "disk is exempt from DISABLED")
     assert.strictEqual(disabledNotice(["disk-watch", "list"]), null, "disk-watch is exempt from DISABLED")
     assert.strictEqual(disabledNotice(["disk-monitor", "status"]), null, "disk-monitor status is exempt from DISABLED")
-    assert.strictEqual(disabledNotice(["disk-monitor", "install"])?.code, 69, "disk-monitor install stays gated")
-    assert.strictEqual(disabledNotice(["disk-monitor", "uninstall"])?.code, 69, "disk-monitor uninstall stays gated")
+    assert.strictEqual(disabledNotice(["disk-monitor", "install"]), null, "disk-monitor install passes the DISABLED gate")
+    assert.strictEqual(disabledNotice(["disk-monitor", "uninstall"]), null, "disk-monitor uninstall passes the DISABLED gate")
     fs.mkdirSync(path.join(home, ".Trash"))
     fs.writeFileSync(path.join(home, ".Trash", "junk.bin"), Buffer.alloc(50_000, 1))
 

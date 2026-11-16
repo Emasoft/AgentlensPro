@@ -1,6 +1,6 @@
 # Disk-space monitor — what the disk did, minute by minute
 
-A permanent sampler records every real volume once a minute into its own DuckDB file, `<dataDir>/disk.duckdb` (never `cards.duckdb`). Questions about disk trends, history, "when exactly did free space drop", or what a folder weighs are answered from it, off disk, with the server down and even while agentlenspro is DISABLED (`disk`, `disk-sample`, `disk-watch` and `disk-monitor status` are exempt from the brake by owner decision: the disk filling up is when everything else is off; `disk-monitor install|uninstall` stay gated and exit 69 while DISABLED).
+A permanent sampler records every real volume once a minute into its own DuckDB file, `<dataDir>/disk.duckdb` (never `cards.duckdb`). Questions about disk trends, history, "when exactly did free space drop", or what a folder weighs are answered from it, off disk, with the server down and even while agentlenspro is DISABLED (`disk`, `disk-sample`, `disk-watch` and `disk-monitor install|uninstall|status` are exempt from the brake by owner decisions 2026-11-16: the disk filling up is when everything else is off).
 
 ## Commands
 

@@ -144,8 +144,8 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'model-headroom': 'FETCHES the OAuth usage endpoint (10-minute cached), so it is network-bound by design and cannot carry a hot-path ceiling. It is not on any per-turn path: an agent calls it ONCE before deciding whether to spawn the advisor, which is itself a minutes-long operation — the check cannot be the expensive half',
   store: 'operator repair verb (repair-parked STAGES and fully re-verifies the whole bodies table) — run with the server stopped, a human watching',
   'hook-context-cost': 'an analysis verb that streams the day buckets of the log-event sink (~170 MB/day); asked deliberately, never per turn',
-  // The four disk-monitor verbs (TRDD-HTARKH87). disk-sample, disk, disk-watch and 'disk-monitor status' are DISABLED-exempt by owner
-  // decision 2026-11-16 (foreignTelemetry.ts READ_ONLY_VERBS, isDiskMonitorStatus); install/uninstall stay gated. None is on a harness hot path.
+  // The four disk-monitor verbs (TRDD-HTARKH87) — disk-sample, disk, disk-watch and disk-monitor install/uninstall/status — are all
+  // DISABLED-exempt by owner decision 2026-11-16 (foreignTelemetry.ts READ_ONLY_VERBS). None is on a harness hot path.
   'disk-sample': 'run by its own launchd job once a minute, never by Claude Code; it is bounded by its own budget (statfs/diskutil 5 s each, folder walks 40 s in total) and exits via exitNow',
   disk: 'an investigation verb a human or agent invokes deliberately; read-only DuckDB queries over the monitor history, retrying briefly on the sampler writer lock',
   'disk-watch': 'edits the watch list in the monitor DuckDB file; an operator action, not on any per-turn path',

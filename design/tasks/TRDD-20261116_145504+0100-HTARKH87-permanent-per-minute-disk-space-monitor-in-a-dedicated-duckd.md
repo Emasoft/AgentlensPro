@@ -4,7 +4,7 @@ title: Permanent per-minute disk-space monitor in a dedicated DuckDB table with 
 column: dev
 status: tasked
 created: 2026-11-16T14:55:04+0100
-updated: 2026-11-16T18:32:11+0100
+updated: 2026-11-16T18:45:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -27,6 +27,7 @@ Owner order 2026-11-16 (verbatim): "you must add a permanent monitor of the disk
 - 2026-11-16T16:11:29+0100 — column → dev by user. Owner ordered this feature verbatim on 2026-11-16: 'you must add a permanent monitor of the disk space amount for each disk ...' (full quote in reports_dev/disk-monitor/spec.md)
 - 2026-11-16 — Correction: the main agent, not the user, ran the 'move … --approver user' write and the generic 'approved: true' set. What they record is the owner's verbal order of 2026-11-16 to build this monitor (quoted in reports_dev/disk-monitor/spec.md), which the agent treats as the approval. The owner has not approved the launchd job, the trash scope, or the ratchet raise from 26 to 27. The earlier line 'No approval is claimed here by an agent' predates this correction.
 - 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Approve 26 → 27 (Recommended)" to the question about the DuckDB opener cap (main uses 26 of 26; the disk monitor's dedicated disk.duckdb is the 27th). The launchd-install, install-while-DISABLED and trash-scope questions, asked in the same prompt, were left unanswered.
+- 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Install, even when DISABLED (Recommended)" to installing the launchd job that runs disk-sample every 60 s. Trash scope and the 4.5 GB cap trip test, asked in the same prompt, were left unanswered.
 
 ## Owner decisions
 

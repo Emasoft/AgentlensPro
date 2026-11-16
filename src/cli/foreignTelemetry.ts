@@ -34,19 +34,12 @@ export const HOOK_PATH_VERBS: ReadonlySet<string> = new Set([
  *  full first-run setup that wrote settings, hooks and telemetry env and could start a server. Found by the CLI
  *  hot-path latency guard in gate run B2.
  *
- *  The disk monitor (TRDD-HTARKH87) is exempt in part, BY OWNER DECISION 2026-11-16 ("Exempt the sampler"): it must keep recording while
- *  agentlenspro is DISABLED, because a filling disk is exactly when everything else is switched off. Exempt: `disk-sample` (writes only
- *  <dataDir>/disk.duckdb), `disk` (opens it READ_ONLY), `disk-watch` (list/add/remove edit only that file) and `disk-monitor status`
- *  (reads the plist and `launchctl print`; see isDiskMonitorStatus). NOT exempt: `disk-monitor install|uninstall` — installing a launchd
- *  job under an armed kill switch is a decision the owner has not made, so they stay gated (exit 69). All exempt verbs also skip the
- *  launch self-heal: the sampler fires every minute and must never write settings.json. */
-export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history", "disk-sample", "disk", "disk-watch"])
+ *  The disk monitor (TRDD-HTARKH87) is exempt as a whole, BY OWNER DECISIONS 2026-11-16 ("Exempt the sampler"; "Install, even when
+ *  DISABLED (Recommended)"): disk-sample, disk, disk-watch and disk-monitor (install, uninstall, status). A filling disk is exactly
+ *  when everything else is switched off. All of them also skip the launch self-heal: the sampler fires every minute and must never
+ *  write settings.json. */
+export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history", "disk-sample", "disk", "disk-watch", "disk-monitor"])
 
-/** `disk-monitor status` — the read-only sub-verb of a verb whose install/uninstall must stay behind the DISABLED gate, so it is
- *  matched on argv, not in READ_ONLY_VERBS. ONE rule shared by the disabled gate and the launch self-heal (same shape as isAllAccountsStatus). */
-export function isDiskMonitorStatus(argv: string[]): boolean {
-  return argv[0] === "disk-monitor" && argv[1] === "status"
-}
 // Verbs that pass the DISABLED gate on purpose; each has its own terminal handling (see above).
 const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", "setup", "server", "daemon"])
 
@@ -96,7 +89,7 @@ export function disabledNotice(argv: string[]): { text: string; code: number } |
   if (HOOK_PATH_VERBS.has(verb) || READ_ONLY_VERBS.has(verb) || DISABLED_PASSTHROUGH.has(verb)) return null
   // Needs no server and writes no user config (only its own data-dir files: key stamps, the account archive, and --out when asked): the brake must not block it
   // (owner directive 2026-10-29, see isAllAccountsStatus).
-  if (isAllAccountsStatus(argv) || isDiskMonitorStatus(argv)) return null
+  if (isAllAccountsStatus(argv)) return null
   const half = killSwitchHalf()
   if (half === null) return null
   const reason = recordedReason()
