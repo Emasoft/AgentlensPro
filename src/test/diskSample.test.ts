@@ -10,9 +10,9 @@ import * as assert from "assert"
 import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
-import { spawn, type ChildProcess } from "child_process"
+import { spawn, spawnSync, type ChildProcess } from "child_process"
 import { disabledNotice } from "../cli/foreignTelemetry"
-import { planWalks, recordVolumes, runDiskSample, runDiskSampleCli, storeOutcomes } from "../cli/diskSample"
+import { nextMinuteBoundary, planWalks, recordVolumes, runDiskSample, runDiskSampleCli, runResident, storeOutcomes } from "../cli/diskSample"
 import { openReadOnly, openWritable } from "../cli/diskStore"
 import { derivePurgeable, parseMount, parsePlistScalars, realMounts, sampleVolumes, usableImportant } from "../cli/diskVolumes"
 import { runSegment, startWalk, type WalkState } from "../cli/diskWalk"
@@ -251,6 +251,112 @@ suite("diskSample — run modes", () => {
   test("--volumes-only together with --walks-only is a usage error", async () => {
     await assert.rejects(runDiskSampleCli(["--volumes-only", "--walks-only"]), /mutually exclusive/)
   })
+})
+
+suite("diskSample — the resident minute loop", () => {
+  const T0 = Date.UTC(2026, 10, 16, 12, 0, 30) // 30 s past a minute boundary
+  const at = (m: number): number => Date.UTC(2026, 10, 16, 12, m, 0)
+
+  // A fake clock: sleep advances it by exactly the requested time (plus lateMs), so ticks land where the loop aimed them, with no real waiting.
+  function fakeClock(startMs: number, lateMs = 0): { now(): number; sleep(ms: number): Promise<void> } {
+    let t = startMs
+    return { now: () => t, sleep: async (ms: number) => { t += ms + lateMs } }
+  }
+  // A watchdog that never fires and an exit that must never be called.
+  const calm = { deadline: () => ({ expired: new Promise<void>(() => {}), cancel: () => {} }), exit: (): void => { throw new Error("unexpected exit") } }
+
+  test("nextMinuteBoundary is the first minute boundary strictly after the given time", () => {
+    assert.strictEqual(nextMinuteBoundary(T0), at(1))
+    assert.strictEqual(nextMinuteBoundary(at(1)), at(2), "exactly on a boundary: the next one")
+    assert.strictEqual(nextMinuteBoundary(Date.UTC(2026, 10, 16, 12, 0, 59, 999)), at(1))
+  })
+
+  test("the first tick runs immediately at the start time, then one tick per minute boundary, and maxTicks stops the loop", async () => {
+    const clock = fakeClock(T0, 3) // every wake is 3 ms late
+    const slots: number[] = []
+    await runResident({ ...clock, ...calm, tick: async slot => { slots.push(slot) }, log: () => { throw new Error("nothing to log") }, maxTicks: 4 })
+    assert.deepStrictEqual(slots, [T0, at(1), at(2), at(3)], "no blind spot after a start: the first sample is at the start time itself")
+    assert.ok(slots.slice(1).every(s => s % 60_000 === 0))
+  })
+
+  test("a timer that fires 2 ms early is slept out: every boundary tick runs exactly on its boundary, once", async () => {
+    let t = T0
+    const clock = { now: () => t, sleep: async (ms: number) => { t += ms > 5 ? ms - 2 : ms } } // the long sleep wakes 2 ms early, the short top-up is exact
+    const slots: number[] = []
+    await runResident({ ...clock, ...calm, tick: async slot => { slots.push(slot); assert.strictEqual(t, slot, "never before the boundary") }, log: () => {}, maxTicks: 3 })
+    assert.deepStrictEqual(slots, [T0, at(1), at(2)])
+  })
+
+  test("after a clock jump of 5 minutes (system sleep) the loop skips to the next boundary: one gap, no backlog of catch-up ticks", async () => {
+    let t = T0
+    const slots: number[] = []
+    await runResident({
+      now: () => t,
+      sleep: async ms => { t += ms },
+      ...calm,
+      tick: async slot => { slots.push(slot); if (slots.length === 1) t += 5 * 60_000 }, // the machine slept through the next 5 minutes during the first tick
+      log: () => {},
+      maxTicks: 2,
+    })
+    assert.deepStrictEqual(slots, [T0, at(6)], "12:01-12:05 are skipped, not replayed")
+  })
+
+  test("a tick that throws is logged as one line and the next tick still runs", async () => {
+    const clock = fakeClock(T0)
+    const slots: number[] = []
+    const lines: string[] = []
+    await runResident({
+      ...clock,
+      ...calm,
+      tick: async slot => { slots.push(slot); if (slots.length === 1) throw new Error("writer lock timeout") },
+      log: line => lines.push(line),
+      maxTicks: 2,
+    })
+    assert.strictEqual(slots.length, 2, "the loop survived the failed tick")
+    assert.strictEqual(lines.length, 1)
+    assert.match(lines[0], /2026-11-16T12:00:30\.000Z failed: writer lock timeout/)
+  })
+
+  test("a tick that never settles trips the watchdog: one stderr line, exit code 1, and no further tick", async () => {
+    const clock = fakeClock(T0)
+    const lines: string[] = []
+    const exits: number[] = []
+    let ticks = 0
+    await runResident({
+      ...clock,
+      tick: () => { ticks++; return new Promise<void>(() => {}) }, // never resolves
+      log: line => lines.push(line),
+      deadline: () => ({ expired: Promise.resolve(), cancel: () => {} }), // the deadline has already passed
+      exit: code => { exits.push(code) },
+    })
+    assert.strictEqual(ticks, 1)
+    assert.deepStrictEqual(exits, [1])
+    assert.strictEqual(lines.length, 1)
+    assert.match(lines[0], /still running after \d+ ms; exiting so launchd restarts the sampler/)
+  })
+
+  test("--resident without --volumes-only is a usage error", async () => {
+    await assert.rejects(runDiskSampleCli(["--resident"]), /--resident is only valid with --volumes-only/)
+    await assert.rejects(runDiskSampleCli(["--walks-only", "--resident"]), /--resident is only valid with --volumes-only/)
+  })
+})
+
+suite("diskSample — the writer lock between minutes", () => {
+  // DiskDb.close() closes the connection AND the DuckDB instance (diskStore.ts:65), so nothing is held after recordVolumes returns.
+  test("after recordVolumes ran twice in this process, a separate child process opens the same disk.duckdb read-write at once", withTempEnv(async (_env, ctx) => {
+    if (process.platform !== "darwin") ctx.skip()
+    const volumes = await sampleVolumes()
+    await recordVolumes(volumes, Date.now())
+    await recordVolumes(volumes, Date.now() + 60_000)
+    const t0 = Date.now()
+    const child = spawnSync(process.execPath, ["-e",
+      "require(process.argv[1]).openWritable().then(db => { db.close(); console.log(\"opened\") })",
+      require.resolve("../cli/diskStore")], { encoding: "utf8", timeout: 20_000 }) // inherits AGENTLENS_DATA_DIR from withTempEnv
+    assert.strictEqual(child.status, 0, child.stderr)
+    assert.strictEqual(child.stdout.trim(), "opened")
+    assert.ok(Date.now() - t0 < 4000, "the child did not wait out the 5 s lock retry")
+    assert.strictEqual(Number((await query("SELECT count(*) AS n FROM disk_volume"))[0].n), 2 * volumes.length)
+  }))
 })
 
 suite("diskSample — the other job holds the writer lock", () => {

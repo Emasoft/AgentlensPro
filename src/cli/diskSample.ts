@@ -1,8 +1,9 @@
-// src/cli/diskSample.ts — `agentlenspro disk-sample`: one sample, then exit (TRDD-HTARKH87, TRDD-RU9A8H7A).
+// src/cli/diskSample.ts — `agentlenspro disk-sample`: one sample then exit, or with `--volumes-only --resident` a minute loop (TRDD-HTARKH87, TRDD-RU9A8H7A, TRDD-T16ZQH9F).
 //
-// Run by TWO launchd jobs that `disk-monitor install` writes: `--volumes-only` every 60 s and `--walks-only` every 300 s. They are
+// Run by TWO launchd jobs that `disk-monitor install` writes: `--volumes-only --resident` (kept alive, one sample per wall-clock minute) and `--walks-only` every 300 s. They are
 // separate because a run that also walked folders took up to ~41 s, and launchd counts StartInterval from the previous run's exit
-// (measured: a steady ~101.5 s gap between volume rows) — the minute job must be as short as possible. No flag = both, in one run.
+// (measured: a steady ~101.5 s gap between volume rows). No flag = both, in one run. The minute job
+// itself is now the resident loop (`--volumes-only --resident`): see runResident for why it is no longer a fresh process per minute.
 // Exempt from the DISABLED kill switch (foreignTelemetry.ts READ_ONLY_VERBS) by owner decision 2026-11-16: the monitor exists to
 // watch a disk filling up, and the disk filling up is exactly when everything else has been switched off. It never touches the
 // DISABLED file and never talks to the server or cards.duckdb.
@@ -272,7 +273,66 @@ export async function runDiskSample(opts: { budgetMs?: number; mode?: SampleMode
   return { volumes: volumeCount, due: plans.length, finished: outcomes.filter(o => o.finished).length, elapsedMs: Date.now() - t0 }
 }
 
-const KNOWN: ReadonlySet<string> = new Set(["--quiet", "--volumes-only", "--walks-only"])
+/** The first wall-clock minute boundary strictly after `nowMs`. */
+export function nextMinuteBoundary(nowMs: number): number {
+  return Math.floor(nowMs / 60_000) * 60_000 + 60_000
+}
+
+export interface ResidentDeps {
+  now(): number
+  sleep(ms: number): Promise<void>
+  /** One sample for the slot that starts at `slotMs`. */
+  tick(slotMs: number): Promise<void>
+  log(line: string): void
+  /** A hard deadline for one tick: `expired` resolves after `ms`; `cancel` disarms it. */
+  deadline(ms: number): { expired: Promise<void>; cancel(): void }
+  /** Ends the process (the injected form in tests just records the code). */
+  exit(code: number): void
+  /** Stop after this many ticks, the immediate first one included (tests); absent = run forever. */
+  maxTicks?: number
+}
+
+/** The minute loop: one sample immediately at start (so a restart leaves no blind spot), then one per wall-clock minute boundary. A tick that
+ *  throws (writer-lock timeout, probe error) is logged as one line and the loop goes on; nothing is carried from one tick to the next. The next
+ *  slot is always computed from now() (never slot += 60000), so after a system sleep or clock jump the loop skips to the next boundary: a gap, no backlog.
+ *  A tick that outlives TICK_WATCHDOG_MS is stuck: log one line and exit non-zero so launchd KeepAlive restarts the job — a live process that no longer samples would never be restarted.
+ *  WHY resident and not a fresh process per minute: measured 2026-11-16 (TRDD-T16ZQH9F) under load 194-258, a fresh node process
+ *  per minute missed its 60 s slot (runs took 24-47 s; startup and sampling were both slow), while a resident node loop with a minute-boundary
+ *  timer woke 0-5 ms late and finished every sample in under 12 s (that scratch loop left out the DuckDB write; unproven with it under load). */
+export async function runResident(deps: ResidentDeps): Promise<void> {
+  /** false = the watchdog fired and the process was told to exit. */
+  const runTick = async (slot: number): Promise<boolean> => {
+    const dog = deps.deadline(TICK_WATCHDOG_MS)
+    try {
+      const outcome = await Promise.race([deps.tick(slot).then(() => "done" as const), dog.expired.then(() => "stuck" as const)])
+      if (outcome === "stuck") {
+        deps.log(`disk-sample resident: tick ${new Date(slot).toISOString()} still running after ${TICK_WATCHDOG_MS} ms; exiting so launchd restarts the sampler`)
+        deps.exit(1)
+        return false
+      }
+    } catch (e) {
+      deps.log(`disk-sample resident: tick ${new Date(slot).toISOString()} failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      dog.cancel()
+    }
+    return true
+  }
+  let lastSlot = deps.now()
+  if (!(await runTick(lastSlot))) return
+  for (let ticks = 1; deps.maxTicks === undefined || ticks < deps.maxTicks; ticks++) {
+    // max(now, lastSlot): a timer that fires a few ms before its boundary must not make the next boundary the same slot again.
+    const slot = nextMinuteBoundary(Math.max(deps.now(), lastSlot))
+    // A real setTimeout can fire a few ms early: sleep again until the boundary is reached, so a tick never runs (or stamps its row) before its slot.
+    while (deps.now() < slot) await deps.sleep(slot - deps.now())
+    lastSlot = slot
+    if (!(await runTick(slot))) return
+  }
+}
+
+/** A resident tick running this long is stuck (every probe is capped at 5 s and the lock wait at 5 s): the process exits so launchd restarts it. */
+const TICK_WATCHDOG_MS = 45_000
+
+const KNOWN: ReadonlySet<string> = new Set(["--quiet", "--volumes-only", "--walks-only", "--resident"])
 
 /** `--quiet`: print nothing on success — the launchd jobs pass it so their log stays small. (`--help` never gets here: main.ts answers it.) */
 export async function runDiskSampleCli(argv: string[]): Promise<number> {
@@ -280,6 +340,27 @@ export async function runDiskSampleCli(argv: string[]): Promise<number> {
   const volumesOnly = argv.includes("--volumes-only")
   const walksOnly = argv.includes("--walks-only")
   if (volumesOnly && walksOnly) throw new UsageError("disk-sample: --volumes-only and --walks-only are mutually exclusive")
+  if (argv.includes("--resident")) {
+    if (!volumesOnly) throw new UsageError("disk-sample: --resident is only valid with --volumes-only")
+    // Never returns: launchd (KeepAlive) owns its lifetime. recordVolumes opens disk.duckdb and closes it per tick, so the writer lock is free between minutes.
+    await runResident({
+      now: Date.now,
+      sleep: ms => new Promise<void>(resolve => setTimeout(resolve, ms)),
+      tick: async () => {
+        // Same stamp as the one-shot path (runDiskSample): the clock is read BEFORE the probes, so a slow probe does not shift the row.
+        const t0 = Date.now()
+        await recordVolumes(await sampleVolumes(), t0)
+      },
+      log: line => console.error(line),
+      deadline: ms => {
+        let timer: NodeJS.Timeout | undefined
+        const expired = new Promise<void>(resolve => { timer = setTimeout(resolve, ms) })
+        return { expired, cancel: () => clearTimeout(timer) }
+      },
+      exit: code => process.exit(code),
+    })
+    return EXIT.OK
+  }
   try {
     const s = await runDiskSample({ mode: volumesOnly ? "volumes" : walksOnly ? "walks" : "all" })
     if (!argv.includes("--quiet")) console.log(`disk-sample: ${s.volumes} volume(s); ${s.finished}/${s.due} due folder walk(s) finished; ${s.elapsedMs} ms`)

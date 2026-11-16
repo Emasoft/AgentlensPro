@@ -1,9 +1,9 @@
 // src/cli/diskLaunchd.ts — `agentlenspro disk-monitor install|uninstall|status`: the two disk-monitor jobs (TRDD-HTARKH87, TRDD-RU9A8H7A).
 //
 // Their OWN launchd agents, not threads of the collector: the monitor must keep recording while the
-// collector is stopped, crashed or DISABLED — that is when a disk quietly fills. `disk-sample --volumes-only` runs every 60 s and
-// `disk-sample --walks-only` every 300 s; there is no KeepAlive, so nothing restarts a failing sampler in a
-// tight loop, the next interval simply tries again.
+// collector is stopped, crashed or DISABLED — that is when a disk quietly fills. `disk-sample --volumes-only --resident` is a resident minute loop and
+// `disk-sample --walks-only` runs every 300 s. The minute job has KeepAlive because a fresh node process per minute missed its 60 s slot under
+// load (runs of 24-47 s at load 194-258) while a resident loop woke 0-5 ms late (TRDD-T16ZQH9F). ThrottleInterval 60 means a crashing sampler restarts at most once a minute.
 
 import * as fs from "fs"
 import * as os from "os"
@@ -17,22 +17,25 @@ import { cliJsPath } from "./serverControl"
 export const DISK_LABEL = "com.agentlens.disk-sample"
 export const DISK_WALK_LABEL = "com.agentlens.disk-walk"
 
-/** One launchd job. Two exist because the minute job must stay short: launchd counts StartInterval from the previous run's exit, so a run
- *  that also walked folders (up to ~41 s) made the volume rows land every ~101 s instead of 60 s (TRDD-RU9A8H7A). */
+/** One launchd job. Two exist so the minute job never waits on a folder walk: an interval job counts from the previous run's exit, so a run
+ *  that also walked folders (up to ~41 s) made the volume rows land every ~101 s instead of 60 s (TRDD-RU9A8H7A). The fields below are exactly what differs between them. */
 export interface DiskJob {
   label: string
-  /** The `disk-sample` mode flag the job passes. */
-  flag: "--volumes-only" | "--walks-only"
-  intervalS: number
+  /** The `disk-sample` arguments the job passes before `--quiet`. */
+  args: readonly string[]
+  /** How launchd runs it: `interval` = a fresh process every `seconds`; `keepAlive` = one resident process, restarted at most once per `throttleS`. */
+  schedule: { kind: "interval"; seconds: number } | { kind: "keepAlive"; throttleS: number }
   logFile: string
   /** launchd's ProcessType for this job. */
   processType: "Standard" | "Background"
+  /** Nice 10 + LowPriorityIO. The resident minute sampler runs at default priority: that is how the measured winner ran (TRDD-T16ZQH9F). */
+  lowPriority: boolean
 }
 
 export const DISK_JOBS: readonly DiskJob[] = [
-  // SUSPECTED, not established: Background lets launchd throttle and coalesce the timer under heavy load. On 2026-11-16 at load 128-169 the minute job ran 3 times in 8 minutes, one gap exactly 7 x 60 s with no sleep (TRDD-RU9A8H7A). The minute job is a cheap statfs read, so it runs Standard; the 5-minute folder walk stays Background.
-  { label: DISK_LABEL, flag: "--volumes-only", intervalS: 60, logFile: "disk-sample.log", processType: "Standard" },
-  { label: DISK_WALK_LABEL, flag: "--walks-only", intervalS: 300, logFile: "disk-walk.log", processType: "Background" },
+  // Resident, KeepAlive, Standard, default priority: measured 2026-11-16 under load 194-258 (TRDD-T16ZQH9F) — a fresh process per minute missed its slot, a resident loop did not.
+  { label: DISK_LABEL, args: ["--volumes-only", "--resident"], schedule: { kind: "keepAlive", throttleS: 60 }, logFile: "disk-sample.log", processType: "Standard", lowPriority: false },
+  { label: DISK_WALK_LABEL, args: ["--walks-only"], schedule: { kind: "interval", seconds: 300 }, logFile: "disk-walk.log", processType: "Background", lowPriority: true },
 ]
 
 const xml = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -43,6 +46,22 @@ export function diskLogPath(job: DiskJob, dir: string = dataDir()): string {
 
 export function diskPlist(p: { node: string; cli: string; dataDir: string; job: DiskJob }): string {
   const log = xml(diskLogPath(p.job, p.dataDir))
+  const schedule = p.job.schedule.kind === "interval"
+    ? `  <key>StartInterval</key>
+  <integer>${p.job.schedule.seconds}</integer>
+`
+    : `  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>${p.job.schedule.throttleS}</integer>
+`
+  const priority = p.job.lowPriority
+    ? `  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+`
+    : ""
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -54,20 +73,13 @@ export function diskPlist(p: { node: string; cli: string; dataDir: string; job: 
     <string>${xml(p.node)}</string>
     <string>${xml(p.cli)}</string>
     <string>disk-sample</string>
-    <string>${p.job.flag}</string>
-    <string>--quiet</string>
+${p.job.args.map(a => `    <string>${xml(a)}</string>\n`).join("")}    <string>--quiet</string>
   </array>
-  <key>StartInterval</key>
-  <integer>${p.job.intervalS}</integer>
-  <key>RunAtLoad</key>
+${schedule}  <key>RunAtLoad</key>
   <true/>
   <key>ProcessType</key>
   <string>${p.job.processType}</string>
-  <key>LowPriorityIO</key>
-  <true/>
-  <key>Nice</key>
-  <integer>10</integer>
-  <key>StandardOutPath</key>
+${priority}  <key>StandardOutPath</key>
   <string>${log}</string>
   <key>StandardErrorPath</key>
   <string>${log}</string>
@@ -118,7 +130,8 @@ const ctl = opts.launchctl ?? launchctl // injectable so the rollback path is te
       bootstrapped.push(job.label)
       loaded = true
     }
-    console.log(`disk-monitor install: ${file} (${opts.load === false ? "written, not loaded" : "loaded"}); ${job.flag === "--volumes-only" ? "volume rows" : "folder walks"} every ${job.intervalS} s into ${path.join(dataDir(), "disk.duckdb")}`)
+    const cadence = job.schedule.kind === "interval" ? `folder walks every ${job.schedule.seconds} s` : "volume rows every minute (resident sampler)"
+    console.log(`disk-monitor install: ${file} (${opts.load === false ? "written, not loaded" : "loaded"}); ${cadence} into ${path.join(dataDir(), "disk.duckdb")}`)
     return { label: job.label, path: file, loaded }
   })
   return { jobs }
@@ -168,7 +181,7 @@ async function status(): Promise<number> {
 }
 
 export const DISK_MONITOR_USAGE = `usage: agentlenspro disk-monitor install | uninstall | status
-  install    write ~/Library/LaunchAgents/${DISK_LABEL}.plist (volume rows every 60 s) and ${DISK_WALK_LABEL}.plist (folder walks
+  install    write ~/Library/LaunchAgents/${DISK_LABEL}.plist (resident sampler, volume rows every minute) and ${DISK_WALK_LABEL}.plist (folder walks
              every 300 s) and load both, even with no Claude session and even while agentlenspro is DISABLED (macOS only)
   uninstall  unload and delete both plists; the recorded history is kept
   status     both plists, their launchd state, and the time of the newest recorded row (exit 0 = both installed and loaded)`

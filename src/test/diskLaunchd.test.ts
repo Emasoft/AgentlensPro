@@ -9,18 +9,21 @@ import { execFileSync } from "child_process"
 import { DISK_JOBS, DISK_LABEL, DISK_WALK_LABEL, diskMonitorInstall, diskMonitorUninstall, diskPlist } from "../cli/diskLaunchd"
 
 suite("disk-monitor launchd jobs", () => {
-  test("the minute job runs disk-sample --volumes-only every 60 s and the walk job --walks-only every 300 s, with the data dir pinned, XML escaped, own logs", () => {
+  test("the minute job is a resident KeepAlive sampler (--volumes-only --resident, throttled to one restart a minute) and the walk job --walks-only every 300 s, with the data dir pinned, XML escaped, own logs", () => {
     const [vol, walk] = DISK_JOBS
     const xml = diskPlist({ node: "/usr/local/bin/node", cli: "/opt/a&b/cli.js", dataDir: "/data/<x>", job: vol })
     assert.strictEqual(vol.label, DISK_LABEL)
     assert.match(xml, new RegExp(`<string>${DISK_LABEL}</string>`))
-    assert.match(xml, /<key>StartInterval<\/key>\s*<integer>60<\/integer>/)
-    assert.match(xml, /<string>disk-sample<\/string>\s*<string>--volumes-only<\/string>\s*<string>--quiet<\/string>/)
+    assert.ok(!xml.includes("StartInterval"), "a resident job has no StartInterval")
+    assert.match(xml, /<string>disk-sample<\/string>\s*<string>--volumes-only<\/string>\s*<string>--resident<\/string>\s*<string>--quiet<\/string>/)
     assert.match(xml, /<key>AGENTLENS_DATA_DIR<\/key>\s*<string>\/data\/&lt;x&gt;<\/string>/)
     assert.ok(xml.includes("/opt/a&amp;b/cli.js"))
     assert.ok(xml.includes("/data/&lt;x&gt;/logs/disk-sample.log"))
     assert.match(xml, /<key>ProcessType<\/key>\s*<string>Standard<\/string>/)
-    assert.ok(!xml.includes("KeepAlive"), "no KeepAlive: a failing sampler must not respawn in a tight loop")
+    assert.match(xml, /<key>KeepAlive<\/key>\s*<true\/>/)
+    assert.match(xml, /<key>ThrottleInterval<\/key>\s*<integer>60<\/integer>/, "a crashing sampler restarts at most once a minute")
+    assert.ok(!xml.includes("<key>Nice</key>"), "the minute sampler runs at default priority")
+    assert.ok(!xml.includes("LowPriorityIO"), "the minute sampler runs at default priority")
     const w = diskPlist({ node: "/n", cli: "/c.js", dataDir: "/d", job: walk })
     assert.strictEqual(walk.label, DISK_WALK_LABEL)
     assert.match(w, new RegExp(`<string>${DISK_WALK_LABEL}</string>`))
@@ -28,6 +31,9 @@ suite("disk-monitor launchd jobs", () => {
     assert.match(w, /<string>disk-sample<\/string>\s*<string>--walks-only<\/string>\s*<string>--quiet<\/string>/)
     assert.ok(w.includes("/d/logs/disk-walk.log"))
     assert.match(w, /<key>ProcessType<\/key>\s*<string>Background<\/string>/)
+    assert.match(w, /<key>Nice<\/key>\s*<integer>10<\/integer>/)
+    assert.match(w, /<key>LowPriorityIO<\/key>\s*<true\/>/)
+    assert.ok(!w.includes("KeepAlive"), "the walk job is interval-driven, never kept alive")
   })
 
   test("install (load: false) writes both plists plutil accepts, twice in a row replaces them, uninstall removes both", function (this: Mocha.Context) {
