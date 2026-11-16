@@ -489,7 +489,7 @@ export async function runGateCheck(payload: Buffer, opts: { baseUrl?: string; ti
 
 /** Process entry for `agentlenspro hook` / `agentlenspro gate`. Always resolves 0. */
 export async function runHookCommand(kind: 'hook' | 'gate'): Promise<number> {
-  // GLOBAL kill-switch, first thing and before stdin: `<dataDir>/DISABLED` disarms every hook in
+  // GLOBAL kill-switch, first thing and before stdin: `<dataDir>/DISABLED` disarms the lifecycle and gate hooks in
   // every RUNNING Claude session on the next fire — the only channel that reaches an agent whose
   // env and config were fixed at launch (see killSwitch.ts; 13 stale sessions kept writing through
   // a settings edit during the 2026-07-14 SSD incident). Returning 0 with no output is a no-op for

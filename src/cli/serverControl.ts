@@ -250,7 +250,7 @@ function hookSpoolDirPath(): string { return path.join(dataDir(), 'hook-spool') 
 export const DEFAULT_MAX_OLD_SPACE_MB = 6144
 
 // TRDD-2JOIAH2G R1: alcore's mimalloc retains freed pages, so the heap plateaus (~3 GB) above the
-// 2048 MB phys_footprint the RSS guard kills on. Spawn env is the ONLY reliable injection point:
+// 2048 MB hard cap the guard kills on (mimalloc commit, since 2026-10-22). Spawn env is the ONLY reliable injection point:
 // mimalloc reads options at its first allocation, which can run before main, so a
 // std::env::set_var inside Rust main races and can be a no-op. Env name per the VENDORED allocator
 // (libmimalloc-sys 0.1.49, no "v2" feature => mimalloc v3): the option is `mimalloc_purge_delay`
@@ -632,6 +632,10 @@ export interface ServerStatsBodies {
   // never "0 since boot".
   reclaimedSinceBoot?: number
   lastNonZeroPassAt?: number
+  // TRDD-5K0YLLEF: consecutive failed .pass-state.json saves (0 = healthy) and epoch ms of the last failed save (0 = never).
+  // An older server omits both; absent is not zero, so stateSaveFailLine prints nothing for them.
+  stateSaveFails?: number
+  lastStateSaveFailAt?: number
   // TRDD-4FMHW124 / TRDD-U0L78B3Z: null = up. Absent is not "healthy", it is "not reported".
   captureDownSince?: number | null
   sinkProblem?: string | null
@@ -685,6 +689,23 @@ function parkedSuffix(parked: { files: number; bytes: number; onDisk: number } |
   // that can never be cleared by a pass that only ever sees files, so it is worth surfacing.
   const ghosts = parked.onDisk < parked.files ? `, ${parked.files - parked.onDisk} name(s) with no file` : ''
   return ` | PARKED ${parked.files} file(s) ${mb}MB${ghosts} — ts-row mismatch, never reclaimed (TRDD-8TM7I49X)`
+}
+
+/** The save-failure line for `server status` (TRDD-LDWBRV9B). Silent at zero and when absent: an
+ *  older server omits both, and absent is not zero, so nothing is rendered for it. The count is
+ *  consecutive failed saves of `.pass-state.json`; a full disk that also loses the one-time log
+ *  line is otherwise visible only through the API. `now` is a parameter so this is testable. */
+export function stateSaveFailLine(
+  bodies: Pick<ServerStatsBodies, 'stateSaveFails' | 'lastStateSaveFailAt'>,
+  now: number = Date.now(),
+): string | null {
+  const fails = bodies.stateSaveFails
+  if (fails === undefined || fails === 0) return null
+  // lastStateSaveFailAt is 0 = never, and is absent on an older server. A count with no usable
+  // timestamp must say so: `now - 0` would render as a failure about 57 years ago.
+  const at = bodies.lastStateSaveFailAt
+  const when = at ? `last failure ${Math.max(1, Math.round((now - at) / 60000))}m ago` : 'last failure time not reported'
+  return `save:   ${fails} consecutive failed .pass-state.json save(s), ${when} — the last save failed; the pass state on disk is stale`
 }
 
 interface ServerStats {
@@ -792,6 +813,7 @@ export async function showStatus(): Promise<void> {
   const up = s.uptimeSec
   const uptime = up >= 3600 ? `${Math.floor(up / 3600)}h${Math.floor((up % 3600) / 60)}m` : `${Math.floor(up / 60)}m${up % 60}s`
   const per = s.persistence
+  const saveFail = stateSaveFailLine(s.bodies)
   // The stats endpoint is reached by URL, which says nothing about WHOSE data dir answered. Without
   // this line status printed `RUNNING pid=…` for a data dir that has no server, and then printed
   // the two disagreeing `data:` lines below it without comment (TRDD-BSDR4TRM ai_review IMPORTANT-2).
@@ -844,6 +866,7 @@ export async function showStatus(): Promise<void> {
     // captures nothing — EXCEPT when the newest body predates the server's own boot, which is
     // not a judgement call: this process has run that whole time and captured nothing.
     `capture: ${bodiesCaptureLine(s)}`,
+    ...(saveFail ? [saveFail] : []),
     // hookEvents/gate are absent when --status hits a server built before TRDD-Q6ZOUVK5/GOD0108C — skip, don't crash.
     ...(s.hookEvents ? [`hooks:  ${s.hookEvents.receivedSinceBoot} event(s) since boot, ${s.hookEvents.files} bucket(s) ${fmtMb(s.hookEvents.bytes)} on disk`] : []),
     // logEvents is absent when --status hits a server built before TRDD-AMEA4O4Z — skip, don't crash.

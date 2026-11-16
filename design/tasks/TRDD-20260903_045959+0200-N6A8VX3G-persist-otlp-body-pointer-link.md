@@ -1,9 +1,9 @@
 ---
 trdd-id: N6A8VX3G
 title: Persist the OTLP body-pointer link so response rows gain a session_id
-column: testing
+column: blocked
 created: 2026-09-03T04:59:59+0200
-updated: 2026-10-09T00:16:17+0200
+updated: 2026-10-17T08:38:13+0200
 current-owner: main-session
 task-type: feature
 priority: high
@@ -12,9 +12,13 @@ parent-trdd: CAJ5RCP9
 created-by: main-session
 npt: []
 eht: []
-blocked-by: []
+blocked-by: [H8F9S7MY]
 status: tasked
-implementation-commits: [34668285]
+implementation-commits: [34668285, 531b3b62, 54f7b978, 1b40ac9a]
+pre-block-column: testing
+unblock-when: [trdd:H8F9S7MY terminal]
+blocker-probe: [trddgrep, why, N6A8VX3G]
+blocker-holds-if: not-match:READY
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -23,8 +27,8 @@ implementation-commits: [34668285]
   same-call pairing between a request and its response exists ONLY at the OTLP ingest layer
   (`agentlens-ingest`), in-memory, and is thrown away — `api_calls` (GVA8TTJF) cannot give a
   response row a `session_id` without it, so its join match rate would be 0 by construction.
-- NEXT ACTION: add a small parquet writer at the point `call_body_registry.rs` already resolves
-  the pairing, so the link becomes durable and readable by `agentlens-store`'s `api_calls` view.
+- NEXT ACTION (2026-10-17): every non-deploy item is done (D4 fixed, wire-path test, timing recorded).
+  Box 3 needs the live deploy, TRDD-H8F9S7MY; the card is blocked on it. If H8F9S7MY ends cancelled or superseded, re-block on its successor: the auto-restore does not mean box 3 is checkable.
 
 ## WHY
 
@@ -60,7 +64,7 @@ one-call-lagged, neither a same-call pair. This card is only about the same-call
       with `session_id` populated from the request side.
 - [x] The link table survives a server restart (parquet, not in-memory). [NDJSON DeltaLog — durable-on-disk, reloaded at boot, boot-compacted; demonstrated: kill -9 → restart → delta compacted into snapshot, verified-from-disk]
 - [ ] GVA8TTJF's `cache_turns` join, once wired to use this link, resolves a response row's
-      `session_id` via the link (verify with a real pair, not a synthetic one).
+      `session_id` via the link (verify with a real pair, not a synthetic one). [2026-10-17: covered synthetically by GVA8TTJF's SQL tests; the live real-pair form waits on TRDD-H8F9S7MY. Not ticked.]
 - [x] No `device_id`/`account_uuid` column exists anywhere in the new table. [confirmed: row construction drops them, grep 0 on live rows, unit test asserts absence]
 
 ## VERIFICATION
@@ -73,8 +77,10 @@ one-call-lagged, neither a same-call pair. This card is only about the same-call
 ## Approval log
 - 2026-10-08T18:51:39+0200 — column → dev by main-agent@agentlenspro.
 - 2026-10-08T19:57:37+0200 — column → testing by main-agent@agentlenspro.
+- 2026-10-17T08:34:26+0200 — column → blocked by main-agent@agentlenspro. non-deploy items done (D4 fixed 531b3b62/54f7b978, wire test 1b40ac9a, timing recorded); box 3 waits on the alcore deploy
 
 ## Notes and lessons learned
+2026-10-16: GVA8TTJF no longer lists this card in blocked-by (its code landed before GVA8TTJF entered dev). Box 3 stays unticked: review round 3 made the contract one-way, so its live real-pair proof is GVA8TTJF's box 5, but re-wording or delegating this box is an acceptance change left to the owner. Owed before complete: the restart-timing measurement (never run; no record on card or in commits). The torn-tail item is met in its round-3 form: tests/delta_log.rs torn-tail tests pass, 12/12. The STATE NEXT ACTION is stale, since the code landed in 34668285; the real next action is the restart-timing measurement, which needs a deployed binary.
 
 ## Dispatched (2026-10-08)
 
@@ -103,3 +109,13 @@ The round-3 fork found the loop's own exit condition and two amendments, all app
 ## GVA8TTJF wired the link (2026-10-09)
 
 GVA8TTJF's api_calls_relation resolves a response row's session_id via the link table in real DuckDB tests (unpaired-half survival test asserts session from the response's OWN link row; paired test asserts the request-side session through the pair) — acceptance box 3's synthetic-form is now proven at the SQL level; the real-pair live form stays pending-deploy with GVA8TTJF.
+
+## Handed over from TRDD-GVA8TTJF review (2026-10-17)
+
+- D4 (GVA8TTJF review M3(d)): a possible link-key collision in agentlens-core lib.rs `body_link_row`. It was found in the GVA8TTJF round-2 review and recorded here because this card owns that code. Not yet reproduced; the next step is to read body_link_row and state whether two distinct calls can produce the same link key. This does not gate this card's acceptance boxes; if it reproduces, it becomes its own TRDD.
+
+## D4 fixed (2026-10-17)
+
+- The body-link key collided for two different same-kind pointers without a span id in one OTLP payload, because ts is the payload's ingest time; replay kept the last row, so a link row was lost. Fixed in 531b3b62, which keyed rows by full content, and 54f7b978, which hashes it: the first 128 bits of SHA-256 over a JSON array of the row fields, safe against untrusted ids and small. 1b40ac9a drives a real /v1/logs payload through ingest_parsed. Mutation-checked: the old key fails three tests. No migration: no body-links file existed on this machine. Box 1 means one row per pointer per payload; a pointer re-sent in a new payload gets a new ts and a second row, which was true of every key format so far.
+- Restart timing (owed): measured on TRDD-1RJBOEI1, compact_from_disk 5.20 s and 184.7 MiB at 700k rows. The year-scale cost is carried by TRDD-64A08ED4.
+- Residue: two doc comments in delta_log.rs (about lines 574 and 591) still say body-links keys are 'unique per pointer'. fastedit duplicated the doc block on two attempts; it is still true in effect, since no key is ever superseded.

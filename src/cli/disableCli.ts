@@ -7,7 +7,8 @@
 // (a hook inherits CLAUDE's env, not the operator's). A flag FILE is the only channel that reaches
 // every already-running session, because every hook is a fresh process that re-reads the disk.
 import * as path from 'path'
-import { killSwitchPath, agentlensDisabled } from './killSwitch'
+import * as fs from 'fs'
+import { killSwitchPath, agentlensDisabled, armKeepStatusline, keepStatuslinePath } from './killSwitch'
 import { disableAgentlensSurfaces, enableAgentlensSurfaces } from './surfaces'
 import { AutoSetupDeps, ensureInstalled } from './autoSetup'
 import { findServerPid, stopServer } from './serverControl'
@@ -21,6 +22,13 @@ export async function runDisableCli(args: string[]): Promise<number> {
   // Kill-switch AND the skills/rules move together (owner order 2026-10-02): one function, so the two
   // can never disagree. The agents stay installed — they do not depend on the CLI.
   const { flag: p, moved } = disableAgentlensSurfaces(reason)
+  // `--keep-statusline`: owner request 2026-10-27, verbatim: "stop everything except the statusline data
+  // collection, so the agentlenspro cli can still answer the basic questions about the session". The marker
+  // only lets statuslineCapture.ts keep appending to disk; the server, hooks and ingestion stay off. A plain
+  // `disable` clears any marker left by an earlier `--keep-statusline`, so it still means everything off.
+  const keepStatusline = args.includes('--keep-statusline')
+  if (keepStatusline) armKeepStatusline()
+  else fs.rmSync(keepStatuslinePath(), { force: true })
 
   // Arming the flag stops hooks from SPAWNING a server, but a server already running would keep
   // ingesting — "disabled" would be a lie. Stop it too, so the state the user asked for is the state
@@ -56,12 +64,15 @@ export async function runDisableCli(args: string[]): Promise<number> {
 
   console.log('AgentlensPro is now DISABLED.')
   console.log(`  flag:    ${p}`)
+  if (keepStatusline) console.log(`  keep:    ${keepStatuslinePath()} (status-line capture stays ON, written straight to disk)`)
   console.log(`  server:  ${stopped}`)
   console.log(`  capture: ${capture}`)
   console.log(`  skills:  ${moved.length ? `${moved.length} moved to ${path.join(dataDir(), 'disabled-surfaces')} (agents stay installed)` : 'none were installed'}`)
   console.log('')
-  console.log('  Every hook, the burn-gate, auto-revive and background ingestion are OFF —')
-  console.log('  in every Claude session already running, from its next hook fire. No restart needed.')
+  console.log('  Every AgentlensPro hook is OFF except the review gate and the review supervisor (read-only).')
+  console.log('  Off: lifecycle capture (agentlenspro hook), the burn-gate and the image cache-guard (agentlenspro gate),')
+  console.log('  server auto-revive, background ingestion, and status-line capture (kept only by --keep-statusline).')
+  console.log('  Takes effect in every Claude session already running, from its next hook fire. No restart needed.')
   console.log('')
   console.log('  Re-enable with:  agentlenspro enable')
   // The flag is armed either way (the brake IS on for AgentlensPro's own hooks), but if we could not
@@ -81,17 +92,25 @@ export async function runEnableCli(forceInstall = false, deps: AutoSetupDeps = {
     console.log('AgentlensPro is already enabled (no kill-switch flag present).')
     return EXIT.OK
   }
+  // WHY (TRDD-RBBEX59R): the converge above ran while the switch stood, so it held the raw-body key ABSENT
+  // (rawBodiesHeldAbsent); every lift is followed by ONE telemetry converge, which writes the key back once no switch
+  // half is armed (under the env half it stays absent, as the owner rule requires).
+  const reconverge = (): Promise<number | null> => ensureInstalled('enable', 'enable', { ...deps, forceInstall })
   // An env-set AGENTLENS_DISABLED cannot be cleared by deleting a file — say so, and return non-zero
   // (cannot-answer) rather than claim a success the user will not observe: the flag is gone but every
   // process inheriting the env stays disabled, so "enable" did not achieve what was asked.
   if (process.env.AGENTLENS_DISABLED === '1') {
     enableAgentlensSurfaces()
+    const again = await reconverge()
+    if (again !== null) return again
     console.log('Removed the kill-switch flag, but AGENTLENS_DISABLED=1 is set in this environment —')
     console.log('AgentlensPro stays disabled for any process that inherits it. Unset it to re-enable.')
     return EXIT.UNKNOWN
   }
   // Disarm AND put the parked skills back — the mirror of disableAgentlensSurfaces.
   const { restored } = enableAgentlensSurfaces()
+  const again = await reconverge()
+  if (again !== null) return again
   console.log('AgentlensPro is now ENABLED.')
   console.log(`  removed: ${killSwitchPath()}`)
   if (restored.length > 0) console.log(`  skills:  ${restored.length} restored to their place`)

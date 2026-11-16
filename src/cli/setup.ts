@@ -31,24 +31,24 @@ import { countNdjsonLinesAuto } from '../ndjsonLines'
 import { readFsMarkers } from '../environment/runtime'
 import {
   TelemetryConflict, TelemetryVerdictRow, ensureTelemetryConfig, forceInstallManagedTelemetry, formatTelemetryConflicts,
-  formatTelemetryVerdict, ownedTelemetryKeys, sameTelemetryValue, shown as shownValue, telemetryVerdict, verdictConflicts as detectConflictsFromRows,
+  formatTelemetryVerdict, ownedTelemetryKeys, rawBodiesHeldAbsent, sameTelemetryValue, shown as shownValue, telemetryVerdict, verdictConflicts as detectConflictsFromRows,
 } from '../telemetryConfig'
 import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
-import { alstoreBin as resolveAlstoreBin, rustIngestPass } from '../rustStorePass'
-import { safeConfigEdit } from '../safeConfigEdit'
-import { DEFAULT_MAX_BYTES_PER_PASS, IngestPassResult } from '../store/ingestPass'
+import { alstoreBin as resolveAlstoreBin, rustIngestPass, type RustPassResult } from '../rustStorePass'
+import { safeConfigEdit, type SafeEditOp } from '../safeConfigEdit'
+import { DEFAULT_MAX_BYTES_PER_PASS } from '../store/ingestPass'
 import { envPort, sleep } from './cliCore'
+import { dataDirFrom } from '../dataDir'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
-  REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
+  INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
-  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillTreeHash, installAgents, AGENT_NAMES,
+  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
-import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir } from './serverControl'
-import { parsePidLock } from '../serverRuntime'
+import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir, statsOwnership } from './serverControl'
 
-import { chooseServerPorts, readChosenPort, writePortsFile } from './portSelect'
+import { chooseServerPorts, liveLockPid, readChosenPort, writePortsFile } from './portSelect'
 export interface SetupOptions {
   dryRun?: boolean
   yes?: boolean
@@ -118,7 +118,11 @@ export function resolveCtx(opts: SetupOptions): Ctx {
   const home = opts.home ?? os.homedir()
   const repoRoot = opts.repoRoot ?? findPackageRoot(__dirname)
   if (!repoRoot) throw new Error(`cannot locate the agentlenspro package root above ${__dirname}`)
-  const dataDir = opts.dataDir ?? process.env.DATA_DIR ?? path.join(home, '.agentlens')
+  // The shared resolver (src/dataDir.ts), against THIS home: AGENTLENS_DATA_DIR, then DATA_DIR, then
+  // <home>/.agentlens. WHY (TRDD-TYOQA14F): this read only DATA_DIR and ignored AGENTLENS_DATA_DIR, the canonical
+  // variable every other verb honours first, so `agentlenspro setup` and the launch self-heal converged and started
+  // a server in ~/.agentlens while server stop/status, the hooks and findServerPid used the user's own dir.
+  const dataDir = opts.dataDir ?? dataDirFrom({ ...process.env, HOME: home })
   // Same resolution as the server start (serverControl.alcoreServeArgs): env first, then the
   // ports the running server recorded in ports.json (honoured only while its pidfile is live),
   // then the canonical default — so detection, probes and the self-test dial where the clients do.
@@ -148,22 +152,38 @@ export function resolveCtx(opts: SetupOptions): Ctx {
 
 // ── Local transport bound to the ctx ports (cliCore reads env — setup must not) ────────────
 
-function httpJson(port: number, method: string, p: string, payload?: unknown): Promise<{ status: number; json: unknown }> {
+/** Overall budgets for setup's own HTTP calls (TRDD-V2HFI30L). The socket timeout each call also sets is an IDLE
+ *  timeout — every byte resets it — so a server that trickled one byte every few seconds held setup forever. The
+ *  overall deadline bounds the whole exchange. 10 s is twice the idle timeout, so a slow but healthy server under
+ *  load still answers in time; the MCP budget keeps the same margin over its 10 s idle timeout. */
+export const HTTP_TOTAL_DEADLINE_MS = 10_000
+const MCP_TOTAL_DEADLINE_MS = 15_000
+
+export function httpJson(port: number, method: string, p: string, payload?: unknown): Promise<{ status: number; json: unknown }> {
   const body = payload === undefined ? null : JSON.stringify(payload)
   return new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (finish: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      finish()
+    }
     const req = http.request({
       hostname: '127.0.0.1', port, path: p, method,
       headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
     }, res => {
       let raw = ''
       res.on('data', (c: Buffer) => { raw += c })
-      res.on('end', () => {
+      res.on('error', e => settle(() => reject(e)))
+      res.on('end', () => settle(() => {
         let json: unknown = null
         try { json = JSON.parse(raw) } catch { /* non-JSON body (e.g. the dashboard HTML) */ }
         resolve({ status: res.statusCode ?? 0, json })
-      })
+      }))
     })
-    req.on('error', reject)
+    req.on('error', e => settle(() => reject(e)))
+    const deadline = setTimeout(() => settle(() => { req.destroy(); reject(new Error('timeout')) }), HTTP_TOTAL_DEADLINE_MS)
     req.setTimeout(5000, () => req.destroy(new Error('timeout')))
     if (body) req.write(body)
     req.end()
@@ -173,6 +193,13 @@ function httpJson(port: number, method: string, p: string, payload?: unknown): P
 async function mcpCall(port: number, method: string, params: unknown): Promise<unknown> {
   const body = JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params })
   return new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (finish: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      finish()
+    }
     const req = http.request({
       hostname: '127.0.0.1', port, path: '/mcp', method: 'POST',
       headers: {
@@ -183,7 +210,8 @@ async function mcpCall(port: number, method: string, params: unknown): Promise<u
     }, res => {
       let raw = ''
       res.on('data', (c: Buffer) => { raw += c })
-      res.on('end', () => {
+      res.on('error', e => settle(() => reject(e)))
+      res.on('end', () => settle(() => {
         const line = raw.split('\n').find(l => l.startsWith('data:'))
         const payload = line ? line.slice(5).trim() : raw
         try {
@@ -191,19 +219,24 @@ async function mcpCall(port: number, method: string, params: unknown): Promise<u
           if (j.error) return reject(new Error(j.error.message || 'rpc error'))
           resolve(j.result)
         } catch { reject(new Error(`bad MCP response (${res.statusCode}): ${raw.slice(0, 200)}`)) }
-      })
+      }))
     })
-    req.on('error', reject)
+    // TRDD-V2HFI30L: the overall bound, see HTTP_TOTAL_DEADLINE_MS.
+    const deadline = setTimeout(() => settle(() => { req.destroy(); reject(new Error('timeout')) }), MCP_TOTAL_DEADLINE_MS)
+    req.on('error', e => settle(() => reject(e)))
     req.setTimeout(10_000, () => req.destroy(new Error('timeout')))
     req.write(body)
     req.end()
   })
 }
 
-interface StatsShape {
+/** A /api/server-stats answer. `dataDir` and `ports` are optional because the answer comes from whatever
+ *  listens on the UI port: a build from before data-dir reporting (82d3776) or a foreign HTTP service may omit
+ *  them (TRDD-V2HFI30L). */
+export interface StatsShape {
   pid: number
-  dataDir: string
-  ports: { ui: number; mcp: number; otlp: number }
+  dataDir?: string
+  ports?: { ui: number; mcp: number; otlp: number }
   spans?: { store?: { totalSpans: number }; inMemory?: number }
   hookEvents?: { receivedSinceBoot: number }
 }
@@ -214,6 +247,86 @@ async function serverStats(ctx: Ctx): Promise<StatsShape | null> {
     if (r.status === 200 && r.json && typeof r.json === 'object') return r.json as StatsShape
     return null
   } catch { return null }
+}
+
+/** A directory as the filesystem sees it: symlinks resolved (realpath), or path.resolve for a path that does
+ *  not exist yet. */
+function canonicalDir(p: string): string {
+  try { return fs.realpathSync.native(p) } catch { return path.resolve(p) }
+}
+
+/** Is the server that answered /api/server-stats OURS, the one that owns ctx.dataDir? (TRDD-V2HFI30L)
+ *  Checked in findServerPid's order: (a) pidfile identity — `<ctx.dataDir>/server.pid` names a live owner
+ *  (liveLockPid checks the start reference, so a recycled pid is not it) and that owner is the pid the server
+ *  reports; else (b) the data dir it reports is ctx.dataDir with symlinks resolved on both sides (statsOwnership).
+ *  A server that reports no data dir (statsOwnership's 'unknown': a build from before data-dir reporting, 82d3776,
+ *  or a foreign HTTP service) is therefore FOREIGN unless (a) matched.
+ *  WHY: the old test was "any 200 JSON on the UI port", so an isolated setup (a test, a second instance) on the
+ *  default ports adopted the developer's live collector as its own, then SIGTERMed it for its data dir. */
+export function statsAreOurs(ctx: Ctx, stats: StatsShape): boolean {
+  const owner = liveLockPid(ctx.dataDir)
+  if (owner !== null && owner === stats.pid) return true
+  const reported = typeof stats.dataDir === 'string' ? canonicalDir(stats.dataDir) : undefined
+  return statsOwnership(reported, canonicalDir(ctx.dataDir)) === 'ours'
+}
+
+/** Whether `port`, one of the three listeners, is held by OUR server. Per port (TRDD-V2HFI30L): the stats come
+ *  from the UI port, so a server that is ours there makes a port ours only when it reports that port as its own;
+ *  otherwise a stranger on 4318 passed the OTLP refusal because our server answered on 3000. */
+async function portHeldByOurs(ctx: Ctx, kind: 'otlp' | 'ui' | 'mcp', port: number): Promise<boolean> {
+  const stats = await serverStats(ctx)
+  return stats !== null && statsAreOurs(ctx, stats) && stats.ports?.[kind] === port
+}
+
+/** The server signature the pidfile check has always required (PR-15 review): `alcore` (TRDD-1B98LCVR box 4),
+ *  plus a legacy TS-server pidfile. NOT `agentlenspro` (TRDD-V2HFI30L, review of 973aead7): a CLI process is never
+ *  a server, and hooks spawn `agentlenspro …` constantly, so with a legacy bare-numeric lock (no start reference)
+ *  a recycled pid now running a CLI process matched that arm, and setup would have SIGTERMed it. */
+const SERVER_CMD_RE = /standalone[/\\]server\.js|[/\\]alcore(?:\s|$)/
+
+/** The command line of `pid`, read from ONE `ps` snapshot (never a live grep), or null when no such process
+ *  runs or ps failed. */
+function processCommand(pid: number): string | null {
+  try {
+    const out = execFileSync('ps', ['-eo', 'pid=,command='], { encoding: 'utf-8', timeout: 5_000 })
+    for (const line of out.split('\n')) {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line)
+      if (m !== null && Number(m[1]) === pid) return m[2]
+    }
+  } catch { /* ps failed: nothing about the pid is provable */ }
+  return null
+}
+
+/** The `--data-dir` value of an `alcore serve` command line, or null. */
+function alcoreServeDataDir(cmd: string): string | null {
+  const m = /(?:^|[/\\])alcore\s+serve\s(?:.*\s)?--data-dir\s+(.+?)(?=\s+--[a-z]|$)/.exec(cmd)
+  return m === null ? null : m[1]
+}
+
+/** `pid` when it is provably OUR server's process, else null: the ONLY pids setup may signal (TRDD-V2HFI30L).
+ *  Provable means (a) `<ctx.dataDir>/server.pid` names it as a live owner AND its command line is a server's
+ *  (the PR-15 guard stays: a legacy bare-numeric lock has no start reference, so liveness alone could be a
+ *  recycled pid), or (b) a ps snapshot shows it running `alcore serve --data-dir <ctx.dataDir>`.
+ *  A pid that a stats answer reports about itself is never enough: whatever answers the UI port can name any
+ *  pid, and the old code sent SIGTERM to exactly that number. */
+export function ownServerPid(ctx: Ctx, pid: number): number | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null
+  const cmd = processCommand(pid)
+  if (cmd === null) return null
+  if (liveLockPid(ctx.dataDir) === pid && SERVER_CMD_RE.test(cmd)) return pid
+  const dir = alcoreServeDataDir(cmd)
+  return dir !== null && canonicalDir(dir) === canonicalDir(ctx.dataDir) ? pid : null
+}
+
+/** The refusal for a UI port answered by a server that is not ours: who it is, and how the user stops it. */
+function foreignServerDetail(ctx: Ctx, stats: StatsShape): string {
+  const dir = typeof stats.dataDir === 'string' ? stats.dataDir : null
+  // `server stop` resolves its target from AGENTLENS_DATA_DIR first (dataDir.ts resolveDataDirFrom), so naming
+  // that variable reaches the other instance even when DATA_DIR is also set.
+  const remedy = dir !== null
+    ? `stop it with \`AGENTLENS_DATA_DIR='${dir}' agentlenspro server stop\`, or pin UI_PORT, MCP_PORT and OTLP_PORT to free ports`
+    : 'stop it, or pin UI_PORT, MCP_PORT and OTLP_PORT to free ports'
+  return `the server on UI port ${ctx.uiPort} (pid ${stats.pid}, data dir ${dir ?? 'not reported'}) does not own ${ctx.dataDir}; setup never stops another instance: ${remedy}`
 }
 
 // ── The result table (heavy header rule, light body — same family as heartbeat-cost) ───────
@@ -258,7 +371,7 @@ function settingsHooks(s: Settings): Record<string, HookMatcher[]> {
 /** Would installHooks change anything? Mirrors the installer's change detection without writing. */
 export function hooksConverged(s: Settings): boolean {
   const hooks = settingsHooks(s)
-  const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])
+  const events = new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
     const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
@@ -377,7 +490,7 @@ export interface SpoolMigrationDeps {
    *  passed: the drain's whole point is to empty the volume before it is detached.
    *  `relocateStrandedTo` moves stranded bodies (bytes proven, ts row wrong — the pass keeps
    *  them on disk and skips them forever) onto the SSD dir so they survive the detach. */
-  drain: (storeDir: string, bodiesDir: string, relocateStrandedTo?: string) => Promise<IngestPassResult | null>
+  drain: (storeDir: string, bodiesDir: string, relocateStrandedTo?: string) => Promise<RustPassResult | null>
   /** Resolve the alstore binary, or null when unavailable (a broken install — loud FAIL, the
    *  fail-fast direction: migration NEVER detaches with bodies undrained). */
   alstoreBin: () => string | null
@@ -472,6 +585,8 @@ function detectLegacySpoolWith(deps: SpoolMigrationDeps, settingsPath: string): 
  *  a starved writer — before the detach. */
 export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Promise<{ result: StepResult; acted: boolean }> {
   const detected = detectLegacySpoolWith(deps, ctx.settingsPath)
+  // While the off switch of ctx.dataDir is armed ACT 3 REMOVES the raw-body key instead of re-pointing it (TRDD-RBBEX59R).
+  const rawOff = rawBodiesHeldAbsent(ctx.dataDir)
   const artifacts = [
     detected.volumeMounted && 'RAM disk mounted',
     detected.settingsPathPointsAtSpool && 'settings path points at the spool',
@@ -485,7 +600,7 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
     return {
       result: {
         step: 'spool-migration', found: artifacts,
-        action: 'would: drain spool bodies (the legacy 72h/8GB limits do not apply by default — this one-shot drain ingests regardless of age) → detach RAM disk → rewrite settings path via safeConfigEdit → bootout + set aside the plist',
+        action: `would: drain spool bodies (the legacy 72h/8GB limits do not apply by default — this one-shot drain ingests regardless of age) → detach RAM disk → ${rawOff ? 'remove the raw-body key via safeConfigEdit (off switch armed)' : 'rewrite settings path via safeConfigEdit'} → bootout + set aside the plist`,
         verify: 'SKIP', detail: 'dry-run',
       },
       acted: false,
@@ -504,6 +619,7 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
   // iterations) AND the readdir gate reports zero files. The cap also bounds a huge backlog
   // (8 × DEFAULT_MAX_BYTES_PER_PASS ≈ 4 GB per setup run; a larger one refuses and re-runs).
   let drained = false
+  let stateWarn: string | null = null
   if (detected.volumeMounted) {
     if (!deps.alstoreBin()) {
       return {
@@ -520,7 +636,7 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
     // relocated to the SSD dir so they cannot be lost with the volume (review round 1).
     const DRAIN_LOOP_MAX = 8
     for (let pass = 1; ; pass++) {
-      let res: IngestPassResult | null = null
+      let res: RustPassResult | null = null
       let drainErr: Error | null = null
       try {
         res = await deps.drain(path.join(ctx.dataDir, 'store'), path.join(SPOOL_VOLUME, 'otel-bodies'), path.join(ctx.dataDir, 'otel-bodies'))
@@ -534,6 +650,10 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
           acted: false,
         }
       }
+      // WHY (TRDD-ZR3OGSAV): exit 3 from the binary means the drain RAN (ingest, verify, delete) and
+      // only .pass-state.json could not be saved. The no-residue readdir gate below is independent of
+      // that bookkeeping, so it is a warning on the final result, not a reason to refuse the migration.
+      if (res.stateNotSaved !== undefined) stateWarn = res.stateNotSaved
       if (res.failed.length > 0 || res.throttled) {
         return {
           result: {
@@ -570,10 +690,14 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
   }
 
   // ACT 3 — REWRITE THE SETTINGS PATH via safeConfigEdit. Only the key's VALUE moves, to the one
-  // bodies dir (raw capture is mandatory since 2026-10-02 — there is no off state to preserve).
+  // bodies dir (raw capture is mandatory since 2026-10-02) — except while the off switch is armed, where the key is
+  // REMOVED instead: disabled mode stops raw-body collection and setup must not undo the disable verb's strip
+  // (owner rule 2026-11-03, TRDD-RBBEX59R). The VERIFY below holds either way: no value points at the spool.
   let settingsRewritten = false
   if (detected.settingsPathPointsAtSpool) {
-    const ops = [{ op: 'set' as const, path: ['env', RAW_BODIES_KEY], value: `file:${effectiveBodiesDir(ctx.dataDir)}` }]
+    const ops: SafeEditOp[] = rawOff
+      ? [{ op: 'delete', path: ['env', RAW_BODIES_KEY] }]
+      : [{ op: 'set', path: ['env', RAW_BODIES_KEY], value: `file:${effectiveBodiesDir(ctx.dataDir)}` }]
     await safeConfigEdit(ctx.settingsPath, 'json', ops, { createIfMissing: true })
     settingsRewritten = true
   }
@@ -617,13 +741,13 @@ export async function runSpoolMigration(ctx: Ctx, deps: SpoolMigrationDeps): Pro
       action: [
         drained && 'drained spool bodies into the store (stranded bodies relocated to the SSD dir)',
         detected.volumeMounted && drained && 'detached RAM disk',
-        settingsRewritten && 'rewrote settings path via safeConfigEdit',
+        settingsRewritten && (rawOff ? 'removed the raw-body key via safeConfigEdit (off switch armed)' : 'rewrote settings path via safeConfigEdit'),
         agentTornDown && 'booted out the agent + moved its plist aside',
       ].filter(Boolean).join(', ') || 'none',
       verify: residue ? 'FAIL' : 'PASS',
       detail: residue
         ? `residue after migration: ${residue}`
-        : `bodies now in the store; disabled plist kept at ${path.join(path.dirname(detected.plistPath), `disabled-${SPOOL_AGENT_LABEL}.plist.bak`)}`,
+        : `bodies now in the store; disabled plist kept at ${path.join(path.dirname(detected.plistPath), `disabled-${SPOOL_AGENT_LABEL}.plist.bak`)}${stateWarn ? `; WARNING: the alstore pass state was not saved (${stateWarn.slice(0, 160)}) — only skip/stranded bookkeeping is affected` : ''}`,
     },
     acted: drained || settingsRewritten || agentTornDown,
   }
@@ -703,13 +827,16 @@ async function gatherEnvFacts(ctx: Ctx): Promise<EnvFacts> {
   const resolvable = (mod: string): boolean => {
     try { require.resolve(mod); return true } catch { return false }
   }
-  // Foreign-process heuristic: OTLP port answers ⇒ occupied; ours iff the paired UI port serves
-  // /api/server-stats. A foreign OTLP squatter would silently eat every span the hooks emit.
+  // Foreign-process heuristic: OTLP port answers ⇒ occupied; ours iff our own server reports that OTLP port
+  // (portHeldByOurs). A foreign OTLP squatter would silently eat every span the hooks emit.
   let otlpBusy = false
   try { await httpJson(ctx.otlpPort, 'GET', '/'); otlpBusy = true } catch { otlpBusy = false }
   let uiIsOurs = false
   if (otlpBusy) {
-    try { uiIsOurs = (await httpJson(ctx.uiPort, 'GET', '/api/server-stats')).status === 200 } catch { uiIsOurs = false }
+    // OUR server, by pidfile identity or data dir, AND reporting this OTLP port as its own (portHeldByOurs).
+    // WHY (TRDD-TYOQA14F): the old test was any 200 on the UI port, so a foreign server answering there hid an
+    // OTLP squatter and suppressed this warning.
+    uiIsOurs = await portHeldByOurs(ctx, 'otlp', ctx.otlpPort)
   }
   let freeDiskBytes: number | null = null
   try {
@@ -767,7 +894,7 @@ export function judgeEnvFacts(facts: EnvFacts): StepResult {
   // Degradable heuristics — warn, never block.
   const warns: string[] = []
   if (!facts.sqljsResolvable) warns.push('sql.js not resolvable — OpenCode SQLite ingestion degrades to per-message JSON')
-  if (facts.otlpPortBusyForeign) warns.push('OTLP port answers but the UI port is not our server — a foreign process may be squatting the collector port')
+  if (facts.otlpPortBusyForeign) warns.push('OTLP port answers but our server does not hold it — a foreign process may be squatting the collector port')
   if (!facts.claudeDirPresent) warns.push('~/.claude absent — no Claude Code on this machine yet? hooks/skill will install for its first run')
   if (facts.freeDiskBytes !== null && facts.freeDiskBytes < 2 ** 30) warns.push(`low disk: ${(facts.freeDiskBytes / 2 ** 20).toFixed(0)}MB free at the data dir`)
   return {
@@ -958,10 +1085,14 @@ const stepSkill: StepDef = {
       const src = path.join(ctx.repoRoot, 'skills', name)
       const dst = path.join(ctx.skillsDir, name)
       const srcHash = skillTreeHash(src)
+      // The INSTALLED copy is hashed over the SHIPPED file list only (see skillTreeHash): an unshipped
+      // extra that installSkill leaves in place must not read as drift, or this step re-runs on every
+      // launch, rewrites nothing and fails its own verify below.
+      const srcFiles = srcHash === null ? [] : skillFiles(src)
       return {
         name, src: path.join(src, 'SKILL.md'), dst, srcExists: srcHash !== null,
-        srcHash,
-        dstHash: skillTreeHash(dst),
+        srcHash, srcFiles,
+        dstHash: skillTreeHash(dst, srcFiles),
       }
     })
     const missing = skills.filter(s => !s.srcExists)
@@ -1019,7 +1150,7 @@ const stepSkill: StepDef = {
     // VERIFY — hash compare on a FRESH read of both trees (not the writer's buffer), for EVERY
     // skill and agent. One bad apple fails the step and is named, so "PASS" can never mean "the
     // first one was fine and the rest were not looked at".
-    const bad = skills.filter(s => skillTreeHash(s.dst) !== s.srcHash)
+    const bad = skills.filter(s => skillTreeHash(s.dst, s.srcFiles) !== s.srcHash)
     const badAgents = AGENT_NAMES.filter(name => {
       const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
       const dst = path.join(ctx.agentsDir, `${name}.md`)
@@ -1045,11 +1176,14 @@ const stepSkill: StepDef = {
  *  configured (company gateway / managed settings / shell env): nothing may be written. */
 export function otelDrift(ctx: Ctx): 'unparseable' | {
   bodiesDir: string; expected: Record<string, string>; converged: boolean; found: string; conflicts: TelemetryConflict[]
-  rows: TelemetryVerdictRow[]; converge: string[]; staleEnv: TelemetryVerdictRow[]
+  rows: TelemetryVerdictRow[]; converge: string[]; staleEnv: TelemetryVerdictRow[]; rawBodiesOff: boolean
 } {
-  // Raw-body capture is MANDATORY (owner reversal 2026-10-02, TRDD-AGZ0XZKW): the key is always owned.
+  // Raw-body capture is MANDATORY (owner reversal 2026-10-02, TRDD-AGZ0XZKW): the key is always owned — but while the
+  // off switch of ctx.dataDir is armed its target is ABSENT (rawBodiesHeldAbsent, TRDD-RBBEX59R), and the verdict
+  // below judges it that way.
   const bodiesDir = effectiveBodiesDir(ctx.dataDir)
   const expected = ownedTelemetryKeys(bodiesDir, ctx.otlpPort)
+  const rawBodiesOff = rawBodiesHeldAbsent(ctx.dataDir)
   const state = readSettingsFresh(ctx.settingsPath)
   if (state === 'unparseable') return 'unparseable'
   // The verdict (telemetryConfig.ts) is the ONE judge: ABSENT/CONVERGE rows are repaired, FOREIGN rows block,
@@ -1067,7 +1201,7 @@ export function otelDrift(ctx: Ctx): 'unparseable' | {
   const found = conflicts.length > 0
     ? `${conflicts.length} conflicting key(s) — another telemetry pipeline is configured`
     : converged ? 'telemetry env current' : `${missing} missing, ${converge.length} to converge`
-  return { bodiesDir, expected, converged, found, conflicts, rows, converge, staleEnv }
+  return { bodiesDir, expected, converged, found, conflicts, rows, converge, staleEnv, rawBodiesOff }
 }
 
 const stepOtel: StepDef = {
@@ -1078,7 +1212,7 @@ const stepOtel: StepDef = {
     if (drift === 'unparseable') {
       return { result: { step: this.name, found: 'settings.json unparseable', action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup' }, acted: false }
     }
-    const { bodiesDir, expected, converged, found, conflicts, rows } = drift
+    const { bodiesDir, expected, converged, found, conflicts, rows, rawBodiesOff } = drift
     // A foreign pipeline (owner order 2026-10-02): refuse and write NOTHING unless --force-install-telemetry
     // was given. A conflicting SHELL export can never be fixed by a settings edit, so it refuses even then.
     if (conflicts.length > 0 && (!ctx.forceInstall || conflicts.some(c => c.scope === 'shell'))) {
@@ -1105,6 +1239,8 @@ const stepOtel: StepDef = {
       acted = true
     }
     if (!converged) {
+      // ensureTelemetryConfig makes the SAME raw-body decision (rawBodiesHeldAbsent of ctx.dataDir) otelDrift judged
+      // with, so the write and the verdict cannot disagree (TRDD-RBBEX59R).
       const r = await ensureTelemetryConfig({ settingsPath: ctx.settingsPath, markerPath, bodiesDir, otlpPort: ctx.otlpPort, dataDir: ctx.dataDir, forceInstall: ctx.forceInstall, ...ctx.telemetryProbe })
       if (r.backupPath) backup += `; backup ${r.backupPath}`
       acted = true
@@ -1115,17 +1251,28 @@ const stepOtel: StepDef = {
       return { result: { step: this.name, found, action: acted ? 'wired' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
     }
     const envAfter = (after.env && typeof after.env === 'object' ? after.env : {}) as Record<string, unknown>
-    const bad = Object.keys(expected).find(k => envAfter[k] === undefined || !sameTelemetryValue(k, String(envAfter[k]), expected[k]))
+    // While the off switch is armed the raw-body key must be ABSENT (TRDD-RBBEX59R): a present one FAILS verify, so a
+    // writer that re-enabled raw-body collection cannot pass as converged.
+    const offRaw = (k: string): boolean => rawBodiesOff && k === RAW_BODIES_KEY
+    const bad = Object.keys(expected).find(k => offRaw(k)
+      ? envAfter[k] !== undefined
+      : envAfter[k] === undefined || !sameTelemetryValue(k, String(envAfter[k]), expected[k]))
     // Our telemetry is in place and nothing foreign remains: a kill-switch armed for the foreign-telemetry
     // reason has no more reason to stand (an operator-armed one is never touched).
-    if (!bad) enableIfForeign({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') })
+    // WHY the second pass (TRDD-RBBEX59R): this pass held the raw-body key absent because the switch stood, so after a
+    // successful lift the step runs ONCE more and writes it in the same run. It terminates: `true` means a flag was
+    // just removed, and the next pass finds none to remove.
+    if (!bad && enableIfForeign({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') })) {
+      const again = await stepOtel.run(ctx)
+      return { ...again, acted: acted || again.acted }
+    }
     return {
       result: {
         step: this.name, found, action: acted ? 'wired' : 'none',
         verify: bad ? 'FAIL' : 'PASS',
         detail: bad
-          ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${JSON.stringify(expected[bad])})`
-          : `${Object.keys(expected).length} key(s) exact${backup}`,
+          ? `${bad} = ${JSON.stringify(envAfter[bad])} (expected ${offRaw(bad) ? 'absent: the off switch is armed' : JSON.stringify(expected[bad])})`
+          : `${Object.keys(expected).length - (rawBodiesOff ? 1 : 0)} key(s) exact${rawBodiesOff ? `, ${RAW_BODIES_KEY} absent (off switch armed)` : ''}${backup}`,
       },
       acted,
     }
@@ -1167,7 +1314,8 @@ const stepOldPackage: StepDef = {
   },
 }
 
-const stepServer: StepDef = {
+/** Exported for the direct-run test of its foreign-server refusal (TRDD-TYOQA14F). */
+export const stepServer: StepDef = {
   name: 'server',
   async run(ctx) {
     const pre = await serverStats(ctx)
@@ -1177,60 +1325,67 @@ const stepServer: StepDef = {
     // status` showed RUNNING, because its stats answer was slow. Collapsing that timeout into
     // "not running" is worse than cosmetic: the real-run remedy for "not running" is SPAWNING,
     // which slams into the single-owner data-dir guard and reports a confusing failure. So when
-    // HTTP says nothing, consult the pidfile under ctx.dataDir (kill(pid, 0) = liveness): an
-    // alive owner means "unresponsive — restart", never "absent — start".
+    // HTTP says nothing, consult the pidfile under ctx.dataDir: an alive owner means
+    // "unresponsive — restart", never "absent — start".
+    // The owner goes through ownServerPid, the same identity check every signal below uses
+    // (TRDD-V2HFI30L): liveLockPid reads both lock shapes (TRDD-PIDFILEAT) and checks the start
+    // reference, and the server-command guard (PR-15 review) still refuses a recycled pid — the
+    // real-run path SIGTERMs this number, and a wrongly-spared real server is still protected by
+    // its own single-owner boot guard (the safe failure direction).
     let stalePid: number | null = null
     if (pre === null) {
-      try {
-        // TRDD-PIDFILEAT: parsePidLock understands both the current JSON {pid,start} lock shape and
-        // the legacy bare-numeric one — a plain Number(...) on the JSON shape reads NaN and would
-        // silently misclassify every up-to-date install as "not running".
-        const lock = parsePidLock(fs.readFileSync(path.join(ctx.dataDir, 'server.pid'), 'utf-8'))
-        if (lock !== null) {
-          const pid = lock.pid
-          process.kill(pid, 0)
-          // PID-REUSE GUARD (PR-15 review): kill(pid, 0) proves SOME process is alive, not that
-          // it is OUR server — the OS reuses pids, and the real-run path SIGTERMs this number.
-          // Only claim the pid when its command line looks like an AgentlensPro server; anything
-          // else means the pidfile is stale and the honest classification is "not running" (a
-          // wrongly-spared real server is still protected by its own single-owner boot guard,
-          // which refuses the duplicate spawn cleanly — the safe failure direction).
-          const cmd = execFileSync('ps', ['-p', String(pid), '-o', 'command='],
-            { encoding: 'utf-8', timeout: 5_000 }).trim()
-          // `[/\\]alcore(\s|$)` catches the Rust server (TRDD-1B98LCVR box 4 — standalone/server.js
-          // no longer exists); the other two arms stay for a legacy TS-server pidfile and a
-          // `agentlenspro` CLI process encountered on an install this check hasn't caught up to.
-          if (/standalone[/\\]server\.js|agentlenspro|[/\\]alcore(?:\s|$)/.test(cmd)) stalePid = pid
-        }
-      } catch { /* no pidfile, a dead pid, or ps failed — genuinely not running */ }
+      const owner = liveLockPid(ctx.dataDir)
+      if (owner !== null) stalePid = ownServerPid(ctx, owner)
     }
     const preSpanCount = pre?.spans?.store?.totalSpans ?? storeSpanCount(ctx.dataDir)
-    const healthy = pre !== null
-      && path.resolve(pre.dataDir) === path.resolve(ctx.dataDir)
-      && pre.ports.ui === ctx.uiPort && pre.ports.mcp === ctx.mcpPort && pre.ports.otlp === ctx.otlpPort
+    const preOurs = pre !== null && statsAreOurs(ctx, pre)
+    const healthy = pre !== null && preOurs
+      && pre.ports?.ui === ctx.uiPort && pre.ports?.mcp === ctx.mcpPort && pre.ports?.otlp === ctx.otlpPort
     const found = pre
-      ? `running pid=${pre.pid} (dataDir ${pre.dataDir === ctx.dataDir ? 'matches' : 'MISMATCH'})`
+      ? `running pid=${pre.pid} (dataDir ${preOurs ? 'matches' : 'MISMATCH'})`
       : stalePid !== null
         ? `unresponsive (pid ${stalePid} alive, stats probe got no answer in 5s)`
         : 'not running'
 
     if (ctx.dryRun) {
-      return { result: { step: this.name, found, action: healthy ? 'none' : (pre !== null || stalePid !== null ? 'would: graceful restart from this install' : 'would: start server'), verify: 'SKIP', detail: 'dry-run' }, acted: false }
+      const would = healthy ? 'none'
+        : pre !== null && !preOurs ? 'would: refuse (another instance answers on the UI port)'
+          : pre !== null || stalePid !== null ? 'would: graceful restart from this install' : 'would: start server'
+      return { result: { step: this.name, found, action: would, verify: 'SKIP', detail: 'dry-run' }, acted: false }
     }
     if (healthy) {
       ctx.serverPid = pre.pid
       return { result: { step: this.name, found, action: 'none', verify: 'PASS', detail: `dashboard+MCP+OTLP already serving ${preSpanCount} span(s)` }, acted: false }
     }
 
-    // ACT — graceful stop of a mismatched/old/unresponsive server (SIGTERM = span-flush), then
+    // TRDD-V2HFI30L: setup never stops a server it cannot prove is its own. The old code SIGTERMed
+    // `pre.pid` — a number the UI port's answerer reported about itself — whenever the reported data
+    // dir differed, so an isolated setup (a test, a second instance) on the default ports killed the
+    // developer's live collector. A foreign server is refused with its pid, data dir and the remedy.
+    if (pre !== null && !preOurs) {
+      return { result: { step: this.name, found, action: 'refuse', verify: 'FAIL', detail: foreignServerDetail(ctx, pre) }, acted: false }
+    }
+    // ACT — graceful stop of a mismatched/old/unresponsive server OF OURS (SIGTERM = span-flush), then
     // start from THIS install's bundle. The unresponsive case uses the pidfile pid: skipping the
     // stop and going straight to spawn would hit the single-owner guard.
-    const stopPid = pre?.pid ?? stalePid
-    if (stopPid !== null && stopPid !== undefined) {
+    const stopPid = pre !== null ? ownServerPid(ctx, pre.pid) : stalePid
+    if (pre !== null && stopPid === null) {
+      return {
+        result: {
+          step: this.name, found, action: 'refuse', verify: 'FAIL',
+          detail: `the server on UI port ${ctx.uiPort} reports this data dir but its pid ${pre.pid} is not provably ours (not the live owner in ${path.join(ctx.dataDir, 'server.pid')}, not \`alcore serve --data-dir ${ctx.dataDir}\`), so setup will not signal it: stop it yourself, or pin UI_PORT, MCP_PORT and OTLP_PORT to free ports`,
+        },
+        acted: false,
+      }
+    }
+    if (stopPid !== null) {
       try { process.kill(stopPid, 'SIGTERM') } catch { /* already gone */ }
       const gone = async (): Promise<boolean> =>
         (await serverStats(ctx)) === null && (() => { try { process.kill(stopPid, 0); return false } catch { return true } })()
-      for (let i = 0; i < 40 && !(await gone()); i++) await sleep(250)
+      // Wall clock, not a try count (TRDD-V2HFI30L): each stats probe can itself take seconds, so
+      // "40 tries" stretched the promised 10s to minutes.
+      const stopBy = Date.now() + 10_000
+      while (Date.now() < stopBy && !(await gone())) await sleep(250)
       if (!(await gone())) {
         return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${stopPid} did not stop within 10s` }, acted: true }
       }
@@ -1239,7 +1394,7 @@ const stepServer: StepDef = {
     // spawn site with no guard, discovered when a server booted minutes after `agentlenspro
     // disable`. The server now also refuses at its own boot — this check just makes setup report
     // the refusal honestly instead of spawning a child that immediately exits 78.
-    if (agentlensDisabled()) {
+    if (agentlensDisabled(ctx.dataDir)) {
       return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: 'AgentlensPro is DISABLED — run `agentlenspro enable` first' }, acted: false }
     }
     // The NO_REVIVE brake refuses this spawn too: `setup` is idempotent and re-run casually, so a
@@ -1248,8 +1403,15 @@ const stepServer: StepDef = {
     // Sits BELOW the graceful stop of a mismatched/unresponsive server on purpose, beside the
     // DISABLED gate: the brake forbids a SPAWN, not a stop, and "braked ⇒ no server" is the state
     // an operator armed it for — leaving a stale server up would be the surprising outcome.
-    if (reviveBraked()) {
-      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `revive brake is set (${noRevivePath()}) — \`agentlenspro server start\` clears it` }, acted: false }
+    // Both flags are read in ctx.dataDir, the dir this step is about to start a server in, not the env-resolved one:
+    // they differ whenever the data dir comes from options (TRDD-TYOQA14F).
+    // DELIBERATE ASYMMETRY (TRDD-TYOQA14F): setup honours the FILE brake but NOT the AGENTLENS_NO_REVIVE env. That
+    // env is documented as a brake on AUTOMATIC revives (hookHandlers.ts reviveDaemonDetached, `server revive`),
+    // set by tests and by an operator supervising the daemon externally; an explicit `agentlenspro setup` is a
+    // deliberate start, and the real-server setup tests (setupVerb.test.ts) run with that env set and still expect
+    // setup to start a server.
+    if (reviveBraked(ctx.dataDir)) {
+      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `revive brake is set (${noRevivePath(ctx.dataDir)}) — \`agentlenspro server start\` clears it` }, acted: false }
     }
     // alcore is the only server this package ships (TRDD-1B98LCVR box 4) — no binary means the
     // step fails honestly rather than spawning a TS bundle that no longer exists.
@@ -1283,11 +1445,13 @@ const stepServer: StepDef = {
 
     // VERIFY — through the network, never the child handle: dashboard 200, OTLP accepts,
     // pid is NEW, and the loaded span count did not shrink (data preservation assertion).
+    // Up to 30s of wall clock — DB open + first log scan can be slow; counted in time, not tries,
+    // because each probe can itself take seconds (TRDD-V2HFI30L).
     let post: StatsShape | null = null
-    for (let i = 0; i < 120; i++) { // up to 30s — DB open + first log scan can be slow
+    const readyBy = Date.now() + 30_000
+    while (post === null && Date.now() < readyBy) {
       await sleep(250)
       post = await serverStats(ctx)
-      if (post) break
     }
     if (!post) {
       return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: `not ready within 30s — check ${logFile}` }, acted: true }
@@ -1314,8 +1478,9 @@ const stepServer: StepDef = {
 
 /** Owner rule 2026-10-02 — never squat a busy port. Wraps stepServer with the SAME chooser the
  *  `agentlenspro server start` path uses: env-pinned ports and OTLP refuse loudly naming the holder,
- *  unpinned UI/MCP move to the next free port; a port held by our own running server is kept. The
- *  chosen ports go back into ctx so the server step, the verify probes and the final self-test all
+ *  unpinned UI/MCP move to the next free port; a port held by our own running server (our data dir,
+ *  reporting that port as its own) is kept. The chosen ports go back into ctx so the server step,
+ *  the verify probes and the final self-test all
  *  dial what is actually bound. ports.json is written only after the server step verified PASS,
  *  never from a dry-run (a dry-run claims nothing and writes nothing). */
 const stepServerGuarded: StepDef = {
@@ -1327,11 +1492,17 @@ const stepServerGuarded: StepDef = {
         const chosen = await chooseServerPorts(
           { otlp: ctx.otlpPort, ui: ctx.uiPort, mcp: ctx.mcpPort },
           { ui: pinned(process.env.UI_PORT), mcp: pinned(process.env.MCP_PORT) },
-          async () => (await serverStats(ctx)) !== null,
+          // TRDD-V2HFI30L: ours = this setup's own server AND reporting that very port — "any 200 on
+          // the UI port" adopted another instance's ports, after which the server step SIGTERMed it.
+          (kind, port) => portHeldByOurs(ctx, kind, port),
         )
         ctx.otlpPort = chosen.otlp; ctx.uiPort = chosen.ui; ctx.mcpPort = chosen.mcp
       } catch (e) {
-        return { result: { step: this.name, found: 'port claim', action: 'start server', verify: 'FAIL', detail: (e as Error).message }, acted: false }
+        // The chooser's refusal names the port holder's pid; when another instance answers on the UI
+        // port, also name its data dir and how to stop it (TRDD-V2HFI30L).
+        const holder = await serverStats(ctx)
+        const hint = holder !== null && !statsAreOurs(ctx, holder) ? `\n${foreignServerDetail(ctx, holder)}` : ''
+        return { result: { step: this.name, found: 'port claim', action: 'start server', verify: 'FAIL', detail: (e as Error).message + hint }, acted: false }
       }
     }
     const out = await stepServer.run(ctx)
@@ -1370,7 +1541,9 @@ const stepSelfTest: StepDef = {
     // …2. and back out through the DIAGNOSTICS door (the get_recent_sessions MCP tool):
     // the round-trip proves collector → span store → summarizer → repository → MCP in one go.
     let seen = false
-    for (let i = 0; i < 40 && !seen; i++) {
+    // 10s of wall clock, not 40 tries: each MCP call can itself take seconds (TRDD-V2HFI30L).
+    const seenBy = Date.now() + 10_000
+    while (!seen && Date.now() < seenBy) {
       try {
         // The stateless Streamable-HTTP endpoint still wants the MCP handshake once per
         // client; it is cheap, so re-issue it per attempt rather than track session state.
@@ -1423,13 +1596,16 @@ const stepSelfTest: StepDef = {
 
 export interface MemoryCheck { verdict: 'PASS' | 'INFO' | 'WARN' | 'SKIP'; detail: string }
 
+/** The memory-check detail when server.log has no composition line yet. Exported: the setupVerb test matches it. */
+export const NO_COMPOSITION_LINE_DETAIL = 'no composition line in server.log yet'
+
 /** Parse one server.log composition line: PASS when live + free-in-page is within 1 MB of
  *  committed (measured rounding bound); INFO (never FAIL — an unexplained ~1 MB committed class
  *  was not ruled out) on larger drift, and INFO when free-in-page exceeds half of committed
  *  (~664 of ~690 MB at boot, expected until Phase D streaming restore lands); WARN when the line
  *  is unparseable; SKIP when unmeasured. Never throws. */
 export function checkCompositionLine(line: string | null): MemoryCheck {
-  if (!line) return { verdict: 'SKIP', detail: 'no composition line in server.log yet' }
+  if (!line) return { verdict: 'SKIP', detail: NO_COMPOSITION_LINE_DETAIL }
   const num = (re: RegExp): number | null | undefined => {
     const m = re.exec(line)
     return m ? (m[1] === '?' ? null : Number(m[1])) : undefined
@@ -1531,12 +1707,12 @@ const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOte
 export const REPAIR_STEPS = { hooks: stepHooks, skill: stepSkill, 'otel-env': stepOtel } as const
 
 /** Full hook drift list, per event: what differs (timeout old→new, command form, missing). Read-only. */
-function hookDriftList(settingsPath: string): Array<{ event: string; problem: string }> {
+export function hookDriftList(settingsPath: string): Array<{ event: string; problem: string }> {
   const s = readSettingsFresh(settingsPath)
   if (s === 'unparseable') return [{ event: '*', problem: 'settings.json is not parseable' }]
   const hooks = settingsHooks(s === 'absent' ? {} : s)
   const out: Array<{ event: string; problem: string }> = []
-  const events = new Set([...Object.keys(hooks), ...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS])
+  const events = new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
     const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
@@ -1564,7 +1740,8 @@ function verdictDocument(ctx: Ctx): unknown {
   return d.rows.map(r => ({
     key: r.key, verdict: r.state, scope: r.scope, source: r.source, detail: r.detail,
     fileValue: val(fileEnv[r.key], r.key), envValue: val(procEnv[r.key], r.key),
-    wouldWrite: r.scope === 'user' && (r.state === 'ABSENT' || r.state === 'CONVERGE') ? shownValue(r.key, d.expected[r.key] ?? '') : null,
+    // While the off switch is armed a CONVERGE raw-body row is a REMOVAL (TRDD-RBBEX59R): it writes nothing.
+    wouldWrite: r.scope === 'user' && (r.state === 'ABSENT' || r.state === 'CONVERGE') && !(d.rawBodiesOff && r.key === RAW_BODIES_KEY) ? shownValue(r.key, d.expected[r.key] ?? '') : null,
   }))
 }
 
@@ -1618,5 +1795,7 @@ export async function runSetupCli(argv: string[], forceInstall = false): Promise
   const json = argv.includes('--json')
   const outcome = await runSetup({ dryRun: argv.includes('--dry-run'), yes: argv.includes('--yes'), forceInstall, json })
   if (json) console.log(JSON.stringify(outcome.json, null, 2))
+  // Offered, never installed (TRDD-HTARKH87): a standing launchd job that samples the disks every minute is the owner's choice, like daemon install.
+  else if (outcome.exitCode === 0 && !argv.includes('--dry-run')) console.log('opt-in: agentlenspro disk-monitor install — record every disk used/free space each minute, even with no Claude session (then query: agentlenspro disk)')
   return outcome.exitCode
 }

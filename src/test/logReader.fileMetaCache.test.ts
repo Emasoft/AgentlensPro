@@ -19,6 +19,21 @@ const sessionBody = (cwd: string, prompt: string): string =>
     },
   }) + '\n'
 
+type TtlHost = { FILE_META_CACHE_TTL_MS: number }
+
+/** Runs `fn` with the walk memo's TTL raised to 60 s, then restores it.
+ *  WHY (TRDD-CS2W7E77, gate run A1): the two burst tests below assert that N calls SHARE one walk while
+ *  the memo is fresh, not how long it stays fresh. Under machine starvation (load average about 300)
+ *  four reparses outlasted the production 2 s TTL and the memo expired between calls ("got 2"). The
+ *  TTL length is a separate tunable, and the corpus-side test pins the stamp/TTL interaction. The
+ *  production value is checked first, so a TTL of 0 (memo absent) still fails here. */
+function withFreshMemo(fn: () => void): void {
+  const host = LogReader as unknown as TtlHost
+  const saved = host.FILE_META_CACHE_TTL_MS
+  assert.ok(saved >= 1000, `the production walk memo must stay fresh for at least 1 s, got ${saved}ms`)
+  host.FILE_META_CACHE_TTL_MS = 60_000
+  try { fn() } finally { host.FILE_META_CACHE_TTL_MS = saved }
+}
 suite('LogReader — reparseSession() must not re-walk the whole log tree on every call', function (this: Mocha.Suite) {
   // SUITE-level, deliberately — a per-test `this.timeout()` does NOT cover hooks, and the hook is
   // what fails first here. The corpus-side test below writes 6000 files and `teardown()` rmSync's
@@ -64,18 +79,20 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
       fs.writeFileSync(path.join(root, 'projects', 'proj', `${id}.jsonl`), sessionBody(cwd, `prompt-${id}`))
     }
 
-    const r = new LogReader()
-    assert.strictEqual(r.getFileMetaWalkCount(), 0, 'no walk has happened yet')
+    withFreshMemo(() => {
+      const r = new LogReader()
+      assert.strictEqual(r.getFileMetaWalkCount(), 0, 'no walk has happened yet')
 
-    for (const id of ids) {
-      const result = r.reparseSession(id)
-      assert.ok(result, `reparseSession must resolve ${id} to its file`)
-      assert.ok(result?.card.userRequest?.includes(`prompt-${id}`), `card content must match ${id}`)
-    }
+      for (const id of ids) {
+        const result = r.reparseSession(id)
+        assert.ok(result, `reparseSession must resolve ${id} to its file`)
+        assert.ok(result?.card.userRequest?.includes(`prompt-${id}`), `card content must match ${id}`)
+      }
 
-    // THE ASSERTION: 4 reparseSession() calls => 1 real walk (memoized), not 4.
-    assert.strictEqual(r.getFileMetaWalkCount(), 1,
-      `expected exactly 1 directory walk across ${ids.length} reparseSession() calls, got ${r.getFileMetaWalkCount()}`)
+      // THE ASSERTION: 4 reparseSession() calls => 1 real walk (memoized), not 4.
+      assert.strictEqual(r.getFileMetaWalkCount(), 1,
+        `expected exactly 1 directory walk across ${ids.length} reparseSession() calls, got ${r.getFileMetaWalkCount()}`)
+    })
   })
 
   // TRDD-ZFX0MPYZ — the CPU profile of the live runaway put 36.6% of main-thread busy time under
@@ -95,6 +112,9 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
   // is `TTL - walkDuration` and collapses to nothing once a walk outlives its TTL. Measured
   // 820ms against a 2000ms budget at 14,509 files — so this fires on corpus growth alone, and
   // when it does the memo does not degrade, it disappears: 5 candidates cost 5 full walks.
+  // Since gate run A1 (TRDD-CS2W7E77) this test runs under withFreshMemo's 60 s TTL, so (1) is now
+  // caught by withFreshMemo's check of the production TTL, and (2) is pinned by the corpus-side test
+  // below ('a real walk slower than the TTL ...'), which reaches walk > TTL with no injected stall.
   test('a transcriptPathFor probe burst triggers at most ONE directory walk, not one per candidate', () => {
     const cwd = path.join(root, 'workspace')
     const ids = ['probe-a', 'probe-b', 'probe-c', 'probe-d', 'probe-e']
@@ -102,25 +122,27 @@ suite('LogReader — reparseSession() must not re-walk the whole log tree on eve
       fs.writeFileSync(path.join(root, 'projects', 'proj', `${id}.jsonl`), sessionBody(cwd, `prompt-${id}`))
     }
 
-    const r = new LogReader()
-    assert.strictEqual(r.getFileMetaWalkCount(), 0, 'no walk has happened yet')
+    withFreshMemo(() => {
+      const r = new LogReader()
+      assert.strictEqual(r.getFileMetaWalkCount(), 0, 'no walk has happened yet')
 
-    for (const id of ids) {
-      assert.ok(r.transcriptPathFor(id)?.endsWith(`${id}.jsonl`), `transcriptPathFor must resolve ${id} to its file`)
-    }
+      for (const id of ids) {
+        assert.ok(r.transcriptPathFor(id)?.endsWith(`${id}.jsonl`), `transcriptPathFor must resolve ${id} to its file`)
+      }
 
-    // THE ASSERTION: N candidates => AT MOST 1 real walk. The intent is "no O(all-files) rescan
-    // per candidate", NOT "a walk must happen" — <= rather than === deliberately, so a future
-    // design that eliminates the walk entirely (an id index built at write time, or per-request
-    // scoping) PASSES instead of being blocked by a guard that pinned the old mechanism. The
-    // correctness assertions above are what stop 0 walks from meaning "returned nothing".
-    assert.ok(r.getFileMetaWalkCount() <= 1,
-      `expected at most 1 directory walk across ${ids.length} transcriptPathFor() calls, got ${r.getFileMetaWalkCount()}`)
+      // THE ASSERTION: N candidates => AT MOST 1 real walk. The intent is "no O(all-files) rescan
+      // per candidate", NOT "a walk must happen" — <= rather than === deliberately, so a future
+      // design that eliminates the walk entirely (an id index built at write time, or per-request
+      // scoping) PASSES instead of being blocked by a guard that pinned the old mechanism. The
+      // correctness assertions above are what stop 0 walks from meaning "returned nothing".
+      assert.ok(r.getFileMetaWalkCount() <= 1,
+        `expected at most 1 directory walk across ${ids.length} transcriptPathFor() calls, got ${r.getFileMetaWalkCount()}`)
 
-    // A miss must not walk either — an unresolvable id scans the SAME memoized listing.
-    const walksBeforeMiss = r.getFileMetaWalkCount()
-    assert.strictEqual(r.transcriptPathFor('no-such-session'), null, 'unknown id resolves to null')
-    assert.strictEqual(r.getFileMetaWalkCount(), walksBeforeMiss, 'a lookup MISS must not trigger a fresh walk')
+      // A miss must not walk either — an unresolvable id scans the SAME memoized listing.
+      const walksBeforeMiss = r.getFileMetaWalkCount()
+      assert.strictEqual(r.transcriptPathFor('no-such-session'), null, 'unknown id resolves to null')
+      assert.strictEqual(r.getFileMetaWalkCount(), walksBeforeMiss, 'a lookup MISS must not trigger a fresh walk')
+    })
   })
 
   // TRDD-ZFX0MPYZ — the SETTLING test for the post-walk-stamp fix, and the reason it is not the one

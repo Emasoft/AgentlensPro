@@ -19,6 +19,7 @@ import {
 } from './cliCore'
 import { EXIT, UsageError } from './cliErrors'
 import { strArg, assertKnownFlags } from './argHelpers'
+import { flushNoticesToStderr, takeNotices } from './launchNotices'
 import { installAgents, installHooks, installOtel, installSkills, installStatusline } from './hookInstall'
 import { ensureServer, openDashboard, showStatus, stopServer } from './serverControl'
 
@@ -77,6 +78,20 @@ usage:
                                               from the PreCompact hook, off disk (server may be
                                               down). No compaction on record = exit 2, stdout EMPTY
                                               (never "0s ago", which is the opposite claim)
+  agentlenspro disk now|history|changes|top-change|trees|sql [--volume V] [--since 6h] [--json]
+                                              the disk-space history the minute monitor records: used/free/avail
+                                              per volume, with and without the trash, and the exact minute and size
+                                              of every change; 'disk sql "<SELECT>"' queries the tables directly.
+                                              Read-only, off disk, works with the server down and while DISABLED.
+                                              'agentlenspro disk' with no argument lists the views, flags and tables
+  agentlenspro disk-sample [--volumes-only | --walks-only] [--quiet]
+                                              one run into disk.duckdb: volume rows and/or due folder walks (no flag = both;
+                                              the two jobs below each run one half; runs even while DISABLED)
+  agentlenspro disk-watch add <path> [--kind folder|trash] | remove <path> | list
+                                              the folders whose size (apparent/allocated, with/without symlinks) is measured
+  agentlenspro disk-monitor install|uninstall|status
+                                              two launchd jobs (macOS): disk-sample --volumes-only every 60 s and --walks-only
+                                              every 300 s, even with no Claude session. Opt-in: setup prints the command, never installs it
   agentlenspro search <pattern> --session ID [--role R] [--type T] [--regex] [--limit N] [--json]
                                               search one session's transcript .jsonl (tool outputs,
                                               agent responses, prompts) with DuckDB's streaming NDJSON
@@ -211,7 +226,7 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
   agentlenspro --guard 15                            arm in a bg monitor BEFORE a fan-out; 1 line/risk transition
   agentlenspro get_burn_status                       is anything burning RIGHT NOW across all live sessions?
   agentlenspro get_account_status                    which account/plan/cache-TTL + how much 5h/7d window is left
-  agentlenspro get_account_status --all              where EVERY account stands, not just the live one — file-only, so it answers with the server DOWN
+  agentlenspro get_account_status --all              where EVERY account stands, not just the live one — no server needed: works with the server DOWN and while DISABLED (rows = what the server last captured, except accounts with a CLAUDE_CODE_LONG_OAUTH_KEY_* key, which one billed probe refreshes)
   agentlenspro get_agent_tokens --agentId abc123     EXACT tokens + $ for ONE sub-agent
   agentlenspro get_cost_rollup --groupBy project --windowHours 5    cost per project over the last 5h
   agentlenspro predict_session_cost --task "xhigh review of auth"   estimate the $ BEFORE you launch
@@ -254,6 +269,7 @@ export interface BurnRiskReport {
   risks?: Array<{ code: string; detail: string; active: boolean }>
   advice?: string
   sources?: { hookEvents?: unknown; bodies?: unknown; burnStatus?: unknown }
+  bodiesScan?: { seeded: boolean; inProgress: boolean; lastMergeAgeMs: number | null }
 }
 // Exported so `budget --with-risks` can fold guard transitions into its own stream (one Monitor
 // instead of two) without duplicating the REST-then-MCP fallback logic.
@@ -267,7 +283,9 @@ export async function fetchBurnRisk(): Promise<BurnRiskReport> {
     }
   }
   const r = await callTool('check_burn_risk', {}, true)
-  return (typeof r === 'string' ? JSON.parse(r) : r) as BurnRiskReport
+  if (typeof r !== 'string') return r as BurnRiskReport
+  // WHY a parse with context: a non-JSON reply is named as a server fault, not left as a bare SyntaxError.
+  try { return JSON.parse(r) as BurnRiskReport } catch (e) { throw new Error(`the server's burn-risk reply is not JSON: ${(e as Error).message}`, { cause: e }) }
 }
 
 // One-shot realtime culprit check: prints ONLY the active risks (each detail names the
@@ -290,6 +308,10 @@ async function runRisk(): Promise<void> {
     throw new Error(`${msg} — ${hint}`)
   }
   const active = (rep.risks || []).filter(r => r.active)
+  const bs = rep.bodiesScan
+  if (bs && (!bs.seeded || bs.inProgress)) {
+    console.log(`bodies feed: ${!bs.seeded ? "not scanned yet" : `last merge ${bs.lastMergeAgeMs === null ? "?" : Math.round(bs.lastMergeAgeMs / 1000)}s ago`}${bs.inProgress ? " (scan in progress)" : ""}`)
+  }
   if (active.length === 0) {
     const s = rep.sources || {}
     console.log(`no active burn risks (${Date.now() - t0}ms; feeds: hooks=${!!s.hookEvents} bodies=${!!s.bodies} monitor=${!!s.burnStatus})`)
@@ -422,7 +444,8 @@ function coerce(flag: string, val: string, type: string | undefined): unknown {
     throw new Error(`--${flag} expects true|false`)
   }
   if (type === 'object' || type === 'array') {
-    try { return JSON.parse(val) } catch { throw new Error(`--${flag} expects a JSON ${type}, got "${val}"`) }
+    // WHY UsageError: a bad flag value is a bad command line (exit 64), like the other flag checks above.
+    try { return JSON.parse(val) } catch { throw new UsageError(`--${flag} expects a JSON ${type}, got "${val}"`) }
   }
   if (type === 'string') return String(val)
   // Untyped in the schema: best-effort JSON so numbers/objects pass through, else string.
@@ -515,8 +538,11 @@ function toolError(result: unknown): string | null {
 function emit(tool: string, result: unknown, globals: { out: string | null; json?: boolean }): void {
   const err = toolError(result)
   if (err !== null) {
+    // The launch check's held notices travel INSIDE the refusal (TRDD-YL3EWT6N item 7): stderr stays exactly one
+    // parseable JSON value — the exit-2 contract — and no notice is lost. The key is omitted when there are none.
     process.exitCode = EXIT.UNKNOWN
-    console.error(JSON.stringify({ tool, error: err }, null, 2))
+    const notices = takeNotices()
+    console.error(JSON.stringify(notices.length > 0 ? { tool, error: err, notices } : { tool, error: err }, null, 2))
     return
   }
   // `--json` overrides the human rendering: a caller who asked for JSON gets JSON even from a tool
@@ -618,6 +644,17 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     else rest.push(argv[i])
   }
 
+  // The launch install check's held notices (launchNotices.ts, TRDD-YL3EWT6N item 7) wait ONLY for a single tool
+  // call — `call <tool>` or `<tool> …`, the two paths that end in emit(), where a refusal folds them into its JSON
+  // so stderr stays one parseable object. Every other path here — any ops flag (`--guard` never returns), usage,
+  // `list`, `help`, `batch` — prints them now, before it runs, exactly as it always did. A new ops flag is covered
+  // without touching this line: any field set on `ops` counts.
+  // A new KEYWORD sub-command (one more entry like 'list' or 'batch' below) is NOT covered automatically: add it to
+  // the list, or it is treated as a tool call and its notices wait until it returns — forever, if it never does.
+  const anyOp = otelOp !== null || statuslineOp !== null || hooksOp !== null
+    || Object.values(ops).some(v => v !== false && v !== null && v !== undefined)
+  const singleToolCall = !anyOp && rest[0] !== undefined && !['-h', '--help', 'list', 'help', 'batch'].includes(rest[0])
+  if (!singleToolCall) flushNoticesToStderr()
   // Settings mutation is standalone — no server needed, exits after the transaction.
   if (otelOp) {
     await installOtel(otelOp === 'uninstall')
@@ -695,6 +732,33 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
     return
   }
 
+  // WHY validate call/batch before init(): a malformed argument is a bad command line (exit 64), so it must fail
+  // before any server contact. A down server would otherwise answer first with a connection error, and the usage
+  // mistake would never be reported. The parsed values are kept here and used by the branches below (parsed once).
+  let rawArgs: Record<string, unknown> = {}
+  let spec: Array<{ tool: string; args?: Record<string, unknown>; full?: boolean }> = []
+  if (cmd === 'call') {
+    if (!rest[1]) throw new UsageError('call requires a tool name')
+    // A present-but-non-JSON second arg is a mistake (usually flag syntax on the wrong verb) — fail
+    // fast rather than silently call the tool with {} and measure the wrong thing.
+    if (rest[2] !== undefined) {
+      if (!rest[2].startsWith('{')) {
+        throw new UsageError('call expects a JSON object as the second argument — for flag syntax use: agentlenspro <tool> --flag value')
+      }
+      // WHY UsageError: malformed JSON is a bad command line (exit 64, as the help says), not a crash (exit 1).
+      try { rawArgs = JSON.parse(rest[2]) as Record<string, unknown> } catch (e) { throw new UsageError(`call: the argument is not valid JSON: ${(e as Error).message}`) }
+    }
+  }
+  if (cmd === 'batch') {
+    if (!rest[1]) throw new UsageError('batch requires a JSON array: [{"tool":"...","args":{...}}]')
+    // WHY UsageError: as for call, malformed JSON is a bad command line (exit 64), not a crash.
+    try { spec = JSON.parse(rest[1]) } catch (e) { throw new UsageError(`batch: the argument is not valid JSON: ${(e as Error).message}`) }
+    if (!Array.isArray(spec)) throw new UsageError('batch requires a JSON array')
+    // WHY checked here: a member without a string tool would otherwise fail after server contact, so a usage mistake would not be reported as one.
+    const badMember = (spec as unknown[]).findIndex(m => typeof m !== 'object' || m === null || typeof (m as { tool?: unknown }).tool !== 'string')
+    if (badMember !== -1) throw new UsageError(`batch: member ${badMember} needs a "tool" name`)
+  }
+
   await init()
 
   if (cmd === 'list') {
@@ -719,24 +783,11 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
 
   if (cmd === 'call') {
     const tool = rest[1]
-    if (!tool) throw new Error('call requires a tool name')
-    // A present-but-non-JSON second arg is a mistake (usually flag syntax on the wrong verb) — fail
-    // fast rather than silently call the tool with {} and measure the wrong thing.
-    let rawArgs: Record<string, unknown> = {}
-    if (rest[2] !== undefined) {
-      if (!rest[2].startsWith('{')) {
-        throw new Error('call expects a JSON object as the second argument — for flag syntax use: agentlenspro <tool> --flag value')
-      }
-      rawArgs = JSON.parse(rest[2]) as Record<string, unknown>
-    }
     emit(tool, await callTool(tool, rawArgs, globals.full), globals)
     return
   }
 
   if (cmd === 'batch') {
-    if (!rest[1]) throw new Error('batch requires a JSON array: [{"tool":"...","args":{...}}]')
-    const spec = JSON.parse(rest[1]) as Array<{ tool: string; args?: Record<string, unknown>; full?: boolean }>
-    if (!Array.isArray(spec)) throw new Error('batch requires a JSON array')
     // Sequential on purpose: the endpoint is stateless per request and the server does bounded
     // disk scans; firing them concurrently would multiply the scan cost for no wall-clock win.
     for (let i = 0; i < spec.length; i++) {

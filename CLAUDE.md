@@ -114,6 +114,7 @@ Package manager is **pnpm**. Node 18+.
 | Run standalone server locally | `pnpm run local` |
 | Unit tests (fast, mocked VS Code) | `pnpm run test:unit` |
 | Integration tests (real VS Code) | `pnpm test` |
+| Rust tests (4 GB test-data cap, applied by the `.cargo/config.toml` runner) | `cargo test --manifest-path rust-core/Cargo.toml ...` (run from the repo root) |
 
 **Run a single unit test** — tests compile from `src/**` to `out/test/`, so `src/test/database/writer.test.ts` → `out/test/test/database/writer.test.js`:
 
@@ -148,6 +149,7 @@ When both capture the same session: **for Claude sessions the log transcript win
 
 - **NEVER write a user config file with `fs.writeFile`/`JSON.parse`-fallback.** Every mutation of `~/.claude/settings.json`, `~/.codex/config.toml`, or VS Code `settings.json` MUST go through `safeConfigEdit` (`src/safeConfigEdit.ts` → `scripts/safe_config_edit.py`): a verified transaction (refuse-unparseable, verify-diff, atomic backup+rename, cross-process lock, bounded retries). A direct writer with a "start fresh on parse failure" path wiped a user's entire 57.8KB settings.json on 2026-07-07 (commit 1a661a9 removed it — do not reintroduce the pattern).
 
+- **Test data is capped at 4 GB (sampled), and every launch path is wrapped.** No test, fixture, or measurement may create or copy more than 4 GB; measurement runs use a ≤4 GB sample, never a full-size data clone (a clone is counted in full — `du -sk` — even on APFS). `scripts/test-data-cap.sh <command>` points `TMPDIR` at a per-run dir under `tests_dev/tmp`, stops the run with exit 3 above the cap (killing the command's process group, its descendants, and any process naming the run dir), and removes the dir. **Enforced now:** (1) `pnpm run test:unit` and `test:browser` and the CI browser-smoke step call the wrapper; (2) a bare `npx mocha` self-wraps — `src/test/setup.js` re-runs the same mocha invocation under the wrapper when `AGENTLENS_TEST_CAP_DIR` is unset or names a deleted dir; (3) `cargo test` is wrapped by the runner in the repo-root `.cargo/config.toml` (root, because cargo finds config from the cwd — any subdirectory of the repo works — not from `--manifest-path`; the runner also wraps `cargo run`); (4) the wrapper exports `AGENTLENS_TEST_CAP_DIR`, and a nested wrapper/self-wrap/runner joins the outer run instead of opening a second 4 GB budget (a bare `cargo test` has no outer run, so each test binary gets its own 4 GB budget, run one after another); (5) Rust tests write scratch under `std::env::temp_dir()`, never `env!("CARGO_TARGET_TMPDIR")` (baked in at compile time, escapes the redirect) — so `agentlens-core`'s `spool_tap` rebuilds its ~1.7 GB bundled-DuckDB `aldigest` inside the capped dir on every run (126 s locally); (6) `pnpm run check-test-cap` (`scripts/check-test-cap.js`, in `compile`/`package`) fails when a `mocha --no-config` call lacks the wrapper, the self-wrap or the runner is gone, any `rust-core/**/*.rs` uses `CARGO_TARGET_TMPDIR`, or a test calls `mkdtempSync` on a literal `/tmp` (one allowlisted file). The guard and the proof tests (`src/test/testDataCap.test.ts`, `agentlens-spool/tests/test_data_cap.rs`) prove COVERAGE only, never that the cap trips. **Still NOT covered:** the cap is SAMPLED every 5 s (a fast writer can overshoot between samples); only files under TMPDIR/TMP/TEMP are counted, so a test that writes to its own DATA_DIR/HOME outside TMPDIR or to a hardcoded absolute path is not counted; **measurement clones made outside tests are NOT covered** (the incident clones were): a measurement script must size-check (`du -sk` ≤ 4194304 KB) before any copy; no measurement script enforces this yet. To run ONE mocha file use `--no-config` plus `--require src/test/setup.js` (otherwise `.mocharc` adds the whole-suite spec glob). Owner order 2026-11-16: "add a permanent cap to tests to limit to 4 GB any generated fake data for tests!" and "no, the cap is 4GB. i don't care about testing full data size." Evidence: 29 clones of a 43 GB data folder by measurement scripts took free space to 41 GB on 2026-11-16; commit 0b7e570e and `reports_dev/test-data-cap/20261116_143819+0100-cap.md`.
 - **One source of truth in `src/shared/` — never mirror it into `media/src/`.** The runtime-neutral modules (`pricing.ts`, `summarizerTypes.ts`, `telemetryTypes.ts`, `cacheBreak.ts`, `keepWarm.ts`, `tokenBuckets.ts`, `fallbackCounters.ts`, `residentCost.ts`, `spawnRollup.ts`, `tokensByCause.ts`) are imported by BOTH the host and the webview; they must stay free of Node imports and DOM APIs. The old hand-synced copies drifted (the webview's cacheBreak had lost FAST_MODE detection; the two pricing tables had diverged into different interfaces), so `scripts/check-no-mirrors.js` (`pnpm run check-mirrors`, run by `compile` and `package`) FAILS the build if any file under `media/src/` re-declares a symbol `src/shared/` exports — import or re-export instead. Rates change in ONE place: `src/shared/pricing.ts` (bump `PRICING_LAST_UPDATED`; `PRICING_SOURCES.md` has the authoritative per-provider rate URLs). Evidence: the guard itself, `scripts/check-no-mirrors.js` (currently `OK — 120 shared exports, no mirrors under media/src`) — it had been wired into NO build path until 2026-08-16, so for its whole life this sentence described a guard that never ran; an executable check is the only evidence that cannot go stale, which is why this no longer cites a report.
 - **`sql.js` is not bundled.** `src/logReader.ts` resolves it at runtime via an injected `sqlFactory` (`require.resolve('sql.js')` + `locateFile` for its WASM) to read OpenCode's SQLite database as a JS-path fallback; production OpenCode ingestion runs through the Rust engine (`rustParseOpenCodeSync`, `rust-core/crates/agentlens-logscan/src/opencode.rs`) and only falls back to the sql.js path when the binary is absent or `OPENCODE_DATA_DIR` overrides the data dir (`src/logReader.ts` `_scanOpenCode`).
 - **`@duckdb/node-api` is not bundled either — and a FAILED esbuild leaves the STALE bundle in place.** Native `.node` addons cannot be bundled, so the package is `external` in the one Node target of `esbuild.js` (`standalone/cli.ts`; the other two `entryPoints:` are browser bundles) and resolves from `node_modules` at runtime (it is a declared runtime dependency). The trap (commit 36c87c8): when esbuild fails it does NOT touch the outfile, so `standalone/*.js` keeps its old mtime and *looks* current — the store code sat un-shipped for a day this way while tsc+mocha gates (which run from `out/`, never esbuild) stayed green. **A change is deployed only after `node esbuild.js` succeeds AND `agentlenspro server restart` — verify with a grep for a new symbol in the bundle when in doubt.**
@@ -516,54 +518,16 @@ culprits by cache-**weighted** equiv (`investigate_burn`), never by request byte
 Diagnostics encode this as the TTL-regime matrix (TRDD-VY1IUVUM); the full model with measured
 costs: `.claude/project/memory/cache-ttl-model.md`.
 
-<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=b2b81262caa2 generated=2026-09-24T18:04:40+0200
+<+-+-JANITOR-WIKIMEM-INDEX-START-(do-not-modify)-+-+> v1 digest=19b40b9d716c generated=2026-11-16T12:58:25+0100
 ## Wikimem index (PROJECT scope) — recall by symptom, read on demand
 
-Deep knowledge lives in these pages, not in this file. Search: `memgrep recall "<symptom>" .claude/project/memory`.
+Root topics only; pages beneath them are not listed. Entry point: `memgrep overview .claude/project/memory`. Search: `memgrep recall "<symptom>" .claude/project/memory`.
 
-**agentlens-burn-token-model** — 5h/7d account window drained fast
 - [agentlens-burn-token-model](.claude/project/memory/agentlens-burn-token-model.md) — 5h/7d account window drained fast
-  - [agentlens-account-window-budget](.claude/project/memory/agentlens-account-window-budget.md) — window budget mixes multiple accounts after rotation
-  - [burn-seismic-statistical-model](.claude/project/memory/burn-seismic-statistical-model.md) — burn_seismic reports wrong/implausible p-values
-  - [agent-fleet-cache-economics](.claude/project/memory/agent-fleet-cache-economics.md) — a wave of subagents burned way more than expected
-  - [image-resident-cost-guard](.claude/project/memory/image-resident-cost-guard.md) — why did reading a screenshot make the session expensive
-  - [agentlenspro-ops-lessons](.claude/project/memory/agentlenspro-ops-lessons.md) — how to deploy agentlenspro on a machine
-  - [cache-ttl-model](.claude/project/memory/cache-ttl-model.md) — keepWarm says cold turns but the session felt warm
-  - [claude-code-surface-inferences](.claude/project/memory/claude-code-surface-inferences.md) — the model id says claude-opus-5 not claude-opus-5[1m]
-  - [cumulative-vs-per-turn-fields](.claude/project/memory/cumulative-vs-per-turn-fields.md) — is total_cost_usd per turn or cumulative
-  - [memory-scope-leak-detector-false-positives](.claude/project/memory/memory-scope-leak-detector-false-positives.md) — janitor flags a PROJECT memory page as leaking machine-private data
-  - [cache-risk-command-detection](.claude/project/memory/cache-risk-command-detection.md) — what actually broke my prompt cache
-
-**agentlenspro-identity** — what is this repo
 - [agentlenspro-identity](.claude/project/memory/agentlenspro-identity.md) — what is this repo
-
-**agentlenspro-publish-pipeline** — how do I release
-- [agentlenspro-publish-pipeline](.claude/project/memory/agentlenspro-publish-pipeline.md) — how do I release
-  - [dashboard-tree-render-topology](.claude/project/memory/dashboard-tree-render-topology.md) — where does the session timeline
-
-**always-on-ingestion-model** — how does no-loss ingestion work
-- [always-on-ingestion-model](.claude/project/memory/always-on-ingestion-model.md) — how does no-loss ingestion work
-
-**otlp-ingest-topology** — which OTLP ingest path is actually live
-- [otlp-ingest-topology](.claude/project/memory/otlp-ingest-topology.md) — which OTLP ingest path is actually live
-
-**Other topics**
-- [agent-context-integrity-false-positives](.claude/project/memory/agent-context-integrity-false-positives.md) — the janitor flags injection/authority-override patterns in CLAUDE.md or .claude/project/memory and says conte…
-- [agentlenspro-ops-lessons-concurrency-and-event-loop](.claude/project/memory/agentlenspro-ops-lessons-concurrency-and-event-loop.md) — server hangs at 100% cpu and every request times out or SIGTERM is ignored
-- [agentlenspro-ops-lessons-deploy-and-install](.claude/project/memory/agentlenspro-ops-lessons-deploy-and-install.md) — how to deploy agentlenspro on a machine
-- [agentlenspro-ops-lessons-store-durability-and-memory](.claude/project/memory/agentlenspro-ops-lessons-store-durability-and-memory.md) — a span segment over 512MB breaks setup or silently drops a day of results
 - [agentlenspro-ops-lessons-testing-and-process-hygiene](.claude/project/memory/agentlenspro-ops-lessons-testing-and-process-hygiene.md) — background agent shows running but does nothing
-- [ctxmap-exact-measurement-cost](.claude/project/memory/ctxmap-exact-measurement-cost.md) — ctxmap/ctxvis exact token measurement is slow
-- [dependency-typosquat-alerts-are-false-positives](.claude/project/memory/dependency-typosquat-alerts-are-false-positives.md) — janitor says preact is a typosquat of react
+- [agentlenspro-publish-pipeline](.claude/project/memory/agentlenspro-publish-pipeline.md) — how do I release
+- [always-on-ingestion-model](.claude/project/memory/always-on-ingestion-model.md) — how does no-loss ingestion work
 - [hook-events-pipeline](.claude/project/memory/hook-events-pipeline.md) — how does AgentLens capture Claude Code lifecycle events
-- [loaded-plugin-version-detection](.claude/project/memory/loaded-plugin-version-detection.md) — which plugin version is a session actually running
-- [log-scan-performance](.claude/project/memory/log-scan-performance.md) — the boot scan of the jsonl corpus is slow
-- [memory-scope-leak-proposed](.claude/project/memory/memory-scope-leak-proposed.md)
-- [rust-fixture-filesystem-portability](.claude/project/memory/rust-fixture-filesystem-portability.md) — the test passes locally but fails only on CI
-- [ssd-write-economics](.claude/project/memory/ssd-write-economics.md) — is SSD life spent by write operations or by bytes
-- [standalone-server-security-model](.claude/project/memory/standalone-server-security-model.md) — can a website read my local agentlens data
-- [statusline-capture-and-store](.claude/project/memory/statusline-capture-and-store.md) — how do I get rate_limits without hitting the usage endpoint
-- [trdd-board-review-hygiene](.claude/project/memory/trdd-board-review-hygiene.md) — which commits belong in implementation-commits
-- [ts-dead-code-vs-rust-parity-oracles](.claude/project/memory/ts-dead-code-vs-rust-parity-oracles.md) — is this TypeScript file dead
-- [vmmap-ioaccelerator-is-the-mimalloc-heap](.claude/project/memory/vmmap-ioaccelerator-is-the-mimalloc-heap.md) — vmmap says IOAccelerator dominates alcore's memory
+- [otlp-ingest-topology](.claude/project/memory/otlp-ingest-topology.md) — which OTLP ingest path is actually live
 <+-+-JANITOR-WIKIMEM-INDEX-END-(do-not-modify)-+-+>

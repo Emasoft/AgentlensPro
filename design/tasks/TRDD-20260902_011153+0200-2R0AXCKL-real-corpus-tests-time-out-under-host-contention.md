@@ -3,7 +3,7 @@ trdd-id: 2R0AXCKL
 title: The two real-corpus slow tests flip between runs and turn a green gate red
 column: backburner
 created: 2026-09-02T01:11:53+0200
-updated: 2026-09-04T14:27:48+0200
+updated: 2026-10-17T10:44:18+0200
 implementation-commits: [84d6f500]
 current-owner: claude-agentlenspro
 task-type: bugfix
@@ -150,3 +150,4 @@ criterion is widened below.
 
 - Evidence files were ephemeral (`/tmp/full5.txt`, `/tmp/full6.txt`); the numbers above are the
   record.
+2026-10-17: since 091799ee (2026-09-23) src/test/setup.js points HOME and DATA_DIR at a scratch dir for every mocha run, so the real-corpus cases in cacheBreakTimeline.test.ts skip on every run: they no longer flip, they never run (3 pending in the whole-file run on 2026-10-17). Running them needs an explicit opt-in that points their bodies dir at the real data dir, which the owner directive of 2026-10-04 reserves to the owner. Recorded from TRDD-B7DSTJLS box 2.

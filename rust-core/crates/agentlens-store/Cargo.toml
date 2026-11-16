@@ -16,6 +16,8 @@ fs2 = "0.4"
 # raw_facts.rs: the Environment-block / model regexes moved here from agentlens-core
 # (QSFYIHUO step 3, A2 hoist).
 regex = "1"
+# errno constants for pass.rs dir_sync_unsupported (TRDD-FINMFYDE); their values differ per platform.
+libc = "0.2"
 
 [[bin]]
 name = "alstore"

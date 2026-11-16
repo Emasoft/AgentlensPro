@@ -16,7 +16,7 @@
 //!   (TS takes it on a db error; here the error is logged and the db skipped).
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -158,6 +158,17 @@ fn parse_one(f: &DiscoveredFile) -> Option<ParsedTranscript> {
 /// headroom over the ~1.1-1.3 GB steady state.
 pub const SCAN_CHUNK: usize = 2_000;
 
+/// TRDD-735Q3JF4 inc 3: the WARM boot sweep's mid-sweep save size (files per `ingest` call),
+/// smaller than [`SCAN_CHUNK`]. Measured (docs_dev/20261029_063500+0100-735Q3JF4-warm-flush-ab-r3.md,
+/// docs_dev/20261029_074750+0100-735Q3JF4-r3-per-site-holds.md): memory committed at 10 minutes is
+/// 134-157 MiB lower, all of it reserved-not-in-use (live memory unchanged); the longest lock hold
+/// AT THE SAVE STEP drops to 2.7-2.75 s from 14.7-15.0 s; total lock time is unchanged. The boot's
+/// longest hold is now the restore step (5.2-5.5 s), which this does not touch. The first-ever boot
+/// is unaffected (an empty file_state takes the cold path, and `cold_scan_chunked` slices by
+/// SCAN_CHUNK). The 60 s re-scan keeps SCAN_CHUNK because it was never measured. A warm boot with a
+/// large backlog makes proportionally more saves (unmeasured).
+pub const BOOT_SWEEP_CHUNK: usize = 200;
+
 /// The cold boot scan: every discovered session file, parsed in parallel (a file that cannot
 /// be read or yields no timestamps is skipped, as the TS sweep does), finished, in discovery
 /// order. OpenCode dbs are parsed sequentially (rusqlite, native WAL read). Collects EVERY
@@ -174,9 +185,10 @@ pub fn cold_scan(env: &Env, now_ms: i64) -> (Vec<ScannedFile>, ScanStats) {
 /// Boot churn alone crossed the 2048 MB phys_footprint cap (R0a: boot-phase peak 2539 MB with
 /// ZERO bodies passes; 93 of 238 kills boot-phase) because the scan collected every parsed
 /// file's cards in one Vec before the caller ingested — ~26k transcripts is the whole corpus
-/// resident at once. Each full chunk is handed to `flush` (the boot site ingests + drops it
-/// under a short state lock) and only the final partial chunk is returned, so the scan's own
-/// peak is one chunk, not the corpus. `states` carries the (path, offset) of EVERY parsed file
+/// resident at once. Every SCAN_CHUNK slice, the final partial one included, is handed to
+/// `flush` (the boot site ingests + drops it under a short state lock). The returned remainder
+/// holds only the OpenCode DB rows, so the scan's own peak is one chunk, not the corpus.
+/// `states` carries the (path, offset) of EVERY parsed file
 /// — flushed or not — because the caller seeds its change gate from them; dropping a flushed
 /// file's state would make the next sweep re-parse the whole corpus.
 /// Returns (unflushed remainder, stats, all parsed files' states).
@@ -424,6 +436,15 @@ pub struct SweepStats {
     pub incremental_reads: u64,
     pub full_reads: u64,
     pub elapsed_ms: u128,
+    /// Number of `ingest` calls made INSIDE the sweep; 0 when `ingest` is None. Warm path (the
+    /// incremental branch): one call each time the pending batch reaches `flush_every` files, all
+    /// mid-sweep. The final partial batch handed back to the caller is NOT counted. Cold path
+    /// (empty `file_state`): `flush_every` is ignored; `cold_scan_chunked` calls `ingest` once per
+    /// SCAN_CHUNK slice of the discovered files, the final partial slice included, and a slice whose
+    /// files all failed to parse still gets a call (an empty batch). So the cold value is
+    /// ceil(discovered files / SCAN_CHUNK), and 0 only when nothing was discovered. The remainder
+    /// the cold path returns holds only the OpenCode DB rows and is not counted.
+    pub flushes: u64,
 }
 
 /// Owns the per-file offset gate and the bounded accumulator cache. `!Send` (the accumulators
@@ -469,7 +490,14 @@ impl LogTailer {
     /// thousands of lagged files and previously held every parsed card in one Vec until the
     /// caller's single bulk ingest (boot-phase peak 2539 MB, zero bodies passes). With `ingest`
     /// = None the behavior is exactly the unbounded-collect form (tests, tooling).
-    pub fn sweep(&mut self, env: &Env, now_ms: i64, mut ingest: Option<&mut dyn FnMut(Vec<ScannedFile>)>) -> (Vec<ScannedFile>, SweepStats) {
+    pub fn sweep(&mut self, env: &Env, now_ms: i64, ingest: Option<&mut dyn FnMut(Vec<ScannedFile>)>) -> (Vec<ScannedFile>, SweepStats) {
+        self.sweep_with_flush(env, now_ms, ingest, SCAN_CHUNK)
+    }
+
+    /// [`Self::sweep`] with an explicit mid-sweep save size: the incremental branch hands `ingest`
+    /// a batch every `flush_every` files. `pub` because the integration tests drive it directly.
+    /// Only the warm boot passes [`BOOT_SWEEP_CHUNK`]; everything else goes through `sweep`.
+    pub fn sweep_with_flush(&mut self, env: &Env, now_ms: i64, mut ingest: Option<&mut dyn FnMut(Vec<ScannedFile>)>, flush_every: usize) -> (Vec<ScannedFile>, SweepStats) {
         if self.file_state.is_empty() {
             // Seed the change gate from the chunked cold scan's returned states — flushed
             // chunks' offsets included, or the next sweep would re-parse the whole corpus.
@@ -478,9 +506,13 @@ impl LogTailer {
             // R5); production must pass Some. With Some, each chunk
             // is handed to the caller's ingest and dropped, bounding the boot's peak.
             let mut unflushed: Vec<ScannedFile> = Vec::new();
+            let mut cold_flushes: u64 = 0;
             let (remainder, s, states) = cold_scan_chunked(env, now_ms, &mut |chunk| {
                 match ingest.as_mut() {
-                    Some(st) => st(chunk),
+                    Some(st) => {
+                        cold_flushes += 1;
+                        st(chunk)
+                    }
                     None => unflushed.extend(chunk),
                 }
             });
@@ -496,6 +528,7 @@ impl LogTailer {
                 incremental_reads: 0,
                 full_reads: s.parsed as u64,
                 elapsed_ms: s.elapsed_ms,
+                flushes: cold_flushes,
             };
             return (unflushed, stats);
         }
@@ -506,13 +539,14 @@ impl LogTailer {
         let mut cards_seen: usize = 0; // F-3 closeout (TRDD-2JOIAH2G): whole-sweep cards — flushed chunks counted here, the returned tail below.
         for f in &files {
             self.process_file(f, now_ms, &mut stats, &mut out);
-            // Bound the accumulation (TRDD-2JOIAH2G R5): hand every SCAN_CHUNK files to the
+            // Bound the accumulation (TRDD-2JOIAH2G R5): hand every `flush_every` files to the
             // caller's ingest and drop them; only the last partial batch is returned. The
             // dropped files' gate states are already in `file_state` (process_file inserts
             // them), so a flush can never cause a re-parse.
             if let Some(st) = ingest.as_mut() {
-                if out.len() >= SCAN_CHUNK {
+                if out.len() >= flush_every {
                     cards_seen += out.iter().map(|s| s.cards.len()).sum::<usize>();
+                    stats.flushes += 1;
                     st(std::mem::take(&mut out));
                 }
             }
@@ -629,22 +663,25 @@ impl LogTailer {
             },
         };
         let from = if can_resume { prev_offset } else { 0 };
-        let (lines, consumed) = match read_lines_from(&f.path, from) {
-            Ok(x) => x,
-            Err(e) => {
-                eprintln!("{} alcore: read error {}: {e}", crate::log_ts(), f.path.display());
-                return None;
-            }
-        };
-        for line in &lines {
-            let Ok(v) = serde_json::from_slice::<Value>(line) else { continue };
+        // WHY the Err arm is safe with a half-fed accumulator: lines may already have reached
+        // `accum` before an I/O error, but `accum` was taken out of the cache (shift_remove) and is
+        // dropped on this path with no file_state.insert and no lru_put, so the next sweep re-reads
+        // from 0. Keep it that way (TRDD-735Q3JF4).
+        let consumed = match read_lines_from(&f.path, from, |line| {
+            let Ok(v) = serde_json::from_slice::<Value>(line) else { return };
             if let Value::Object(entry) = v {
                 match &mut accum {
                     Accum::Claude(a) => agentlens_logscan::on_entry(a, &entry),
                     Accum::Codex(a) => agentlens_logscan::codex::on_entry(a, &entry),
                 }
             }
-        }
+        }) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("{} alcore: read error {}: {e}", crate::log_ts(), f.path.display());
+                return None;
+            }
+        };
         let state = FileState { bytes_read: consumed, mtime_ms, ino, size };
         self.file_state.insert(f.path.clone(), state);
         let path_str = f.path.to_string_lossy();
@@ -664,14 +701,30 @@ impl LogTailer {
 
 /// TS `_streamLinesFrom`: the complete lines from `from` to EOF and the offset just past the last
 /// '\n' — a trailing partial line is NOT consumed (it is re-read, whole, on the next sweep).
-fn read_lines_from(path: &Path, from: u64) -> std::io::Result<(Vec<Vec<u8>>, u64)> {
+/// WHY streaming: the whole-file read held ~850 MiB of free-in-page commit after a 1990-file warm
+/// boot sweep (TRDD-735Q3JF4, docs_dev/20261029_031000+0100-735Q3JF4-diff1-streaming.md); TS
+/// `_streamLinesFrom` (src/logReader.ts) already streams.
+fn read_lines_from(path: &Path, from: u64, mut on_line: impl FnMut(&[u8])) -> std::io::Result<u64> {
+    use std::io::BufRead;
     let mut file = std::fs::File::open(path)?;
     file.seek(SeekFrom::Start(from))?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf)?;
-    let Some(last_nl) = buf.iter().rposition(|b| *b == b'\n') else { return Ok((Vec::new(), from)) };
-    let lines = buf[..last_nl].split(|b| *b == b'\n').filter(|l| !l.iter().all(u8::is_ascii_whitespace)).map(<[u8]>::to_vec).collect();
-    Ok((lines, from + last_nl as u64 + 1))
+    let mut rd = std::io::BufReader::with_capacity(64 * 1024, file);
+    let mut line: Vec<u8> = Vec::new();
+    let mut consumed = from;
+    loop {
+        line.clear();
+        let n = rd.read_until(b'\n', &mut line)?;
+        if n == 0 || line.last() != Some(&b'\n') {
+            break;
+        }
+        consumed += n as u64;
+        line.pop();
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        on_line(&line);
+    }
+    Ok(consumed)
 }
 
 // ── Durable state (P5e — server.ts TRDD-PJC8N1HO + the delta logs of TRDD-K3WDPR7M) ────────────
@@ -751,6 +804,22 @@ pub fn strip_card_for_persist(card: &Value) -> Value {
     c.shift_remove("generatedFiles");
     c.shift_remove("generatedFilesTruncated");
     Value::Object(c)
+}
+
+
+/// persistence record builder: the delta log's records for a set of resident cards, keyed by
+/// sessionId ("" when absent, the contract put_log_session keeps). DA0GN1CS: built from the resident
+/// layer in first-insert order, so no DuckDB scan is needed.
+pub fn persist_records_from(cards: &[Arc<Value>]) -> IndexMap<String, Value> {
+    cards.iter().map(persist_record).collect()
+}
+
+/// One card's delta-log record: (sessionId or "", the persist-stripped card). TRDD-2JOIAH2G: the
+/// ONE definition restore_reused's seed and save_cards' stream both use, so the seeded hashes and
+/// the saved records cannot drift; both stream it one card at a time instead of collecting a map
+/// (a full stripped copy of the corpus at restore and at every save).
+fn persist_record(card: &Arc<Value>) -> (String, Value) {
+    (card.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(), strip_card_for_persist(card))
 }
 
 
@@ -844,28 +913,49 @@ impl DurableState {
         }
     }
 
-    /// The restore (server.ts startup): when the delta logs are CURRENT, restored cards go into
-    /// the map (timelines capped, then the global tier) and the offsets seed the tailer's gate.
-    /// Returns (restored cards, imported offsets, skipped offsets); version-stale logs restore
-    /// nothing and are tombstoned by the next save.
+    /// The restore (server.ts startup) from the card snapshot, for a store that was not reused:
+    /// when the delta logs are CURRENT, restored cards go into the map (timelines capped, then the
+    /// global tier). Returns (restored cards, 0, 0): the saved read positions are never imported
+    /// on this path — they are tombstoned and the boot sweep re-reads every file (TRDD-6B7VV2Z7,
+    /// B'; WHY at the tombstone below). Version-stale logs restore nothing: both logs are
+    /// tombstoned and then the version stamped, at once (TRDD-A2KNXCNH, TRDD-6B7VV2Z7).
     ///
     /// TRDD-ORGJ0E3G (usage-only backfill, replacing both the 7→8 whole-corpus version bump AND
     /// the full-card re-parse this superseded — see `LOG_INGEST_VERSION`'s doc comment and
     /// TRDD-TWDGR75R for why each was retracted): a card whose file has since been deleted or
     /// rotated (Claude Code's own `cleanupPeriodDays`, or a Codex/Copilot/OpenCode source that
-    /// rotated) is the ONLY copy of that session's history, and a card whose file DOES still
-    /// exist gets its history rebuilt bigger than the persisted form ever was if it is fully
-    /// re-parsed. So `restore()` never rebuilds ANY card and never touches ANY file offset here;
-    /// it only queues `(session_id, path)` for a card that is missing a field added by a later
-    /// parser (`cacheCreate1hTokens`, currently) AND whose source file still exists, for
-    /// `run_1h_backfill` to patch after boot with a usage-only pass over that one file.
-    fn restore_from_snapshot(&mut self, tailer: &mut LogTailer, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
+    /// rotated) is the ONLY copy of that session's history, so the restore keeps every card it
+    /// finds. The restore itself never rebuilds ANY card; it only queues `(session_id, path)` for
+    /// a card that is missing a field added by a later parser (`cacheCreate1hTokens`, currently)
+    /// AND whose source file still exists, for `run_1h_backfill` to patch after boot with a
+    /// usage-only pass over that one file.
+    fn restore_from_snapshot(&mut self, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
         let cards = self.cards.load()?;
         let offsets = self.offsets.load()?;
         if !self.version_is_current() {
             if !cards.is_empty() || !offsets.is_empty() {
-                eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale delta-log entries are tombstoned on the next durable save", crate::log_ts());
+                eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale read positions and card entries tombstoned now", crate::log_ts());
             }
+            // TRDD-A2KNXCNH: tombstone the stale read positions and stamp the version NOW, before
+            // the cold rescan. WHY: the rescan appends per-chunk positions with `append_changed`,
+            // which fills `written`; the first tick may then write 0 offset bytes and skip
+            // `stamp_version` (it stamps only when bytes > 0), and a death before the first card
+            // save would leave current positions under a stale stamp — the next boot would discard
+            // the whole scan.
+            // TRDD-6B7VV2Z7 (B'): tombstone log-sessions here too. WHY: a death before the first
+            // card save would otherwise leave the stale snapshot under a CURRENT stamp, and the next
+            // refused reuse would restore it as if it described this ingest version. No new loss:
+            // this branch puts no card into the store and `self.cards.load()` above seeded
+            // `written` with every stale key, so the first full `save_cards` after the rescan would
+            // tombstone every key the rescan did not rebuild anyway (gone-file cards included) —
+            // this only does it earlier.
+            // ORDER: both tombstones BEFORE `stamp_version`. A death between them leaves the stale
+            // stamp, so the next boot repeats this branch, which is idempotent; the reverse order
+            // would leave a current stamp over stale cards. The `?` fails the start on a disk error
+            // (fail-fast) rather than rescanning onto logs that still hold stale entries.
+            self.offsets.save(&IndexMap::new())?;
+            self.cards.save(&IndexMap::new())?;
+            self.stamp_version();
             return Ok((0, 0, 0));
         }
         let restored = cards.len();
@@ -920,14 +1010,23 @@ impl DurableState {
             state.cards.commit();
             state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
         }
-        // Every card and every file offset is restored untouched — flagged or not — so a
-        // deleted/rotated source never loses history and no file is re-read twice for the same
-        // bytes. The flagged list is only a plan for `run_1h_backfill`; nothing here does I/O.
+        // Every card is restored untouched — flagged or not — so a deleted/rotated source never
+        // loses history. The flagged list is only a plan for `run_1h_backfill`; nothing here does I/O.
         if backfill_candidates > 0 || too_old > 0 {
             eprintln!("{} alcore: log-ingest 1h-tier backfill — flagged {backfill_candidates} transcript(s) for a usage-only cache_create_1h pass after boot ({too_old} skipped, older than {} days)", crate::log_ts(), REPARSE_MAX_AGE.as_secs() / 86_400);
         }
-        let (imported, skipped) = tailer.import_file_state(&offsets);
-        Ok((restored, imported, skipped))
+        // TRDD-6B7VV2Z7 (B'): the saved read positions are NOT imported on this path; they are
+        // tombstoned NOW and the boot sweep re-reads every file. WHY: positions always run ahead
+        // of the card snapshot after a crash — `ingest_chunk` appends them per chunk and `tick`
+        // saves offsets more often than cards — so importing them would mark as unchanged every
+        // file whose card the snapshot lacks or holds stale, and that card would stay missing or
+        // stale until its file changed again. The rescan rebuilds every card whose file exists;
+        // the snapshot puts above keep the gone-file cards. The tombstone is eager, not left to the
+        // next offsets save, so a death before that save cannot hand the stale positions to a
+        // later reused boot (`restore_reused` imports them). It relies on `self.offsets.load()`
+        // above: `save` tombstones only keys that load seeded into `written`.
+        self.offsets.save(&IndexMap::new())?;
+        Ok((restored, 0, 0))
     }
 
 
@@ -942,15 +1041,14 @@ impl DurableState {
         // immediately — compact_now bypasses save()'s size gate, so the delta stays bounded to
         // per-boot volume and a torn trailing line left by a hard kill is healed before any
         // SQL consumer reads the file. Append-only facts: no deletion-diffing ever runs on them.
-        match state.body_links.load() {
-            Ok(records) => {
-                if let Err(e) = state.body_links.compact_now(&records) {
-                    eprintln!("{} alcore: could not compact body-links: {e}", crate::log_ts());
-                }
-            }
-            Err(e) => eprintln!("{} alcore: could not load body-links: {e}", crate::log_ts()),
+        // TRDD-1RJBOEI1: compact_from_disk, not load() + compact_now(&records): the same seeding of
+        // `written` and the same verified snapshot, streamed, so this boot step never holds the
+        // record map (load() alone peaked at 1564 MiB at 700k rows, and the old pair at 3337 MiB,
+        // over alcore's 2048 MiB cap — docs_dev/20261017-1rjboei1-streaming-compact-report.md).
+        if let Err(e) = state.body_links.compact_from_disk() {
+            eprintln!("{} alcore: could not load or compact body-links: {e}", crate::log_ts());
         }
-        let out = if state.cards.reused() { self.restore_reused(tailer, state, env)? } else { self.restore_from_snapshot(tailer, state, env)? };
+        let out = if state.cards.reused() { self.restore_reused(tailer, state, env)? } else { self.restore_from_snapshot(state, env)? };
         state.cards.mark_restore_complete();
         Ok(out)
     }
@@ -964,12 +1062,13 @@ impl DurableState {
             // WHY not reuse: the offsets (and the card snapshot) are stamped with another ingest
             // semantics — or not stamped at all — so the offsets about to be imported would not
             // describe this corpus. Discard the rows and take the legacy path, which sees the same
-            // stale stamp, restores nothing and tombstones the stale entries on the next save
-            // (skipping `self.cards.load()` here would leave them in the snapshot to be trusted
-            // as current once the first save re-stamps the version).
+            // stale stamp, restores nothing, and tombstones BOTH logs before re-stamping the version
+            // (TRDD-A2KNXCNH, TRDD-6B7VV2Z7). That path loads both logs first, which is what seeds
+            // the keys those tombstones name; skipping the load would leave the stale entries in
+            // the snapshot to be trusted as current once the version is re-stamped.
             eprintln!("{} alcore: card store reuse refused — the offsets log is stamped with another ingest version; discarding the cards and cold-rescanning", crate::log_ts());
             state.cards.discard_cards();
-            return self.restore_from_snapshot(tailer, state, env);
+            return self.restore_from_snapshot(state, env);
         }
         let offsets = self.offsets.load()?;
         let restored = state.cards.len();
@@ -992,20 +1091,18 @@ impl DurableState {
         // Idempotent (rows already demoted are skipped); needed because the hot-set size may have
         // changed between boots. Once, not per card.
         state.demote_cold_timelines(crate::summarize::retention::timeline_hot_cards());
-        // Seed the delta-log hashes with exactly what `save_cards` would compute (persist_records
-        // = strip_card_for_persist of every stored card), taken from the resident parsed layer so
-        // the 72 MB snapshot is never loaded and the table is not scanned a second time. Without
-        // it the first save would append the whole corpus (72 MB) and compact. WHY AFTER the
-        // demotion: cards demoted at this start are persisted stripped; hashing them before the
-        // demotion would make the first save see them as changed and append them again.
-        let records: IndexMap<String, Value> = state
-            .cards
-            .parsed_cards()
-            .iter()
-            .map(|c| (c.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(), strip_card_for_persist(c)))
-            .collect();
-        self.cards.seed_written(&records);
-        drop(records);
+        // Seed the delta-log hashes with exactly what `save_cards` would compute. Both map
+        // `persist_record` over the resident layer, so the seeded hashes and the saved records
+        // cannot drift, and the 72 MB snapshot is never loaded. Without the seed the first save would
+        // append the whole corpus (72 MB) and compact. WHY AFTER the demotion (keep this order): cards
+        // demoted at this start are persisted stripped; hashing them before the demotion would make the
+        // first save see them as changed and append them again.
+        // TRDD-2JOIAH2G: streamed, one stripped card at a time, into the seed. It used to collect every
+        // stripped card into a map first, a full copy of the corpus on top of the resident layer at
+        // restore (measured ~540 MB committed, reports/rss-crash-loop/20261018_114500+0200-head-paired-run.md).
+        let parsed = state.cards.parsed_cards();
+        self.cards.seed_written(parsed.iter().map(persist_record));
+        drop(parsed);
         // The full restore bumps `data_version` once per card; a reused store would stay at 0 and
         // version-keyed caches (summary, SSE pusher) would see no change after the build.
         state.data_version += 1;
@@ -1089,7 +1186,8 @@ impl DurableState {
         let mut chunk_filled = 0usize;
         let mut patched_ids: Vec<String> = Vec::with_capacity(take);
         {
-            if let Ok(mut st) = state.lock_timed() {
+            {
+                let mut st = state.lock_timed();
                 for (session_id, sum) in sums {
                     let Some(mut card) = st.cards.get(&session_id) else { continue };
                     let already_filled = card.as_object().is_some_and(|o| o.contains_key("cacheCreate1hTokens"));
@@ -1122,13 +1220,11 @@ impl DurableState {
         // applied chunk, undoing the whole run. Force each chunk's patches onto the delta-append
         // path BEFORE returning, so a hard exit loses at most one in-flight chunk.
         //
-        // TRDD-ORGJ0E3G follow-up: this used to call `save_cards`, which rebuilds
-        // `persist_records()` — a `SELECT * FROM cards` over the WHOLE store plus a JSON parse of
-        // every card (`card_store.rs:222-235`) — once per 200-file chunk (~45 times on the
-        // measured 8,846-file corpus), the suspected driver behind the RSS-cap exits this backfill
-        // exists to reduce (TRDD-WKLD508O/TWDGR75R). `save_cards_for` below persists ONLY the
-        // session_ids this chunk actually patched, so the cost is proportional to the chunk
-        // (≤200 cards), not the corpus.
+        // TRDD-ORGJ0E3G follow-up: this used to call `save_cards`, which persisted the WHOLE store once
+        // per 200-file chunk (~45 times on the measured 8,846-file corpus), the suspected driver behind
+        // the RSS-cap exits this backfill exists to reduce (TRDD-WKLD508O/TWDGR75R). `save_cards_for`
+        // below persists ONLY the session_ids this chunk actually patched, so the cost is proportional
+        // to the chunk (≤200 cards), not the corpus.
         if chunk_filled > 0 {
             self.mark_dirty();
             self.save_cards_for(state, &patched_ids);
@@ -1156,20 +1252,60 @@ impl DurableState {
         self.cards_dirty = true;
     }
 
+    /// TRDD-A2KNXCNH — ingest one flushed sweep chunk and persist ITS read positions now, so a
+    /// long sweep killed partway resumes from the last chunk instead of restarting from the first
+    /// file (before this, no position was written until the sweep returned and the 60 s tick ran).
+    ///
+    /// Each record key is derived exactly as `LogTailer::export_file_state` derives it
+    /// (`PathBuf::from(&s.file).to_string_lossy()`): a different spelling would make the next
+    /// full `save_offsets` see every key as new-plus-missing and tombstone and re-append it.
+    /// `append_changed` (never `save`) because the chunk is a SUBSET — `save` would tombstone
+    /// every other file's position. It also fills the log's `written` hashes, so the next tick
+    /// writes only what changed since.
+    ///
+    /// A poisoned lock panics at the first `lock_timed()` (TRDD-TYJSS45N), so neither the puts
+    /// nor the offsets append run. Offsets are still appended strictly after the card puts of this
+    /// chunk (TRDD-9VX3WTGU): the positions are built before the lock and appended only after the
+    /// guard is dropped, and each put is a committed DuckDB statement, so a position on disk never
+    /// describes a file whose card is not in the database.
+    pub fn ingest_chunk(&mut self, state: &std::sync::Mutex<crate::CoreState>, chunk: Vec<ScannedFile>) {
+        let positions: IndexMap<String, Value> =
+            chunk.iter().map(|s| (PathBuf::from(&s.file).to_string_lossy().into_owned(), file_state_record(&s.state))).collect();
+        // WHY: a poisoned state lock must fail loud here, not skip the chunk (the 2026-10-14 stall hid one for 28+ hours).
+        {
+            let mut core = state.lock_timed();
+            core.ingest_scanned(chunk);
+            self.mark_dirty();
+        }
+        match self.offsets.append_changed(&positions) {
+            Ok(r) if r.bytes > 0 => {
+                {
+                    let mut st = state.lock_timed();
+                    st.persist.offsets_writes += 1;
+                    st.persist.offsets_bytes += r.bytes;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("{} alcore: could not append chunk read positions: {e}", crate::log_ts()),
+        }
+    }
+
     /// saveOffsetsNow — a save that wrote bytes counts as one write (persistStats.offsetsWrites).
     ///
-    /// TRDD-9VX3WTGU ORDERING CONTRACT — reuse of `cards.duckdb` depends on it: this runs only
-    /// from `tick`, on the sweeper thread, AFTER the sweep's cards were put (each `put_arc` is a
-    /// committed, WAL-fsynced DuckDB statement), and the offsets log is written WITHOUT an fsync.
-    /// So an offset on disk never describes a file whose card is not already durable in the
-    /// database. Saving offsets before the sweep's puts, or from another thread, would let a
-    /// reused database sit BEHIND its offsets: the file reads as unchanged and the stale card is
-    /// never refreshed.
+    /// TRDD-9VX3WTGU ORDERING CONTRACT — reuse of `cards.duckdb` depends on it. Offsets are written
+    /// from exactly two places, both on the sweeper thread and both AFTER the cards they describe
+    /// were put (each `put_arc` is a committed, WAL-fsynced DuckDB statement): this full save, run
+    /// from `tick` after the sweep's puts, and `ingest_chunk`'s per-chunk append (TRDD-A2KNXCNH),
+    /// run after that chunk's puts. The offsets log is written WITHOUT an fsync. So an offset on
+    /// disk never describes a file whose card is not already durable in the database. Saving
+    /// offsets before the puts, or from another thread, would let a reused database sit BEHIND its
+    /// offsets: the file reads as unchanged and the stale card is never refreshed.
     fn save_offsets(&mut self, tailer: &LogTailer, state: &std::sync::Mutex<crate::CoreState>) {
         match self.offsets.save(&tailer.export_file_state()) {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
-                if let Ok(mut st) = state.lock_timed() {
+                {
+                    let mut st = state.lock_timed();
                     st.persist.offsets_writes += 1;
                     st.persist.offsets_bytes += r.bytes;
                 }
@@ -1180,14 +1316,26 @@ impl DurableState {
     }
 
     fn save_cards(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
-        let records: IndexMap<String, Value> = {
-            let st = state.lock_timed().expect("core state");
-            st.cards.persist_records()
+        // DA0GN1CS: the state lock covers only a copy of the resident layer's Arc handles (one
+        // refcount bump per card). WHY: the previous whole-store persist ran
+        // `SELECT session_id, card FROM cards ORDER BY seq` under this lock, the OOM site that panicked
+        // the sweeper while it held the lock and poisoned the mutex (2026-10-03 and 2026-10-14). The
+        // resident layer is the same corpus in the same order, so the records are built from the snapshot
+        // after the lock is released.
+        let snap = {
+            let st = state.lock_timed();
+            st.cards.persist_snapshot()
         };
-        match self.cards.save(&records) {
+        // TRDD-2JOIAH2G: the records are streamed from the Arc snapshot, each stripped card built and
+        // dropped in turn (twice when the save compacts), instead of collected into a map first — a
+        // full stripped copy of the corpus every 300 s and at shutdown.
+        let saved = self.cards.save_from(|| snap.iter().map(persist_record));
+        drop(snap);
+        match saved {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
-                if let Ok(mut st) = state.lock_timed() {
+                {
+                    let mut st = state.lock_timed();
                     st.persist.cards_writes += 1;
                     st.persist.cards_bytes += r.bytes;
                 }
@@ -1199,8 +1347,8 @@ impl DurableState {
     }
 
     /// TRDD-ORGJ0E3G follow-up — `run_1h_backfill_step`'s own persistence path. Unlike
-    /// `save_cards` above (whole-store `persist_records()`, a `SELECT * FROM cards` plus a JSON
-    /// parse of every card — cheap at shutdown/timer cadence, expensive called ~45x per backfill),
+    /// `save_cards` above (a whole-store persist: every card stripped and diffed against the delta
+    /// log — cheap at shutdown/timer cadence, expensive called ~45x per backfill),
     /// this locks the state ONLY to fetch the handful of `session_ids` this one chunk patched
     /// (`st.cards.get(id)`, bounded by chunk size — never a whole-store read under the lock) and
     /// appends just those records via `DeltaLog::append_changed`, which — unlike `DeltaLog::save`
@@ -1212,13 +1360,14 @@ impl DurableState {
     /// only deferred to the next full save.
     fn save_cards_for(&mut self, state: &std::sync::Mutex<crate::CoreState>, session_ids: &[String]) {
         let records: IndexMap<String, Value> = {
-            let st = state.lock_timed().expect("core state");
+            let st = state.lock_timed();
             session_ids.iter().filter_map(|id| st.cards.get(id).map(|c| (id.clone(), strip_card_for_persist(&c)))).collect()
         };
         match self.cards.append_changed(&records) {
             Ok(r) if r.bytes > 0 => {
                 self.stamp_version();
-                if let Ok(mut st) = state.lock_timed() {
+                {
+                    let mut st = state.lock_timed();
                     st.persist.cards_writes += 1;
                     st.persist.cards_bytes += r.bytes;
                 }
@@ -1436,10 +1585,17 @@ pub fn start_sweeper(
         .spawn(move || {
             let mut tailer = LogTailer::default();
             let mut durable = DurableState::open(&data_dir);
+            // TRDD-2HRA270Y: opens the DurableState restore window; the window from `before_start_sweeper`
+            // (alcore.rs) to here is thread spawn + `DurableState::open`.
+            static RESTORE_START: std::sync::Once = std::sync::Once::new();
+            RESTORE_START.call_once(|| crate::rss_guard::log_boot_phase("sweeper_restore_start", None));
             let restored = {
-                let mut st = state.lock_timed().expect("core state");
+                let mut st = state.lock_timed();
                 durable.restore(&mut tailer, &mut st, &env)
             };
+            // TRDD-2HRA270Y: closes the DurableState restore window (opened by `sweeper_restore_start`).
+            static RESTORE_DONE: std::sync::Once = std::sync::Once::new();
+            RESTORE_DONE.call_once(|| crate::rss_guard::log_boot_phase("sweeper_restore_done", None));
             let (restored_cards, offsets_imported, offsets_skipped) = match restored {
                 Ok(r) => r,
                 Err(e) => {
@@ -1451,25 +1607,27 @@ pub fn start_sweeper(
             // event instead of waiting for the backstop (its stat gate makes a double-visit free).
             let (_watcher, watch_attached, watch_failed) = attach_watchers(&env, tx.clone());
             // TRDD-2JOIAH2G R5: the boot sweep ingests each SCAN_CHUNK under a short state lock
-            // and drops it — the only residual is the final partial chunk. The flush also marks
-            // both sidecars dirty (exactly what the old `if !scanned.is_empty()` did for the
-            // whole batch at once).
-            let mut ingest_boot = |chunk: Vec<ScannedFile>| {
-                if let Ok(mut core) = state.lock_timed() {
-                    core.ingest_scanned(chunk);
-                    durable.mark_dirty();
-                }
-            };
-            let (scanned, sweep) = tailer.sweep(&env, crate::now_ms(), Some(&mut ingest_boot));
-            // The flush marked each chunk dirty; the returned remainder is ingested below and
-            // must be marked too (old semantics: one mark for the whole batch).
+            // and drops it. On a warm boot the residual is the final partial batch; on a cold boot it is
+            // only the OpenCode DB rows. TRDD-A2KNXCNH: every
+            // chunk goes through `ingest_chunk`, which puts its cards, marks both sidecars dirty
+            // and THEN appends that chunk's read positions — a boot sweep killed partway resumes
+            // from the last persisted chunk instead of re-reading the whole corpus.
+            let mut ingest_boot = |chunk: Vec<ScannedFile>| durable.ingest_chunk(&state, chunk);
+            // WHY BOOT_SWEEP_CHUNK and not SCAN_CHUNK (TRDD-735Q3JF4 inc 3): smaller saves cut the committed
+            // memory and the longest lock hold at the save step (see the constant's doc for numbers).
+            let (scanned, sweep) = tailer.sweep_with_flush(&env, crate::now_ms(), Some(&mut ingest_boot), BOOT_SWEEP_CHUNK);
+            // The remainder takes the same path, BEFORE the lock below: `ingest_chunk` takes the
+            // state lock itself, and std Mutex is not reentrant.
             if !scanned.is_empty() {
-                durable.mark_dirty();
+                durable.ingest_chunk(&state, scanned);
             }
+            // TRDD-2HRA270Y: closes the boot-sweep window (sweep_with_flush + remainder ingest), taken
+            // before the state lock below; with `sweeper_restore_done` it splits the sweeper thread boot.
+            static BOOT_SWEEP_DONE: std::sync::Once = std::sync::Once::new();
+            BOOT_SWEEP_DONE.call_once(|| crate::rss_guard::log_boot_phase("sweeper_boot_sweep_done", None));
             {
-                let mut st = state.lock_timed().expect("core state");
+                let mut st = state.lock_timed();
                 st.log_scan.add(&sweep);
-                st.ingest_scanned(scanned);
                 st.sweeper = Some(SweeperControl { tx });
             }
             let _ = boot_tx.send(Ok(BootReport {
@@ -1481,13 +1639,19 @@ pub fn start_sweeper(
                 watch_failed: watch_failed.len(),
             }));
             // TRDD-RVKQDLRD: this thread DELIBERATELY stays at normal priority (no background QoS).
-            // The steady-state loop does NOT always take the state lock in short chunks: sweep
-            // ingestion is chunked (SCAN_CHUNK per lock) and the 1h backfill is bounded (<=200
-            // cards per lock), but `durable.tick` -> `save_cards` calls
-            // `st.cards.persist_records()` UNDER the state lock: a `SELECT * FROM cards` plus a
-            // JSON parse of every card, a full-corpus hold. At background QoS that hold would be
+            // Most of its lock holds are short (sweep ingestion is chunked, SCAN_CHUNK per lock;
+            // the 1h backfill is bounded, <=200 cards per lock), but each non-empty ingest batch
+            // (ingest_scanned returns early on an empty one), once the corpus exceeds the hot set
+            // (demote_cold returns early below it), ends in demote_cold's keys-only candidate query
+            // plus, per demoted card, one primary-key fetch and UPDATE, under the lock
+            // (TRDD-KMF02UEX); a forced 30-card pass (hot_cards 1) took 0.58-1.64 s on scratch
+            // clones (cold, no lock, timer including the connection open; the upper figure on a
+            // synthetic regrowth), almost all of it per-card fetch and UPDATE (TRDD-074C0DK8); the
+            // hold under the real lock is unmeasured. At background QoS that hold would be
             // preempted while request threads wait on the lock (priority inversion), so lowering
-            // this thread would make requests slower, not the machine quieter.
+            // this thread would make requests slower, not the machine quieter. Since
+            // DA0GN1CS the periodic save no longer adds a full-corpus scan under the lock;
+            // re-decide this under RVKQDLRD.
             let backstop = if watch_attached > 0 { FULL_RESCAN } else { poll_interval };
             let mut next_full = Instant::now() + backstop;
             let mut pending: Vec<PathBuf> = Vec::new();
@@ -1616,25 +1780,27 @@ pub fn start_sweeper(
                     pending.clear();
                     needs_full = false;
                     next_full = Instant::now() + backstop;
-                    let mut ingest_loop = |chunk: Vec<ScannedFile>| {
-                        if let Ok(mut core) = state.lock_timed() {
-                            core.ingest_scanned(chunk);
-                            // A flushed chunk carries new offsets: mark the sidecars dirty here,
-                            // not only for the returned remainder below.
-                            durable.mark_dirty();
-                        }
-                    };
+                    // TRDD-A2KNXCNH: each flushed chunk goes through `ingest_chunk`, which puts its
+                    // cards and THEN appends its read positions, so a sweep killed partway resumes
+                    // from the last chunk instead of re-reading everything.
+                    let mut ingest_loop = |chunk: Vec<ScannedFile>| durable.ingest_chunk(&state, chunk);
+                    // WHY plain sweep() (SCAN_CHUNK) and not BOOT_SWEEP_CHUNK: the periodic re-scan was never
+                    // measured at the smaller save size (TRDD-735Q3JF4 inc 3).
                     let (scanned, sweep) = tailer.sweep(&env, crate::now_ms(), Some(&mut ingest_loop));
+                    // The full sweep's remainder takes the same path. WHY here and not in the
+                    // post-sweep block below: that block holds the state lock, and `ingest_chunk`
+                    // takes it itself (std Mutex is not reentrant). Nothing is returned, so the
+                    // block below only records the stats for a full sweep.
                     if !scanned.is_empty() {
-                        durable.mark_dirty();
+                        durable.ingest_chunk(&state, scanned);
                     }
-                    (scanned, sweep)
+                    (Vec::new(), sweep)
                 } else {
                     let paths = std::mem::take(&mut pending);
                     tailer.sweep_paths(&env, &paths, crate::now_ms())
                 };
                 {
-                    let mut st = state.lock_timed().expect("core state");
+                    let mut st = state.lock_timed();
                     st.log_scan.add(&sweep);
                     if !scanned.is_empty() {
                         durable.mark_dirty();
@@ -1645,7 +1811,7 @@ pub fn start_sweeper(
                 // ingested just above): the corpus is whole again, so the next boot may reuse it.
                 if clear_pending && full_sweep {
                     clear_pending = false;
-                    state.lock_timed().expect("core state").cards.finish_clear();
+                    state.lock_timed().cards.finish_clear();
                 }
                 durable.tick(&tailer, &state, false);
             }
@@ -1680,6 +1846,58 @@ pub fn strip_timeline_value(card: &mut Map<String, Value>) {
 mod sweeper_backstop_tests {
     use super::should_full_sweep;
     use std::time::{Duration, Instant};
+
+    /// The pre-streaming whole-file implementation, kept verbatim as the oracle (TRDD-735Q3JF4).
+    fn old_read_lines_from(path: &std::path::Path, from: u64) -> std::io::Result<(Vec<Vec<u8>>, u64)> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(path)?;
+        file.seek(SeekFrom::Start(from))?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let Some(last_nl) = buf.iter().rposition(|b| *b == b'\n') else { return Ok((Vec::new(), from)) };
+        let lines = buf[..last_nl].split(|b| *b == b'\n').filter(|l| !l.iter().all(u8::is_ascii_whitespace)).map(<[u8]>::to_vec).collect();
+        Ok((lines, from + last_nl as u64 + 1))
+    }
+
+    /// The streaming read must yield the same lines and the same consumed offset as the whole-file oracle.
+    #[test]
+    fn streaming_read_lines_from_matches_the_whole_file_oracle() {
+        let mut long = vec![b'x'; 200_000];
+        long.extend_from_slice(b"\npartial");
+        let mut partial_tail = b"a\n".to_vec();
+        partial_tail.extend(vec![b'y'; 100_000]);
+        let mut boundary = vec![b'z'; 65_535];
+        boundary.extend_from_slice(b"\nnext\n");
+        let cases: Vec<(&str, Vec<u8>, u64)> = vec![
+            ("empty", vec![], 0),
+            ("no newline", b"abc".to_vec(), 0),
+            ("one complete line", b"{\"a\":1}\n".to_vec(), 0),
+            ("trailing partial", b"one\ntwo\npart".to_vec(), 0),
+            ("blank lines", b"\n\n".to_vec(), 0),
+            ("whitespace-only line", b"a\n  \t\nb\n".to_vec(), 0),
+            ("crlf", b"a\r\nb\r\n".to_vec(), 0),
+            ("lone crlf", b"\r\n".to_vec(), 0),
+            ("invalid utf8", b"a\xff\xfe\nb\n".to_vec(), 0),
+            ("from mid-line", b"abcdef\nghi\njk".to_vec(), 3),
+            ("from == len", b"abc\ndef\n".to_vec(), 8),
+            ("line longer than buffer", long, 0),
+            ("partial tail longer than buffer", partial_tail, 0),
+            ("newline on the buffer boundary", boundary, 0),
+        ];
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("alcore-rlf-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (i, (name, bytes, from)) in cases.iter().enumerate() {
+            let p = dir.join(format!("case{i}.jsonl"));
+            std::fs::write(&p, bytes).unwrap();
+            let mut got: Vec<Vec<u8>> = Vec::new();
+            let off = super::read_lines_from(&p, *from, |l| got.push(l.to_vec())).unwrap();
+            let (want, want_off) = old_read_lines_from(&p, *from).unwrap();
+            assert_eq!(got, want, "lines differ for case {name}");
+            assert_eq!(off, want_off, "offset differs for case {name}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// TRDD-ORGJ0E3G follow-up: the backstop must fire exactly once it is due, and stay quiet
     /// both before the deadline and after being re-armed to a later deadline — the loop re-arms

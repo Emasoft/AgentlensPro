@@ -1,0 +1,31 @@
+---
+name: hook-install-and-timeouts
+description: "how do I install or change hook registration / never hand-edit settings.json hooks / --install-hooks safeConfigEdit transaction / hook config change needs a session restart / which timeout does setup write into settings.json / hook timeout 30 s / hooks often hit the timeout / hook timed out warning in the terminal / review-gate timeout / why was the 10 s ceiling replaced / AGENTLENS_HOOK_TIMEOUT default / AGENTLENS_GATE_TIMEOUT default / removes dead claude-spyglass entries / preserves other tools hooks / hookInstall.ts matcher timeout / gate fails open under load / silently dropped capture event"
+ocd: 2026-07-10
+lmd: 2026-10-14
+metadata:
+  node_type: memory
+  type: project
+  tier: component
+publish-globally: false
+---
+
+# Hook installation and timeouts
+
+^DJISEOQJ [desc:"how to install/change hook registration: only via --install-hooks (safeConfigEdit transaction); never hand-edit settings.json; needs a session restart to take effect", keywords:"how_to_install_hooks never_hand_edit_settings_json safeconfigedit_transaction_for_hooks hook_config_change_needs_session_restart removes_dead_claude_spyglass_entries preserves_other_tools_hooks", ocd:2026-07-10, lmd:2026-09-05]
+**How to apply:** install/replace via `--install-hooks` ONLY (safeConfigEdit transaction;
+preserves other tools' hooks; removes dead claude-spyglass entries); never hand-edit
+settings.json. Hook config changes need a session restart.
+
+## Superseded
+
+^ATOM-5WTK-6YPU [desc: "Hook timeouts doubled 2026-09-05 (USER order, TRDD-GXKRBK1Q, commit 52155adf): settings.json ceilings 10s lifecycle/gate/supervisor, 20s review-gate; live sessions need setup + restart", keywords: hook_timeout hooks_often_hit_the_timeout doubled_hook_timeouts settings.json_timeout_10 review-gate_timeout_20 AGENTLENS_HOOK_TIMEOUT_default AGENTLENS_GATE_TIMEOUT_default gate_fails_open_under_load silently_dropped_capture_event hook_timed_out_warning_in_terminal hookInstall.ts_matcher_timeout relax_the_timeouts_of_all_hooks, type: project, trdd: TRDD-GXKRBK1Q, ocd: 2026-09-05, lmd: 2026-09-05, status:superseded, superseded-by:ATOM-6OC6-575F]
+**Status 2026-09-05 16:05: committed in `52155adf`; `agentlenspro setup --yes` converged the owner machine at 16:05 — JSON read-back: 21 agentlenspro entries at 10/10/20/10 (15 hook, 2 gate, 2 review-gate, 2 supervisor), the one foreign 30 s hook untouched; the installer asks for a session restart to pick the change up.** The `timeout` each installer matcher writes into `~/.claude/settings.json` (`src/cli/hookInstall.ts`): lifecycle forwarder (async) 10 s, burn gate (sync) 10 s, review gate (sync, local disk only) 20 s, review supervisor 10 s — doubled from 5/5/10/5 (TRDD-GXKRBK1Q, USER: "relax the timeouts of all hooks.. they must be doubled"), after the 2026-08-14 raise (forwarder 2→5 s, gate 3→5 s) when the owner's machine measured load-avg 130+ and an 800 ms TCP connect starved. The hooks' OWN network budgets must sit inside those ceilings and doubled with them: `hookHandlers.ts` `AGENTLENS_HOOK_TIMEOUT` default 2 s (was 1), `AGENTLENS_GATE_TIMEOUT` default 4 s (was 2); `setup.ts` verify-exec env 4/4 (was 2/2). Why: every hit on the ceiling is a silently dropped capture event or a sync gate FAILING OPEN; the owner's machine measured load-avg 16–26 on 2026-09-05 (15-min average 164 at 15:56). New values reach a machine only through `agentlenspro setup --yes` / `--install-hooks` (safeConfigEdit). The installer identifies its own entries by COMMAND (`isOurHookCommand(h.command)`, `hookInstall.ts:216`), never by timeout, so old 5 s entries are stripped and rewritten while foreign hooks survive. Read back with a JSON parse of settings.json, never by eye. [^1]
+
+## Governed by
+
+- [[hook-events-pipeline]] — the hook pipeline overview this page details (what is hooked, what is deliberately not).
+
+## Notes and lessons learned
+
+[^1]: [id: ATOM-6OC6-575F, status: valid, supersedes: ATOM-5WTK-6YPU, keywords: "hook_timeout_30 hook_ceiling_30_seconds HOOK_TIMEOUT_SEC settings.json_timeout_30 which_timeout_does_setup_write hook_timed_out_warning review-gate_timeout hooks_timeout_doubled_again installer_hook_timeout_value agentlenspro_hook_timeout", ocd: 2026-09-08, lmd: 2026-09-08] DO NOT quote the 10 s lifecycle/gate/supervisor and 20 s review-gate hook ceilings, BECAUSE the USER ordered a 30 s ceiling on every AgentlensPro hook entry on 2026-09-08 (TRDD-B07NR7ZI, commit a2303f91): one exported constant HOOK_TIMEOUT_SEC = 30 in src/cli/hookInstall.ts drives all four matcher builders and src/test/cliMatchers.test.ts pins it. DO read HOOK_TIMEOUT_SEC for the ceiling; the inner budgets AGENTLENS_HOOK_TIMEOUT 2 s and AGENTLENS_GATE_TIMEOUT 4 s did not change. SUPERSEDED BODY: **Status 2026-09-05 16:05: committed in `52155adf`; `agentlenspro setup --yes` converged the owner machine at 16:05 — JSON read-back: 21 agentlenspro entries at 10/10/20/10 (15 hook, 2 gate, 2 review-gate, 2 supervisor), the one foreign 30 s hook untouched; the installer asks for a session restart to pick the change up.** The `timeout` each installer matcher writes into `~/.claude/settings.json` (`src/cli/hookInstall.ts`): lifecycle forwarder (async) 10 s, burn gate (sync) 10 s, review gate (sync, local disk only) 20 s, review supervisor 10 s — doubled from 5/5/10/5 (TRDD-GXKRBK1Q, USER: "relax the timeouts of all hooks.. they must be doubled"), after the 2026-08-14 raise (forwarder 2→5 s, gate 3→5 s) when the owner's machine measured load-avg 130+ and an 800 ms TCP connect starved. The hooks' OWN network budgets must sit inside those ceilings and doubled with them: `hookHandlers.ts` `AGENTLENS_HOOK_TIMEOUT` default 2 s (was 1), `AGENTLENS_GATE_TIMEOUT` default 4 s (was 2); `setup.ts` verify-exec env 4/4 (was 2/2). Why: every hit on the ceiling is a silently dropped capture event or a sync gate FAILING OPEN; the owner's machine measured load-avg 16–26 on 2026-09-05 (15-min average 164 at 15:56). New values reach a machine only through `agentlenspro setup --yes` / `--install-hooks` (safeConfigEdit). The installer identifies its own entries by COMMAND (`isOurHookCommand(h.command)`, `hookInstall.ts:216`), never by timeout, so old 5 s entries are stripped and rewritten while foreign hooks survive. Read back with a JSON parse of settings.json, never by eye.

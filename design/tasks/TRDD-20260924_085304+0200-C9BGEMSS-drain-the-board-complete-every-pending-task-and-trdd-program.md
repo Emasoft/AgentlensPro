@@ -1,9 +1,9 @@
 ---
 trdd-id: C9BGEMSS
 title: Drain the board, complete every pending task and TRDD (program 2026-09-24)
-column: dev
+column: human_review
 created: 2026-09-24T08:53:04+0200
-updated: 2026-09-24T11:06:38+0200
+updated: 2026-10-16T11:13:22+0200
 current-owner: Emasoft
 created-by: Emasoft
 task-type: infra
@@ -15,6 +15,7 @@ approved: true
 approval-judge: Emasoft
 approval-datetime: 2026-09-24T08:53:04+0200
 priority: high
+status: tasked
 ---
 
 # Drain the board, complete every pending task and TRDD (program 2026-09-24)
@@ -22,6 +23,7 @@ priority: high
 ## Approval log
 
 - 2026-09-24T08:53:04+0200 — MANDATE issued by Emasoft (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T11:13:22+0200 — column → human_review by main-agent@agentlenspro. owner decisions in its STATE are pending; row 15
 
 ## STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24T11:16:57+0200
 

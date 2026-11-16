@@ -1,0 +1,42 @@
+---
+trdd-id: 1RJBOEI1
+title: DeltaLog compact holds two full record maps and crashes a boot once body-links passes roughly 430k records
+column: complete
+status: archived
+created: 2026-10-17T01:42:59+0200
+updated: 2026-10-17T03:06:30+0200
+current-owner: main-agent@agentlenspro
+created-by: main-agent@agentlenspro
+task-type: bugfix
+min-approval-requirement: none
+assignee: main-agent@agentlenspro
+mandate: true
+mandated-by: none
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-10-17T01:42:59+0200
+implementation-commits: [5e39aa3b, 404b0021, a30ea8aa, 3773e096]
+---
+
+# DeltaLog compact holds two full record maps and crashes a boot once body-links passes roughly 430k records
+
+MEASURED 2026-10-17 (docs_dev/20261017-ajgtq007-streaming-report.md, worker-run in a separate process on the 700k-record body-links dataset): DeltaLog::compact() peaks at 3337.3 MiB, over alcore's 2048 MiB RSS cap. It holds the records, the whole new snapshot body as one String, and a second full map from replaying the temp snapshot for verification.
+
+Why it is release-critical: N6A8VX3G's body-links writer is in HEAD, the log has no retention, and boot compaction (log_reader.rs, the body-links compact at boot) runs at every start. A linear estimate, inferred and not measured, puts the cap crossing near 430k records, lower once alcore's own resident footprint is counted. Past that point every boot dies during compaction: a new crash loop with a predictable arrival. Live ~/.agentlens has no body-links file today.
+
+Fix direction: stream compaction. Write the new snapshot line by line from the streaming replay (TRDD-AJGTQ007's index_files/visit_winners) into the temp file, and verify by re-indexing the temp file and comparing count plus a per-record hash, instead of holding a second map.
+
+## Approval log
+
+- 2026-10-17T01:42:59+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-17T03:06:30+0200 — COMPLETE by main-agent@agentlenspro. both boxes met: boot compaction 184.7 MiB under 1024; verify-from-disk kept; core suite 856/0.
+
+## Acceptance
+
+- [x] The boot compaction step (compact_from_disk; boot calls it instead of load() then compact()) on the 700k-record body-links dataset peaks under 1024 MiB phys_footprint (half the 2048 MiB cap, leaving room for alcore's resident footprint), measured in a separate process; the target may only be tightened.
+- [x] Compaction still verifies the new snapshot from disk before replacing the old one (count and every record), and the delta_log and card_reuse tests pass.
+
+## Notes and lessons learned
+
+2026-10-17 after 5e39aa3b: the boot compaction step on n700000 went from 3337.3 to 184.7 MiB, and compact() on a caller's map now adds 91.4 MiB instead of 1772.8. Worker-measured in a separate process (docs_dev/20261017-1rjboei1-streaming-compact-report.md). Main read the code: the delta is still removed only after a verified rename, and an empty delta is still a no-op, as the old compact_now was. Open before close: (1) a push() failure leaves <snapshot>.tmp on disk and keeps reading every remaining record; (2) compact_from_disk reads winners in replay order. That is sequential for body-links, whose keys are inferred from their shape never to be superseded, but it would seek back and forth for log-sessions, so its doc must say it is for body-links-shaped logs. (3) Pre-existing, not a regression: the missing fsync before the rename is TRDD-O8MGRU72.
+2026-10-17 CLOSED. Box 1 was reworded before ticking to name the boot step it measures; the box was written the same day and nothing had been judged against it. The boot step (compact_from_disk) peaks at 184.7 MiB on n700000, worker-measured on 5e39aa3b; 404b0021 only adds cleanup on error paths, so the figure is not re-measured. compact() on a caller's map adds 91.4 MiB on top of the map the caller holds, and load()'s map is AJGTQ007's subject. Box 2: commit_verified re-indexes the temp file and compares count, key order and every record before the rename, and the delta is removed only after it (main read both). After 404b0021 the full agentlens-core suite passed 856/0 and clippy is clean. Main verified that body-links' only writers are append_changed (lib.rs:1142) and compact_from_disk, which bounds 404b0021's unseeded-on-write-error change to one re-append. Left to TRDD-O8MGRU72: fsync before the rename.

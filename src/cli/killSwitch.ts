@@ -4,8 +4,11 @@ import { dataDir } from './cliCore'
 import { NO_REVIVE_FILE } from '../dataDir'
 
 /**
- * The GLOBAL kill-switch — one flag file that disarms every AgentlensPro side-effect running inside
- * every Claude Code session on this machine (hooks, the burn-gate, server revive, spooling, cron).
+ * The GLOBAL kill-switch — one flag file that disarms AgentlensPro's side-effects inside every Claude Code
+ * session on this machine. Every AgentlensPro hook is OFF except the review gate and the review supervisor,
+ * which only read transcripts. Off: lifecycle capture (`agentlenspro hook`), the burn-gate and the image
+ * cache-guard (`agentlenspro gate`), server auto-revive, background ingestion, and status-line capture
+ * (kept only by `agentlenspro disable --keep-statusline`).
  *
  * WHY A FILE, AND WHY GLOBAL (this is the lesson of the 2026-07-14 SSD incident, TRDD-K3WDPR7M):
  *
@@ -31,9 +34,34 @@ import { NO_REVIVE_FILE } from '../dataDir'
  * checked on every single hook, so arming it is never slow to take effect.
  */
 
-/** Path of the global flag. Exported so `disable`/`enable`/`status` all agree on ONE location. */
-export function killSwitchPath(): string {
-  return path.join(dataDir(), 'DISABLED')
+/** Path of the global flag. Exported so `disable`/`enable`/`status` all agree on ONE location.
+ *  Every helper below takes an optional `dir`, defaulting to the env-resolved data dir. `setup` passes its own
+ *  ctx.dataDir, which can come from options rather than the env, so it checks the flags of the dir it is about to
+ *  start a server in (TRDD-TYOQA14F). */
+export function killSwitchPath(dir: string = dataDir()): string {
+  return path.join(dir, 'DISABLED')
+}
+
+/** Marker beside the kill-switch flag: while BOTH exist, status-line capture still appends to disk
+ *  (statuslineCapture.ts) — every other surface stays off.
+ *  WHY: owner request 2026-10-27, verbatim: "stop everything except the statusline data collection, so the
+ *  agentlenspro cli can still answer the basic questions about the session". */
+export function keepStatuslinePath(dir: string = dataDir()): string {
+  return path.join(dir, 'DISABLED-KEEP-STATUSLINE')
+}
+
+/** Is the disabled-but-keep-status-line marker present? Any stat error reads as absent: the failure
+ *  direction is then "no capture", i.e. the plain disabled state the operator already had. */
+export function keepStatuslineArmed(dir: string = dataDir()): boolean {
+  try { fs.statSync(keepStatuslinePath(dir)); return true } catch { return false }
+}
+
+/** Arm the keep-status-line marker. Idempotent. Returns its path. */
+export function armKeepStatusline(): string {
+  const p = keepStatuslinePath()
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  fs.writeFileSync(p, 'Status-line capture stays ON while AgentlensPro is disabled. Removed by `agentlenspro enable`.\n')
+  return p
 }
 
 /** Env var every server spawner stamps on the child, naming the PATH that started it. The server
@@ -49,8 +77,8 @@ export function killSwitchPath(): string {
 export const STARTED_BY_ENV = 'AGENTLENS_STARTED_BY'
 
 /** Path of the narrow server-revive brake (hooks may still spool; they just won't spawn a server). */
-export function noRevivePath(): string {
-  return path.join(dataDir(), NO_REVIVE_FILE)
+export function noRevivePath(dir: string = dataDir()): string {
+  return path.join(dir, NO_REVIVE_FILE)
 }
 
 /** Is the narrow revive brake armed? Checks NO_REVIVE ONLY — deliberately NOT the global DISABLED
@@ -75,17 +103,16 @@ export function noRevivePath(): string {
  *  hook failing open loses a spawn (missed capture); a start failing open mid-rewrite SPAWNS into
  *  the swap (corruption). Unreadable therefore means BRAKED. Proven on this machine: statSync
  *  throws EACCES on /var/root/x while existsSync returns false for the same path. */
-export function reviveBraked(): boolean {
-  try { fs.statSync(noRevivePath()); return true } catch (e) {
+export function reviveBraked(dir: string = dataDir()): boolean {
+  try { fs.statSync(noRevivePath(dir)); return true } catch (e) {
     return (e as NodeJS.ErrnoException).code !== 'ENOENT'
   }
 }
 
 /**
  * WHICH half of the global kill-switch is armed, or `null` if neither is. ONE definition shared by
- * `agentlensDisabled()` and the review gate's stderr line (`reviewGate.ts::runReviewGate`) — those
- * two used to each spell out `AGENTLENS_DISABLED === '1'` on their own, which is exactly the kind
- * of duplicated condition that drifts the moment one side changes and the other doesn't.
+ * `agentlensDisabled()` and `disabledNotice()` (`foreignTelemetry.ts`): the two cannot disagree about
+ * which half is armed, and the notice names the half that fired.
  *
  * `AGENTLENS_DISABLED=1` is honored too, for the cases where env DOES reach the process (tests,
  * a supervisor that spawns the server directly). The FILE is the one that reaches running agents.
@@ -98,9 +125,9 @@ export function reviveBraked(): boolean {
 let envHalfOverridden = false
 export function overrideKillSwitchEnv(on = true): void { envHalfOverridden = on }
 
-export function killSwitchHalf(): 'env' | 'file' | null {
+export function killSwitchHalf(dir: string = dataDir()): 'env' | 'file' | null {
   if (process.env.AGENTLENS_DISABLED === '1' && !envHalfOverridden) return 'env'
-  try { return fs.existsSync(killSwitchPath()) ? 'file' : null } catch { return null }
+  try { return fs.existsSync(killSwitchPath(dir)) ? 'file' : null } catch { return null }
 }
 
 /**
@@ -108,21 +135,26 @@ export function killSwitchHalf(): 'env' | 'file' | null {
  * any network call and any read of stdin — a disabled AgentlensPro must cost the host session
  * nothing at all, not even a blocked pipe.
  */
-export function agentlensDisabled(): boolean {
-  return killSwitchHalf() !== null
+export function agentlensDisabled(dir: string = dataDir()): boolean {
+  return killSwitchHalf(dir) !== null
 }
 
 /** Arm the global kill-switch. Idempotent. Returns the flag path. */
-export function armKillSwitch(reason?: string): string {
-  const p = killSwitchPath()
+export function armKillSwitch(reason?: string, dir: string = dataDir()): string {
+  // `dir` (TRDD-RBBEX59R): the arm and the check must hit the SAME file. setup's foreign check reads ctx.dataDir's flag,
+  // so the writer takes that dir too — on the env default it armed a different dir's flag than the one later checked.
+  const p = killSwitchPath(dir)
   fs.mkdirSync(path.dirname(p), { recursive: true })
   // The body is a human note, never parsed — an operator who finds this file months later must be
   // able to tell WHY it is there and how to undo it without reading our source.
   fs.writeFileSync(p, [
     `AgentlensPro is DISABLED.`,
     ``,
-    `Every hook, the burn-gate, server auto-revive and all background ingestion are OFF while`,
-    `this file exists. It takes effect on the NEXT hook fire in EVERY running Claude session —`,
+    `Every AgentlensPro hook is OFF while this file exists, except the review gate and the review`,
+    `supervisor, which only read transcripts. Off: lifecycle capture (agentlenspro hook), the burn-gate`,
+    `and the image cache-guard (agentlenspro gate), server auto-revive, background ingestion, and`,
+    `status-line capture (kept only by agentlenspro disable --keep-statusline).`,
+    `It takes effect on the NEXT hook fire in EVERY running Claude session —`,
     `no restart needed.`,
     ``,
     `Armed: ${new Date().toISOString()}`,
@@ -136,11 +168,23 @@ export function armKillSwitch(reason?: string): string {
 
 /** Disarm the global kill-switch. Idempotent — a missing flag is success, not an error. Any OTHER
  *  unlink failure (EACCES, EPERM, EBUSY) is thrown: swallowing it let `agentlenspro enable` print
- *  "now ENABLED" while the flag stayed on disk and every hook kept no-op'ing. */
-export function disarmKillSwitch(): boolean {
-  const p = killSwitchPath()
-  try { fs.unlinkSync(p); return true } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
-    throw e
+ *  "now ENABLED" while the flag stayed on disk and the hooks kept no-op'ing. */
+export function disarmKillSwitch(dir: string = dataDir()): boolean {
+  // `dir` (TRDD-RBBEX59R): removal must hit the file the foreign check read (ctx.dataDir), never the env default's flag,
+  // and the keep-status-line marker beside it in that same dir.
+  const p = killSwitchPath(dir)
+  // The FLAG goes first. A marker that cannot be deleted still throws, but only after the flag is already
+  // gone: AgentlensPro is left enabled (the marker is inert without the flag), not disabled with the flag
+  // still on disk. The throw still reaches `enable`, which stops before restoring the parked skills.
+  let existed = true
+  try { fs.unlinkSync(p) } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+    existed = false
   }
+  // The keep-status-line marker only means something beside the flag (owner request 2026-10-27), so
+  // it goes with it: a stale marker would resurrect status-line-only capture at the next `disable`.
+  try { fs.unlinkSync(keepStatuslinePath(dir)) } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+  }
+  return existed
 }

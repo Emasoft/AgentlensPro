@@ -1,0 +1,118 @@
+---
+trdd-id: YGEV6QDD
+title: The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
+column: complete
+created: 2026-09-08T22:41:51+0200
+updated: 2026-10-16T21:34:59+0200
+current-owner: main
+task-type: bugfix
+min-approval-requirement: none
+priority: high
+severity: high
+blocked-by: []
+npt: []
+eht: []
+implementation-commits: [e56795ae, 9830aefa]
+project-id: agentlenspro
+scope: project
+labels: [test, ops, server, leak]
+relevant-rules: []
+status: archived
+---
+
+# The hot-path latency test revives a real alcore daemon on the canonical ports and never stops it
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-09 12:23
+
+Root cause, verified: `runSetup()`'s `hooks`/`final-test` steps exec the registered hook via
+`execRegisteredCommand` (`src/cli/setup.ts:285-311`), which spreads `process.env` (`:287`) and
+pins HOME/AGENTLENS_DATA_DIR/AGENTLENS_UI_URL but NOT UI_PORT/MCP_PORT/OTLP_PORT. On a failed
+POST the hook's `reviveDaemonDetached()` (`src/cli/hookHandlers.ts:138-232`, brake at `:166`)
+spawns `alcore serve` with `alcoreServeArgs()` reading ports from env → DEFAULT ports
+3000/4316/4318 with the FIXTURE's `--data-dir`. Measured leak: pid 68584 (`al-setup-OYnBpx`),
+started 22:43 during a full mocha run, still the only listener on 3000 at 11:32 on 2026-09-09,
+holding ~100 MB of REAL diverted capture (tracked for recovery in TRDD-81BW1CS9). This test
+file's own `baseEnv()` had the same hole (no NO_REVIVE) — pid 850 (`al-lat-wUTURr`, 123 MB) was
+an earlier squatter, origin unknown.
+
+Fix LANDED in `e56795ae` (per-suite brake + `src/test/helpers/noSurvivingServer.ts`, types/eslint/compile 0): `AGENTLENS_NO_REVIVE: '1'` added to the env in
+this test file + `src/test/setupVerb.test.ts`, plus a ps-snapshot tripwire
+`assertNoSurvivingServer`.
+
+Adversarial review (2026-09-09) accepted the brake and found:
+- the root-level `suiteSetup` brake in `setupVerb.test.ts` was RUN-scoped not file-scoped —
+  being fixed: convert to a per-suite brake + shared helper (worker in flight).
+- the tripwire only fails when the POST race actually fires — it is not a regression test of
+  the brake itself, only a symptom detector.
+- the product-side recommendation to add NO_REVIVE inside `execRegisteredCommand` was
+  REJECTED — on a real HOME a revive from the self-test is a working collector; the real
+  defect is the missing port pins (a real setup with custom ports would still revive on
+  default ports). That is a separate follow-up, not this card.
+
+Coordinator's acceptance re-run 2026-09-08 23:00: 15 passing / 8 failing, every failure
+`spawnSync /bin/sh ETIMEDOUT` in the `hooks` step at load 20–37; the worker's own idle run was
+23/23. Idle re-run 2026-09-09 12:07 (load 6.71 at the gate): 23 passing, exit 0; no `alcore serve`
+younger than the run afterwards. Load remains the INFERRED cause of the 23:00 timeouts — two
+variables changed (load, and the per-suite brake).
+- review 3 (2026-09-09) asked whether the "server probe distinguishes DOWN from UNRESPONSIVE"
+  suite (`setupVerb.test.ts:394`) needs the brake: VERIFIED no — it calls `runSetup` only with
+  `dryRun: true` (:413/:431/:444/:461) and both `execRegisteredCommand` sites sit behind
+  `if (ctx.dryRun) return` (`src/cli/setup.ts:567`, `:967`). `brakeReviveForThisSuite()` is the
+  first line of the other four suites (:135, :242, :314, :365).
+
+Third squatter in the 12:07 post-run snapshot (`reports_dev/unit8-ps-after.txt`): pid 2218,
+elapsed 3 d 8 h, a worktree agent's DEBUG build `.claude/worktrees/agent-…/rust-core/target/debug/alcore serve --data-dir …/al-shutdown-2141-…` — an alcore leaked by some test on an
+`al-shutdown-…` fixture; MECHANISM NOT ESTABLISHED (a test that spawns the server itself and
+skips teardown is at least as likely as the hook revive this card diagnoses). Carded as
+TRDD-4FLTDMHA. pid 850 (`al-lat-wUTURr`) was not among the three matches; whether it is alive
+was not checked. A bare `alcore serve` grep of the same snapshot (12:45) returns the same three
+lines, so no `alcore serve` line in the 12:07 snapshot is younger than the run (a
+renamed binary or a non-`serve` alcore would not match; the in-suite
+tripwire covers a child that exited before the snapshot).
+
+NEXT ACTION: pid 68584 is stopped only inside the 5JZQFVO8 deploy after the TRDD-81BW1CS9
+decision; pid 2218 belongs to TRDD-4FLTDMHA (origin untraced, out of this card's scope); then
+close this card.
+- 2026-10-16 CLOSED: boxes A1-A3 landed in 9830aefa (test code only: freePort() trio pinned behind the brake; assertNoSurvivingServer stops the server.pid pid only after a ps snapshot shows it carries this --data-dir; a run-level root hook in src/test/setup.js fails on any alcore serve with a --data-dir under os.tmpdir() outliving the suite, simulated leak shown failing). A4: full pnpm run test:unit at 9830aefa exit 0, 3176 passing, 14 pending, 0 failing, no isolation-guard line, no alcore before or after (the tree also carried an unrelated 1-line src/cli/hookInstall.ts change). Caveats accepted: A1 and A2 are met as written but no test fails if they are removed (the brake keeps the path they guard unreached); A3's regex misses a wrapper-launched or renamed binary, a space in the path, and DATA_DIR set without --data-dir (it fails toward missing a leak, never inventing one); its 2 s poll is not load-aware; R2 (no direct test that the brake blocks a revive) stays open as an accepted limitation. Follow-ups own their cards: 4EV3OJ19 (port pins in execRegisteredCommand), 4FLTDMHA, 81BW1CS9. Evidence: docs_dev/20261016-ygev6qdd-{verify,impl,a4}-report.md (gitignored).
+
+## Why
+
+`src/test/cliHotPathLatency.test.ts` exercises the CLI hot-path recipes against a temp HOME,
+but the `agentlenspro hook` recipe found no server registered for that HOME and revived one
+using the DEFAULT canonical ports (4318/3000/4316) instead of isolated ones — so the revived
+process collides with, and can be mistaken for, the real canonical instance, and nothing in
+the test stops it. Per `~/.claude/rules/plugin-tests-are-the-plugins-job.md`, "every resource
+opened during the suite is closed before the suite returns" is the test's job, not the
+harness's. Per this repo's CLAUDE.md: "EXACTLY ONE server may own a data directory — and
+changing ports does NOT isolate an instance" — an un-ported revive is exactly the scenario the
+project's own single-instance guard exists to prevent leaking into.
+
+## Evidence
+
+- `src/test/cliHotPathLatency.test.ts` (~line 139): creates temp HOME `al-lat-*`, runs CLI
+  hot-path recipes; one recipe (`agentlenspro hook`) triggers `hookHandlers.ts`'s
+  spool+revive path.
+- Revived process: `bin-native/darwin-arm64/alcore serve --data-dir <tmp>/.agentlens
+  --otlp-port 4318 --ui-port 3000 --mcp-port 4316` — the default canonical ports, detached
+  under launchd.
+- Measured 2026-09-08: pid 850 started 15:38, still serving at 22:30, phys_footprint 742 MB;
+  `/api/server-stats` reported `canonical:true` with the temp data dir; temp dir held 126 MB
+  of captured data. Every hook/OTEL capture 15:38–22:38 went there instead of `~/.agentlens`.
+- The test's `finally` only does `fs.rmSync` on the temp HOME — it never stops the server it
+  caused to spawn.
+- Orchestrator SIGTERMed pid 850 at 22:38:29 during an unrelated memory-verification task; the
+  leak was discovered only incidentally.
+
+## Acceptance
+
+- [x] The test pins explicit isolated ports (`MCP_PORT`/`UI_PORT`/`OTLP_PORT`) for its temp HOME
+      so any revive cannot bind the canonical ports.
+- [x] The test's `finally` reads `<tmp>/.agentlens/server.pid` (if present) and stops that pid,
+      regardless of which recipe caused the revive.
+- [x] A runner-level check confirms the process table after the suite has no `alcore` process
+      whose `--data-dir` is under `os.tmpdir()`.
+- [x] `pnpm run test:unit` (or the relevant mocha invocation) passes with the fix in place.
+
+## Approval log
+- 2026-10-16T21:34:59+0200 — COMPLETE by main-agent@agentlenspro. every transcribed promise met: A1-A3 in 9830aefa, A4 full suite 3176/14/0; N1 pids gone; R1 per-suite brake; R3 carded as 4EV3OJ19.
+

@@ -3,13 +3,15 @@ trdd-id: IXMB2JVD
 title: The post-publish verify races the CDN and reports a successful release as a failed workflow run
 column: testing
 created: 2026-08-29T14:19:15+0200
-updated: 2026-09-04T15:13:48+0200
+updated: 2026-10-16T17:03:38+0200
 current-owner: main-session
 task-type: infra
 scope: project
 project-id: agentlenspro
 relevant-rules: []
 implementation-commits: []
+blocked-by: []
+unblock-when: []
 ---
 
 # The post-publish verify races the CDN
@@ -97,3 +99,7 @@ still the right guard for its own step.
       is live, with the manual check command printed. The v2.33.1 run is the measured trigger: the
       old 10 × 20 s budget expired while the tarball still 404'd on the edge, and the run went red
       for a publish that had fully succeeded. Proven by the NEXT release's run (box 1).
+
+## Notes and lessons learned
+
+2026-10-16: stays in testing: its last box is post-release verification (the next release's publish-npm job green end to end), so it cannot block or be blocked by the release card TRDD-HSPUF5XH; it closes after that release.

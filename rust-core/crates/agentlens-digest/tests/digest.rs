@@ -30,7 +30,9 @@ struct Fx {
 
 impl Fx {
     fn new(name: &str) -> Fx {
-        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aldigest").join(name);
+        // temp_dir(), not env!("CARGO_TARGET_TMPDIR"): that path is baked in at COMPILE time, so it escapes the
+        // TMPDIR redirect of scripts/test-data-cap.sh and its 4 GB cap; temp_dir() follows the run dir.
+        let root = std::env::temp_dir().join("aldigest").join(name);
         if root.exists() {
             std::fs::remove_dir_all(&root).unwrap();
         }
@@ -1060,7 +1062,8 @@ fn b3_rehash_of_the_crate_manifest_is_a_byte_for_byte_no_op() {
 fn alspool() -> PathBuf {
     static BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     BIN.get_or_init(|| {
-        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("alspool-build");
+        // temp_dir(), not env!("CARGO_TARGET_TMPDIR") (compile-time path, escapes the cap): see Fx::new.
+        let target = std::env::temp_dir().join("alspool-build");
         let out = Command::new(std::env::var("CARGO").expect("cargo sets CARGO for test runs"))
             .args(["build", "--offline", "--quiet", "-p", "agentlens-spool", "--manifest-path"])
             .arg(crate_dir().join("../../Cargo.toml"))

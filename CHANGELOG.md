@@ -8,6 +8,54 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **get_account_status --all reads the owner's long-lived OAuth keys.** Set CLAUDE_CODE_LONG_OAUTH_KEY_01 through _10 to '<email>|<token>' in the environment. Each valid key is probed with a max_tokens 0 claude-fable-5-1 message (about 33 input tokens, no output), at most once per 10 minutes per key; that message is billed, and on an idle account it probably opens a new 5-hour window. The reply's anthropic-ratelimit-unified headers become the 5-hour, 7-day and Fable windows, filed under the account whose email matches and cross-checked against the 7-day reset within 60 seconds (refused on a mismatch). The usage endpoint answers 403 oauth_scope_insufficient to these keys, which is why this path exists. --no-refresh reads the files only. Tokens are read only from the environment and are never printed or stored (TRDD-HO94JMKD, increment 2).
+
+- **A long-lived key whose check failed inside the 10-minute wait now shows its error with no figures and when it was checked, instead of an old archived reading.** (TRDD-HO94JMKD)
+
+- **The burn tick's otel-bodies scan no longer holds the server state lock.** The first pass after boot held it for up to ~10 minutes (534-588 s measured), stalling every request that needed the state. The scan now runs in a background task off the lock and merges its findings in one short step. `/api/burn-risk` and MCP `check_burn_risk` report the last background scan rather than polling the bodies folder at call time, so a body file written just now shows up on the next scan, not the next call. `/api/burn-risk` gains a top-level `bodiesScan: { seeded, inProgress, lastMergeAgeMs }` field; `agentlenspro --risk` prints a `bodies feed:` line while the feed is unseeded or a scan is running (TRDD-H3D5ZBO1).
+
+- **`/api/server-stats` reports failed `.pass-state.json` saves.** `bodies.stateSaveFails` is the number of consecutive failed saves of the bodies pass state file (0 = healthy), and `bodies.lastStateSaveFailAt` is the epoch ms of the last failed save (0 = never). A full disk that also loses the one-time log line now shows here. The count resets on the next successful save; the timestamp does not (TRDD-5K0YLLEF).
+
+- **`server status` shows failed `.pass-state.json` saves.** When `/api/server-stats` reports `bodies.stateSaveFails` above zero, `agentlenspro server status` prints one `save:` line with the consecutive-failure count and the time of the last failure. A zero or absent count prints nothing (TRDD-LDWBRV9B).
+
+- **`cheap-worker` and `fast-worker` — two more shipped worker agents, both on Haiku 5.5.**
+  `cheap-worker` is `haiku[1m]` at `xhigh` effort (maximum depth on the smallest, cheapest model);
+  `fast-worker` is the same shape at `medium` (the quickest model, shallower reasoning). Both take the
+  same `Bash, Read, Write, Edit, Grep` surface, and their bodies teach the four binding CLIs — a worker
+  reads with `tldr`, locates with `jgrep`, triages with `qs.mjs` when quicksilver is installed, writes
+  with `fastedit`, and reports (then falls back to the built-in tools) when a CLI is missing.
+  The skills are not shipped, so the recipes also live in the bodies. Pick
+  `cheap-worker` when the prompt already carries every fact the task needs; pick `lean-worker`
+  (Haiku 5.5 at `high`) when the task needs real judgement; pick
+  `fast-worker` when the task is mechanical and latency matters more than the last bit of depth. Both
+  install into `~/.claude/agents/` alongside the existing three.
+- **The shipped worker bodies now teach the four binding CLIs.** `lean-worker`, `cheap-worker` and
+  `fast-worker` read a named path with `tldr body "<file>" --from A --to B -f text` instead of pulling a
+  whole file into context, and write with `fastedit` rather than `Edit`/`Write`/`sed -i`/a heredoc —
+  `fastedit` validates every write and keeps a backup, and `fastedit diff <file>` then confirms that
+  exactly the intended change landed. `micro-worker` gets the same `tldr body` reading recipe while
+  keeping its no-CLAUDE.md footprint (measured 2026-09-24, before the workers preloaded skills: first
+  request 61,119 -> 11,167 tokens).
+- **The shipped workers move to Haiku 5.5, set `permissionMode: auto`, and carry their tool commands inline instead of preloading skills.** `lean-worker`
+  (was `sonnet[1m]`/`medium`, now `haiku[1m]`/`high`), `micro-worker` (was `sonnet[1m]`, now
+  `haiku[1m]`, effort unchanged) and `agentlens-tldr-worker` (was `sonnet[1m]`/`low`, now
+  `haiku[1m]`/`medium`) leave Sonnet. Every shipped worker sets `permissionMode: auto`.
+  `micro-worker` gains `Grep` and keeps `omitClaudeMd: true`; `agentlens-tldr-worker` gains `Write`.
+  `cheap-worker`, `fast-worker`, `lean-worker` and `micro-worker` do not preload skills: each carries one
+  identical `## Tools` section with the basic `tldr`, `jgrep`, `qs.mjs`, `fastedit` and `graphify`
+  commands inline, as `agentlens-tldr-worker` already does. AgentlensPro does not ship those CLIs.
+  Basis: the Claude Code docs say a `skills:` preload injects the full skill content at spawn, and the
+  five `SKILL.md` files measured 2026-11-04 total 126,557 bytes (a documentation-sourced byte count, not
+  a measured per-spawn token count). `agentlens-tldr-worker`'s `tldr definition` example is corrected to `--symbol`/`--file` (the positional form exits 2).
+- **`sonnet-worker` and `smart-worker` now ship and install with agentlenspro.** `sonnet-worker` is `sonnet[1m]` at `high` effort (judgement tasks), `smart-worker` is `opus[1m]` at `medium`; both take the same `Bash, Read, Write, Edit, Grep` surface with `permissionMode: auto`. Neither preloads skills: each carries the same inline `## Tools` section as the other four workers, byte-identical (the shipped-agent test now checks all six).
+- **`js-test-writer` and `python-test-writer` now ship and install with agentlenspro.** Both are `opus[1m]` at `high` effort with large bodies (48.4 and 50.3 KB measured) read on every spawn, so spawn them for real test-writing work only. They preload no skills and carry the same inline `## Tools` section as the other workers, byte-identical (the shipped-agent test now checks all eight agents).
+- **A test pins the shipped-agent set.** Every file in `agents/` must be listed in `AGENT_NAMES` (so it
+  actually installs), its frontmatter `name:` must match its filename, and its body must not name a
+  sibling worker (a body that tells the model to dispatch a different worker is the defect this
+  catches). The `description:` is deliberately exempt from that last check — it is the field the parent
+  model reads to CHOOSE a worker, and "Identical shape to lean-worker…" is exactly the routing hint it
+  needs.
+
 - **Opt-in digest ingest path (off by default).** A second, typed ingestion path next to the existing
   stores, which stay the system of record. `alcore serve --ingest-manifest PATH --aldigest-bin PATH
   [--ingest-sources LIST]` makes `alcore` write each hook event, status-line sample, telemetry event and
@@ -40,6 +88,17 @@ All notable changes to AgentlensPro are documented here.
   when the capture carries it, falling back to span id and timestamp (TRDD-ZQQYRYBO I9, I12a).
 
 ### Changed
+
+- `call`/`batch` with a missing or malformed argument (or a batch member without a tool) now exit 64 instead of 1, and the check runs before the tool session opens, so an unreachable server no longer masks the usage error. The launch self-heal still runs first. A malformed JSON flag value is also refused with exit 64, after the schema lookup. (TRDD-HO94JMKD)
+
+- **The warm log sweep streams transcripts line by line instead of reading each changed file whole**, cutting about 850 MiB of reserved memory after a large boot sweep in a test build. No change to what is parsed (TRDD-735Q3JF4).
+
+- **The alcore boot summary log line now includes `flushes=`.** It counts the `ingest` calls made inside the boot sweep: on a warm boot those are the mid-sweep saves, now one every 200 changed files instead of every 2,000; on a first boot with no state, one per 2,000-file chunk, the last partial chunk included (TRDD-735Q3JF4).
+
+- **The RSS hard cap and the memory-pressure ladder now measure the mimalloc committed heap of alcore, not whole-process physical footprint.**
+  `AGENTLENS_RSS_HARD_CAP_MB` is charged only for mimalloc committed bytes, so DuckDB memory (system malloc, governed by the
+  DuckDB memory_limit setting) is no longer charged to the cap. The breach log line now leads with
+  `mimalloc commit N MB > cap M MB` and records footprint (RSS off macOS) as evidence.
 
 - **`UI_PORT` / `MCP_PORT` / `OTLP_PORT` values that are not plain decimal integers (for example `3e3`,
   `0x50`, `80.5`) are now rejected by the CLI**, as the server already rejected them, with a stderr
@@ -101,6 +160,84 @@ All notable changes to AgentlensPro are documented here.
 
 ### Fixed
 
+- **The review gate ignores the kill-switch now.** Setting the `DISABLED` flag file or `AGENTLENS_DISABLED=1` used to make `agentlenspro review-gate` allow every stop unreviewed, so no adversarial review was demanded while the switch was set. The gate has no side effects (it reads the transcript and prints to stdout), so the switch no longer reaches it. Its brake is now a sequence: `agentlenspro enable`, `agentlenspro --uninstall-hooks`, then `agentlenspro disable` again (a disabled AgentlensPro refuses `--uninstall-hooks`, and an enabled one re-registers its hooks on the next CLI launch). Removing the `review-gate` entries from `settings.json` by hand also works. Either way each running session keeps the hook until it restarts; the in-band exit is the gate's NO-REVIEW sentinel. (TRDD-8D26QVBC).
+
+- **The review gate self-exemption now requires the role marker on the first line of a non-fork agent brief.** A `ROLE` line buried in quoted text no longer exempts the agent, and a brief with `ROLE: MEASURE` first and `ROLE: REVIEW` later now resolves to measure (TRDD-8YM21R5X).
+
+- **Haiku 5.5 calls priced at zero are now priced.** Calls on claude-haiku-5-5 (Haiku 5.5 subagent sessions, including the [1m] alias) matched no rate-table key, so they were priced at $0 or reported as unpriced. The rate table now carries the entry with the two prompt-length tiers from the Anthropic pricing page: a call whose total input is over 100,000 tokens bills every bucket, output included, at the over-100,000 rates. (TRDD-KQ549VCQ)
+
+- **get_account_status --all review fixes.** A cached key row keeps its last check's verdict and date and says when its next check is allowed; the "Exception" sentence counts only readings a key actually took, and the archive warning names the rows that no working key refreshes; a corrupt key stamp names its file; the usage cache and cooldown files are written atomically; the usage-fetch lock reclaims a stale lock (older than three request timeouts) through the exclusive create and releases only its own lock. (TRDD-HO94JMKD)
+
+- **`get_account_status --all` now answers while AgentlensPro is disabled.** The plural form only reads files (the account-state timeline and the per-account usage archive), but the off-switch gate refused it with exit 69 like the server-only verbs. It now passes the gate and skips the launch self-heal, so it never writes settings; rows do not refresh while disabled. The singular `get_account_status` still needs the server and exits 69, and its disabled notice now points to `get_account_status --all` instead of only telling the reader to re-enable. Also fixed: the dispatcher rejected `--all` as an unknown flag (exit 64) since TRDD-PIB6T4RU (TRDD-HO94JMKD).
+
+- **A failed save of the bodies-pass state file is now reported instead of silently dropped (TRDD-ZR3OGSAV).**
+  `save_pass_state` discarded both the temp-file write error and the rename result, so a full disk or
+  a permission error lost stranded/skip names with no trace. It now returns the error and removes a
+  stale `.pass-state.json.tmp` after a failed rename. alcore logs `FAILED to persist <path>` on the
+  first failing tick, suppresses the repeats of the 60s chore (counting them), and logs one
+  `recovered after N failed saves` line on the next successful save; on a full disk that server.log
+  line may itself be lost. **alstore CLI contract change:** `alstore pass` still prints its result
+  JSON, then exits 3 when the state was not saved; `alstore unpark` exits 3 and prints no counts.
+  Exit 3 is new (2 stays reconstruct/verify errors); every in-repo caller already treats any non-zero
+  exit other than 75 as a failure.
+- **An unreadable pass state file is no longer read as empty, and alcore moves it aside instead of stopping (TRDD-FINMFYDE).**
+  `load_pass_state` treated a corrupt or unreadable `.pass-state.json` as empty sets, and `alstore unpark`
+  then saved those empty sets over the real file, destroying every persisted skip and stranded name. An
+  absent file still loads as empty; a present file that cannot be read or is not valid JSON is now an error.
+  alcore's bodies pass moves such a file aside to `.pass-state.json.corrupt-<unix_ms>`, logs one line naming
+  both paths and the cause, and rebuilds the state from empty sets; if the move fails it logs once and skips
+  that tick, so the unreadable file is never overwritten. It does this only on a tick with staged bodies,
+  because an idle tick never reads the state. **alstore CLI contract change:** `alstore pass` and
+  `alstore unpark` refuse before any ingest or delete when the state cannot be read: they print
+  `alstore: cannot read pass state` with the cause on stderr, print nothing on stdout, leave the file in place
+  and exit with the new code 4 (1, 2, 3, 64 and 75 keep their meanings). The CLI refuses instead of moving the
+  file aside because a person runs it and decides. The save now fsyncs the temp file and the directory (the
+  directory sync is skipped where the volume cannot sync a directory), so a power cut cannot leave a zero-byte
+  state under the real name.
+- **`api_calls.cost_usd` now prices 1h-tier cache writes at the 1h rate (TRDD-K4XQ7M2B).** The
+  forensics indexer (`forensics_scan.rs`, the live one; `src/forensicsIndex.ts` `apiCallParams` is its
+  TypeScript parity twin, not in the shipped bundle; imported only by tests, the parity generators and the unbundled `src/mcpServer.ts`) passed `0` as the 1h
+  cache-write argument, so every 1h write was priced at the 5m rate (1.25x input instead of 2x) while
+  the same row's `billable_weight` already used the measured tier split. It now passes the row's
+  `tier_1h_tokens`. **Numbers for 1h-heavy rows of Claude (Anthropic-priced) models go UP**, by up to x1.6 on the cache-write bucket (the
+  old figure was 37.5% low); flat-total rows (both tiers 0) and 5m-only rows are unchanged. **Cutover:**
+  a cost series spanning this version shows a step up that is an accounting correction, not a cost
+  increase. **Only rows indexed from this version on use the 1h rate; existing rows keep the old
+  value**: there is no rebuild command, and the indexer rewrites a row (keyed on `call_id`) only when
+  it re-scans that call's response body inside its bounded window. `cost_usd` and `billable_weight` now
+  read the same tier field; they can still disagree on a row whose tier split does not match its
+  cache-write total, which `cost_usd` reconciles and `billable_weight` does not (TRDD-M6SVB8UY).
+- **The burn tick and the scope pass stopped copying the whole corpus per session.** The live profile
+  put 14,071 of 14,071 samples in `composition_project_map` -> `IndexMap::get_index_of` ->
+  `_platform_memcmp`: the `sessionId -> project` map was rebuilt once per session, and the burn tick
+  deep-cloned the entire consumption-event corpus once per session, once more per account, and once
+  more per session status. The map is now built ONCE per scope pass, and the burn helpers borrow
+  (`&[&Value]`) instead of cloning. One burn-status pass over 40 sessions now allocates 385,015 B
+  against the old shape's 58,945,536 B — 153x less — and the scope-pass test is mutation-verified
+  (reinstating the per-session build fails it with 13 builds over 12 sessions). No client-visible
+  output changed: every string and every JSON shape is byte-identical, and the TS oracle parity test
+  still passes (TRDD-9VX3WTGU).
+- **The hook-spool drain's durability verification is an OFFSET SEEK, and the read volume is now
+  measured rather than asserted.** The Rust port had re-read the whole 69 MB day bucket and scanned
+  every line, once per spooled event; a drain tick over ~1,248 spooled events therefore read ~86 GB
+  and allocated ~86 GB of transient strings. It now seeks to the recorded byte offset and reads
+  exactly that many bytes. The verification also reports how many bytes it actually read, so the
+  read volume is a number the code produces instead of a claim about the code — a new test pads the
+  bucket past 4 MB and asserts the verification read exactly the appended line length. The
+  verify-before-delete rule is unchanged: the spool file is unlinked only after the verification
+  returns true, and every shortfall keeps it (TRDD-K3WDPR7M, TRDD-VIEFSSKZ).
+- **The store's CLI DuckDB sizing is bounded.** `alstore pass` sized its DuckDB from the machine's
+  resources, and one pass grew to 4.8 GB RSS. The CLI now sizes DuckDB to 1 GiB with 2 threads, and
+  an override is accepted only through `AGENTLENS_DUCKDB_MEMORY_LIMIT` /
+  `AGENTLENS_DUCKDB_THREADS` — a rejected override falls back to the bounded default with a message
+  on stderr, and stdout stays exactly one JSON line so the drain loop's parser is unaffected
+  (TRDD-CQ4652DQ).
+- **The deploy ships the Rust half.** `scripts/safe-deploy.sh` built only the JavaScript bundle, so a
+  deploy left 81 rust-core commits unshipped — the deployed `alcore` IS the server (the TypeScript
+  server was retired in 567fc5c2), so nothing in Rust reached the running binary. The script now
+  builds, stages, code-signs and verifies the Rust binary as well, and the verify compares the
+  running server's binary by INODE rather than by path. A Rust stage that fails says the Rust half
+  is SUSPECT instead of reporting a healthy deploy (TRDD-KRJNTSQH).
 - **Cache-risk causes are graded by the Claude Code version that ran them.** From 2.1.273 `/upgrade` and
   `/extra-usage` are no longer a cache risk and `/login`/`/logout` are `ambiguous`; from 2.1.267 plugin
   reload, plugin change and MCP toggle are `ambiguous`; from 2.1.260 an `/effort` change on Fable 5.1 is

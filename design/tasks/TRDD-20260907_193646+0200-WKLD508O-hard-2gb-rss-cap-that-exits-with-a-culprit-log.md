@@ -1,9 +1,9 @@
 ---
 trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
-column: dev
+column: human_review
 created: 2026-09-07T19:36:46+0200
-updated: 2026-09-25T05:34:07+0200
+updated: 2026-10-22T04:19:23+0200
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -19,6 +19,7 @@ scope: project
 labels: [rust, memory, alcore, guard]
 assignee: main
 created-by: main
+status: tasked
 ---
 
 # alcore exits with a culprit log rather than exceed a 2 GB memory cap
@@ -770,3 +771,12 @@ QUALIFIERS (2026-09-24): the 41-exit count above is grep -a -c over the whole ~/
 ## RSS-cap isolation evidence (2026-09-24)
 
 Isolated full-size runs (own DATA_DIR, real read-only HOME, distinct ports; reports/cc-alignment/20260924_191316+0200-backfill-rss-control.md, 20260924_181928+0200-1h-backfill.md) used build 86f4fa22, NOT HEAD (63f41d04): Run A (8849 flagged transcripts queued for the 1h backfill, fresh live copy, 34901 cards) hit the default 2048 MB cap at uptime 77s; Run C (restarted on already-backfilled data, 0 flagged, Run P's grown data: 35301 cards, delta log grew 19.7->35.8 MB) hit it at 182s; Run D (deployed a187815e, no 1h-backfill code at all) hit it at 335s — all three under concurrent load from other isolated runs and cargo builds. With the cap raised to 8192 MB (measurement-only) RSS reached 2.6-3.0 GB in every run, well above the 2048 MB default — this was NOT a plateau: Run B was still climbing at 2.93 GB when stopped, so steady-state RSS/footprint is unmeasured. Note the cap itself is keyed on phys_footprint while these isolated runs sampled RSS, a different counter (see STATE above).
+
+## Approval log
+
+- 2026-10-16T11:13:17+0200 — column → human_review by main-agent@agentlenspro. fix on main; the deploy needs the owner; row 6
+
+## Owner decisions
+
+2026-10-21 — USER chose, verbatim option: "Deploy it (Recommended)" — rebuild alcore from HEAD with the ad-hoc codesign, restart, and watch the culprit log. Main agent's plan note (not part of the user's decision): the deploy is bundled with the core-cap change.
+2026-10-22 04:14 — executed: commit 44bc67e1 (which carries the guard) deployed to bin-native with codesign (see TRDD-YH822LDI Deploy log). The guard was already live before this deploy: the observed canonical exits (8.9-17.9 s uptime, footprints 2.35-2.61 GB, culprit blocks in ~/.agentlens/rss-hard-cap.log) came from the Oct 21 03:21 bin-native build. 44bc67e1 had not yet run on canonical data when this line was written; its first canonical boot is the next revive. Making the collector stay under 2 GB is TRDD-2JOIAH2G.

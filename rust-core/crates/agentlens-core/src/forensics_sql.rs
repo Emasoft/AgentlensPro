@@ -23,7 +23,9 @@ use serde_json::{Map, Value};
 use crate::forensics_db::open_readonly_snapshot;
 use crate::summarize::helpers::{fmt_js_num, js_slice, js_to_fixed_str, utf16_len};
 
-const HARD_MAX_ROWS: f64 = 2000.0;
+/// Shared row ceiling. THIS view CLAMPS a caller limit to it; cache_turns_sql::run_preset_or_sql
+/// REJECTS an out-of-range limit instead (fail-fast, TRDD-GVA8TTJF m4). Each site owns its policy.
+pub(crate) const HARD_MAX_ROWS: f64 = 2000.0;
 /// Token-lean default (the TS lowered this from 200) — pass a bigger `limit` explicitly for more.
 const DEFAULT_ROWS: f64 = 50.0;
 /// One wide TEXT/JSON column (e.g. a diff summary) must not blow up the payload.

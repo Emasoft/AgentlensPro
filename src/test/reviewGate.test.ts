@@ -2,17 +2,21 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { Readable } from 'stream'
 import {
   scanTranscriptLines, decideGate, subagentExempt, JANITOR_AGENT_RE,
   isFloorPrompt, userPromptText, HEARTBEAT_PREFIX, INTERRUPT_PREFIX,
   demandText, mainBlockReason, subagentBlockReason, ARM_CAUSE_TEXT,
   REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, declaredRole, declaredRoleOwnTranscript,
   runMainGate, runReviewGate, agentCannotSpawn, declaredToolsHaveAgent,
-  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, workerReturnId, workerWriteDetail,
+  NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, workerReturnId, workerWriteDetail, workerDeclaredRole,
+  isTurnStart, readCurrentTurn, isCreditedFork, computeVerdict,
 } from '../cli/reviewGate'
-import { PROPOSAL_MARKER } from '../cli/reviewGateTriggers'
+import { PROPOSAL_MARKER, commandWriteReasons } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
 import { DELEGATE_DENY_REASON } from '../cli/delegateGate'
+import { MEASURE_HEADING, REVIEW_HEADING } from '../cli/reviewLoop'
+import { killSwitchHalf } from '../cli/killSwitch'
 
 // `agentlenspro review-gate` — pure decision-function tests (owner order 2026-09-15 rewrite: ONE
 // shared scan/decide pair, `scanTranscriptLines` / `decideGate`, replaces the separate main/subagent
@@ -134,13 +138,206 @@ suite('reviewGate — worker writes reach the main gate', () => {
     })
   })
 
-  test('a worker whose first user entry declares ROLE: MEASURE is a measurer, not a writer', () => {
+  // TRDD-QQ2XIIZ6 amendment A: a declared role relaxes ONLY unresolvable scratch targets, so a role worker's Edit of a
+  // real source file is reported like any other worker's (before, any `ROLE:` line anywhere skipped the whole worker).
+  test('a ROLE: MEASURE worker that edits a file outside the ephemeral dirs still reports it', () => {
     withWorkers((t, s) => {
       addWorker(s, 'agent-c', 'toolu_W3', 'fast-worker', [userStringLine('ROLE: MEASURE\nmeasure it'), assistantLine([editBlock])])
-      assert.strictEqual(workerWriteDetail(t, 'toolu_W3', CWD), null)
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W3', CWD), 'fast-worker: Edit a.ts')
     })
   })
 
+  // The MEASURED shape of a fork's first user entry (TRDD-QQ2XIIZ6, 2026-10-14): a tool_result block, then ONE text
+  // block holding the fork boilerplate and, after it, the parent's prompt behind `Your directive: `. Ids are fake.
+  const forkEntryContent = (directive: string, toolResult: unknown = 'Forked.'): unknown[] => [
+    { type: 'tool_result', tool_use_id: 'toolu_aaaaaaaa', content: toolResult },
+    { type: 'text', text: `<fork-boilerplate>\nYou are a fork. Do not spawn subagents. Report once and stop.\n</fork-boilerplate>\n\nYour directive: ${directive}` },
+  ]
+  const forkEntryLine = (directive: string): string => JSON.stringify({ type: 'user', message: { role: 'user', content: forkEntryContent(directive) } })
+
+  test('workerDeclaredRole reads the measured fork shape [tool_result, text], for which userPromptText returns empty', () => {
+    assert.strictEqual(userPromptText(forkEntryContent('ROLE: MEASURE\n1. run x')), '', 'the old read: why the exemption never ran')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: MEASURE\n1. run x')), 'measure')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: REVIEW \r\nreview it')), 'review')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: INVESTIGATE\nfind it')), 'investigate')
+    assert.strictEqual(workerDeclaredRole('\nROLE: MEASURE\nmeasure it'), 'measure', 'a plain string prompt: its first non-blank line')
+    assert.strictEqual(workerDeclaredRole([{ type: 'text', text: 'ROLE: REVIEW\nreview it' }]), 'review', 'a plain text-block prompt')
+  })
+
+  test("workerDeclaredRole: a ROLE line anywhere but the directive line or a plain prompt's first line never counts", () => {
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('Implement the fix.\nThe reviewer prompt reads:\nROLE: MEASURE\n')), null, 'quoted later in a fork directive')
+    assert.strictEqual(workerDeclaredRole('do the work\nstep 1\nstep 2\nstep 3\nROLE: MEASURE\n'), null, 'bare on line 5 of a fresh worker prompt')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('Act as ROLE: MEASURE and settle it')), null, 'a directive starting with other text')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: IMPLEMENT the fix')), null, 'a role outside MEASURE|REVIEW|INVESTIGATE')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('do it', 'Your directive: ROLE: MEASURE')), null, 'a tool_result block is never read')
+  })
+
+  // Review of df8bfc70: the investigation forks' real directive line carries text after the role word, which the
+  // whole-line match missed, so their scratch writes still armed the gate. A role here relaxes the scan only.
+  test('workerDeclaredRole accepts text after the role word, but not a longer word', () => {
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: INVESTIGATE (read-only; may run read-only commands)\n1. find it')), 'investigate', 'the real investigation-fork line')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: MEASURE the assumptions below')), 'measure', 'prose after the marker')
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: MEASUREMENT of x')), null, 'a longer word is not the marker')
+    assert.strictEqual(workerDeclaredRole('ROLE: REVIEWER\nreview it'), null, 'a longer word is not the marker')
+  })
+
+  test('workerDeclaredRole refuses a hyphenated role word (`ROLE: REVIEW-ish`), which a plain word boundary let through', () => {
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: REVIEW-ish of the draft')), null)
+    assert.strictEqual(workerDeclaredRole('ROLE: MEASURE-and-fix\nfix it'), null)
+    assert.strictEqual(workerDeclaredRole(forkEntryContent('ROLE: REVIEW: the draft')), 'review', 'punctuation after the word still declares it')
+  })
+  test("a fork whose directive line is `ROLE: INVESTIGATE (…)` gets the role's scratch relaxation", () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-w', 'toolu_W23', 'fork', [forkEntryLine('ROLE: INVESTIGATE (read-only; may run read-only commands)\n1. find it'), assistantLine([
+        bashBlock('SP=/private/tmp/sp; for i in 1 2; do echo r > $SP/x-$i.txt; done'),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W23', CWD), null)
+    })
+  })
+
+  test('control: the same fork with NO role line demands review for the same scratch writes', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-y', 'toolu_W25', 'fork', [forkEntryLine('read-only; may run read-only commands\n1. find it'), assistantLine([
+        bashBlock('SP=/private/tmp/sp; for i in 1 2; do echo r > $SP/x-$i.txt; done'),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W25', CWD), 'fork: redirect into $SP/x-$i.txt')
+    })
+  })
+  test("amendment A: a role fork's UNRESOLVABLE writes inside an ephemeral dir (a loop variable, a $(date) stamp) demand no review", () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-t', 'toolu_W20', 'fork', [forkEntryLine('ROLE: MEASURE\n1. measure it'), assistantLine([
+        bashBlock('SP=/private/tmp/sp; for i in 1 2; do echo r > $SP/x-$i.txt; done'),
+        bashBlock('fastedit create docs_dev/$(date +%s)-r.md --content x'),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W20', CWD), null)
+    })
+  })
+
+  test('amendment A: the same writes from a worker with NO declared role still demand review', () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-u', 'toolu_W21', 'fork', [forkEntryLine('measure it\nROLE: MEASURE'), assistantLine([
+        bashBlock('SP=/private/tmp/sp; for i in 1 2; do echo r > $SP/x-$i.txt; done'),
+        bashBlock('fastedit create docs_dev/$(date +%s)-r.md --content x'),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W21', CWD), 'fork: redirect into $SP/x-$i.txt, fastedit create')
+    })
+  })
+
+  test("amendment A: a role fork's RESOLVABLE write outside the ephemeral dirs still demands review", () => {
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-v', 'toolu_W22', 'fork', [forkEntryLine('ROLE: MEASURE\n1. measure it'), assistantLine([bashBlock('echo x > src/a.ts')])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W22', CWD), 'fork: redirect into src/a.ts')
+    })
+  })
+
+  test("amendment A: a role's dynamic target that can leave the ephemeral dir, or has none, still arms", () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('fastedit create docs_dev/$(date +%s)-r.md --content x'), [], 'control: the stamp itself passes')
+    assert.deepStrictEqual(role('fastedit create docs_dev/$(printf ../src)/a.ts --content x'), ['fastedit create'], 'a `/` inside the cut substitution')
+    assert.deepStrictEqual(role('echo x > docs_dev/$(printf ..)/src/a.ts'), ['redirect into docs_dev/$'], 'a `/` after the cut substitution')
+    assert.deepStrictEqual(role('echo x > "docs_dev/$(printf ..)/src/a.ts"'), ['redirect into docs_dev/$(printf ..)/src/a.ts'], 'quoted, so seen whole')
+    assert.deepStrictEqual(role('echo x > $OUT'), ['redirect into $OUT'], 'no static directory at all')
+    assert.deepStrictEqual(role('echo x > src/x-$i.ts'), ['redirect into src/x-$i.ts'], 'a static directory that is not ephemeral')
+  })
+
+  // Review of 668fc421: the danger in a role's dynamic target is its CONTENT, not its syntax. A backslash escape
+  // spells `../` without writing it (`'..\57src\57a.ts'`, `'\56\56\57src\57a.ts'`), in `$(…)` and backticks alike.
+  test('a role target whose quoted `$(…)` spells `..` through a backslash escape arms', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role(`echo x > "reports/$(printf '..\\57src\\57a.ts')"`), [`redirect into reports/$(printf '..\\57src\\57a.ts')`])
+    assert.deepStrictEqual(role(`echo x > "reports/$(printf '\\56\\56\\57src\\57a.ts')"`), [`redirect into reports/$(printf '\\56\\56\\57src\\57a.ts')`])
+  })
+
+  test('the same escapes in a quoted backtick span arm too', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role(`echo x > "reports/\`printf '..\\57src\\57a.ts'\`"`), [`redirect into reports/\`printf '..\\57src\\57a.ts'\``])
+    assert.deepStrictEqual(role(`echo x > "reports/\`printf '\\56\\56\\57src\\57a.ts'\`"`), [`redirect into reports/\`printf '\\56\\56\\57src\\57a.ts'\``])
+  })
+
+  test('a backtick stamp in a role target passes like the same `$(date +%s)` stamp', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('echo x > "docs_dev/`date +%s`-r.md"'), [])
+    assert.deepStrictEqual(role('echo x > "docs_dev/$(date +%s)-r.md"'), [], 'control: the `$(…)` stamp')
+  })
+
+  // Round-2 review of d476914a: `rm` refuses `..` as an operand's last component, so the case that writes into the
+  // project root is `cp` / `mv` into `reports/$(printf ..)`. `tar -C` would too, but the gate classifies no `tar`.
+  test('a cut `$(…)` whose hidden text spells `..` arms for a role: `cp x reports/$(printf ..)` writes into the project root', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('cp x reports/$(printf ..)'), ['cp reports/$'])
+    assert.deepStrictEqual(role('mv x docs_dev/$(printf ..)'), ['mv docs_dev/$'])
+    assert.deepStrictEqual(role('echo x > docs_dev/$(printf ..)-x'), ['redirect into docs_dev/$'], '`..` with a word tail')
+    assert.deepStrictEqual(role('rm -rf reports/$(printf ..)'), ['rm reports/$'], 'pinned: harmless today, `rm` refuses a trailing `..`')
+    assert.deepStrictEqual(role('cp x reports/$(date +%s)'), [], 'control: a stamp still passes')
+  })
+
+  // Review of 668fc421: role forks write scratch as `D=$(mktemp -d); cat > "$D/x"`, and `$D` is unresolvable with no
+  // static directory, so isRoleScratchTarget alone armed on it (this session's fastedit reproduction fork).
+  test("a role worker's write into a same-command `$(mktemp -d)` directory demands no review", () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); cat > "$D/min.ts"'), [])
+    assert.deepStrictEqual(role('D="$(mktemp -d -t fe)"\necho x > ${D}/a.ts && rm -rf "$D"'), [], 'quoted, `-t <prefix>`, braces, a cleanup rm')
+    withWorkers((t, s) => {
+      addWorker(s, 'agent-x', 'toolu_W24', 'fork', [forkEntryLine('ROLE: INVESTIGATE (read-only; may run read-only commands)\n1. reproduce it'), assistantLine([
+        bashBlock("D=$(mktemp -d)\ncat > \"$D/min.ts\" <<'EOF'\nexport const a = 1\nEOF\nfastedit edit \"$D/min.ts\" --replace a --snippet x"),
+      ])])
+      assert.strictEqual(workerWriteDetail(t, 'toolu_W24', CWD), null)
+    })
+  })
+
+  test('a mktemp variable never exempts a target that leaves it, a template or relocated mktemp, a rebinding, or an early use', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); cat > "$D/../src/a.ts"'), ['redirect into $D/../src/a.ts'], 'climbs out')
+    assert.deepStrictEqual(role('D=$(mktemp -d /x/src); cat > "$D/min.ts"'), ['redirect into $D/min.ts'], 'a template path')
+    assert.deepStrictEqual(role('D=$(mktemp -d tmp.XXXXXX); cat > "$D/min.ts"'), ['redirect into $D/min.ts'], 'a bare template is created in the cwd')
+    assert.deepStrictEqual(role('D=$(mktemp -d -p src); cat > "$D/min.ts"'), ['redirect into $D/min.ts'], '-p moves it')
+    assert.deepStrictEqual(role('TMPDIR=src; D=$(mktemp -d); cat > "$D/min.ts"'), ['redirect into $D/min.ts'], 'TMPDIR moves it')
+    assert.deepStrictEqual(role('D=$(mktemp -d); for D in src; do echo x > $D/a.ts; done'), ['redirect into $D/a.ts'], 'a loop rebinds D')
+    assert.deepStrictEqual(role('echo x > "$D/a.ts"; D=$(mktemp -d)'), ['redirect into $D/a.ts'], 'used before it is assigned')
+    assert.deepStrictEqual(role('D=$(mktemp -d); rm -rf "$D"/*'), ['rm $D/*'], 'a glob: a failed mktemp would make it /*')
+  })
+
+  test('the same mktemp write from a worker with NO declared role still demands review', () => {
+    assert.deepStrictEqual(commandWriteReasons('D=$(mktemp -d); cat > "$D/min.ts"', CWD), ['redirect into $D/min.ts'])
+  })
+
+  // Round-2 review of d476914a: an EMPTY D (a failed mktemp, or an assignment that never took effect) turns
+  // `$D/<name>` into `/<name>`, so `<name>` must be ONE path component; and an assignment that may not take effect
+  // in this shell, or a rebinding such as `${D:=…}`, leaves D holding something other than the fresh directory.
+  test('a mktemp target with more than one path component arms: an empty D would make it an absolute path', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); cat > "$D/a/b"'), ['redirect into $D/a/b'])
+    assert.deepStrictEqual(role('D=$(mktemp -d) true; cat > "$D/Volumes/x/src/a.ts"'), ['redirect into $D/Volumes/x/src/a.ts'], 'after a prefix assignment')
+    assert.deepStrictEqual(role('( D=$(mktemp -d) ); cat > "$D/Volumes/x/src/a.ts"'), ['redirect into $D/Volumes/x/src/a.ts'], 'after a subshell assignment')
+  })
+
+  test('a mktemp assignment that may not take effect in this shell exempts nothing', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d) true; cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a prefix assignment sets D for `true` only')
+    assert.deepStrictEqual(role('( D=$(mktemp -d) ); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a subshell')
+    assert.deepStrictEqual(role('( a; D=$(mktemp -d); b ); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a subshell, the assignment mid-list')
+    assert.deepStrictEqual(role('D=$(mktemp -d) | cat; cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a pipeline stage')
+    assert.deepStrictEqual(role('false && D=$(mktemp -d); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a conditional branch')
+  })
+
+  test('a rebinding, a quoted tail, a shadowed mktemp or a moved PATH disqualifies the mktemp variable', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); : "${D:=/abs/src}"; cat > "$D/a.ts"'), ['redirect into $D/a.ts'], '`${D:=…}` rebinds an empty D')
+    assert.deepStrictEqual(role('D=$(mktemp -d); : "${D=/abs/src}"; cat > "$D/a.ts"'), ['redirect into $D/a.ts'], '`${D=…}`')
+    assert.deepStrictEqual(role(': "${D:=/abs/src}"; cat > "$D/a.ts"'), ['redirect into $D/a.ts'], 'pinned: no mktemp at all')
+    assert.deepStrictEqual(role('D="$(mktemp -d)"x; cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'pinned: a quoted mktemp with a tail')
+    assert.deepStrictEqual(role('mktemp() { echo /x; }; D=$(mktemp -d); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'a function named mktemp')
+    assert.deepStrictEqual(role("alias mktemp='echo /x'; D=$(mktemp -d); cat > \"$D/m.ts\""), ['redirect into $D/m.ts'], 'an alias named mktemp')
+    assert.deepStrictEqual(role('PATH=/x:$PATH; D=$(mktemp -d); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], 'PATH moved')
+    assert.deepStrictEqual(role('path=(/x $path); D=$(mktemp -d); cat > "$D/m.ts"'), ['redirect into $D/m.ts'], "zsh's path array is tied to PATH")
+  })
+
+  test('controls: a plain top-level `D=$(mktemp -d)` still exempts a one-component write', () => {
+    const role = (cmd: string): string[] => commandWriteReasons(cmd, CWD, { roleScratch: true })
+    assert.deepStrictEqual(role('D=$(mktemp -d); cp x "$D/m.ts"'), [])
+    assert.deepStrictEqual(role('D=$(mktemp -d); cat > "$D/m.ts"'), [])
+    assert.deepStrictEqual(role('D=$(mktemp -d) && cat > "$D/m.ts" || exit 1'), [], '`&&` after the assignment')
+  })
   test('a janitor worker is skipped even when it wrote a file', () => {
     withWorkers((t, s) => {
       addWorker(s, 'agent-d', 'toolu_W4', 'ai-maestro-janitor:janitor-memory-subconscious-agent', [userStringLine('go'), assistantLine([editBlock])])
@@ -468,7 +665,7 @@ suite('reviewGate — agentCannotSpawn / declaredToolsHaveAgent (built-in + plug
 // -- whole-line equality (unchanged here) is what keeps fixture K closed; first-line anchoring (new
 // here) is what keeps BA0DCW98 closed on the credit path; the two checks are independent and this
 // suite covers both. `declaredRoleOwnTranscript` (own suite below) is the SEPARATE self-exemption
-// predicate and is deliberately NOT anchored the same way -- do not unify the two.
+// predicate; since TRDD-8YM21R5X it delegates to declaredRole, so both share its first-line anchoring.
 suite('reviewGate — declaredRole: the marker must be the prompt\'s literal first line', () => {
   test('the marker AS the prompt\'s first line is credited, trailing whitespace or \\r tolerated', () => {
     assert.strictEqual(declaredRole('ROLE: MEASURE'), 'measure')
@@ -532,59 +729,120 @@ suite('reviewGate — declaredRole: the marker must be the prompt\'s literal fir
   })
 })
 
-// ── declaredRoleOwnTranscript: the SELF-EXEMPTION predicate, deliberately NOT first-line-anchored ───
+// ── declaredRoleOwnTranscript: the SELF-EXEMPTION predicate, anchored to the first non-blank line ───
 //
-// This reads the SPAWNED agent's own first transcript entry, not the parent's raw `input.prompt` --
-// per TRDD-3U8AIHXK it may arrive with harness-added preamble ahead of the marker, so anchoring it
-// to the first line (the `declaredRole` fix above) risks falsely de-exempting every real REVIEW/
-// MEASURE fork and deadlocking the gate (each fork's own SubagentStop would then demand it spawn a
-// reviewer of itself). Left loose deliberately (owner direction, 2026-09-24): TRDD-BA0DCW98's
-// self-exemption residual therefore stays OPEN on this specific predicate pending a real measurement
-// of the harness-wrapped shape -- these tests lock the CURRENT (unchanged) behaviour so nobody
-// "fixes" it here without reading why.
-suite('reviewGate — declaredRoleOwnTranscript: self-exemption, unanchored by design (BA0DCW98 residual)', () => {
-  test('the marker anywhere in the prompt still exempts, trailing whitespace or \\r tolerated', () => {
+// Reads the SPAWNED agent's own first transcript entry. Shapes measured 2026-11-01 (TRDD-8YM21R5X):
+// a fresh non-fork worker's entry is the brief verbatim (plain string, no preamble); forks and resumed
+// agents never reach this predicate with a role line. So it anchors exactly like `declaredRole`.
+suite('reviewGate — declaredRoleOwnTranscript: self-exemption anchored to the first non-blank line', () => {
+  test('a plain brief whose first line is the marker exempts, trailing whitespace or \\r tolerated', () => {
+    assert.strictEqual(declaredRoleOwnTranscript('ROLE: REVIEW\nAttack the proposal.'), 'review')
     assert.strictEqual(declaredRoleOwnTranscript('ROLE: MEASURE'), 'measure')
     assert.strictEqual(declaredRoleOwnTranscript('ROLE: REVIEW \r\ndo the thing'), 'review')
-    assert.strictEqual(declaredRoleOwnTranscript('<fork-boilerplate>\nROLE: REVIEW\nAttack the proposal.'), 'review', 'harness-prepended boilerplate must not defeat a real fork\'s exemption')
   })
 
-  test('BA0DCW98 residual: a marker quoted after preceding text still exempts (not fixed on this predicate, by design)', () => {
-    assert.strictEqual(declaredRoleOwnTranscript('Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.'), 'review')
+  test('BA0DCW98 residual closed: a marker line after other text does NOT exempt', () => {
+    assert.strictEqual(declaredRoleOwnTranscript('Here is the protocol:\nROLE: REVIEW\nThat is what it looks like.'), null)
+  })
+
+  test('a resumed agent whose first entry is a system notification with a later ROLE line does NOT exempt', () => {
+    assert.strictEqual(declaredRoleOwnTranscript('[SYSTEM NOTIFICATION - NOT USER INPUT]\nresumed\nROLE: REVIEW\n'), null)
   })
 
   test('trailing prose on the marker line still does NOT exempt -- the fixture K fix is unaffected', () => {
     assert.strictEqual(declaredRoleOwnTranscript('ROLE: REVIEW the following diff and then edit it'), null)
   })
 
-  test('both markers, or neither, exempts neither', () => {
-    assert.strictEqual(declaredRoleOwnTranscript('ROLE: MEASURE\nROLE: REVIEW\n'), null)
+  test('a second marker on a later line is ignored (first line wins); no marker exempts nothing', () => {
+    assert.strictEqual(declaredRoleOwnTranscript('ROLE: MEASURE\nROLE: REVIEW\n'), 'measure')
     assert.strictEqual(declaredRoleOwnTranscript('just a plain prompt'), null)
   })
 })
 
-// ── KEPT VERBATIM — runReviewGate: the global kill-switch stderr line ───────────────────────────────
-suite('reviewGate — runReviewGate: the global kill-switch stderr line', () => {
-  test('AGENTLENS_DISABLED=1 allows the stop AND names which half of the switch fired', async () => {
-    const savedEnv = process.env.AGENTLENS_DISABLED
-    const writes: string[] = []
-    const originalWrite = process.stderr.write.bind(process.stderr)
-    process.stderr.write = ((chunk: unknown): boolean => {
-      writes.push(String(chunk))
-      return true
-    }) as typeof process.stderr.write
+// ── runReviewGate: the global kill-switch does NOT silence the gate (owner order 2026-09-03; directive 2026-11-03) ──
+suite('reviewGate — runReviewGate: the global kill-switch does not silence the gate', () => {
+  // A turn start: a non-sidechain user entry with an object `turnPosition`, the shape isTurnStart reads.
+  const turnStart = JSON.stringify({
+    type: 'user', isSidechain: false, message: { role: 'user', content: 'make the change' },
+    turnOrigin: 'human', turnPosition: { promptIndex: 1, turnIndex: 1 }, userType: 'external',
+  })
+  // Arms one half of the switch or both, writes `lines` to a transcript, and runs runReviewGate([]) with the payload on a
+  // replaced stdin. 'env' sets AGENTLENS_DISABLED=1 and writes no file. 'file' writes the DISABLED file and deletes
+  // AGENTLENS_DISABLED, so an inherited value cannot stand in for it. 'both' arms each. The precondition pins which half
+  // killSwitchHalf reports: the env half wins whenever it is set.
+  const runGateWhileDisabled = async (
+    arm: 'env' | 'file' | 'both',
+    lines: string[],
+    payloadFor: (transcriptPath: string, cwd: string) => Record<string, unknown>,
+  ): Promise<{ code: number; stdout: string; stderr: string }> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-killswitch-'))
+    const transcriptPath = path.join(dir, 'transcript.jsonl')
+    fs.writeFileSync(transcriptPath, lines.join('\n') + '\n')
+    if (arm !== 'env') fs.writeFileSync(path.join(dir, 'DISABLED'), 'test')
+    const savedDisabled = process.env.AGENTLENS_DISABLED
+    const savedDataDir = process.env.AGENTLENS_DATA_DIR
+    const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin')
+    const realStdout = process.stdout.write
+    const realStderr = process.stderr.write
+    const stdout: string[] = []
+    const stderr: string[] = []
     try {
-      process.env.AGENTLENS_DISABLED = '1'
+      if (arm === 'file') delete process.env.AGENTLENS_DISABLED
+      else process.env.AGENTLENS_DISABLED = '1'
+      process.env.AGENTLENS_DATA_DIR = dir
+      assert.strictEqual(killSwitchHalf(), arm === 'file' ? 'file' : 'env', `precondition: the ${arm} switch is armed`)
+      const payload = JSON.stringify(payloadFor(transcriptPath, dir))
+      Object.defineProperty(process, 'stdin', { configurable: true, value: Readable.from([Buffer.from(payload)]) })
+      process.stdout.write = ((chunk: unknown): boolean => { stdout.push(String(chunk)); return true }) as typeof process.stdout.write
+      process.stderr.write = ((chunk: unknown): boolean => { stderr.push(String(chunk)); return true }) as typeof process.stderr.write
       const code = await runReviewGate([])
-      assert.strictEqual(code, 0)
+      return { code, stdout: stdout.join(''), stderr: stderr.join('') }
     } finally {
-      process.stderr.write = originalWrite
-      if (savedEnv === undefined) delete process.env.AGENTLENS_DISABLED
-      else process.env.AGENTLENS_DISABLED = savedEnv
+      process.stdout.write = realStdout
+      process.stderr.write = realStderr
+      if (realStdin !== undefined) Object.defineProperty(process, 'stdin', realStdin)
+      if (savedDisabled === undefined) delete process.env.AGENTLENS_DISABLED
+      else process.env.AGENTLENS_DISABLED = savedDisabled
+      if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
+      else process.env.AGENTLENS_DATA_DIR = savedDataDir
+      fs.rmSync(dir, { recursive: true, force: true })
     }
-    const joined = writes.join('')
-    assert.ok(/\[review-gate\]/.test(joined), `no kill-switch line was written: ${JSON.stringify(writes)}`)
-    assert.ok(joined.includes('AGENTLENS_DISABLED=1'), `the line must name the env half, not "disabled by the owner": ${joined}`)
+  }
+  // The JSON block the gate printed, picked by its leading brace because mocha may write to stdout too.
+  const blockOf = (r: { stdout: string; stderr: string }): { decision: string; reason: string } => {
+    const line = r.stdout.split('\n').find((l) => l.startsWith('{'))
+    assert.ok(line !== undefined, `no block on stdout: stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`)
+    return JSON.parse(line) as { decision: string; reason: string }
+  }
+
+  test('a Stop with an unreviewed edit still BLOCKS while both halves of the switch are armed', async () => {
+    const r = await runGateWhileDisabled('both', [turnStart, assistantLine([editBlock])], (transcript_path, cwd) => ({ hook_event_name: 'Stop', transcript_path, cwd }))
+    assert.strictEqual(r.code, 0)
+    const block = blockOf(r)
+    assert.strictEqual(block.decision, 'block', `stderr=${JSON.stringify(r.stderr)}`)
+    assert.ok(block.reason.includes('edited a file'))
+  })
+
+  test('a Stop with an unreviewed edit still BLOCKS while only AGENTLENS_DISABLED=1 is set (no DISABLED file)', async () => {
+    const r = await runGateWhileDisabled('env', [turnStart, assistantLine([editBlock])], (transcript_path, cwd) => ({ hook_event_name: 'Stop', transcript_path, cwd }))
+    assert.strictEqual(r.code, 0)
+    const block = blockOf(r)
+    assert.strictEqual(block.decision, 'block', `stderr=${JSON.stringify(r.stderr)}`)
+    assert.ok(block.reason.includes('edited a file'))
+  })
+
+  test('a Stop with an unreviewed edit still BLOCKS while only the DISABLED file is armed (AGENTLENS_DISABLED unset)', async () => {
+    const r = await runGateWhileDisabled('file', [turnStart, assistantLine([editBlock])], (transcript_path, cwd) => ({ hook_event_name: 'Stop', transcript_path, cwd }))
+    assert.strictEqual(r.code, 0)
+    const block = blockOf(r)
+    assert.strictEqual(block.decision, 'block', `stderr=${JSON.stringify(r.stderr)}`)
+    assert.ok(block.reason.includes('edited a file'))
+  })
+
+  test('a SubagentStop of general-purpose (it has the Agent tool, so it is demanded) with an unreviewed edit still BLOCKS while both halves of the switch are armed', async () => {
+    const r = await runGateWhileDisabled('both', [assistantLine([editBlock])], (agent_transcript_path, cwd) => ({ hook_event_name: 'SubagentStop', agent_type: 'general-purpose', agent_transcript_path, cwd }))
+    assert.strictEqual(r.code, 0)
+    assert.strictEqual(blockOf(r).decision, 'block', `stderr=${JSON.stringify(r.stderr)}`)
   })
 })
 
@@ -660,19 +918,27 @@ suite('reviewGate — scanTranscriptLines', () => {
     assert.strictEqual(scan.roles.review, 0)
   })
 
-  test('a `lean-worker` spawn whose prompt starts `ROLE: MEASURE` still credits measure', () => {
+  // TRDD-QQ2XIIZ6 amendment B: INVESTIGATE is a worker-scan role only (workerDeclaredRole); gate credit stays MEASURE/REVIEW.
+  test('an INVESTIGATE fork earns NO credit: it can never satisfy a MEASURE or a REVIEW demand', () => {
+    const scan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: INVESTIGATE\nfind it')])], CWD)
+    assert.deepStrictEqual(scan.roles, { measure: -1, review: -1 })
+    assert.strictEqual(declaredRole('ROLE: INVESTIGATE'), null)
+    assert.strictEqual(workerDeclaredRole('ROLE: INVESTIGATE\nfind it'), 'investigate', 'control: the worker scan does recognise it')
+  })
+
+  test('a `lean-worker` spawn whose prompt starts `ROLE: MEASURE` earns NO measure credit: only a fork does (QQ2XIIZ6)', () => {
     const scan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: MEASURE\nsettle it')])], CWD)
-    assert.strictEqual(scan.roles.measure, 0)
+    assert.strictEqual(scan.roles.measure, -1)
     assert.strictEqual(scan.roles.review, -1)
   })
 
-  test('an Agent spawn whose prompt starts `ROLE: MEASURE` credits roles.measure; a second marker on a later line is ignored, and no marker credits nothing', () => {
-    const measureScan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: MEASURE\nsettle it')])], CWD)
+  test('an Agent FORK spawn whose prompt starts `ROLE: MEASURE` credits roles.measure; a second marker on a later line is ignored, and no marker credits nothing', () => {
+    const measureScan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: MEASURE\nsettle it')])], CWD)
     assert.strictEqual(measureScan.roles.measure, 0)
     assert.strictEqual(measureScan.roles.review, -1)
     // TRDD-BA0DCW98: only the FIRST line is read, so a second marker line can no longer make
     // "both" true — the first line alone decides, and here it is exactly `ROLE: MEASURE`.
-    const secondLineIgnoredScan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'ROLE: MEASURE\nROLE: REVIEW\n')])], CWD)
+    const secondLineIgnoredScan = scanTranscriptLines([assistantLine([agentBlock('fork', 'ROLE: MEASURE\nROLE: REVIEW\n')])], CWD)
     assert.deepStrictEqual(secondLineIgnoredScan.roles, { measure: 0, review: -1 })
     const neitherScan = scanTranscriptLines([assistantLine([agentBlock('lean-worker', 'just do it')])], CWD)
     assert.deepStrictEqual(neitherScan.roles, { measure: -1, review: -1 })
@@ -792,15 +1058,15 @@ suite('reviewGate — decideGate', () => {
 
 // ── subagentExempt ────────────────────────────────────────────────────────────────────────────────
 suite('reviewGate — demandText is short enough to read inside a block (C)', () => {
-  test('the demandText for a review spawn is under 1200 characters and says a write after the spawn re-arms the gate', () => {
+  test('the demandText for a review spawn is under 1500 characters and says a write after the spawn re-arms the gate', () => {
     const t = demandText('review')
-    assert.ok(t.length < 1200, 'demandText review is ' + t.length + ' characters')
+    assert.ok(t.length < 1500, 'demandText review is ' + t.length + ' characters')
     assert.ok(t.includes('re-arms'))
   })
 
-  test('the demandText for a both spawn is under 2700 characters', () => {
+  test('the demandText for a both spawn is under 3000 characters', () => {
     const t = demandText('both')
-    assert.ok(t.length < 2700, 'demandText both is ' + t.length + ' characters')
+    assert.ok(t.length < 3000, 'demandText both is ' + t.length + ' characters')
   })
 })
 suite('reviewGate — subagentExempt', () => {
@@ -883,9 +1149,11 @@ suite('reviewGate — messages', () => {
     assert.ok(!t.includes(REVIEW_ROLE_RULE))
   })
 
-  test("demandText('measure') names fast-worker as the preferred measurer and requires a numbered step list", () => {
+  test("demandText('measure') names a MEASURE fork with no isolation, and requires a numbered step list", () => {
     const t = demandText('measure')
-    assert.ok(t.includes('fast-worker'))
+    assert.ok(t.includes('MEASURE fork'))
+    assert.ok(t.includes('NO isolation parameter'))
+    assert.ok(!t.includes('fast-worker'))
     assert.ok(t.includes('numbered'))
   })
 
@@ -917,7 +1185,8 @@ suite('reviewGate — messages', () => {
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('[janitor-heartbeat]'))
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('interrupted'))
     assert.ok(REVIEW_GATE_DIRECTIVE.includes('ai-maestro-janitor'))
-    assert.ok(REVIEW_GATE_DIRECTIVE.includes('Only a `fork` spawn credits the REVIEW role'))
+    assert.ok(REVIEW_GATE_DIRECTIVE.includes('Only a `fork` spawn with NO `isolation` parameter credits a role'))
+    assert.ok(REVIEW_GATE_DIRECTIVE.includes('only the turn that just ended decides'))
     for (const ex of NO_REVIEW_SENTINEL_EXAMPLES) assert.ok(REVIEW_GATE_DIRECTIVE.includes(ex), ex)
   })
 
@@ -1029,13 +1298,44 @@ suite('reviewGate — runSubagentGate: own sidechain entries are scanned (TRDD-L
     assert.strictEqual(await stop(t), null)
   })
 
-  test('`ROLE: MEASURE` mid-sentence does not exempt a worker; as a whole line it does (existing declaredRoleOwnTranscript behaviour)', async () => {
+  test('`ROLE: MEASURE` mid-sentence or buried after other text does not exempt a worker; as the first line it does (declaredRoleOwnTranscript anchored, TRDD-8YM21R5X)', async () => {
     const mid = mkTranscript([scUser('w1', 'Explain how ROLE: MEASURE works in the gate'), scAssistant('w1', [writeBlock])])
     assert.ok(await stop(mid) !== null, 'a mid-sentence mention must not exempt')
-    const whole = mkTranscript([scUser('w1', 'preamble\nROLE: MEASURE\nmeasure it'), scAssistant('w1', [writeBlock])])
-    assert.strictEqual(await stop(whole), null, 'a whole-line marker anywhere in the brief self-exempts (unanchored by design)')
+    const buried = mkTranscript([scUser('w1', 'preamble\nROLE: MEASURE\nmeasure it'), scAssistant('w1', [writeBlock])])
+    assert.ok(await stop(buried) !== null, 'a marker buried after other text must not exempt')
+    const first = mkTranscript([scUser('w1', 'ROLE: MEASURE\nmeasure it'), scAssistant('w1', [writeBlock])])
+    assert.strictEqual(await stop(first), null, 'a first-line marker self-exempts')
   })
 
+  // Shape measured on Claude Code 2.1.316, 2026-11-01 (TRDD-8YM21R5X): a non-fork worker's first
+  // transcript entry, key structure copied from a real subagent file; every id, uuid, path and
+  // session value is a visibly fake placeholder.
+  const realShapeFirstEntry = (brief: string): string => JSON.stringify({
+    parentUuid: null,
+    isSidechain: true,
+    promptId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    agentId: 'aaaaaaaaaaaaaaaaa',
+    type: 'user',
+    message: { role: 'user', content: brief },
+    uuid: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    timestamp: '2000-01-01T00:00:00.000Z',
+    userType: 'external',
+    entrypoint: 'cli',
+    cwd: '/fake/project',
+    sessionId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    version: '2.1.316',
+    gitBranch: 'main',
+  })
+
+  test('a real-shape first entry whose plain-string brief starts `ROLE: REVIEW` yields ownRole review', () => {
+    const scan = scanTranscriptLines([realShapeFirstEntry('ROLE: REVIEW\nAttack the proposal.')], CWD, 'aaaaaaaaaaaaaaaaa')
+    assert.strictEqual(scan.ownRole, 'review')
+  })
+
+  test('the same real-shape first entry with the ROLE line second yields no ownRole', () => {
+    const scan = scanTranscriptLines([realShapeFirstEntry('Context first.\nROLE: REVIEW\nAttack the proposal.')], CWD, 'aaaaaaaaaaaaaaaaa')
+    assert.strictEqual(scan.ownRole, null)
+  })
   test('the MAIN Stop gate still ignores a transcript whose only write is a sidechain entry', async () => {
     const t = mkTranscript([scUser('w1', 'x'), scAssistant('w1', [writeBlock])])
     assert.strictEqual(await runMainGate({ transcript_path: t, cwd: CWD }), null)
@@ -1131,5 +1431,558 @@ suite('reviewGate — scanTranscriptLines: a delegate-gate-denied edit does not 
     const bash = { type: 'tool_use', id: 'toolu_b1', name: 'Bash', input: { command: 'sed -i s/a/b/ /repo/src/a.ts' } }
     const scan = scanTranscriptLines([assistantLine([bash]), deniedResult('toolu_b1', true)], CWD)
     assert.strictEqual(scan.work?.cause, 'write-shaped command')
+  })
+
+
+  // ── The turn scope and the fork-only, unisolated credit (QQ2XIIZ6) ──────────────────────────────────
+  // Fixtures copy the entry SHAPES measured on real transcripts (2026-10-14), not their text: a turn
+  // starts at a non-sidechain `user` entry with an object `turnPosition`; a heartbeat is one of those
+  // with `isMeta: true`; the Stop hook's feedback is `isMeta` with no `turnPosition`.
+  suite('reviewGate — per-turn scope and the fork-only credit (QQ2XIIZ6)', () => {
+    const turnStart = (content: unknown, turnOrigin = 'human', turnIndex = 1): string => JSON.stringify({
+      parentUuid: 'p', isSidechain: false, promptId: `prompt-${turnIndex}`, type: 'user',
+      message: { role: 'user', content }, turnOrigin, turnPosition: { promptIndex: turnIndex, turnIndex }, userType: 'external',
+    })
+    const heartbeat = (turnIndex: number): string => JSON.stringify({
+      parentUuid: 'p', isSidechain: false, isMeta: true, promptId: `hb-${turnIndex}`, type: 'user',
+      message: { role: 'user', content: '[janitor-heartbeat]\n/x/dispatcher-stub.py\nHandle this fire.' },
+      turnOrigin: 'scheduled', turnPosition: { promptIndex: turnIndex, turnIndex }, userType: 'external',
+    })
+    const stopFeedback = (): string => JSON.stringify({
+      parentUuid: 'p', isSidechain: false, isMeta: true, type: 'user',
+      message: { role: 'user', content: 'Stop hook feedback: [review-gate] demanded a review' },
+    })
+    const attachment = (text: string): string => JSON.stringify({
+      parentUuid: 'p', isSidechain: false, type: 'attachment', attachment: { type: 'hook_success', content: text },
+    })
+    const notification = (id: string): string =>
+      `<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n</task-notification>`
+    const enqueue = (id: string): string => JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: notification(id) })
+    const forkSpawn = (prompt: string, isolation?: string) =>
+      ({ type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt, ...(isolation === undefined ? {} : { isolation }) } })
+    const withFile = <T>(lines: string[], run: (file: string) => T): T => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-turn-'))
+      try {
+        const file = path.join(dir, 'main.jsonl')
+        fs.writeFileSync(file, lines.join('\n') + '\n')
+        return run(file)
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+    const runGate = (lines: string[]): Promise<string | null> =>
+      withFile(lines, (file) => runMainGate({ transcript_path: file, cwd: CWD }))
+    const reasonOf = (out: string | null): string => (JSON.parse(out as string) as { reason: string }).reason
+
+    test('isTurnStart: a non-sidechain user entry with a turnPosition object starts a turn, even when isMeta; feedback, tool results, sidechain entries and heartbeat attachments do not', () => {
+      assert.strictEqual(JSON.parse(heartbeat(2)).isMeta, true)
+      assert.strictEqual(isTurnStart(JSON.parse(turnStart('fix it'))), true)
+      assert.strictEqual(isTurnStart(JSON.parse(heartbeat(2))), true)
+      assert.strictEqual(isTurnStart(JSON.parse(stopFeedback())), false)
+      assert.strictEqual(isTurnStart(JSON.parse(toolResultLine('t1', 'ok'))), false)
+      assert.strictEqual(isTurnStart(JSON.parse(JSON.stringify({ type: 'user', isSidechain: true, turnPosition: { turnIndex: 2 }, message: { content: 'x' } }))), false)
+      assert.strictEqual(isTurnStart(JSON.parse(attachment('[janitor-heartbeat] status: quiet'))), false)
+    })
+
+    test('edit → isMeta Stop-hook feedback → BLOCKS: the feedback does not start a new turn', async () => {
+      const out = await runGate([turnStart('fix it'), assistantLine([editBlock]), stopFeedback()])
+      assert.ok(out !== null, 'the feedback must not end the turn that wrote the file')
+      assert.ok(reasonOf(out).includes('edited a file'))
+    })
+
+    test('an edit in an earlier human turn does not block a later human turn with no writes', async () => {
+      const out = await runGate([
+        turnStart('edit it', 'human', 1), assistantLine([editBlock]), assistantLine([{ type: 'text', text: 'done' }]),
+        turnStart('what time is it', 'human', 2), assistantLine([{ type: 'text', text: 'noon' }]),
+      ])
+      assert.strictEqual(out, null)
+    })
+
+    test('a heartbeat turn after a written human turn, with no writes, PASSES', async () => {
+      const out = await runGate([
+        turnStart('edit it', 'human', 1), assistantLine([editBlock]),
+        heartbeat(2), assistantLine([{ type: 'text', text: 'janitor heartbeat' }]),
+      ])
+      assert.strictEqual(out, null)
+    })
+
+    test('a heartbeat turn that writes and spawns no review BLOCKS', async () => {
+      const out = await runGate([
+        turnStart('hi', 'human', 1), assistantLine([{ type: 'text', text: 'hello' }]),
+        heartbeat(2), assistantLine([editBlock]),
+      ])
+      assert.ok(out !== null)
+      assert.ok(reasonOf(out).includes('edited a file'))
+    })
+
+    test('an attachment quoting [janitor-heartbeat] between an edit and the Stop does not start a turn, so the edit still BLOCKS', async () => {
+      const out = await runGate([
+        turnStart('edit it'), assistantLine([editBlock]),
+        attachment('[janitor-heartbeat] status: quiet'), assistantLine([{ type: 'text', text: 'ok' }]),
+      ])
+      assert.ok(out !== null, 'an attachment mid-turn must not split the turn and release the edit')
+    })
+
+    test('a REVIEW fork with isolation "worktree" earns no credit and BLOCKS; the same fork without isolation PASSES', async () => {
+      const isolated = await runGate([turnStart('edit it'), assistantLine([editBlock]), assistantLine([forkSpawn('ROLE: REVIEW\nattack it', 'worktree')])])
+      assert.ok(isolated !== null, 'an isolated spawn must not release the gate')
+      const plain = await runGate([turnStart('edit it'), assistantLine([editBlock]), assistantLine([forkSpawn('ROLE: REVIEW\nattack it')])])
+      assert.strictEqual(plain, null)
+    })
+
+    test('a review fork from an earlier turn does not release a later turn\'s edit', async () => {
+      const out = await runGate([
+        turnStart('edit it', 'human', 1), assistantLine([editBlock]), assistantLine([forkSpawn('ROLE: REVIEW\nreview it')]),
+        turnStart('edit again', 'human', 2), assistantLine([editBlock]),
+      ])
+      assert.ok(out !== null, 'the review belongs to the earlier turn')
+    })
+
+    test('a MEASURE spawn credits only as a fork with no isolation: a lean-worker earns nothing, an isolated fork earns nothing, a plain fork credits', () => {
+      const proposal = { type: 'text', text: 'PROPOSAL FOR ACTION - PLEASE REVIEW\nswitch the store to WAL' }
+      const measureBy = (block: unknown): number => scanTranscriptLines([assistantLine([proposal]), assistantLine([block])], CWD).roles.measure
+      assert.strictEqual(measureBy({ type: 'tool_use', name: 'Agent', input: { subagent_type: 'lean-worker', prompt: 'ROLE: MEASURE\nsettle it' } }), -1)
+      assert.strictEqual(measureBy({ type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt: 'ROLE: MEASURE\nsettle it', isolation: 'worktree' } }), -1)
+      assert.strictEqual(measureBy({ type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', prompt: 'ROLE: MEASURE\nsettle it' } }), 1)
+    })
+
+    test('isCreditedFork: a case-folded fork with no isolation credits; any non-empty isolation, or another subagent type, does not', () => {
+      assert.strictEqual(isCreditedFork({ subagent_type: 'FORK' }), true)
+      assert.strictEqual(isCreditedFork({ subagent_type: ' fork ', isolation: '' }), true)
+      assert.strictEqual(isCreditedFork({ subagent_type: 'fork', isolation: 'worktree' }), false)
+      assert.strictEqual(isCreditedFork({ subagent_type: 'fork', isolation: false }), false)
+      assert.strictEqual(isCreditedFork({ subagent_type: 'lean-worker' }), false)
+    })
+
+    test('a worker return enqueued just before a task-notification turn is counted: the main gate blocks on the worker write', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-ret-'))
+      try {
+        const subagents = path.join(dir, 'main', 'subagents')
+        fs.mkdirSync(subagents, { recursive: true })
+        fs.writeFileSync(path.join(subagents, 'agent-w.meta.json'), JSON.stringify({ toolUseId: 'toolu_W1', agentType: 'lean-worker' }))
+        fs.writeFileSync(path.join(subagents, 'agent-w.jsonl'), assistantLine([editBlock]) + '\n')
+        const transcript = path.join(dir, 'main.jsonl')
+        const spawnTurn = [turnStart('spawn the worker', 'human', 1), assistantLine([{ type: 'text', text: 'spawned' }])]
+        const returnTurn = [turnStart(notification('toolu_W1'), 'human', 2), assistantLine([{ type: 'text', text: 'worker finished' }])]
+        fs.writeFileSync(transcript, [...spawnTurn, enqueue('toolu_W1'), ...returnTurn].join('\n') + '\n')
+        const out = await runMainGate({ transcript_path: transcript, cwd: CWD })
+        assert.ok(out !== null, 'the return belongs to this turn, so its worker write must block')
+        assert.ok(reasonOf(out).includes('a worker you spawned wrote files'))
+        fs.writeFileSync(transcript, [...spawnTurn, ...returnTurn].join('\n') + '\n')
+        assert.strictEqual(await runMainGate({ transcript_path: transcript, cwd: CWD }), null, 'with no enqueue line there is no return to judge')
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+  test('readCurrentTurn returns the current turn from its start with the non-conversation run before it, across chunk boundaries and multi-byte text', () => {
+    const lines = [
+      turnStart('old é—', 'human', 1), assistantLine([editBlock]), enqueue('toolu_X'),
+      turnStart('new ✓ prompt', 'human', 2), assistantLine([{ type: 'text', text: 'ok ✓' }]),
+    ]
+    withFile(lines, (file) => {
+      assert.deepStrictEqual(readCurrentTurn(file, { chunkBytes: 16 }), lines.slice(2))
+      assert.deepStrictEqual(readCurrentTurn(file), lines.slice(2))
+    })
+  })
+
+    test('readCurrentTurn reads a file with no turn start whole, and returns null for an unreadable path', () => {
+      const sc = (entry: Record<string, unknown>): string => JSON.stringify({ isSidechain: true, agentId: 'w1', ...entry })
+      const lines = [sc({ type: 'user', message: { role: 'user', content: 'do it' } }), sc({ type: 'assistant', message: { content: [editBlock] } })]
+      withFile(lines, (file) => assert.deepStrictEqual(readCurrentTurn(file), lines))
+      assert.strictEqual(readCurrentTurn('/nonexistent/rg-turn/x.jsonl'), null)
+    })
+
+    test('a turn longer than 4 MB still shows its first write: no fixed window cuts the turn short', async () => {
+      const filler = assistantLine([{ type: 'text', text: 'x'.repeat(1024 * 1024) }])
+      const out = await runGate([turnStart('edit it'), assistantLine([editBlock]), filler, filler, filler, filler, filler])
+      assert.ok(out !== null, 'the edit lies more than 4 MB before the Stop and must still block')
+    })
+
+    test('runSubagentGate: a worker whose only reviewer is an isolated fork is still BLOCKED; a plain fork releases it', async () => {
+      const sc = (entry: Record<string, unknown>): string => JSON.stringify({ isSidechain: true, agentId: 'w1', ...entry })
+      const userLine = sc({ type: 'user', message: { role: 'user', content: 'do the thing' } })
+      const writeLine = sc({ type: 'assistant', message: { content: [bashBlock("fastedit create evals/x.md --force --content 'a'")] } })
+      const spawnLine = (input: Record<string, unknown>): string => sc({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', input }] } })
+      const stopWith = (lines: string[]): Promise<string | null> => withFile(lines, (file) => runSubagentGate({
+        hook_event_name: 'SubagentStop', agent_id: 'w1', agent_type: 'general-purpose', agent_transcript_path: file, cwd: CWD,
+      }))
+      assert.notStrictEqual(await stopWith([userLine, writeLine, spawnLine({ subagent_type: 'fork', isolation: 'worktree', prompt: 'ROLE: REVIEW\nattack it' })]), null)
+      assert.strictEqual(await stopWith([userLine, writeLine, spawnLine({ subagent_type: 'fork', prompt: 'ROLE: REVIEW\nattack it' })]), null)
+    })
+
+
+    // Captures what a call writes to stderr (the review gate's own notices), without changing what it returns.
+    const captureStderr = async <T>(run: () => Promise<T> | T): Promise<{ result: T; stderr: string }> => {
+      const real = process.stderr.write
+      let stderr = ''
+      process.stderr.write = ((chunk: string | Uint8Array): boolean => { stderr += String(chunk); return true }) as typeof process.stderr.write
+      try {
+        return { result: await run(), stderr }
+      } finally {
+        process.stderr.write = real
+      }
+    }
+    const withFileAsync = async <T>(lines: string[], run: (file: string) => Promise<T>): Promise<T> => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-disp-'))
+      try {
+        const file = path.join(dir, 'agent-f1.jsonl')
+        fs.writeFileSync(file, lines.join('\n') + '\n')
+        return await run(file)
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+    const finished = (agent_type: string, last: string, file: string): Promise<string | null> => runSubagentGate({
+      hook_event_name: 'SubagentStop', agent_id: 'f1', agent_type, agent_transcript_path: file, last_assistant_message: last, cwd: CWD,
+    })
+
+    test('skipUnstartedTurn: the new prompt is already written and unanswered, so the window is the last COMPLETED turn', () => {
+      const lines = [turnStart('edit it', 'human', 1), assistantLine([editBlock]), turnStart('next question', 'human', 2)]
+      withFile(lines, (file) => {
+        assert.deepStrictEqual(readCurrentTurn(file, { skipUnstartedTurn: true }), lines.slice(0, 2))
+        assert.deepStrictEqual(readCurrentTurn(file), [lines[2]], 'without the option the unanswered turn is the window')
+      })
+    })
+
+    test('skipUnstartedTurn: the new prompt is not yet written, so the completed turn is the window either way', () => {
+      const lines = [turnStart('edit it', 'human', 1), assistantLine([editBlock])]
+      withFile(lines, (file) => assert.deepStrictEqual(readCurrentTurn(file, { skipUnstartedTurn: true }), lines))
+    })
+
+    test('skipUnstartedTurn: a worker return enqueued before the unanswered turn belongs to that turn, not the completed one', () => {
+      const lines = [turnStart('edit it', 'human', 1), assistantLine([editBlock]), enqueue('toolu_Y'), turnStart('next', 'human', 2)]
+      withFile(lines, (file) => assert.deepStrictEqual(readCurrentTurn(file, { skipUnstartedTurn: true }), lines.slice(0, 2)))
+    })
+
+    test('skipUnstartedTurn: a first turn with no answer yet has no completed turn to judge', () => {
+      withFile([turnStart('first question', 'human', 1)], (file) => assert.deepStrictEqual(readCurrentTurn(file, { skipUnstartedTurn: true }), []))
+    })
+
+    test('a main transcript with no turn start is judged whole and the stderr names it; a subagent transcript with none prints nothing', async () => {
+      const lines = [userStringLine('no turn start here'), assistantLine([editBlock])]
+      await withFileAsync(lines, async (file) => {
+        const main = await captureStderr(() => readCurrentTurn(file, { warnNoTurnStart: true }))
+        assert.deepStrictEqual(main.result, lines)
+        assert.ok(main.stderr.includes(`no turn start found in ${file}; judging the whole transcript`), main.stderr)
+        const sub = await captureStderr(() => readCurrentTurn(file))
+        assert.deepStrictEqual(sub.result, lines)
+        assert.strictEqual(sub.stderr, '')
+      })
+    })
+
+  test('a finished review fork shows its report to the USER as systemMessage, exactly as written', async () => {
+    const report = `${REVIEW_HEADING}\n\nFinding 1: the reader drops the last line when the file ends without a newline.`
+    const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+    assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+  })
+
+  test('the review heading may follow # and spaces, and a MEASURE report is shown the same way', async () => {
+    const report = `  ## * ${MEASURE_HEADING}   \nASSUMPTION 1: the file exists\nCOMMAND: ls\nOBSERVED: yes\nVERDICT: confirmed`
+    const out = await withFileAsync([userStringLine('measure it')], (file) => finished('fork', report, file))
+    assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+  })
+
+  test('an agent whose last message is not a report shows nothing, and the retired review and measure headings no longer trigger the display', async () => {
+    const plain = await withFileAsync([userStringLine('rename it')], (file) => finished('general-purpose', 'Renamed the file.', file))
+    assert.strictEqual(plain, null)
+    for (const retired of ['ADVERSARIAL-REVIEW\nlooked at it', 'MEASURE-AND-VERIFY-REPORT\nVERDICT: confirmed']) {
+      const out = await withFileAsync([userStringLine('rename it')], (file) => finished('general-purpose', retired, file))
+      assert.strictEqual(out, null, retired)
+    }
+  })
+
+  test('an agent the gate blocks gets the block decision and no systemMessage', async () => {
+    const out = await withFileAsync([userStringLine('edit it'), assistantLine([bashBlock("fastedit create evals/x.md --force --content 'a'")])],
+      (file) => finished('general-purpose', `${REVIEW_HEADING}\nlooked at it`, file))
+    const parsed = JSON.parse(out as string) as Record<string, unknown>
+    assert.strictEqual(parsed.decision, 'block')
+    assert.strictEqual('systemMessage' in parsed, false)
+  })
+
+  test('a review longer than the display cap is cut to exactly the cap and names the full transcript', async () => {
+    const report = `${REVIEW_HEADING}\n` + 'x'.repeat(12000)
+    await withFileAsync([userStringLine('review the change')], async (file) => {
+      const message = (JSON.parse(await finished('fork', report, file) as string) as { systemMessage: string }).systemMessage
+      assert.strictEqual(message.length, 9500)
+      assert.ok(message.startsWith(`${REVIEW_HEADING}\n`))
+      assert.ok(message.endsWith(`… (truncated; full text: ${file})`), message.slice(-120))
+    })
+  })
+
+  test('a review of exactly the cap is shown whole', async () => {
+    const report = `${REVIEW_HEADING}\n` + 'x'.repeat(9500 - `${REVIEW_HEADING}\n`.length)
+    const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+    assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report })
+  })
+
+  test('a long review with no transcript path says so on stderr and shows nothing', async () => {
+    const report = `${REVIEW_HEADING}\n` + 'x'.repeat(12000)
+    const { result, stderr } = await captureStderr(() => runSubagentGate({
+      hook_event_name: 'SubagentStop', agent_id: 'f1', agent_type: 'fork', last_assistant_message: report, cwd: CWD,
+    }))
+    assert.strictEqual(result, null)
+    assert.ok(stderr.includes('review display skipped'), stderr)
+  })
+
+
+  test('a marker quoted mid-line or on a later line does not trigger the display', async () => {
+    const quoted = [
+      `Summary first.\n${REVIEW_HEADING}\nis below`,
+      `I will open with ${REVIEW_HEADING} once the check passes`,
+      `The verdict follows the ${REVIEW_HEADING} marker`,
+    ]
+    for (const last of quoted) {
+      const out = await withFileAsync([userStringLine('review it')], (file) => finished('general-purpose', last, file))
+      assert.strictEqual(out, null, last)
+    }
+  })
+
+
+  test('a marker decorated with **, backticks or same-line text still displays; a marker run into a word does not', async () => {
+    const decorated = [
+      `**${REVIEW_HEADING}**\nFinding 1: the reader drops the last line.`,
+      `\`${REVIEW_HEADING}\`\nFinding 1: the reader drops the last line.`,
+      `${REVIEW_HEADING} notes on the first pass\nFinding 1: the reader drops the last line.`,
+    ]
+    for (const report of decorated) {
+      const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report }, report)
+    }
+    const glued = `${REVIEW_HEADING}notes`
+    const none = await withFileAsync([userStringLine('review it')], (file) => finished('general-purpose', glued, file))
+    assert.strictEqual(none, null)
+  })
+
+
+  test('a marker followed by a colon or by decorated text still displays; one followed by a letter, digit, underscore or hyphen does not', async () => {
+    const opening = [
+      `**${REVIEW_HEADING}** Task: review the change\nFinding 1: the reader drops the last line.`,
+      `\`${REVIEW_HEADING}\` the change\nFinding 1: the reader drops the last line.`,
+      `${REVIEW_HEADING}: review of the change\nFinding 1: the reader drops the last line.`,
+    ]
+    for (const report of opening) {
+      const out = await withFileAsync([userStringLine('review the change')], (file) => finished('fork', report, file))
+      assert.deepStrictEqual(JSON.parse(out as string), { systemMessage: report }, report)
+    }
+    for (const glued of [`${REVIEW_HEADING}X`, `${REVIEW_HEADING}7`, `${REVIEW_HEADING}_x`, `${REVIEW_HEADING}-x`]) {
+      const out = await withFileAsync([userStringLine('review it')], (file) => finished('general-purpose', glued, file))
+      assert.strictEqual(out, null, glued)
+    }
+  })
+
+  })
+
+})
+
+// ── `--json-verdict`: the read-only verdict a mod calls (TRDD-KZCSO0R2 Phase 0) ───────────────────
+suite('reviewGate — --json-verdict: the read-only verdict mode', () => {
+  const turnStart = JSON.stringify({
+    type: 'user', isSidechain: false, message: { role: 'user', content: 'make the change' },
+    turnOrigin: 'human', turnPosition: { promptIndex: 1, turnIndex: 1 }, userType: 'external',
+  })
+  type Verdict = { demands: boolean; reasons: string[]; scan: { kind: string; lines: number } }
+  // Runs runReviewGate with the payload on a replaced stdin, capturing stdout and restoring both.
+  const run = async (argv: string[], lines: string[]): Promise<{ code: number; stdout: string }> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-verdict-'))
+    const transcript = path.join(dir, 'transcript.jsonl')
+    fs.writeFileSync(transcript, [turnStart, ...lines].join('\n') + '\n')
+    const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin')
+    const realStdout = process.stdout.write
+    const stdout: string[] = []
+    try {
+      const payload = JSON.stringify({ hook_event_name: 'Stop', transcript_path: transcript, cwd: CWD })
+      Object.defineProperty(process, 'stdin', { configurable: true, value: Readable.from([Buffer.from(payload)]) })
+      process.stdout.write = ((chunk: unknown): boolean => { stdout.push(String(chunk)); return true }) as typeof process.stdout.write
+      const code = await runReviewGate(argv)
+      return { code, stdout: stdout.join('') }
+    } finally {
+      process.stdout.write = realStdout
+      if (realStdin !== undefined) Object.defineProperty(process, 'stdin', realStdin)
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const firstJson = (stdout: string): string => {
+    const line = stdout.split('\n').find((l) => l.startsWith('{'))
+    assert.ok(line !== undefined, `no JSON on stdout: ${JSON.stringify(stdout)}`)
+    return line
+  }
+
+  test('an armed turn yields demands=true with a non-empty reason and NO hook block JSON', async () => {
+    const r = await run(['--json-verdict'], [assistantLine([editBlock])])
+    assert.strictEqual(r.code, 0, 'read-only: always exits 0, even when it demands a review')
+    const v = JSON.parse(firstJson(r.stdout)) as Verdict
+    assert.strictEqual(v.demands, true)
+    assert.ok(v.reasons.length > 0 && v.reasons[0].includes('edited a file'), v.reasons.join(' '))
+    assert.strictEqual(v.scan.kind, 'main')
+    assert.ok(!r.stdout.includes('"decision":"block"'), 'the verdict mode must never emit the Stop-hook block shape')
+  })
+
+  test('a clean turn yields demands=false with no reasons', async () => {
+    const r = await run(['--json-verdict'], [assistantLine([{ type: 'text', text: 'nothing to do' }])])
+    assert.strictEqual(r.code, 0)
+    const v = JSON.parse(firstJson(r.stdout)) as Verdict
+    assert.strictEqual(v.demands, false)
+    assert.deepStrictEqual(v.reasons, [])
+  })
+
+  test('no flag: the hook-mode block is unchanged (decision block, suppressOutput, reason)', async () => {
+    const r = await run([], [assistantLine([editBlock])])
+    const parsed = JSON.parse(firstJson(r.stdout)) as { decision: string; suppressOutput: boolean; reason: string }
+    assert.strictEqual(parsed.decision, 'block')
+    assert.strictEqual(parsed.suppressOutput, true)
+    assert.ok(parsed.reason.includes('edited a file'))
+    assert.ok(!('demands' in parsed), 'hook mode must not print the verdict shape')
+  })
+
+  test('computeVerdict directly: an unreviewed edit demands, a credited fork releases', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-verdict-'))
+    try {
+      const t = path.join(dir, 't.jsonl')
+      fs.writeFileSync(t, [assistantLine([editBlock])].join('\n') + '\n')
+      assert.strictEqual(computeVerdict({ transcript_path: t, cwd: CWD }).demands, true)
+      fs.writeFileSync(t, [assistantLine([editBlock]), assistantLine([agentBlock('fork', 'ROLE: REVIEW\nattack it')])].join('\n') + '\n')
+      assert.strictEqual(computeVerdict({ transcript_path: t, cwd: CWD }).demands, false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── ignoreInterruptFloor and the verdict command line: the review mod's opt-ins (TRDD-KZCSO0R2) ─────
+// A Stop/SubagentStop hook never fires on an Esc, so the mod is the only net for an interrupted turn;
+// it needs the interrupt entry to NOT clear the turn's work. The default stays as the hooks need it.
+suite('reviewGate — ignoreInterruptFloor and the --json-verdict command line', () => {
+  // The shapes the harness writes: the turn start has an object turnPosition; the interrupt entry is a
+  // `user` entry with one text block and NO turnPosition (measured 2026-11-12: 48 interrupt entries, 0 with one).
+  const turnStartAt = (promptIndex: number, text: string): string => JSON.stringify({
+    type: 'user', isSidechain: false, message: { role: 'user', content: text },
+    turnOrigin: 'human', turnPosition: { promptIndex, turnIndex: 1 }, userType: 'external',
+  })
+  const turnStart = turnStartAt(1, 'make the change')
+  const interrupt = userTextLine('[Request interrupted by user]')
+  type Verdict = { demands: boolean; reasons: string[]; scan: { transcript: string | null; kind: string; lines: number; readable: boolean }; options: { ignoreInterruptFloor: boolean } }
+  // Awaits an async callback BEFORE the temp directory goes: a sync-only helper removed it under the callback.
+  const withTranscript = async <T>(lines: string[], run: (file: string) => T | Promise<T>): Promise<T> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-intr-'))
+    try {
+      const file = path.join(dir, 'main.jsonl')
+      fs.writeFileSync(file, lines.join('\n') + '\n')
+      return await run(file)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const demands = (lines: string[], ignoreInterruptFloor: boolean): Promise<boolean> =>
+    withTranscript(lines, (file) => computeVerdict({ hook_event_name: 'Stop', transcript_path: file, cwd: CWD }, { ignoreInterruptFloor }).demands)
+  // Runs runReviewGate with `argv(file)` and both output streams captured and restored.
+  const cli = (lines: string[], argv: (file: string) => string[]): Promise<{ code: number; stdout: string; stderr: string }> =>
+    withTranscript(lines, async (file) => {
+      const realStdout = process.stdout.write
+      const realStderr = process.stderr.write
+      const out: string[] = []
+      const err: string[] = []
+      try {
+        process.stdout.write = ((chunk: unknown): boolean => { out.push(String(chunk)); return true }) as typeof process.stdout.write
+        process.stderr.write = ((chunk: unknown): boolean => { err.push(String(chunk)); return true }) as typeof process.stderr.write
+        const code = await runReviewGate(argv(file))
+        return { code, stdout: out.join(''), stderr: err.join('') }
+      } finally {
+        process.stdout.write = realStdout
+        process.stderr.write = realStderr
+      }
+    })
+  const editInReports = assistantLine([{ type: 'tool_use', name: 'Edit', input: { file_path: '/repo/reports/x.md' } }])
+
+  test('default options: a write then an interrupt entry gives demands false (the interrupt is a floor)', async () => {
+    assert.strictEqual(await demands([turnStart, assistantLine([editBlock]), interrupt], false), false)
+  })
+
+  test('ignoreInterruptFloor: the same transcript gives demands true, so the turn reader keeps the writes before the interrupt', async () => {
+    assert.strictEqual(await demands([turnStart, assistantLine([editBlock]), interrupt], true), true)
+  })
+
+  test('ignoreInterruptFloor: a credited REVIEW fork spawn before the interrupt still releases the turn', async () => {
+    const fork = assistantLine([agentBlock('fork', 'ROLE: REVIEW\nattack it')])
+    assert.strictEqual(await demands([turnStart, assistantLine([editBlock]), fork, interrupt], true), false)
+  })
+
+  test('ignoreInterruptFloor: a [janitor-heartbeat] entry is still a floor, so a write before it is released', async () => {
+    const heartbeat = userTextLine('[janitor-heartbeat]\nuv run dispatcher-stub.py')
+    assert.strictEqual(await demands([turnStart, assistantLine([editBlock]), heartbeat], true), false)
+  })
+
+  test('ignoreInterruptFloor: a new prompt typed right after Esc does not hide the interrupted turn', async () => {
+    const lines = [turnStart, assistantLine([editBlock]), interrupt, turnStartAt(2, 'new prompt, no answer yet')]
+    assert.strictEqual(await demands(lines, true), true, 'the turn before the unanswered one is the interrupted turn')
+    assert.strictEqual(await demands(lines, false), false, 'without the option the unanswered newest turn is the one judged')
+  })
+
+  test('the CLI: --json-verdict --transcript --cwd --ignore-interrupt-floor prints demands true, echoes the option, exits 0', async () => {
+    const r = await cli([turnStart, assistantLine([editBlock]), interrupt], (file) => ['--json-verdict', '--transcript', file, '--cwd', CWD, '--ignore-interrupt-floor'])
+    assert.strictEqual(r.code, 0)
+    const v = JSON.parse(r.stdout.trim()) as Verdict
+    assert.strictEqual(v.demands, true)
+    assert.deepStrictEqual(v.options, { ignoreInterruptFloor: true })
+    assert.strictEqual(v.scan.readable, true)
+  })
+
+  test('the CLI: without --ignore-interrupt-floor the verdict echoes ignoreInterruptFloor false', async () => {
+    const r = await cli([turnStart, assistantLine([editBlock]), interrupt], (file) => ['--json-verdict', '--transcript', file, '--cwd', CWD])
+    const v = JSON.parse(r.stdout.trim()) as Verdict
+    assert.strictEqual(v.demands, false)
+    assert.deepStrictEqual(v.options, { ignoreInterruptFloor: false })
+  })
+
+  test('--cwd changes the verdict: the same absolute write target is scratch under cwd /repo and a real edit under another cwd', async () => {
+    const lines = [turnStart, editInReports]
+    const inRepo = JSON.parse((await cli(lines, (file) => ['--json-verdict', '--transcript', file, '--cwd', '/repo'])).stdout.trim()) as Verdict
+    const elsewhere = JSON.parse((await cli(lines, (file) => ['--json-verdict', '--transcript', file, '--cwd', '/elsewhere'])).stdout.trim()) as Verdict
+    assert.strictEqual(inRepo.demands, false, 'reports/ under the session cwd is gitignored scratch')
+    assert.strictEqual(elsewhere.demands, true, 'the same file is outside that cwd\'s reports/ and arms the gate')
+  })
+
+  test('scan.readable is false for a missing transcript and for one that cannot be read, true for a clean scan', async () => {
+    await withTranscript([turnStart], (file) => {
+      const dir = path.dirname(file)
+      const clean = computeVerdict({ hook_event_name: 'Stop', transcript_path: file, cwd: CWD })
+      assert.strictEqual(clean.scan.readable, true)
+      assert.strictEqual(clean.demands, false)
+      const missing = computeVerdict({ hook_event_name: 'Stop', transcript_path: path.join(dir, 'absent.jsonl'), cwd: CWD })
+      assert.deepStrictEqual([missing.scan.readable, missing.scan.transcript], [false, null])
+      // A directory exists but cannot be read as a transcript: the path is echoed with lines 0, which `readable` tells apart from a clean scan.
+      const unreadable = computeVerdict({ hook_event_name: 'Stop', transcript_path: dir, cwd: CWD })
+      assert.deepStrictEqual([unreadable.scan.readable, unreadable.scan.transcript, unreadable.scan.lines], [false, dir, 0])
+    })
+  })
+
+  test('--event Foo returns 2 with one stderr line and prints no verdict', async () => {
+    const r = await cli([turnStart], (file) => ['--json-verdict', '--transcript', file, '--event', 'Foo'])
+    assert.strictEqual(r.code, 2)
+    assert.strictEqual(r.stdout, '')
+    assert.ok(r.stderr.includes('--event must be Stop or SubagentStop'), r.stderr)
+    assert.strictEqual(r.stderr.trim().split('\n').length, 1)
+  })
+
+  test('--cwd or --ignore-interrupt-floor without --transcript returns 2 with one stderr line', async () => {
+    for (const argv of [['--json-verdict', '--cwd', '/repo'], ['--json-verdict', '--ignore-interrupt-floor']]) {
+      const r = await cli([turnStart], () => argv)
+      assert.strictEqual(r.code, 2, argv.join(' '))
+      assert.strictEqual(r.stdout, '')
+      assert.ok(r.stderr.includes('need --transcript'), r.stderr)
+      assert.strictEqual(r.stderr.trim().split('\n').length, 1)
+    }
+  })
+
+  test('a --transcript, --cwd or --event value that starts with -- returns 2', async () => {
+    for (const argv of [
+      ['--json-verdict', '--transcript', '--cwd', '/repo'],
+      ['--json-verdict', '--transcript', '/x/t.jsonl', '--cwd', '--ignore-interrupt-floor'],
+      ['--json-verdict', '--transcript', '/x/t.jsonl', '--event', '--cwd'],
+    ]) {
+      const r = await cli([turnStart], () => argv)
+      assert.strictEqual(r.code, 2, argv.join(' '))
+      assert.ok(r.stderr.includes('needs a value'), r.stderr)
+    }
   })
 })

@@ -46,7 +46,7 @@ fn ingest_flush_reopen_reconstructs_byte_identically_and_dedups() {
 
     // Reopen: the dedup set reloads from the durable parts; reconstruction is end-to-end proven.
     let mut store2 = agentlens_store::open_store(&dir, "1GB", 4).expect("reopen");
-    assert!(!store2.known.is_empty(), "known set reloads from parts");
+    assert!(count(&store2, "known_blob") > 0, "known_blob reloads from parts");
     let back = agentlens_store::reconstruct_body(&store2, &r1.body_id).expect("reconstruct");
     assert_eq!(back, raw1, "byte identity across flush + reopen");
     let r4 = agentlens_store::ingest_body(&mut store2, "a.request.json", &raw1, ts).expect("re-ingest");
@@ -65,23 +65,292 @@ fn blob_files_indexes_every_durable_sha_to_an_existing_part_file() {
     let ts = 1_787_000_000_000_i64;
 
     let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
-    assert!(store.blob_files.is_empty(), "nothing durable yet");
+    assert_eq!(count(&store, "known_blob"), 0, "nothing durable yet");
     agentlens_store::ingest_body(&mut store, "idx.request.json", &raw, ts).expect("ingest");
     agentlens_store::flush_detailed(&mut store).expect("flush");
 
-    assert!(!store.blob_files.is_empty(), "flush must populate the index");
-    for (sha, path) in &store.blob_files {
-        assert!(store.known.contains(sha), "every indexed sha must also be in `known`");
+    let index = sha_index(&store);
+    assert!(!index.is_empty(), "flush must populate the index");
+    assert_eq!(index.len() as i64, count(&store, "known_blob"), "every known_blob sha must map to a part_file row");
+    for (sha, path) in &index {
+        assert_eq!(sha.len(), 64, "the BLOB sha round-trips to a 64-char hex digest: {sha}");
         assert!(std::path::Path::new(path).is_file(), "indexed path must exist on disk: {path}");
         assert!(path.ends_with(".parquet"));
     }
-    let after_flush = store.blob_files.clone();
     drop(store);
 
     // Reopen rebuilds the index purely from the parquet scan — must match.
     let store2 = agentlens_store::open_store(&dir, "1GB", 4).expect("reopen");
-    assert_eq!(store2.blob_files.len(), after_flush.len(), "reopen must rebuild the same index");
+    assert_eq!(sha_index(&store2), index, "reopen must rebuild the same index");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Dedup moved from Rust sets to SQL (ingest probes known_blob / body_durable, flush anti-joins):
+/// the same bytes under a new name after a flush must add zero blob rows and exactly one body
+/// row, and a reopen must rebuild the same known_blob.
+#[test]
+fn same_bytes_new_name_after_flush_adds_one_body_row_and_no_blobs() {
+    let dir = fixture_dir("samebytes");
+    let raw = body("same");
+    let ts = 1_787_000_000_000_i64;
+
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "a.request.json", &raw, ts).expect("ingest a");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let blobs_before = count(&store, "known_blob");
+    let bodies_before = count(&store, "body_durable");
+    assert!(blobs_before > 0);
+
+    let r = agentlens_store::ingest_body(&mut store, "b.request.json", &raw, ts + 1000).expect("ingest b");
+    assert!(r.existed);
+    assert_eq!(r.new_blobs, 0);
+    let flushed = agentlens_store::flush_detailed(&mut store).expect("flush 2");
+    assert_eq!(flushed.n, 0, "no new blob rows written");
+    assert!(
+        !flushed.part_paths.iter().any(|p| p.parent().is_some_and(|d| d.ends_with(agentlens_store::BLOBS_DIR))),
+        "no blob part file for a flush with nothing new: {:?}",
+        flushed.part_paths
+    );
+    assert_eq!(count(&store, "known_blob"), blobs_before, "zero new blob rows");
+    assert_eq!(count(&store, "body_durable"), bodies_before + 1, "exactly one new body row");
+    drop(store);
+
+    let store2 = agentlens_store::open_store(&dir, "1GB", 4).expect("reopen");
+    assert_eq!(count(&store2, "known_blob"), blobs_before, "reopen rebuilds the same known_blob");
+    assert_eq!(count(&store2, "body_durable"), bodies_before + 1);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// GATE 2 end to end through flush: the same bytes under the same name, re-ingested after a flush, must
+/// write nothing: no staged row, no new part file in any store dir, and an empty staging area.
+#[test]
+fn same_bytes_same_name_after_flush_writes_nothing() {
+    let dir = fixture_dir("gate2-same-name");
+    let raw = body("g2");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "g.request.json", &raw, ts).expect("ingest 1");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let files_before = store_parquet_counts(&dir);
+
+    let r = agentlens_store::ingest_body(&mut store, "g.request.json", &raw, ts).expect("ingest 2");
+    assert!(r.existed);
+    let flushed = agentlens_store::flush_detailed(&mut store).expect("flush 2");
+    assert_eq!(flushed.n, 0, "no new blob rows written");
+    assert!(flushed.part_paths.is_empty(), "no part file written: {:?}", flushed.part_paths);
+    assert_eq!(store_parquet_counts(&dir), files_before, "no store dir gained a part file");
+    for table in ["blob", "part", "body", "api_call"] {
+        assert_eq!(count(&store, table), 0, "staging {table} is empty");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The flush correctness net on its own: a blob row staged by hand (bypassing the ingest probe)
+/// whose sha is already durable must NOT be written again.
+#[test]
+fn flush_anti_join_drops_an_already_durable_blob() {
+    let dir = fixture_dir("antijoin");
+    let raw = body("aj");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "aj.request.json", &raw, ts).expect("ingest");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let before = count(&store, "known_blob");
+    // Re-stage every durable sha twice, as a buggy ingest would.
+    store
+        .con
+        .execute_batch(
+            "INSERT INTO blob SELECT lower(hex(sha)), 1, NULL FROM known_blob;
+             INSERT INTO blob SELECT lower(hex(sha)), 1, NULL FROM known_blob;",
+        )
+        .expect("stage dupes");
+    let flushed = agentlens_store::flush_detailed(&mut store).expect("flush 2");
+    assert_eq!(flushed.n, 0, "durable shas must be anti-joined away");
+    assert_eq!(count(&store, "known_blob"), before);
+    assert_eq!(count(&store, "blob"), 0, "staging is cleared");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+
+/// The body and part anti-joins on their own: an already-durable body row and its part rows
+/// staged again by hand (bypassing the ingest probe) must not be written to a new part.
+#[test]
+fn flush_anti_join_drops_already_durable_body_and_part_rows() {
+    let dir = fixture_dir("antijoin-body");
+    let raw = body("ajb");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "ajb.request.json", &raw, ts).expect("ingest");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let bodies_before = count(&store, "body_durable");
+    let parts = agentlens_store::parquet_scan(&dir, agentlens_store::PARTS_DIR).expect("a part file exists");
+    store
+        .con
+        .execute_batch(&format!(
+            "INSERT INTO body BY NAME SELECT * EXCLUDE (file_id) FROM body_durable;
+             INSERT INTO part BY NAME SELECT * FROM {parts};"
+        ))
+        .expect("stage dupes");
+    assert!(count(&store, "body") > 0 && count(&store, "part") > 0, "duplicates are staged");
+
+    let flushed = agentlens_store::flush_detailed(&mut store).expect("flush 2");
+    assert!(
+        !flushed.part_paths.iter().any(|p| p.parent().is_some_and(|d| d.ends_with(agentlens_store::BODIES_DIR) || d.ends_with(agentlens_store::PARTS_DIR))),
+        "no body or part file for durable duplicates: {:?}",
+        flushed.part_paths
+    );
+    assert_eq!(count(&store, "body_durable"), bodies_before, "no body row added");
+    assert_eq!(parquet_files(&dir, agentlens_store::PARTS_DIR), 1, "no second part file");
+    assert_eq!(count(&store, "body") + count(&store, "part"), 0, "staging is cleared");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The post-COPY index updates are one transaction: when one fails, the rollback leaves staging
+/// and the index untouched, removes the unindexed part file the COPY wrote, and the retry writes
+/// exactly one part.
+#[test]
+fn a_failed_post_copy_update_rolls_back_and_the_retry_writes_one_part() {
+    let dir = fixture_dir("rollback");
+    let raw = body("rb");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "rb.request.json", &raw, ts).expect("ingest");
+    let staged = count(&store, "blob");
+    assert!(staged >= 2, "the fixture stages several spans");
+    // Fail the SECOND statement of the transaction deterministically: the part_file INSERT
+    // succeeds, then the known_blob INSERT (several shas, one file id) violates this index.
+    // Only a real transaction can undo the part_file row that already went in.
+    store.con.execute_batch("CREATE UNIQUE INDEX one_sha_per_file ON known_blob (file_id);").expect("trap");
+    let err = agentlens_store::flush_detailed(&mut store).expect_err("the index update must fail");
+    assert!(err.contains("rolled back"), "{err}");
+    assert_eq!(count(&store, "blob"), staged, "staging intact after rollback");
+    assert_eq!(count(&store, "known_blob"), 0, "known_blob untouched after rollback");
+    assert_eq!(count(&store, "part_file"), 0, "the part_file insert that succeeded is rolled back too");
+    assert_eq!(parquet_files(&dir, agentlens_store::BLOBS_DIR), 0, "the unindexed part file is removed");
+
+    store.con.execute_batch("DROP INDEX one_sha_per_file;").expect("untrap");
+    agentlens_store::flush_detailed(&mut store).expect("retry");
+    assert_eq!(parquet_files(&dir, agentlens_store::BLOBS_DIR), 1, "the retry writes exactly one blob part");
+    assert_eq!(count(&store, "known_blob"), staged, "every staged sha indexed once");
+    assert_eq!(count(&store, "blob"), 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The flush anti-join net, end to end: a blob whose sha is already durable, a part row and a body
+/// row for an already-durable body, and two identical NEW blob rows in one batch. Only the one new
+/// sha may reach a part file, and only once.
+#[test]
+fn restaged_durable_rows_and_a_duplicated_new_sha_write_one_blob_once() {
+    let dir = fixture_dir("antijoin-mixed");
+    let raw = body("mix");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "mix.request.json", &raw, ts).expect("ingest");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let known_before = count(&store, "known_blob");
+    let durable_sha: String = store
+        .con
+        .query_row("SELECT lower(hex(sha)) FROM known_blob LIMIT 1", [], |r| r.get(0))
+        .expect("a durable sha");
+    let body_id = agentlens_store::body_id_of(&raw);
+    let new_sha = "f".repeat(64);
+    store
+        .con
+        .execute_batch(&format!(
+            "INSERT INTO blob (sha, n, data) VALUES ('{durable_sha}', 3, 'already-durable');
+             INSERT INTO blob (sha, n, data) VALUES ('{new_sha}', 1, 'new'), ('{new_sha}', 1, 'new');
+             INSERT INTO part (body_id, pos, kind, lit, sha, path, idx, n) VALUES ('{body_id}', 0, 'lit', 'dup', NULL, NULL, NULL, NULL);
+             INSERT INTO body BY NAME SELECT * EXCLUDE (file_id) FROM body_durable;"
+        ))
+        .expect("stage duplicates");
+
+    let flushed = agentlens_store::flush_detailed(&mut store).expect("flush 2");
+    assert_eq!(flushed.n, 1, "only the new sha is written");
+    assert_eq!(flushed.part_paths.len(), 1, "the durable part and body duplicates write no file");
+    let new_part = &flushed.part_paths[0];
+    assert!(new_part.starts_with(dir.join(agentlens_store::BLOBS_DIR)), "the one file is a blob part: {}", new_part.display());
+    let (rows, distinct): (i64, i64) = store
+        .con
+        .query_row(
+            &format!("SELECT count(*), count(DISTINCT sha) FROM read_parquet('{}')", new_part.display()),
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("read the new part");
+    assert_eq!((rows, distinct), (1, 1), "the new part holds the one new sha exactly once");
+    let (known_rows, known_distinct): (i64, i64) = store
+        .con
+        .query_row("SELECT count(*), count(DISTINCT sha) FROM known_blob", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("known_blob");
+    assert_eq!(known_rows, known_distinct, "known_blob has no duplicate sha");
+    assert_eq!(known_rows, known_before + 1, "known_blob gains exactly the one new sha");
+    assert_eq!(parquet_files(&dir, agentlens_store::PARTS_DIR), 1, "no new part-table file");
+    assert_eq!(parquet_files(&dir, agentlens_store::BODIES_DIR), 1, "no new body file");
+    for table in ["blob", "part", "body", "api_call"] {
+        assert_eq!(count(&store, table), 0, "staging {table} is cleared");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A post-COPY transaction that fails must take the part file it just wrote with it: no index names
+/// that file, so a reopen would not load it, but a retry would write the same rows again as a second
+/// file. The staged blob must survive intact.
+#[test]
+fn a_failed_blob_index_update_removes_the_part_file_it_copied() {
+    let dir = fixture_dir("cleanup");
+    let raw = body("cl");
+    let ts = 1_787_000_000_000_i64;
+    let mut store = agentlens_store::open_store(&dir, "1GB", 4).expect("open");
+    agentlens_store::ingest_body(&mut store, "cl.request.json", &raw, ts).expect("ingest");
+    agentlens_store::flush_detailed(&mut store).expect("flush 1");
+    let files_before = parquet_files(&dir, agentlens_store::BLOBS_DIR);
+    assert_eq!(files_before, 1, "baseline: one blob part from flush 1");
+    let new_sha = "a".repeat(64);
+    store
+        .con
+        .execute_batch(&format!("INSERT INTO blob (sha, n, data) VALUES ('{new_sha}', 1, 'staged');"))
+        .expect("stage one new blob");
+    let staged = count(&store, "blob");
+    // The COPY of the blob table writes its part file, then the index insert hits the missing table.
+    store.con.execute_batch("DROP TABLE part_file;").expect("trap");
+    let err = agentlens_store::flush_detailed(&mut store).expect_err("the index update must fail");
+    assert!(err.contains("rolled back after COPY"), "{err}");
+    assert!(!err.contains("ROLLBACK failed"), "{err}");
+    assert_eq!(parquet_files(&dir, agentlens_store::BLOBS_DIR), files_before, "the part file the COPY wrote is removed");
+    assert_eq!(count(&store, "blob"), staged, "staging is intact");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+fn parquet_files(dir: &std::path::Path, sub: &str) -> usize {
+    fs::read_dir(dir.join(sub))
+        .expect("read_dir")
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "parquet"))
+        .count()
+}
+
+/// Parquet part count in each store dir (blobs, bodies, parts, api_calls), in that order.
+fn store_parquet_counts(dir: &std::path::Path) -> Vec<usize> {
+    [agentlens_store::BLOBS_DIR, agentlens_store::BODIES_DIR, agentlens_store::PARTS_DIR, agentlens_store::API_CALLS_DIR]
+        .iter()
+        .map(|sub| parquet_files(dir, sub))
+        .collect()
+}
+
+fn count(store: &agentlens_store::Store, table: &str) -> i64 {
+    store.con.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).expect("count")
+}
+
+/// sha (hex) to owning part file, from the SQL index that replaced the Rust `blob_files` map.
+fn sha_index(store: &agentlens_store::Store) -> std::collections::BTreeMap<String, String> {
+    let mut stmt = store
+        .con
+        .prepare("SELECT lower(hex(k.sha)), pf.path FROM known_blob k JOIN part_file pf ON pf.id = k.file_id")
+        .expect("prepare");
+    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows")
 }
 
 #[test]

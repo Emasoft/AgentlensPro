@@ -1229,7 +1229,7 @@ export const TOOLS = [
       'with big cache_creation and ~zero cache_read — the prefix is being INVALIDATED every turn instead of ' +
       'read from cache; exact Anthropic usage numbers, the measured lean-ctx-class disaster). Hook-event risks need ' +
       '--install-hooks; the sources block says honestly which feeds are absent. Poll every 10-30s, or use ' +
-      '`agentlenspro-cli --guard [seconds]` which polls for you and prints one line per risk TRANSITION — ' +
+      '`agentlenspro --guard [seconds]` which polls for you and prints one line per risk TRANSITION — ' +
       'designed to be armed via a background monitor so the agent is interrupted the moment a risk fires.',
     inputSchema: {
       type: 'object' as const,

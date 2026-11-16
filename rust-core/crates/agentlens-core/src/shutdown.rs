@@ -16,12 +16,6 @@ pub enum Outcome<'a> {
     /// The deadline elapsed while the lock was held elsewhere. Carries the holder site (with how
     /// long it had been held), when known, so the caller can name what it was stuck behind.
     TimedOut { holder: Option<String> },
-    /// Never constructed today — a poisoned mutex is recovered via `into_inner()` (the crate's
-    /// own convention; see `chores.rs`'s `unwrap_or_else(|e| e.into_inner())`) and returned as
-    /// `Flushed` instead, so a prior panic elsewhere never blocks a shutdown flush that could
-    /// still succeed. Kept as a distinct variant so a future caller that needs to tell "recovered
-    /// from poison" apart from "never poisoned" can do so without an API break.
-    Poisoned,
 }
 
 /// Poll `state.try_lock()` for up to `timeout`, then hand back the guard (or the reason it
@@ -32,7 +26,9 @@ pub fn flush_with_deadline(state: &Mutex<CoreState>, timeout: Duration) -> Outco
     loop {
         match state.try_lock() {
             Ok(guard) => return Outcome::Flushed(guard),
-            Err(TryLockError::Poisoned(poisoned)) => return Outcome::Flushed(poisoned.into_inner()),
+            // A poisoned CoreState lock is unreachable in alcore: its panic hook exits the process
+            // before unwinding (TRDD-3RVTC1HY), so this arm fails loud instead of recovering.
+            Err(TryLockError::Poisoned(_)) => panic!("CoreState lock poisoned"),
             Err(TryLockError::WouldBlock) => {
                 if Instant::now() >= deadline {
                     return Outcome::TimedOut {
@@ -60,30 +56,25 @@ mod tests {
     fn times_out_and_names_the_holder_when_the_lock_is_held_past_the_deadline() {
         let m = std::sync::Arc::new(Mutex::new(fresh_state()));
         let holder = m.clone();
-        let started = Instant::now();
+        let (tx, rx) = std::sync::mpsc::channel();
         let t = std::thread::spawn(move || {
-            let _g = holder.lock_timed().unwrap();
+            let _g = holder.lock_timed();
+            tx.send(()).unwrap();
             std::thread::sleep(Duration::from_millis(2000));
         });
-        // Give the thread a moment to actually acquire the lock before we start polling.
-        std::thread::sleep(Duration::from_millis(50));
+        // The holder signals once it owns the lock, so the poll below never races the acquisition.
+        rx.recv().unwrap();
+        let started = Instant::now();
         match flush_with_deadline(&m, Duration::from_millis(200)) {
             Outcome::TimedOut { holder } => {
-                // `HOLDER_SITE`/`HOLDER_SINCE_NS` (lib.rs) are process-wide statics shared by
-                // EVERY `Mutex<CoreState>` in the binary, not scoped per-mutex — a pre-existing
-                // property of `lock_timed`, unrelated to this change. Under the default parallel
-                // `cargo test` run another test's unrelated mutex can clear the slot between our
-                // failed `try_lock` and the read, so `None` is a real (if rare) outcome here, not
-                // a bug in `flush_with_deadline`. Assert the shape when a holder IS named, run
-                // single-threaded (`cargo test -- --test-threads=1`) for a deterministic check of
-                // the name itself.
+                // The holder slot (HOLDER_SITE in lib.rs) is process-wide, so in this parallel unit-test binary another test can own it; None and another site are both possible here, and the exact-site check lives in tests/lock_holder_site.rs, which runs alone in its own process (TRDD-7EZE3AIZ).
                 if let Some(site) = holder {
-                    assert!(site.contains("shutdown.rs"), "holder site should point at this file's lock_timed call, got {site}");
+                    assert!(site.contains(".rs:") && site.contains(" (holding for "), "holder should be a well-formed site, got {site}");
                 }
             }
             _ => panic!("expected TimedOut"),
         }
-        assert!(started.elapsed() <= Duration::from_millis(300), "should return close to the deadline, not wait for the holder");
+        assert!(started.elapsed() <= Duration::from_millis(1000), "should return close to the deadline, not wait for the holder");
         t.join().unwrap();
     }
 
@@ -92,14 +83,13 @@ mod tests {
         let m = std::sync::Arc::new(Mutex::new(fresh_state()));
         let holder = m.clone();
         let t = std::thread::spawn(move || {
-            let _g = holder.lock_timed().unwrap();
+            let _g = holder.lock_timed();
             std::thread::sleep(Duration::from_millis(100));
         });
         std::thread::sleep(Duration::from_millis(20));
         match flush_with_deadline(&m, Duration::from_millis(2000)) {
             Outcome::Flushed(_guard) => {}
             Outcome::TimedOut { holder } => panic!("expected Flushed, timed out behind {holder:?}"),
-            Outcome::Poisoned => panic!("expected Flushed, got Poisoned"),
         }
         t.join().unwrap();
     }

@@ -1,9 +1,9 @@
 ---
 trdd-id: FSMISF5K
 title: Per-session summaries are DuckDB queries over the segments and the resident span window is deleted
-column: dev
+column: human_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-09-06T09:20:26+0200
+updated: 2026-10-16T11:16:42+0200
 current-owner: kraken-worker-fix/fsmisf5k
 implementation-commits: [dfeef735, 7d552913, 7d1fbd76]
 task-type: refactor
@@ -16,6 +16,7 @@ npt: [XTFDRTH2]
 related: [7YPQWKPG, Q9WD3K5R, YILE6N3T, 7RM5YW2T]
 relevant-files: [rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-core/src/ui.rs, rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-spanstore/src/writer.rs]
 labels: [rust-core, memory, duckdb]
+status: tasked
 ---
 
 # Per-session summaries are DuckDB queries over the segments and the resident span window is deleted
@@ -132,3 +133,4 @@ delete `boot_load` → `SpanWindow` → the rebuild loop, one phase per file gro
 
 - 2026-09-05T22:06:10+0200 — Authored into `todo` as an NPT-gated child of the USER-approved
   7YPQWKPG.
+- 2026-10-16T11:16:42+0200 — column → human_review by main-agent@agentlenspro. needs a live re-measure on a deployed collector; a deploy needs the owner (row 20)

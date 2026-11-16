@@ -3,7 +3,7 @@
 //! over HTTP, and reads what the tap wrote either from the spool files or, after the scheduled
 //! seal + `aldigest collect` ran, from the loaded tables through `aldigest query` (read-only).
 //! agentlens-core links no DuckDB for this: the `aldigest` binary is built once by a nested
-//! `cargo build` into CARGO_TARGET_TMPDIR, the way agentlens-digest's tests build `alspool`.
+//! `cargo build` into the capped temp dir, the way agentlens-digest's tests build `alspool`.
 
 #![cfg(unix)]
 
@@ -23,7 +23,9 @@ fn free_port() -> u16 {
 }
 
 fn scratch(tag: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spool-tap").join(tag);
+    // temp_dir(), not env!("CARGO_TARGET_TMPDIR"): that path is baked in at COMPILE time, so it escapes the
+    // TMPDIR redirect of scripts/test-data-cap.sh and its 4 GB cap; temp_dir() follows the run dir.
+    let d = std::env::temp_dir().join("spool-tap").join(tag);
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -37,7 +39,9 @@ fn manifest() -> PathBuf {
 fn aldigest() -> PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
     BIN.get_or_init(|| {
-        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aldigest-build");
+        // temp_dir(), not env!("CARGO_TARGET_TMPDIR") (compile-time path, escapes the cap): see scratch().
+        // Cost: the bundled-DuckDB aldigest build (~1.5 GB) is rebuilt in the capped run dir every run.
+        let target = std::env::temp_dir().join("aldigest-build");
         let out = Command::new(std::env::var("CARGO").expect("cargo sets CARGO for test runs"))
             .args(["build", "--offline", "--quiet", "-p", "agentlens-digest", "--manifest-path"])
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml"))

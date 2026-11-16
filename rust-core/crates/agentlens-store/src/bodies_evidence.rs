@@ -83,7 +83,7 @@ fn with_duck<T>(store_dir: &Path, f: impl FnOnce(&duckdb::Connection) -> Result<
     let spill = crate::spill_sql(&store_dir.join(crate::TMP_DIR)).map_err(|e| format!("duckdb spill dir: {e}"))?;
     for stmt in [
         format!("SET memory_limit = {}", sq(&mem)),
-        "SET threads = 2".to_owned(),
+        format!("SET threads = {}", crate::cores::duckdb_threads()),
         spill,
         "SET preserve_insertion_order = false".to_owned(),
     ] {

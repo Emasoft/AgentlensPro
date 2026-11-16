@@ -53,6 +53,7 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 installs the server itself; the CLI starts it on demand.
 
 If any agentlenspro command prints "agentlenspro is DISABLED", run the reactivate command it prints; do not retry the original command.
+While disabled, the reads that need no server still answer without enabling: `get_account_status --all` (every account's status; it also sends one billed probe per CLAUDE_CODE_LONG_OAUTH_KEY_* key, even while disabled, unless `--no-refresh`), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`, and the disk monitor, all four verbs (owner decision 2026-11-16): `disk`, `disk-sample`, `disk-watch`, `disk-monitor install|uninstall|status`. Server-only verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) refuse with exit 69; for account status use `get_account_status --all` instead of re-enabling.
 `server`/`daemon` restarts do not self-heal the install: run any other agentlenspro command, or `agentlenspro enable`, to repair.
 
 ## Version floor — check this FIRST if a command is "unknown"
@@ -134,13 +135,20 @@ around. It was not always true: before 2.22.0 a refusal printed `{"error": …}`
 exited **0**, so a consumer read a refusal as an answer (issue #9 §1). If you must support an
 older binary, check for a top-level `error` key as well as the exit code.
 
-Two more things a program needs:
+Three more things a program needs:
 
 - **`--json` is a global.** It works on every tool and overrides the human rendering, so a tool
   that normally prints a table still gives you JSON. `--out FILE` writes the full payload to disk
   and prints a digest instead; on a refusal the file is **not** written.
 - **A refusal never writes `--out`.** A file containing `{"error": …}` is worse than no file,
   because the next reader finds it and trusts it.
+- **A refused single tool call may carry a `notices` array.** If the same launch repaired the install or warned
+  (a first-run or `agentlenspro: restored …` line), those lines travel INSIDE the refusal —
+  `{"tool": "...", "error": "...", "notices": ["agentlenspro: ..."]}` — so stderr is still exactly one JSON object.
+  The key is absent when there is nothing to report. Everywhere else the same lines print on stderr as plain text:
+  AFTER the output of a successful tool call, and BEFORE the output of every other command, of `batch`, and of a
+  call that fails on its arguments. A `batch` in which tools refuse prints one JSON object per refusal, so its
+  stderr is not a single object.
 
 ## When a command fails — read the failure, don't retry blindly
 
@@ -172,6 +180,7 @@ text refers to in **bold** are listed here with the file that holds them.
 | the full `budget` flag surface and the abort recipe | [references/budget.md](references/budget.md) — **Budgeting a timed run** |
 | the full `watch` flag surface, metrics, and durable logging | [references/watch.md](references/watch.md) — **Watching ANY metric for peaks** |
 | why a 20-minute gap is NOT a cold cache; `cache-expired`, `cache-state`, `last-compact` | [references/cache-ttl.md](references/cache-ttl.md) — **Cache TTL tracking** |
+| disk space over time: free/used per volume, when exactly it changed, the trash, folder sizes; `disk`, `disk-sample`, `disk-watch`, `disk-monitor` | [references/disk-monitor.md](references/disk-monitor.md) — **Disk-space monitor** |
 | the per-call cache ledger, Anthropic's own window usage, every account's headroom | [references/windows-and-ledger.md](references/windows-and-ledger.md) — **The per-call ledger**, **Authoritative window usage**, **Every account** |
 | what is running in THIS project and what it cost; per-subagent context fill | [references/statusline-history.md](references/statusline-history.md) — **Per-project and per-subagent history** |
 | every tool, by the question it answers | [references/tool-cheat-sheet.md](references/tool-cheat-sheet.md) — **High-value tools (cheat-sheet)**, **Context-composition & session-drill tools** |

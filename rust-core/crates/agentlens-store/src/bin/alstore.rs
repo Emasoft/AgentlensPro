@@ -10,6 +10,12 @@
 //!       persisted stranded set, under the pass lock (TRDD-8TM7I49X) — run AFTER the ts rows
 //!       those names were parked for have been repaired, or the next pass re-parks them
 //!
+//! Exit codes: 0 ok; 1 failure / verify mismatch; 2 reconstruct/verify store error; 3 the pass state
+//!   file (.pass-state.json) could not be saved (`pass` still prints its result first, `unpark` prints
+//!   no counts); 4 the pass state file exists but cannot be read or is not valid JSON (`pass` and `unpark`
+//!   refuse before any ingest or delete and leave it untouched; an absent file is an empty state, not this); 64 usage;
+//!   75 another alstore pass owns the store (EX_TEMPFAIL, skip the tick).
+//!
 //! The parity tests drive these against the TS store on the same files/directories: the
 //! Parquet parts are the compatibility boundary (both engines are DuckDB).
 
@@ -69,7 +75,10 @@ fn main() {
     // a locked-out tick exits in milliseconds instead of paying the parts-scan open first.
     // Exit 75 = EX_TEMPFAIL: the TS wrapper treats it as "skip this tick", the cross-process
     // twin of its own bodiesPassRunning guard — every other failure stays loud.
-    let _pass_lock = if cmd == "pass" || cmd == "unpark" {
+    // `ingest` too (TRDD-2HRA270Y step 3, A4): it writes store parts, and alcore now keeps one store
+    // open across ticks and syncs other writers' parts only under this lock — an unlocked ingest
+    // could leave a half-written part for that sync to trip over.
+    let _pass_lock = if cmd == "pass" || cmd == "unpark" || cmd == "ingest" {
         match agentlens_store::pass::acquire_pass_lock(std::path::Path::new(store_dir)) {
             Ok(f) => Some(f),
             Err(agentlens_store::pass::PassLockErr::Busy) => {
@@ -94,7 +103,19 @@ fn main() {
         let names: Vec<String> =
             raw.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
         let state_file = std::path::Path::new(store_dir).join(agentlens_store::pass::PASS_STATE_FILE);
-        let (requested, removed, remaining) = agentlens_store::pass::unpark_names(&state_file, &names);
+        // TRDD-FINMFYDE: refuse (exit 4) before anything is written when the state cannot be read. This load is
+        // what tells a read failure from a save failure: unpark_names returns one io::Error for both, so the exit
+        // code must not be picked from the error alone. The second read inside unpark_names sees the same bytes,
+        // because this process holds the exclusive pass lock for the whole call.
+        if let Err(e) = agentlens_store::pass::load_pass_state(&state_file) {
+            eprintln!("alstore: cannot read pass state: {e}");
+            exit(4);
+        }
+        // TRDD-ZR3OGSAV: a failed state save means nothing was unparked; fail (exit 3) instead of printing counts.
+        let (requested, removed, remaining) = agentlens_store::pass::unpark_names(&state_file, &names).unwrap_or_else(|e| {
+            eprintln!("alstore: cannot save {}: {e}", state_file.display());
+            exit(3);
+        });
         println!(
             "{}",
             serde_json::json!({ "requested": requested, "removed": removed, "strandedRemaining": remaining })
@@ -102,12 +123,33 @@ fn main() {
         return;
     }
 
-    let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).max(4)).unwrap_or(4);
-    let mut store = agentlens_store::open_store(std::path::Path::new(store_dir), agentlens_store::DEFAULT_MEMORY_LIMIT, threads)
-        .unwrap_or_else(|e| {
-            eprintln!("alstore: cannot open store: {e}");
-            exit(1);
-        });
+
+    // TRDD-CQ4652DQ: the CLI DuckDB sizing is BOUNDED, not the old 8GB + available_parallelism().
+    // The in-process server path already made this change for the same reason (chores.rs,
+    // TRDD-768NEX6E: at 8GB + available_parallelism() the DuckDB scans of the pass became the
+    // dominant IO/CPU load of the machine). The CLI was left at the old sizing, and a live pass
+    // grew to 4.8 GB RSS — the janitor memory-guard logged it as the largest process on the box.
+    // The env override lets an operator raise the ceiling for a deliberate bulk backfill
+    // without a rebuild; an unusable value falls back to the bounded default WITH a message.
+    let sizing = agentlens_store::cli_sizing(&std::env::vars().collect());
+    for w in &sizing.warnings {
+        eprintln!("alstore: {w}");
+    }
+    // The sizing is printed so the next reader sees WHY the process is the size it is: a pass
+    // that grows to a gigabyte is then explicable instead of mysterious.
+    eprintln!(
+        "alstore: duckdb memory_limit={} threads={}",
+        sizing.memory_limit, sizing.threads
+    );
+    let mut store = agentlens_store::open_store(
+        std::path::Path::new(store_dir),
+        &sizing.memory_limit,
+        sizing.threads,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("alstore: cannot open store: {e}");
+        exit(1);
+    });
 
     match cmd.as_str() {
         "ingest" => {
@@ -184,7 +226,13 @@ fn main() {
             // memory for its process lifetime; a CLI's process is one pass, so the state rides
             // a file). fsyncedParts stays per-invocation — correct either way, cheaper with.
             let state_file = std::path::Path::new(store_dir).join(agentlens_store::pass::PASS_STATE_FILE);
-            let (mut skip, mut stranded) = agentlens_store::pass::load_pass_state(&state_file);
+            // TRDD-FINMFYDE: an unreadable state file refuses (exit 4) here, before any ingest or delete. Empty sets
+            // would let the pass re-examine skipped bodies and forget stranded ones, and the save below would then
+            // overwrite the file it could not read.
+            let (mut skip, mut stranded) = agentlens_store::pass::load_pass_state(&state_file).unwrap_or_else(|e| {
+                eprintln!("alstore: cannot read pass state: {e}");
+                exit(4);
+            });
             let mut fsynced = std::collections::HashSet::new();
             let opts = agentlens_store::pass::PassOptions {
                 bodies_dir: std::path::PathBuf::from(bodies_dir),
@@ -195,9 +243,20 @@ fn main() {
                 relocate_stranded_to: relocate_to.map(std::path::PathBuf::from),
                 ..Default::default()
             };
-            let res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
-            agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
+            // The state file belongs to the STORE, not to this bodies dir: alternating `alstore pass` runs on two
+            // dirs against one store would prune the other dir names. One dir per store is the supported use; no
+            // guard is added (a guard would need the state file to record which dir owns it). Runs inside _pass_lock.
+            let prune_line = agentlens_store::pass::prune_pass_names(std::slice::from_ref(&opts.bodies_dir), &mut skip, &mut stranded);
+            let mut res = agentlens_store::pass::ingest_pass(&mut store, &opts, &mut skip, &mut stranded, &mut fsynced);
+            res.failed.extend(prune_line);
+            // TRDD-ZR3OGSAV: the pass already ran (and may have deleted), so still print its result for
+            // the operator, but exit 3: the state it relies on next run was not persisted.
+            let saved = agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
             println!("{}", serde_json::to_string(&res).expect("serializable"));
+            if let Err(e) = saved {
+                eprintln!("alstore: cannot save {}: {e}", state_file.display());
+                exit(3);
+            }
         }
         other => usage(&format!("unknown command {other}")),
     }

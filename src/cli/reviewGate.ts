@@ -4,10 +4,10 @@
 // WHAT ARMS IT (owner order 2026-09-15, replacing every earlier arming rule):
 //   - a WRITE — an Edit/Write/NotebookEdit outside the ephemeral roots, or a write-shaped Bash
 //     command (git commit, sed -i, a redirect outside /tmp, …; `commandWriteReason`) — demands ONE
-//     adversarial REVIEW fork (`ROLE: REVIEW`, heading ADVERSARIAL-REVIEW);
+//     adversarial REVIEW fork (`ROLE: REVIEW`, heading REVIEW_HEADING);
 //   - a PROPOSAL — a text block with a line that starts `PROPOSAL FOR ACTION - PLEASE REVIEW`
 //     (`PROPOSAL_LINE`) — demands a MEASURE agent (`ROLE: MEASURE`, heading
-//     MEASURE-AND-VERIFY-REPORT) AND the REVIEW fork. A proposal without that exact line is not a
+//     MEASURE_HEADING) AND the REVIEW fork. A proposal without that exact line is not a
 //     proposal to this gate; it triggers nothing on Stop or SubagentStop.
 // WHAT NEVER ARMS IT: a janitor heartbeat turn (`[janitor-heartbeat]`), a turn the user interrupted
 // (`[Request interrupted by user…]`, Esc / Ctrl-C), a janitor subagent, the review fork itself, an
@@ -25,7 +25,6 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { agentlensDisabled, killSwitchHalf, killSwitchPath } from './killSwitch'
 import { readStdin } from './hookHandlers'
 import { DELEGATE_DENY_REASON } from './delegateGate'
 import {
@@ -33,6 +32,7 @@ import {
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel, shellWords, stripHeredocBodies,
 } from './reviewGateTriggers'
 import type { ArmCause } from './reviewGateTriggers'
+import { markerOpening, MEASURE_HEADING, REVIEW_HEADING } from './reviewLoop'
 // Re-exported so existing importers of these three names from THIS module keep working — the
 // definitions themselves live in reviewGateTriggers.ts.
 export { NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel }
@@ -47,13 +47,14 @@ export { NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, isNoReviewSentinel }
 // line of prose before the marker would silently fail to credit.
 export const REVIEW_ROLE_RULE = 'Begin your prompt with its FIRST line being exactly "ROLE: REVIEW" '
   + '(nothing before it), and '
-  + 'begin your final message with the heading ADVERSARIAL-REVIEW. Answer in ONE turn. Make ZERO '
+  + 'begin your final message with the heading ' + REVIEW_HEADING + '. Answer in ONE turn. Make ZERO '
   + 'tool calls — no SendMessage, no Read, no Bash, none. Put every finding INLINE in your final '
   + 'message and stop.'
+  + ' You cannot see the response that spawned you: tool calls and results from it are invisible to you. Their absence from your transcript is not evidence they did not happen; review only what your prompt states, and never mark a claim about the spawning response VERIFIED.'
 
 export const MEASURE_ROLE_RULE = 'Begin your prompt with its FIRST line being exactly "ROLE: MEASURE" '
   + '(nothing before it), and '
-  + 'begin your final message with the heading MEASURE-AND-VERIFY-REPORT. Settle EVERY load-bearing '
+  + 'begin your final message with the heading ' + MEASURE_HEADING + '. Settle EVERY load-bearing '
   + 'assumption the proposal rests on and report each as ASSUMPTION / COMMAND / OBSERVED / VERDICT '
   + '(confirmed | refuted | unmeasurable). There is NO cap on how many tool calls this takes — measure '
   + 'properly; a half-measured report that stops mid-way is worse than none, and a cap is what makes '
@@ -87,12 +88,9 @@ export type Role = 'measure' | 'review'
  *  "ROLE: REVIEW is the marker…"); first-line anchoring (added here) is what BA0DCW98 needs — the
  *  two are independent and both required.
  *
- *  NOT used for `ownRole` (the self-exemption check, below): that reads a DIFFERENT string — the
- *  first user entry of the SPAWNED agent's own transcript, which per `declaredRoleOwnTranscript`'s
- *  own doc comment may arrive with harness-added preamble ahead of the marker line, so anchoring
- *  THIS function's position rule onto that read would falsely de-exempt every real REVIEW/MEASURE
- *  fork and deadlock the gate (each fork's own SubagentStop would then demand it spawn a reviewer
- *  of itself). Keep the two predicates separate; do not unify them. */
+ *  Since TRDD-8YM21R5X this ALSO feeds `ownRole` through `declaredRoleOwnTranscript` (the spawned
+ *  agent's self-exemption), so editing it changes self-exemption too. These are not the only role
+ *  readers: the worker-write scan (`workerDeclaredRole`) reads `Your directive: ` lines separately. */
 export function declaredRole(prompt: string): Role | null {
   let firstLine: string | undefined
   for (const line of prompt.split('\n')) {
@@ -104,28 +102,78 @@ export function declaredRole(prompt: string): Role | null {
   return m === r ? null : (m ? 'measure' : 'review')
 }
 
-/** Role claimed by the SPAWNED agent's OWN first transcript entry — its spawning brief as Claude
- *  Code actually delivered and recorded it, which (per a prior measurement, TRDD-3U8AIHXK) may
- *  carry harness-added preamble ahead of the `ROLE: …` line, unlike the parent's raw `input.prompt`
- *  string `declaredRole` reads above. Feeds ONLY `ownRole` (self-exemption from the agent's own
- *  SubagentStop gate) — NOT anchored to the first line, so this predicate still carries the
- *  BA0DCW98 residual: untrusted text quoted early in a spawned agent's own brief that happens to
- *  contain a bare marker line self-exempts that agent. Left open deliberately (orchestrator
- *  decision, 2026-09-24, pending a measurement of the wrapped shape): anchoring it requires
- *  knowing the actual harness-wrapped shape, which is
- *  unmeasured here, and a wrong anchor point deadlocks every real role fork — worse than the
- *  residual it would close. Whole-line equality with trailing-whitespace tolerance (the fixture K
- *  fix) still applies, so a marker with trailing prose does not exempt. Follow-up: measure the
- *  real wrapped shape (a MEASURE agent's own first transcript entry) and anchor this predicate the
- *  same way once that shape is known. */
+/** Role claimed by the SPAWNED agent's OWN first transcript entry (feeds ONLY `ownRole`, the
+ *  self-exemption from the agent's own SubagentStop gate). Anchored exactly like `declaredRole`: the
+ *  marker must be the FIRST NON-BLANK line, whole-line equality, trailing whitespace tolerated.
+ *  WHY (TRDD-8YM21R5X, shapes measured 2026-11-01, Claude Code 2.1.316): a freshly spawned non-fork
+ *  worker's first user entry is a plain string holding the brief verbatim, no harness preamble, so the
+ *  brief's first line IS the entry's first line. A fork's first entry is [tool_result, text]; userPromptText
+ *  returns '' for it, so this predicate never sees a fork (forks are exempted by the separate review-fork
+ *  rule). An agent resumed into a new session file starts with a tool_result or a "[SYSTEM NOTIFICATION…"
+ *  string, so it declares no role. Unanchored matching let a bare marker line buried in untrusted quoted
+ *  text self-exempt the agent (TRDD-BA0DCW98); anchoring closes that. No non-fork role agent was
+ *  measured, and under the gate's current rules role agents are forks. If a future Claude Code or a
+ *  SubagentStart hook puts a line ahead of a non-fork brief, non-fork role agents lose self-exemption
+ *  (the gate gets stricter, never looser). */
 export function declaredRoleOwnTranscript(prompt: string): Role | null {
-  const m = /^ROLE: MEASURE\s*$/m.test(prompt)
-  const r = /^ROLE: REVIEW\s*$/m.test(prompt)
-  return m === r ? null : (m ? 'measure' : 'review')
+  return declaredRole(prompt)
+}
+
+/** A declared role for the worker-write scan. `investigate` relaxes that scan only; it never credits a gate role
+ *  (`declaredRole` and `Role` stay MEASURE/REVIEW), so an INVESTIGATE fork cannot satisfy a MEASURE demand. */
+export type WorkerRole = Role | 'investigate'
+
+/** The TEXT blocks of a transcript entry, joined; a tool_result block is skipped, never read. Unlike
+ *  `userPromptText`, an entry that ALSO carries a tool_result still yields its text, because a fork's first
+ *  user entry is exactly that shape (measured, TRDD-QQ2XIIZ6). */
+function firstEntryText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((b) => (b as AssistantContentBlock)?.type === 'text')
+    .map((b) => String((b as { text?: unknown }).text ?? ''))
+    .join('\n')
+}
+
+/** The ROLE a background worker declared in its OWN first transcript entry, for workerWriteDetail only.
+ *  WHY (TRDD-QQ2XIIZ6, measured 2026-10-14): a fork's first user entry is `[tool_result, text]`, the text being
+ *  `<fork-boilerplate>…</fork-boilerplate>` then a line `Your directive: ROLE: X`. The old read
+ *  (`userPromptText`, which returns '' for any entry holding a tool_result, then declaredRoleOwnTranscript)
+ *  therefore never matched a fork, so the role exemption never ran and every role fork's report or scratch
+ *  write armed the gate. The line read is the first one starting `Your directive: ` (fork shape), else the
+ *  first non-blank line (a plain prompt); the marker must START that line, so a ROLE line anywhere else — quoted
+ *  later in a directive, on line 5 of a fresh worker's prompt, or after other text — never counts. Text AFTER
+ *  the role word is allowed: the investigation forks' real line is `ROLE: INVESTIGATE (read-only; …)`, which a
+ *  whole-line match missed (review of df8bfc70). The word must still END there: `(?![\w-])` refuses a longer word
+ *  (`ROLE: MEASUREMENT`) and a hyphenated one (`ROLE: REVIEW-ish`, review of 668fc421), which `\b` let through.
+ *  This is deliberately looser than declaredRole's credit test (first line exactly `ROLE: MEASURE`/`ROLE: REVIEW`,
+ *  fixture K): a role here only relaxes the scan of unresolvable scratch targets (isRoleScratchTarget), it never
+ *  credits a gate role. */
+export function workerDeclaredRole(content: unknown): WorkerRole | null {
+  const lines = firstEntryText(content).split('\n')
+  const line = lines.find((l) => l.startsWith('Your directive: ')) ?? lines.find((l) => l.trim() !== '') ?? ''
+  const m = /^(?:Your directive: )?ROLE: (MEASURE|REVIEW|INVESTIGATE)(?![\w-])/.exec(line)
+  return m === null ? null : (m[1].toLowerCase() as WorkerRole)
+}
+
+
+/** The credit test BOTH roles share (owner spec 2026-10-14). A spawn credits its ROLE only when it is a
+ *  `fork` (case-folded) with NO `isolation` parameter. WHY a fork: it inherits the parent's conversation
+ *  and reuses its prompt cache, so the reviewer reads that context at the cached rate. WHY no isolation:
+ *  an isolated spawn runs in a fresh git worktree, which fails outside a git repository, so it is not a
+ *  reviewer the gate can rely on and it earns nothing. Any non-empty `isolation` value counts. Shared with
+ *  reviewSupervisor so the gate and the supervisor cannot disagree. */
+export function isCreditedFork(agentInput: { subagent_type?: unknown; isolation?: unknown }): boolean {
+  const isFork = String(agentInput.subagent_type ?? '').trim().toLowerCase() === 'fork'
+  return isFork && String(agentInput.isolation ?? '') === ''
 }
 
 // ── The directive, embedded (not a shipped file): `agentlenspro review-gate --directive` ─────────
 export const REVIEW_GATE_DIRECTIVE = `# Review gate directive (read on every Stop / SubagentStop fire)
+
+SCOPE (owner ruling 2026-10-14): only the turn that just ended decides. A turn starts at a non-sidechain user
+entry with an object turnPosition: a human prompt, a heartbeat, a task notification, a peer message or a compact
+summary. A message typed mid-turn does not start one. Work, proposals and reviews from an earlier turn do not count.
 
 WHAT ARMS IT (owner order 2026-09-15):
 - a WRITE: an Edit/Write/NotebookEdit outside /tmp and the project's reports/ and *_dev/ dirs, or a
@@ -144,24 +192,25 @@ WHAT ARMS IT (owner order 2026-09-15):
 WHAT NEVER ARMS IT: plain prose, status lines, read-only commands, files changed on disk by someone
 else (there is no mtime walk), a janitor heartbeat prompt (\`[janitor-heartbeat]\`) or a user interrupt (Esc / Ctrl-C,
 \`[Request interrupted by user…]\`) — each is a FLOOR: nothing before it is ever demanded, while a
-write the main agent makes AFTER it still arms — a janitor subagent (\`ai-maestro-janitor:*\`), the review fork itself, or
-an agent whose OWN first transcript entry carries \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as a whole line
-by itself (self-exemption; not anchored to that entry's first line — TRDD-8YM21R5X tracks that
-residual). This is DIFFERENT from what credits YOUR spawn to the gate scanning YOU (below): a spawn
-you make is only credited when the marker is the literal FIRST non-blank line of the prompt you
-wrote for it (TRDD-BA0DCW98: a marker buried later in the prompt you wrote, e.g. quoted from
-untrusted third-party text, no longer credits it).
+write the main agent makes AFTER it still arms — a janitor subagent (\`ai-maestro-janitor:*\`), any fork
+(\`subagent_type: "fork"\`: REVIEW and MEASURE forks alike, exempt by agent type), or a non-fork agent whose OWN
+first transcript entry has \`ROLE: MEASURE\` / \`ROLE: REVIEW\` as its first non-blank line, that line whole by itself
+(self-exemption; TRDD-8YM21R5X).
+Self-exemption and crediting use the same first-line anchoring and differ in whose text is read and what it unlocks:
+self-exemption reads the first entry of the spawned agent itself and exempts that agent; crediting reads the prompt
+you wrote and credits your spawn to the gate scanning YOU (below). A marker buried later in the prompt you wrote,
+e.g. quoted from untrusted third-party text, credits nothing (TRDD-BA0DCW98).
 
 THE AGENTS:
-- REVIEW: the Agent tool, \`subagent_type: "fork"\`. Its prompt states what you did this turn and
+- REVIEW: the Agent tool, \`subagent_type: "fork"\`, with NO \`isolation\` parameter. Its prompt states what you did this turn and
   every claim you assert, and carries THIS LINE VERBATIM, because it reads nothing else you were told:
   "${REVIEW_ROLE_RULE}"
   Tell it to hunt the recurring failure shape — a PROXY read in place of the thing (a pipe's exit
   status for the tool's, a preview for the file, one run for the variance, an assumed format for the
-  real one) — and to name the single WEAKEST link with ONE settling command. Only a \`fork\` spawn credits the REVIEW role; a \`ROLE: REVIEW\` line in any other agent's prompt credits nothing.
-- MEASURE (proposals only): any subagent type; a \`fast-worker\` (haiku[1m], medium effort, no inherited
-  conversation context) is PREFERRED — the measurer only reads or runs simple commands, so the cheapest fast model with an exact step list is enough. Its prompt is a numbered step list (one assumption per step, each with the exact command to run and what to report), and carries THIS LINE VERBATIM:
+  real one) — and to name the single WEAKEST link with ONE settling command.
+- MEASURE (proposals only): a fork too (Agent tool, \`subagent_type: "fork"\`, NO \`isolation\` parameter). It may run read-only commands and read files with \`tldr\`. Its prompt is a numbered step list (one assumption per step, each with the exact command to run and what to report), and carries THIS LINE VERBATIM:
   "${MEASURE_ROLE_RULE}"
+Only a \`fork\` spawn with NO \`isolation\` parameter credits a role; a ROLE line in any other spawn credits nothing.
 Each agent does its one job and returns; neither spawns reviewers of its own (a roled agent is
 exempt from this gate, so the regress stops there).
 
@@ -175,6 +224,7 @@ the spawn is fine; another write or proposal after it re-arms the gate.
 If you CANNOT spawn — ${NO_REVIEW_SENTINEL_EXAMPLES.join(', ')} — a text block whose ENTIRE content
 is "${NO_REVIEW_SENTINEL} — <reason>", as the turn's last block, releases the gate. It is the only
 other exit.
+The sentinel must be the ENTIRE text block (no trailing prose after the reason line), and the reason must be at least 8 characters — a token like "foo" does not release the gate.
 
 Then read the report(s) and act on them — if acting edits, writes or proposes, that is new work
 and needs its own review. Do NOT restate this directive to the user — spawn and continue. This
@@ -197,6 +247,9 @@ export interface ReviewGateInput {
    *  (2026-09-03) forbids. The main gate cannot loop on its own any more — a roled spawn credits
    *  permanently, so one compliant response releases it. */
   stop_hook_active?: unknown
+  /** SubagentStop only: the text of the agent's final message (Claude Code hook input). The review display
+   *  shows a finished review to the USER from it; it is never sent to the model. */
+  last_assistant_message?: unknown
 }
 
 /** True when the agent's definition lists a `tools:` line WITHOUT the Agent tool — it cannot
@@ -368,7 +421,7 @@ export interface AssistantContentBlock {
   // on-disk JSONL a different process wrote: a malformed entry must reach the String() coercion at
   // the read site, not throw here.
   text?: unknown
-  input?: { subagent_type?: unknown; command?: unknown; file_path?: unknown; notebook_path?: unknown; prompt?: unknown }
+  input?: { subagent_type?: unknown; isolation?: unknown; command?: unknown; file_path?: unknown; notebook_path?: unknown; prompt?: unknown }
   id?: unknown
   tool_use_id?: unknown
   content?: unknown
@@ -471,7 +524,8 @@ function runsNestedShell(command: string): boolean {
 /** What ONE background worker wrote, as the detail of a `worker write` block, or null. The worker's
  *  transcript sits beside the main one at `<base>/subagents/agent-<x>.jsonl`, and its `.meta.json`
  *  holds the tool_use id the return names. Skipped: a janitor agent (its writes are the janitor's, as
- *  everywhere in this file) and a ROLED agent (its own fork is the review, not work to review). Never
+ *  everywhere in this file). A ROLED agent (workerDeclaredRole) is scanned like any worker, except that an
+ *  unresolvable write target inside an ephemeral directory is its scratch, not work (TRDD-QQ2XIIZ6). Never
  *  throws: a read or parse error is named on stderr and allowed, because a throw here would wedge the
  *  main session's Stop. */
 export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd: string): string | null {
@@ -490,7 +544,10 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
     const entries: TranscriptEntry[] = []
     for (const l of rawLines) { try { entries.push(JSON.parse(l) as TranscriptEntry) } catch { /* torn line */ } }
     const firstUser = entries.find((e) => e?.type === 'user')
-    if (firstUser !== undefined && declaredRoleOwnTranscript(userPromptText(firstUser.message?.content)) !== null) return null
+    // A declared role no longer skips the worker (TRDD-QQ2XIIZ6, amendment A): it relaxes ONLY an unresolvable
+    // target inside an ephemeral directory (a `$(date +%s)` stamp, a loop variable), so a role fork's resolvable
+    // write outside those directories still arms. workerDeclaredRole, not userPromptText: see its WHY.
+    const roleScratch = firstUser !== undefined && workerDeclaredRole(firstUser.message?.content) !== null
     const denied = deniedToolUseIds(rawLines)
     const details: string[] = []
     for (const e of entries) {
@@ -511,7 +568,7 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
         // while a path-qualified shell or a clustered -lc-style option still counts.
         const command = String(b.input?.command ?? '')
         const nested = runsNestedShell(command)
-        for (const reason of commandWriteReasons(command, cwd)) {
+        for (const reason of commandWriteReasons(command, cwd, { roleScratch })) {
           if (nested || !DEPLOY_OR_RECORD_RE.test(reason)) details.push(reason)
         }
       }
@@ -526,7 +583,8 @@ export function workerWriteDetail(transcriptPath: string, toolUseId: string, cwd
   }
 }
 
-/** Read only the tail of a (possibly huge) transcript — the answer is always near the end. */
+/** Read only the tail of a (possibly huge) transcript; the answer is always near the end. Used by delegateGate only:
+ *  the review gate reads its current turn with readCurrentTurn, not this window. */
 export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 * 1024): string[] | null {
   try {
     const fd = fs.openSync(transcriptPath, 'r')
@@ -541,6 +599,132 @@ export function readTranscriptTail(transcriptPath: string, maxBytes = 4 * 1024 *
     return lines.filter(Boolean)
   } catch {
     return null
+  }
+}
+
+
+/** Bytes per backward step in `readCurrentTurn`. A step size, not a cap: the walk continues until the
+ *  turn's start is found, however far back that is. */
+const TURN_READ_CHUNK_BYTES = 1024 * 1024
+
+/** Whether a transcript entry starts a turn. Measured 2026-10-14 on real transcripts: a turn starts at a
+ *  non-sidechain `user` entry with an object `turnPosition`. That covers human prompts, heartbeat cron
+ *  prompts (`turnOrigin: "scheduled"`, and `isMeta: true`, so isMeta must NOT exclude a turn start),
+ *  task-notification turns, peer messages and compact summaries. It is absent on Stop-hook feedback (isMeta,
+ *  no turnPosition), tool results, /clear and /exit. A message the user types MID-turn does not start one:
+ *  it is recorded as a queue-operation and an attachment (queued_command), then a user entry with no
+ *  turnPosition. Of 293 measured turn starts, none followed an assistant tool_use mid-turn.
+ *  KNOWN LIMIT: an auto-compact written mid-turn would carry a turnPosition and start a new turn here, so
+ *  the turn after it would be judged alone. Not measured yet; upgrade this predicate when its shape is known.
+ *  An attachment containing `[janitor-heartbeat]` is NOT a turn start: four of six such attachments sit
+ *  mid-turn with assistant entries after them, so counting them would split a turn and release its earlier
+ *  writes unreviewed. */
+export function isTurnStart(e: { type?: unknown; isSidechain?: unknown; turnPosition?: unknown }): boolean {
+  return e?.type === 'user' && typeof e.turnPosition === 'object' && e.turnPosition !== null && e.isSidechain !== true
+}
+
+
+/** One transcript line's head fields, or null when the line is not JSON. Its own function, because a
+ *  `let` assigned inside a try block narrows to `null` for TypeScript and every later read reads `never`. */
+function parseLineHead(text: string): { type?: unknown; isSidechain?: unknown; turnPosition?: unknown } | null {
+  try { return JSON.parse(text) as { type?: unknown; isSidechain?: unknown; turnPosition?: unknown } } catch { return null }
+}
+
+
+/** Options for `readCurrentTurn`. */
+export interface CurrentTurnOptions {
+  /** Bytes per backward step. A step size, not a cap: the walk continues until the turn start is found. */
+  chunkBytes?: number
+  /** For a UserPromptSubmit hook, which can run after the new prompt is already written: when the newest
+   *  turn has no assistant entry yet, return the turn before it (the last COMPLETED turn). */
+  skipUnstartedTurn?: boolean
+  /** Write one stderr line when the file has no turn start, so a dropped `turnPosition` is visible. The
+   *  whole file is still returned. Main transcripts only: a subagent's own file has no turn start by design. */
+  warnNoTurnStart?: boolean
+}
+
+/** One backward walk over the bytes before `endOffset`: the turn that ends there. `startOffset` is where its
+ *  first line begins; `sawTurnStart` is false when no turn start was met, so the whole prefix was taken. */
+function walkTurnBefore(fd: number, endOffset: number, chunkBytes: number): { lines: string[]; startOffset: number; sawTurnStart: boolean } {
+  const newestFirst: string[] = []
+  let startOffset = endOffset
+  let sawTurnStart = false
+  // 'seeking': no turn start met yet, so every line is taken. 'extending': the turn start is found, so
+  // only non-conversation lines are taken, and the first conversation entry ends the run.
+  let extending = false
+  let done = false
+  // Hands one complete line to the walk, newest first, with its byte offset; true once the walk has its answer.
+  const take = (raw: Buffer, offset: number): boolean => {
+    const text = raw.toString('utf8')
+    if (text.trim() === '') return false
+    const e = parseLineHead(text)
+    if (!extending) {
+      newestFirst.push(text)
+      startOffset = offset
+      if (e !== null && isTurnStart(e)) { extending = true; sawTurnStart = true }
+      return false
+    }
+    if (e !== null && (isTurnStart(e) || e.type === 'user' || e.type === 'assistant')) return true
+    newestFirst.push(text)
+    startOffset = offset
+    return false
+  }
+  let pos = endOffset
+  // The head of the line that begins before the bytes read so far.
+  let carry = Buffer.alloc(0)
+  while (pos > 0 && !done) {
+    const start = Math.max(0, pos - chunkBytes)
+    const chunk = Buffer.alloc(pos - start)
+    if (fs.readSync(fd, chunk, 0, chunk.length, start) !== chunk.length) throw new Error('short read of the transcript')
+    pos = start
+    // Split at the BYTE level: a multi-byte UTF-8 character can straddle a chunk boundary, so a line is
+    // decoded only once it is complete.
+    const data = Buffer.concat([chunk, carry])
+    let end = data.length
+    let nl = data.lastIndexOf(0x0a)
+    while (nl !== -1) {
+      if (take(data.subarray(nl + 1, end), start + nl + 1)) { done = true; break }
+      end = nl
+      nl = end > 0 ? data.lastIndexOf(0x0a, end - 1) : -1
+    }
+    carry = data.subarray(0, end)
+  }
+  // At file start the carry is the first line, complete because nothing precedes it.
+  if (!done) take(carry, 0)
+  return { lines: newestFirst.reverse(), startOffset, sawTurnStart }
+}
+
+/** The lines of the CURRENT turn, from its turn-start entry (`isTurnStart`) to the end of the file. Read
+ *  BACKWARD in chunks and stopped at that start, so no fixed window can cut a long turn short. Owner
+ *  ruling 2026-10-14: only the work, proposals and reviews of the turn that just ended decide whether a
+ *  review is demanded; a tail window let an earlier turn's edit carry over into a later turn. The run of
+ *  non-conversation entries (queue-operation, system, attachment) directly before the turn start belongs
+ *  to the turn: a background worker's return is a queue-operation enqueue that sits just before the
+ *  task-notification turn it starts, and that return is this turn's work. A file with no turn start (a
+ *  subagent's own transcript, every entry a sidechain) is read whole, because the whole file is its one
+ *  turn; `warnNoTurnStart` says so on stderr for a main transcript. Returns null when the file cannot be
+ *  read; callers then allow the stop UNREVIEWED and say so. */
+export function readCurrentTurn(transcriptPath: string, opts: CurrentTurnOptions = {}): string[] | null {
+  const chunkBytes = opts.chunkBytes ?? TURN_READ_CHUNK_BYTES
+  let fd: number
+  try { fd = fs.openSync(transcriptPath, 'r') } catch { return null }
+  try {
+    const size = fs.fstatSync(fd).size
+    const turn = walkTurnBefore(fd, size, chunkBytes)
+    if (opts.skipUnstartedTurn === true && turn.sawTurnStart && !turn.lines.some((l) => parseLineHead(l)?.type === 'assistant')) {
+      // The newest turn has not answered yet, so the last COMPLETED turn is the one before it. A file with
+      // nothing before that turn has no completed turn to judge.
+      const before = turn.startOffset > 0 ? walkTurnBefore(fd, turn.startOffset, chunkBytes) : null
+      return before !== null && before.sawTurnStart ? before.lines : []
+    }
+    if (opts.warnNoTurnStart === true && !turn.sawTurnStart && size > 0) {
+      process.stderr.write(`[review-gate] no turn start found in ${transcriptPath}; judging the whole transcript\n`)
+    }
+    return turn.lines
+  } catch {
+    return null
+  } finally {
+    fs.closeSync(fd)
   }
 }
 
@@ -592,10 +776,11 @@ export function userPromptText(content: unknown): string {
  *  silently defeat the floor the day a harness change pairs interrupt text with a tool_result — the
  *  exact "interrupted during a tool call" Esc this floor is meant to catch. So this scans the
  *  blocks directly instead of going through `userPromptText`. */
-export function isFloorPrompt(content: unknown): boolean {
+export function isFloorPrompt(content: unknown, ignoreInterrupt = false): boolean {
   const isFloorText = (t: string) => {
     const s = t.replace(/^\s+/, '')
-    return s.startsWith(HEARTBEAT_PREFIX) || s.startsWith(INTERRUPT_PREFIX)
+    // ignoreInterrupt (the review mod's opt-in): an interrupted turn still owes its review, so only a heartbeat is a floor.
+    return s.startsWith(HEARTBEAT_PREFIX) || (!ignoreInterrupt && s.startsWith(INTERRUPT_PREFIX))
   }
   if (typeof content === 'string') return isFloorText(content)
   if (!Array.isArray(content)) return false
@@ -609,19 +794,21 @@ export interface GateScan {
   /** Index of the last proposal block after the last floor, -1 when none. */
   lastProposal: number
   /** Highest index at which each role was credited — permanent, whatever the agent returns, or the
-   *  no-review sentinel (both roles). REVIEW credits ONLY an Agent spawn with `subagent_type: "fork"`
-   *  whose prompt carries the ROLE: REVIEW marker; MEASURE credits ANY subagent type whose prompt
-   *  carries the ROLE: MEASURE marker. -1 when never. */
+   *  no-review sentinel (both roles). REVIEW and MEASURE both credit ONLY an Agent spawn that passes
+   *  `isCreditedFork` (a `fork` with no isolation parameter) and whose prompt carries that role's
+   *  marker. -1 when never. */
   roles: { measure: number; review: number }
   /** The role the transcript's OWN first prompt declares (a subagent's spawning brief), which
    *  exempts that agent from the SubagentStop gate. Meaningless for the main transcript. */
   ownRole: Role | null
 }
 
-/** ONE scan for both gates. Pure — the whole "relative position, not turn boundaries" rule lives
- *  here, so it is testable without a real transcript file. WHAT counts as work is decided in the
- *  triggers module; `cwd` is the hook's, for resolving relative write targets. */
-export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAgentId?: string, workerWrote?: (toolUseId: string) => string | null): GateScan {
+/** ONE scan for both gates. Pure: it judges the lines it is handed by their relative position. WHICH
+ *  lines it is handed is the reader's decision (`readCurrentTurn`): the scan never sees past the current
+ *  turn's start, so a review or record write from an earlier turn cannot release this turn's work. WHAT
+ *  counts as work is decided in the triggers module; `cwd` is the hook's, for resolving relative write
+ *  targets. */
+export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAgentId?: string, workerWrote?: (toolUseId: string) => string | null, ignoreInterruptFloor = false): GateScan {
   let work: GateScan['work'] = null
   let lastProposal = -1
   const roles: GateScan['roles'] = { measure: -1, review: -1 }
@@ -636,9 +823,10 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
     // tool, so its own SubagentStop gate releases it, and nothing looked at what it wrote: two Rust fix
     // rounds went unreviewed on 2026-10-09. Its return, a `queue-operation` line, is where those writes
     // become the main agent's to review, so only the main gate passes `workerWrote`.
-    // KNOWN LIMITS: a return whose queue-operation line lies before the 4 MB tail is not seen; a worker
-    // whose notification was never recorded (session cleared first) is not seen; workers spawned by
-    // workers are not scanned; a heartbeat turn is blocked when a worker returns inside it (intended:
+    // KNOWN LIMITS: a return counts only when its queue-operation line is in the run just before its
+    // task-notification turn start (see readCurrentTurn), so a return recorded earlier is not seen; a
+    // worker whose notification was never recorded (session cleared first) is not seen; workers spawned
+    // by workers are not scanned; a heartbeat turn is blocked when a worker returns inside it (intended:
     // that is the 2026-10-09 15:15 case). Without `workerWrote` this branch never runs.
     // a worker that ran in another cwd (a worktree) has its relative targets judged against the main session's cwd.
     if (workerWrote !== undefined) {
@@ -663,7 +851,9 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
       // The transcript's OWN spawning prompt is its FIRST non-sidechain `user` entry — read ONCE,
       // so a later human-authored `user` turn is never mistaken for it.
       if (!sawFirstUser) { sawFirstUser = true; ownRole = declaredRoleOwnTranscript(userPromptText(content)) }
-      if (isFloorPrompt(content)) { work = null; lastProposal = -1 }
+      // ignoreInterruptFloor defaults false so the Stop/SubagentStop hooks are unchanged; the mod opts in because
+      // an Esc'd turn is exactly one it must still review (the hooks never fire on an interrupt).
+      if (isFloorPrompt(content, ignoreInterruptFloor)) { work = null; lastProposal = -1 }
       continue
     }
     if (e?.type !== 'assistant' || !Array.isArray(content)) continue
@@ -687,22 +877,23 @@ export function scanTranscriptLines(lines: string[], cwd = process.cwd(), ownAge
       }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent') {
-        // SPAWN credit. MEASURE: any subagent type whose prompt carries the marker — a fast-worker
-        // is the preferred MEASURE agent; any other type still credits. REVIEW REQUIRES A FORK and a
-        // whole-line marker: a worker brief
-        // that merely mentions "ROLE: REVIEW" while DESCRIBING this gate's protocol (e.g. this very
-        // file's own prose) must not release the gate with no reviewer ever spawned (adversarial
-        // review of 268f3080, finding b) — the owner's spec names the review agent a fork, the
-        // measure agent any type. Permanent from the spawn index on; nothing the agent returns
+        // SPAWN credit. REVIEW and MEASURE both credit only a fork with no isolation parameter
+        // (isCreditedFork, shared with reviewSupervisor). WHY the whole-line marker: a worker brief that
+        // merely mentions "ROLE: REVIEW" while DESCRIBING this gate's protocol (e.g. this very file's
+        // own prose) must not release the gate with no reviewer ever spawned (adversarial review of
+        // 268f3080, finding b). WHY no isolation: an isolated spawn fails outside git and is not a
+        // reviewer the gate can rely on. Permanent from the spawn index on; nothing the agent returns
         // un-credits it.
         const role = declaredRole(String(b.input?.prompt ?? ''))
-        const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
-        if (role === 'review' && isFork) {
-          roles.review = Math.max(roles.review, i)
-          lastReviewPrompt = String(b.input?.prompt ?? '')
-          recordUsed = { append: false, commit: false }
+        if (role !== null && isCreditedFork(b.input ?? {})) {
+          if (role === 'review') {
+            roles.review = Math.max(roles.review, i)
+            lastReviewPrompt = String(b.input?.prompt ?? '')
+            recordUsed = { append: false, commit: false }
+          } else {
+            roles.measure = Math.max(roles.measure, i)
+          }
         }
-        if (role === 'measure') roles.measure = Math.max(roles.measure, i)
         continue
       }
       // A delegate-gate-denied call never ran (TRDD-PNB9FNJ0) — not work.
@@ -753,34 +944,35 @@ export const ARM_CAUSE_TEXT: Record<ArmCause, string> = {
   'worker write': 'a worker you spawned wrote files',
 }
 
-const REVIEW_DEMAND = 'Spawn ONE adversarial REVIEW fork (Agent tool, subagent_type "fork") and COPY THIS LINE '
+// NO isolation parameter: an isolated spawn earns no credit (isCreditedFork), so demanding one wastes the turn.
+const REVIEW_DEMAND = 'Spawn ONE adversarial REVIEW fork (Agent tool, subagent_type "fork", NO isolation parameter) and COPY THIS LINE '
   + 'VERBATIM INTO ITS PROMPT: "' + REVIEW_ROLE_RULE + '"'
-// owner decision 2026-10-09 — the measurer only reads or runs simple commands, so the cheapest fast model with an exact step list is enough (TRDD-9YWTNFU8).
-const MEASURE_DEMAND = 'Spawn ONE MEASURE agent (any subagent type; a `fast-worker` (haiku[1m], medium effort, no inherited '
-  + 'conversation context) is PREFERRED, and its prompt is a numbered step list, one assumption per step, each with the exact '
-  + 'command to run and what to report) and COPY THIS LINE VERBATIM '
+// owner decision 2026-10-14: MEASURE is a fork too, because a fresh agent earns no credit. A fork reuses
+// the parent's prompt cache, and a measurer only runs read-only commands and reads files with tldr.
+const MEASURE_DEMAND = 'Spawn ONE MEASURE fork (Agent tool, subagent_type "fork", NO isolation parameter; its prompt is a '
+  + 'numbered step list, one assumption per step, each with the exact command to run and what to report) and COPY THIS LINE VERBATIM '
   + 'INTO ITS PROMPT: "' + MEASURE_ROLE_RULE + '"'
 
 /** What the blocked agent must spawn, and how the gate releases. One text for both gates so the
  *  two can never drift. */
 export function demandText(d: Demand): string {
   const parts = d === 'review' ? [REVIEW_DEMAND] : d === 'measure' ? [MEASURE_DEMAND] : [MEASURE_DEMAND, REVIEW_DEMAND]
-  return parts.join(' ') + ' A spawn counts ONLY if the ROLE marker is the FIRST NON-BLANK line of its prompt, and REVIEW only from a fork. '
+  return parts.join(' ') + ' A spawn counts ONLY if it is a fork with NO isolation parameter and the ROLE marker is the FIRST NON-BLANK line of its prompt. '
     + 'Put the spawn tool_use(s) LAST in the response, after the turn\'s last edit, write-shaped command or "' + PROPOSAL_MARKER + '" line: a write or proposal after the spawn re-arms this gate. '
     + 'If you CANNOT spawn — ' + NO_REVIEW_SENTINEL_EXAMPLES.join(', ') + ' — emit a text block whose ENTIRE content is "' + NO_REVIEW_SENTINEL + ' — <reason>"; that is the only other way out. '
     + 'Full rules: `agentlenspro review-gate --directive`.'
 }
 
-/** The block message names WHAT armed the gate and WHICH agents it wants. It names the scanned
- *  window, never "this turn": the scan reads the transcript's last 4 MB (`readTranscriptTail`), so
- *  a long turn's earlier blocks can be outside it. */
+/** The block message names WHAT armed the gate and WHICH agents it wants. It names the scanned window
+ *  as this turn only (`readCurrentTurn`): an earlier turn's work is not in the scan, so the message never
+ *  cites it. */
 export function mainBlockReason(cause: ArmCause, detail: string, demand: Demand): string {
   const what = detail === '' ? ARM_CAUSE_TEXT[cause] : `${ARM_CAUSE_TEXT[cause]}: ${detail}`
   // WHY: a worker's files are already on disk and its report only describes them, so the fork must review the real diff.
   const gitFirst = cause === 'worker write'
     ? 'FIRST, in an earlier response than the fork spawn, run `git status --short` and `git diff` on the files the worker changed (print new files too, or `cat` a file that is outside git), so the fork reviews the real change and not a description. '
     : ''
-  return `Review gate: ${what} after the last review (scanned: the transcript's last 4 MB). ${gitFirst}${demandText(demand)}`
+  return `Review gate: ${what} after the last review (scanned: this turn only). ${gitFirst}${demandText(demand)}`
 }
 
 export function subagentBlockReason(cause: ArmCause, detail: string, demand: Demand): string {
@@ -797,9 +989,11 @@ export async function runMainGate(input: ReviewGateInput): Promise<string | null
     process.stderr.write('[review-gate] allowing UNREVIEWED: transcript_path is missing or does not exist\n')
     return null
   }
-  const lines = readTranscriptTail(transcript)
+  // THIS TURN ONLY (owner ruling 2026-10-14): work from an earlier turn must not carry over into this one.
+  // warnNoTurnStart: a main transcript without a turn start means CC dropped turnPosition; say so.
+  const lines = readCurrentTurn(transcript, { warnNoTurnStart: true })
   if (lines === null) {
-    process.stderr.write('[review-gate] allowing UNREVIEWED: could not read the transcript tail\n')
+    process.stderr.write('[review-gate] allowing UNREVIEWED: could not read the current turn of the transcript\n')
     return null
   }
   // Only the main gate passes workerWrote: a worker's writes are reviewed at its return (see scanTranscriptLines).
@@ -838,7 +1032,8 @@ export function subagentExempt(agentType: string, ownRole: Role | null): boolean
   return t === '' || REVIEWER_AGENT_TYPES.has(t) || JANITOR_AGENT_RE.test(t) || ownRole !== null
 }
 
-export async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
+/** The SubagentStop block decision: the block JSON, or null when this agent may stop. */
+async function subagentBlock(input: ReviewGateInput): Promise<string | null> {
   // ONE demand per return: the harness sets this once a Stop hook already blocked this same stop.
   if (input?.stop_hook_active === true) return null
   const type = String(input?.agent_type ?? '')
@@ -851,40 +1046,190 @@ export async function runSubagentGate(input: ReviewGateInput): Promise<string | 
     process.stderr.write('[review-gate] allowing UNREVIEWED: agent_transcript_path is missing or does not exist for ' + JSON.stringify(type) + '\n')
     return null
   }
-  let scan: GateScan
-  // `agent_id` lets the scan keep this agent's own sidechain entries (TRDD-LZ2JDIJP).
-  const ownAgentId = typeof input?.agent_id === 'string' ? input.agent_id : undefined
-  try { scan = scanTranscriptLines(fs.readFileSync(own, 'utf8').split('\n'), hookCwd(input), ownAgentId) } catch {
+  // The subagent's own file has no turn start, so readCurrentTurn returns all of it: its one turn.
+  const lines = readCurrentTurn(own)
+  if (lines === null) {
     process.stderr.write('[review-gate] allowing UNREVIEWED: agent_transcript_path is unreadable for ' + JSON.stringify(type) + '\n')
     return null
   }
+  // `agent_id` lets the scan keep this agent's own sidechain entries (TRDD-LZ2JDIJP).
+  const ownAgentId = typeof input?.agent_id === 'string' ? input.agent_id : undefined
+  const scan = scanTranscriptLines(lines, hookCwd(input), ownAgentId)
   if (subagentExempt(type, scan.ownRole)) return null
   const demand = decideGate(scan)
   if (demand === null || scan.work === null) return null
   return JSON.stringify({ decision: 'block', suppressOutput: true, reason: subagentBlockReason(scan.work.cause, scan.work.detail, demand) })
 }
 
+/** SubagentStop: a block when the agent owes a review; otherwise the review display, so a finished review
+ *  or measure report reaches the user's terminal. The display runs only when the agent is NOT blocked: a
+ *  block already tells the agent what to do, and a second message would be noise. */
+export async function runSubagentGate(input: ReviewGateInput): Promise<string | null> {
+  return (await subagentBlock(input)) ?? reviewDisplay(input)
+}
+
+// ── `--json-verdict`: the SAME scan, as machine-readable data for a mod (TRDD-KZCSO0R2 Phase 0) ───
+// A mod (hooks module) runs `agentlenspro review-gate --json-verdict` to ask the gate's own question —
+// "does this turn demand an adversarial review?" — and get data back instead of the hook-shaped block
+// JSON. It reuses readCurrentTurn -> scanTranscriptLines -> decideGate, so the criteria live in ONE place
+// and cannot drift from the hook behavior (the check-no-mirrors rule). Read-only: it never writes and, at
+// the call site, never blocks. It does NOT apply the gates' agent-capability check — the verdict is the
+// scanner's decision (the same reason strings the gates would block on); the caller decides what to do.
+
+export interface GateVerdict {
+  /** True when the scan demands a review/measure fork for this payload's turn. */
+  demands: boolean
+  /** The block reason string(s) the gate would emit — the SAME text mainBlockReason/subagentBlockReason
+   *  produce — so a caller can show or log exactly what the hook would have said. Empty when demands=false. */
+  reasons: string[]
+  /** A short summary of what was scanned. `readable` is false when the transcript is missing or could not be
+   *  read: `transcript` is then null or a path with `lines: 0`, and without this flag a caller cannot tell that
+   *  from a clean scan of an empty turn. */
+  scan: { transcript: string | null; kind: 'main' | 'subagent'; lines: number; readable: boolean }
+  /** The options the scan applied, echoed so a caller can tell its flag took effect: an older CLI that does
+   *  not know a flag ignores it and echoes nothing (or `false`). */
+  options: { ignoreInterruptFloor: boolean }
+  /** What the turn did, reported WHETHER OR NOT a review credit released it (TRDD-KZCSO0R2): the
+   *  harness-run review in agentlenspro-review-mod keys on this, so a fork the model spawned itself can
+   *  never skip the review the harness runs. null when the turn has no arming work. */
+  work?: { cause: ArmCause; detail: string; index: number } | null
+  /** True when the turn has a proposal line, whatever the credits. */
+  proposal?: boolean
+  /** Line index (within the turn) of the last proposal, -1 when none: lets the mod skip work it already reviewed. */
+  proposalIndex?: number
+}
+
+/** The verdict the Stop/SubagentStop gate would reach for this payload's turn, as data. Read-only. A
+ *  missing/unreadable transcript is "no demand", the same fail-open allow the gates take, with
+ *  `scan.readable` false. */
+export function computeVerdict(input: ReviewGateInput, opts: { ignoreInterruptFloor?: boolean } = {}): GateVerdict {
+  const ignoreInterruptFloor = opts.ignoreInterruptFloor === true
+  const evt = input?.hook_event_name ?? input?.hookEventName
+  const subagent = evt === 'SubagentStop'
+  const kind: GateVerdict['scan']['kind'] = subagent ? 'subagent' : 'main'
+  const transcript = subagent ? input?.agent_transcript_path : input?.transcript_path
+  const noDemand = (transcriptOut: string | null, lines: number, readable: boolean): GateVerdict =>
+    ({ demands: false, reasons: [], scan: { transcript: transcriptOut, kind, lines, readable }, options: { ignoreInterruptFloor }, work: null, proposal: false, proposalIndex: -1 })
+  if (typeof transcript !== 'string' || !fs.existsSync(transcript)) return noDemand(null, 0, false)
+  // The subagent gate honours the harness loop-breaker and the exemption list BEFORE scanning; mirror that
+  // so a subagent the hook would release never reads as a demand here.
+  const agentType = String(input?.agent_type ?? '')
+  if (subagent && (input?.stop_hook_active === true || subagentExempt(agentType, null))) return noDemand(transcript, 0, true)
+  // skipUnstartedTurn only with ignoreInterruptFloor: a user who typed a new prompt right after Esc has
+  // written a turn start with no assistant entry yet, so the interrupted turn is the one BEFORE it. Without
+  // the option the hook semantics are unchanged (a hook only ever sees a turn that has an answer).
+  const lines = subagent
+    ? readCurrentTurn(transcript)
+    : readCurrentTurn(transcript, { warnNoTurnStart: true, skipUnstartedTurn: ignoreInterruptFloor })
+  if (lines === null) return noDemand(transcript, 0, false)
+  const ownAgentId = subagent && typeof input?.agent_id === 'string' ? input.agent_id : undefined
+  const scan = subagent
+    ? scanTranscriptLines(lines, hookCwd(input), ownAgentId, undefined, ignoreInterruptFloor)
+    : scanTranscriptLines(lines, hookCwd(input), undefined, (id) => workerWriteDetail(transcript, id, hookCwd(input)), ignoreInterruptFloor)
+  if (subagent && subagentExempt(agentType, scan.ownRole)) return noDemand(transcript, lines.length, true)
+  const demand = decideGate(scan)
+  const found = { work: scan.work === null ? null : { cause: scan.work.cause, detail: scan.work.detail, index: scan.work.index }, proposal: scan.lastProposal >= 0, proposalIndex: scan.lastProposal }
+  if (demand === null || scan.work === null) return { ...noDemand(transcript, lines.length, true), ...found }
+  const reason = subagent
+    ? subagentBlockReason(scan.work.cause, scan.work.detail, demand)
+    : mainBlockReason(scan.work.cause, scan.work.detail, demand)
+  return { demands: true, reasons: [reason], scan: { transcript, kind, lines: lines.length, readable: true }, options: { ignoreInterruptFloor }, ...found }
+}
+
+/** Longest `systemMessage` the review display emits. WHY a cap: a review is long, and the terminal is not
+ *  a file viewer; the full text stays one `Read` away at the transcript path. */
+const REVIEW_DISPLAY_MAX_CHARS = 9500
+
+/** The `systemMessage` for a finished agent whose last message OPENS with a report marker, or null. The first
+ *  non-blank line decides, through `markerOpening`: decoration such as `**`, backticks or surrounding whitespace
+ *  is not a barrier, but the marker must be at the START of that line. A marker quoted mid-line or on a later
+ *  line does not trigger the display. WHY `systemMessage` and not `additionalContext`: it is shown to the USER
+ *  only and never enters the model's context, so the review does not spend the model's window twice. */
+function reviewDisplay(input: ReviewGateInput): string | null {
+  const text = typeof input?.last_assistant_message === 'string' ? input.last_assistant_message : ''
+  const firstLine = text.split('\n').find((line) => line.trim() !== '')
+  if (firstLine === undefined || markerOpening(firstLine) === null) return null
+  if (text.length <= REVIEW_DISPLAY_MAX_CHARS) return JSON.stringify({ systemMessage: text })
+  const transcriptPath = input.agent_transcript_path
+  if (typeof transcriptPath !== 'string') {
+    process.stderr.write('[review-gate] review display skipped: the review is longer than the display cap and agent_transcript_path is missing\n')
+    return null
+  }
+  // The cut is counted INCLUDING the pointer, so the emitted message never exceeds the cap.
+  const pointer = `… (truncated; full text: ${transcriptPath})`
+  return JSON.stringify({ systemMessage: text.slice(0, REVIEW_DISPLAY_MAX_CHARS - pointer.length) + pointer })
+}
+
 // ── Process entry for `agentlenspro review-gate` ─────────────────────────────────────────────────
 
-/** `agentlenspro review-gate [--directive]`. Always resolves 0 — a Stop/SubagentStop hook that
+/** The `--json-verdict` command line, or the one-line reason it is malformed. WHY strict: a `--cwd` or
+ *  `--ignore-interrupt-floor` an older or mistyped command line silently dropped would return a verdict
+ *  computed for other options than the caller asked for, and a verdict is only useful if it is the one
+ *  asked for. `--cwd` replaces process.cwd() as the base for relative write targets: the mod runs this CLI
+ *  from its own cwd, not the session's. */
+function parseVerdictArgs(argv: string[]): { transcript: string | undefined; cwd: string; event: 'Stop' | 'SubagentStop'; ignoreInterruptFloor: boolean } | string {
+  const values: Record<string, string | undefined> = {}
+  for (const flag of ['--transcript', '--cwd', '--event']) {
+    const i = argv.indexOf(flag)
+    if (i === -1) continue
+    const value = argv[i + 1]
+    if (value === undefined || value === '' || value.startsWith('--')) return `${flag} needs a value, got ${JSON.stringify(value ?? null)}`
+    values[flag] = value
+  }
+  const ignoreInterruptFloor = argv.includes('--ignore-interrupt-floor')
+  if (values['--transcript'] === undefined && (values['--cwd'] !== undefined || ignoreInterruptFloor)) {
+    return '--cwd and --ignore-interrupt-floor need --transcript: the hook-payload path takes its options from the payload'
+  }
+  const event = values['--event'] ?? 'Stop'
+  if (event !== 'Stop' && event !== 'SubagentStop') return `--event must be Stop or SubagentStop, got ${JSON.stringify(event)}`
+  return { transcript: values['--transcript'], cwd: values['--cwd'] ?? process.cwd(), event, ignoreInterruptFloor }
+}
+
+/** `agentlenspro review-gate [--directive] [--json-verdict]`. Hook mode resolves 0 — a Stop/SubagentStop hook that
  *  can throw or hang can wedge the session, which is worse than a missed review. Dispatches on
  *  `hook_event_name`: `SubagentStop` -> the subagent gate, `Stop` (or an absent field) -> the main
- *  gate. Any other event is a silent allow. */
+ *  gate. Any other event is a silent allow. `--json-verdict` (TRDD-KZCSO0R2 Phase 0) runs the SAME
+ *  readCurrentTurn -> scan -> decide pipeline but prints the verdict as ONE JSON object; it is read-only
+ *  and exits 0 whether or not the verdict demands a review. It exits 2, printing one stderr line, only for
+ *  a malformed command line (a flag without a usable value, `--cwd`/`--ignore-interrupt-floor` without
+ *  `--transcript`, an `--event` other than Stop/SubagentStop): a caller must not read a verdict that was
+ *  computed for options other than the ones it asked for. */
 export async function runReviewGate(argv: string[]): Promise<number> {
   if (argv[0] === '--directive') {
     process.stdout.write(REVIEW_GATE_DIRECTIVE)
     return 0
   }
-  // GLOBAL kill-switch, before stdin — mirrors runHookCommand('gate'): a disabled AgentlensPro
-  // must never block the user's work. Named on stderr, matching the other silent-allow lines in
-  // this file — a silent bypass is exactly the failure class this gate exists to close.
-  if (agentlensDisabled()) {
-    const half = killSwitchHalf() === 'env'
-      ? 'env AGENTLENS_DISABLED=1'
-      : `the kill-switch flag file (${killSwitchPath()})`
-    process.stderr.write(`[review-gate] allowing UNREVIEWED: ${half} is set.\n`)
-    return 0
+  const jsonVerdict = argv.includes('--json-verdict')
+  // --transcript <path> (with --json-verdict): build the ReviewGateInput from argv instead of reading
+  // stdin. The mod (agentlenspro-review-mod/hooks/register.js) calls via $.process.run, which provides
+  // NO stdin — so the stdin path would fail to parse and return demands:false, making the mod a runtime
+  // no-op (F1). Accepts --transcript <path>, --turn-id <id> (accepted but not used by computeVerdict),
+  // --event Stop|SubagentStop (default Stop), --cwd <dir> and --ignore-interrupt-floor. The stdin path is
+  // kept for hook-mode and for --json-verdict without --transcript.
+  if (jsonVerdict) {
+    const parsed = parseVerdictArgs(argv)
+    if (typeof parsed === 'string') {
+      process.stderr.write(`[review-gate] ${parsed}\n`)
+      return 2
+    }
+    if (parsed.transcript !== undefined) {
+      const input: ReviewGateInput = parsed.event === 'SubagentStop'
+        ? { hook_event_name: 'SubagentStop', agent_transcript_path: parsed.transcript, cwd: parsed.cwd }
+        : { hook_event_name: 'Stop', transcript_path: parsed.transcript, cwd: parsed.cwd }
+      process.stdout.write(JSON.stringify(computeVerdict(input, { ignoreInterruptFloor: parsed.ignoreInterruptFloor })) + '\n')
+      return 0
+    }
   }
+  // NO KILL-SWITCH CHECK HERE, on purpose. The global switch (the DISABLED flag file, or AGENTLENS_DISABLED=1)
+  // exists to stop side-effects: disk writes and server revive. This gate has none: it reads the transcript
+  // and prints a block to stdout. While the switch silenced it, every stop was allowed UNREVIEWED and no
+  // adversarial review was demanded (owner order 2026-09-03: never stopped or bypassed; owner directive
+  // 2026-11-03: the review must work at every turn and for every agent). The brake is a sequence:
+  // `agentlenspro enable`, then `agentlenspro --uninstall-hooks` (refused by `disabledNotice` in
+  // foreignTelemetry.ts while the switch is armed), then `agentlenspro disable` again. Each running
+  // session keeps the hook until it restarts; the next launch of a verb outside
+  // `AUTOSETUP_EXCLUDED_VERBS` (autoSetup.ts) re-registers it through `ensureInstalled` unless the
+  // switch is armed afterwards.
   const payload = await readStdin(process.stdin)
   // THE ENV KILL-SWITCH IS GONE (owner order, 2026-09-03: "it must NEVER BE STOPPED OR BYPASSED, no
   // matter what"). `AGENTLENS_REVIEW_FORK=off` is ignored: an env var is settable by anything in the
@@ -894,7 +1239,18 @@ export async function runReviewGate(argv: string[]): Promise<number> {
   }
   let input: ReviewGateInput
   try { input = JSON.parse(payload.toString('utf8')) as ReviewGateInput } catch {
+    if (jsonVerdict) {
+      process.stdout.write(JSON.stringify({ demands: false, reasons: [], scan: { transcript: null, kind: 'main', lines: 0, readable: false }, options: { ignoreInterruptFloor: false } } satisfies GateVerdict) + '\n')
+      process.stderr.write('[review-gate] allowing UNREVIEWED: the hook payload is not valid JSON\n')
+      return 0
+    }
     process.stderr.write('[review-gate] allowing UNREVIEWED: the hook payload is not valid JSON\n')
+    return 0
+  }
+  if (jsonVerdict) {
+    // ALWAYS exit 0: read-only, it never blocks. The verdict is the scanner's own decision; a bad
+    // payload yields demands:false.
+    process.stdout.write(JSON.stringify(computeVerdict(input)) + '\n')
     return 0
   }
   const evt = input?.hook_event_name ?? input?.hookEventName

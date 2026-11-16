@@ -5,6 +5,10 @@ import * as os from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
 import type { AddressInfo } from 'net'
+import { McpStub, startMcpStub } from './helpers/mcpStub'
+import { freePort } from './helpers/freePort'
+import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
+import { dataDirFrom, NO_REVIVE_FILE } from '../dataDir'
 
 // ── the single `agentlenspro` executable — dispatch contracts (TRDD-7284WCW7) ─────────────
 // Spawns the REAL built CLI (standalone/cli.js) with HOME pointed at an EMPTY temp dir and
@@ -30,7 +34,11 @@ function runCli(args: string[], env: NodeJS.ProcessEnv, stdin?: string): Promise
   })
 }
 
-/** Isolated child env: empty temp HOME, no ambient AgentlensPro endpoint/knob leakage. */
+/** Isolated child env: empty temp HOME, no ambient AgentlensPro endpoint/knob leakage. The launch install check is
+ *  OFF by default (AGENTLENS_NO_AUTOSETUP=1): every spawned CLI here starts on an EMPTY HOME, which since b867797a makes
+ *  the first ordinary launch run the full first-run setup — including its server step, which on a CI runner with OTLP
+ *  4318 free would start a real alcore under a temp HOME the test then deletes. This suite tests dispatch, not install
+ *  (autoSetup.test.ts owns that); a test that needs the check deletes the key from the returned env. */
 function isolatedEnv(home: string, overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env = { ...process.env }
   for (const k of Object.keys(env)) {
@@ -40,14 +48,28 @@ function isolatedEnv(home: string, overrides: Record<string, string> = {}): Node
   delete env.UI_PORT
   delete env.MCP_PORT
   delete env.OTLP_PORT
-  return { ...env, HOME: home, USERPROFILE: home, ...overrides }
+  return { ...env, HOME: home, USERPROFILE: home, AGENTLENS_NO_AUTOSETUP: '1', ...overrides }
 }
 
 function mkHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'al-cli-home-'))
 }
 
-suite('agentlenspro — zero-side-effect global flags', () => {
+/** The suites that spawn the real CLI run under this ceiling instead of mocha's 10 s default; a test that sets its
+ *  own timeout keeps it (the network-help suite's single test sets 30 s).
+ *  WHY: on 2026-10-14 a machine-wide starvation window of about 85 s (load average 195-267, from processes outside
+ *  the test suite) slowed 23 consecutive spawned-CLI tests 3-40× — `-v` went from 238 ms to 9432 ms with no stub
+ *  and no server involved — and timed out two of them at 10 s. The same tests then measured 0.2-2.6 s in isolation
+ *  under the same load. A spawn's cost is the machine's, not the code's: this ceiling absorbs the measured window
+ *  (worst single test 9.4 s), not any load — a 40× slowdown of the slowest test here would still exceed it — and
+ *  every assertion is unchanged (TRDD-CS2W7E77). */
+const SPAWN_SUITE_TIMEOUT_MS = 60_000
+
+/** The launch check's notice when the first-run full setup fails (autoSetup.ts, ensureInstalled). */
+const FIRST_RUN_SETUP_FAILED = 'agentlenspro: first-run setup failed — run `agentlenspro setup` to see why'
+
+suite('agentlenspro — zero-side-effect global flags', function () {
+  this.timeout(SPAWN_SUITE_TIMEOUT_MS)
   test('--version prints the exact package.json version, exits 0, and creates NOTHING under HOME', async () => {
     // Field defect: v1 booted the whole span store to parse --version (and then exited 1).
     // The empty-HOME-stays-empty assertion is the no-side-effects proof.
@@ -82,40 +104,8 @@ suite('agentlenspro — zero-side-effect global flags', () => {
   })
 })
 
-// A minimal MCP stub: answers initialize, tools/list, tools/call over plain JSON (the CLI
-// accepts plain-JSON responses on the Streamable-HTTP endpoint). Real HTTP, real CLI child.
-interface McpStub { url: string; calls: Array<{ method: string; params: unknown }>; close: () => Promise<void> }
-function startMcpStub(tools: Array<Record<string, unknown>>, callResult: (name: string) => unknown): Promise<McpStub> {
-  return new Promise((resolve) => {
-    const calls: Array<{ method: string; params: unknown }> = []
-    const server = http.createServer((req, res) => {
-      const chunks: Buffer[] = []
-      req.on('data', (c: Buffer) => chunks.push(c))
-      req.on('end', () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { id: number; method: string; params: unknown }
-        calls.push({ method: body.method, params: body.params })
-        let result: unknown = {}
-        if (body.method === 'tools/list') result = { tools }
-        if (body.method === 'tools/call') {
-          const name = (body.params as { name: string }).name
-          result = { content: [{ type: 'text', text: JSON.stringify(callResult(name)) }] }
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }))
-      })
-    })
-    server.listen(0, '127.0.0.1', () => {
-      const port = (server.address() as AddressInfo).port
-      resolve({
-        url: `http://127.0.0.1:${port}/mcp`,
-        calls,
-        close: () => new Promise<void>((r) => server.close(() => r())),
-      })
-    })
-  })
-}
-
-suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js surface)', () => {
+suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js surface)', function () {
+  this.timeout(SPAWN_SUITE_TIMEOUT_MS)
   test('`list --desc` prints every tool from the live tools/list schema, one per line', async () => {
     // The CLI must have no local tool registry — names/descriptions come from the server.
     const home = mkHome()
@@ -196,12 +186,55 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
       () => ({ error: 'Agent "nope" not found. Accepted forms: bare agent id, agent-<id>, or a full sessionId.' }),
     )
     try {
-      const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url }))
+      // The launch check must RUN here (isolatedEnv turns it off by default): the empty HOME makes this a first run,
+      // whose notice is what has to travel inside the refusal.
+      // ISOLATION (TRDD-V2HFI30L): that first run is a FULL setup. Its server step SIGTERMs any server answering
+      // /api/server-stats on the UI port whose data dir differs — before every spawn gate — and otherwise spawns a
+      // detached alcore. With the ports left at their defaults (isolatedEnv deletes them) that server is the
+      // developer's LIVE collector. Pinned free ports leave the step's stats probe empty, so there is nothing to kill;
+      // the revive brake, set in the child's own data dir, stops that step before any spawn should it be reached.
+      // The notice reads "first-run setup failed" whichever step fails first, so the test proves that setup failed
+      // and no server outlived it, not that the brake fired. A pinned free port another process takes first (a second
+      // suite running at once) could still be adopted and killed; only TRDD-V2HFI30L closes that.
+      const env = isolatedEnv(home, {
+        AGENTLENS_MCP_URL: stub.url,
+        UI_PORT: String(await freePort()),
+        MCP_PORT: String(await freePort()),
+        OTLP_PORT: String(await freePort()),
+      })
+      delete env.AGENTLENS_NO_AUTOSETUP
+      const dataDir = dataDirFrom(env)
+      fs.mkdirSync(dataDir, { recursive: true })
+      fs.writeFileSync(path.join(dataDir, NO_REVIVE_FILE), 'cliDispatch: the launch setup must not start a server\n')
+      const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], env)
       assert.notStrictEqual(r.code, 0, 'a refusal must not exit 0')
       assert.strictEqual(r.stdout.trim(), '', `stdout must stay parse-safe, got: ${r.stdout}`)
-      const payload = JSON.parse(r.stderr) as { tool: string; error: string }
+      // The empty HOME makes this launch a FIRST RUN, so the install check has a notice to print. It used to land on
+      // stderr ahead of the refusal and break JSON.parse; it now travels inside the refusal (TRDD-YL3EWT6N item 7).
+      const payload = JSON.parse(r.stderr) as { tool: string; error: string; notices?: string[] }
       assert.strictEqual(payload.tool, 'get_agent_tokens')
       assert.ok(payload.error.includes('not found'), r.stderr)
+      assert.ok(Array.isArray(payload.notices) && payload.notices.length > 0 && payload.notices.every(n => n.startsWith('agentlenspro:')),
+        `the first-run notice must be folded into the refusal: ${r.stderr}`)
+      assert.ok((payload.notices ?? []).includes(FIRST_RUN_SETUP_FAILED),
+        `the braked server step must fail the first-run setup, and the notice must say so: ${r.stderr}`)
+      assert.ok(!fs.existsSync(path.join(dataDir, 'server.pid')), 'the launch setup must not have started a server')
+      assertNoSurvivingServer(dataDir)
+    } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
+  })
+
+  test('a refusal with nothing to report carries NO notices key — the field appears only when something happened', async () => {
+    const home = mkHome()
+    const stub = await startMcpStub(
+      [{ name: 'get_agent_tokens', description: 'x', inputSchema: { properties: { agentId: { type: 'string' } } } }],
+      () => ({ error: 'Agent "nope" not found.' }),
+    )
+    try {
+      const r = await runCli(['get_agent_tokens', '--agentId', 'nope'], isolatedEnv(home, { AGENTLENS_MCP_URL: stub.url, AGENTLENS_NO_AUTOSETUP: '1' }))
+      assert.notStrictEqual(r.code, 0)
+      assert.strictEqual(r.stdout.trim(), '')
+      const payload = JSON.parse(r.stderr) as Record<string, unknown>
+      assert.deepStrictEqual(Object.keys(payload).sort(), ['error', 'tool'], r.stderr)
     } finally { await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
   })
 
@@ -297,7 +330,10 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
   test('`heartbeat-cost` fails fast (non-zero) when the server is unreachable — no silent fallback', async () => {
     const home = mkHome()
     try {
-      const r = await runCli(['heartbeat-cost'], isolatedEnv(home, { AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp' }))
+      // The invariant is the VERB's own fail-fast path: it writes nothing. The launch install check is switched off
+      // here because, since b867797a (TRDD-AGZ0XZKW, owner-ordered), the first ordinary launch on an EMPTY HOME
+      // installs skills, agents, hooks and telemetry — that behaviour is tested in autoSetup.test.ts, not here.
+      const r = await runCli(['heartbeat-cost'], isolatedEnv(home, { AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp', AGENTLENS_NO_AUTOSETUP: '1' }))
       assert.notStrictEqual(r.code, 0)
       assert.ok(r.stderr.includes('FAIL'), r.stderr)
       assert.deepStrictEqual(fs.readdirSync(home), [], 'a failed call must not create anything under HOME')
@@ -570,7 +606,8 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
   })
 })
 
-suite('agentlenspro — help is TOTAL: --help anywhere never executes the verb', () => {
+suite('agentlenspro — help is TOTAL: --help anywhere never executes the verb', function () {
+  this.timeout(SPAWN_SUITE_TIMEOUT_MS)
   // Owner directive 2026-08-05, from a live incident: `agentlenspro disable --help` EXECUTED the
   // disable — it armed <dataDir>/DISABLED, stopped the running server, disarmed every hook on the
   // machine and stripped the telemetry env, because runDisableCli folds non-flag args into the

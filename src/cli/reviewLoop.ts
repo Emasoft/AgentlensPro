@@ -1,10 +1,10 @@
 // src/cli/reviewLoop.ts — pure logic for the PreToolUse "propose -> two forks -> wait -> act"
 // gate (plan `drifting-stirring-dream.md`, D1/D2/D3/D8, STAGE 1).
 //
-// NO IMPORT FROM ./reviewGate: stage 2 wires THIS module INTO reviewGate.ts, so an import in the
-// other direction would cycle. Role/heading primitives (MEASURE_HEADING etc.) are therefore OWNED
-// here rather than shared with reviewGate.ts's own (distinct, not-yet-unified) Stop-gate
-// primitives of the same name — see the STAGE 1 report for the follow-up to unify them in stage 2.
+// NO IMPORT FROM ./reviewGate: reviewGate.ts imports THIS module, so an import the other way would cycle.
+//
+// The heading constants (MEASURE_HEADING, REVIEW_HEADING) live HERE and reviewGate.ts imports them: one
+// spelling, so the Stop gate, the SubagentStop display and this loop cannot disagree.
 //
 // FS ACCESS IS INJECTABLE (`FsHelpers`) so tests exercise real temp directories instead of mocking
 // the logic under test.
@@ -19,8 +19,25 @@ import {
 import { killSwitchPath } from './killSwitch'
 
 export type Role = 'measure' | 'review'
-export const MEASURE_HEADING = 'MEASURE-AND-VERIFY-REPORT'
-export const REVIEW_HEADING = 'ADVERSARIAL-REVIEW'
+// Bracketed and product-specific on purpose (owner 2026-10-14): the bare words the headings used to be
+// (ADVERSARIAL-REVIEW, MEASURE-AND-VERIFY-REPORT) are common in any conversation about code, so a message that
+// merely discussed a review tripped the display and this loop's result classifier.
+export const MEASURE_HEADING = '[AGENTLENSPRO-MEASURE-REPORT]'
+export const REVIEW_HEADING = '[AGENTLENSPRO-REVIEW-REPORT]'
+
+/** The report marker a line OPENS with, or null. Leading decoration comes off first: `#`, `*`, backticks and
+ *  whitespace. The line opens with a marker when it starts with the marker and the next character is absent or is
+ *  not a letter, digit, underscore or hyphen: `[MARKER]`, `**[MARKER]** Task`, `` `[MARKER]` `` and `[MARKER]:` all
+ *  open, while `[MARKER]X` does not (it is one word). WHY one helper: the display (reviewGate.ts) and this loop's
+ *  result classifier must agree on what a report heading is. WHY the start of the line only: a marker quoted
+ *  mid-line or on a later line is a mention, not the report's heading. */
+export function markerOpening(line: string): string | null {
+  const core = line.replace(/^[#*`\s]+/, '')
+  for (const marker of [MEASURE_HEADING, REVIEW_HEADING]) {
+    if (core.startsWith(marker) && !/^[A-Za-z0-9_-]/.test(core.slice(marker.length))) return marker
+  }
+  return null
+}
 
 // ── FS injection ─────────────────────────────────────────────────────────────────────────────
 export interface FsHelpers {
@@ -355,11 +372,13 @@ function roleFromPromptFirstLine(prompt: string): Role | null {
   if (firstLine === 'ROLE: REVIEW') return 'review'
   return null
 }
-/** Heading of a RESULT block: must START a line (markdown punctuation allowed before it). Both
- *  or neither => null — one agent claiming both jobs is the shape this loop replaces. */
-function resultRole(text: string): Role | null {
-  const m = /^[#*\t ]*MEASURE-AND-VERIFY-REPORT/m.test(text)
-  const r = /^[#*\t ]*ADVERSARIAL-REVIEW/m.test(text)
+/** Heading of a RESULT block: some line OPENS with a report marker (`markerOpening`, the same test the display
+ *  uses). Both or neither => null — one agent claiming both jobs is the shape this loop replaces. Exported so the
+ *  both-markers rule is tested directly. */
+export function resultRole(text: string): Role | null {
+  const openers = new Set(text.split('\n').map(markerOpening))
+  const m = openers.has(MEASURE_HEADING)
+  const r = openers.has(REVIEW_HEADING)
   return m === r ? null : (m ? 'measure' : 'review')
 }
 

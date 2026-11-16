@@ -1,9 +1,9 @@
 ---
 trdd-id: ZQQYRYBO
 title: Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
-column: dev
+column: todo
 created: 2026-09-24T13:39:40+0200
-updated: 2026-09-25T05:39:41+0200
+updated: 2026-10-16T11:16:02+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -16,6 +16,7 @@ approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:39:40+0200
 implementation-commits: [92d8b369, b30b80d7, 33189cdf, fc89382b, 0972f2e7, 76c3b859, ef1577b6, e48e49c6, 97cb873d, f101fe50, 5b272f77, 079f7839, 802531dd, bb53a24c, e02bb80a, a2b73fa6, fbaae7d0, c18c33fa, a99a17f2, 33c8a52b, 7f0b3d4e, 3d128e0d]
 eht: [2D3D2V9F, 6TSEHXML, WQKM44AL, WBT2WW96]
+status: tasked
 ---
 
 # Align AgentlensPro with Claude Code 2.1.253 to 2.1.281
@@ -120,10 +121,12 @@ Defaults taken or proposed 2026-09-25 (owner may veto):
 
 ## Notes and lessons learned
 DO NOT verify a patch with a hand-picked --test list, BECAUSE the I6c2 worktree run named 9 parity suites, omitted log_reader_parity, and a stale fixture reached main. DO run cargo test -p agentlens-core -p agentlens-logscan --no-fail-fast (the whole crate) before committing.
+2026-10-16: moved to todo by the board triage (row 28). What remains: 13 open items: I3, I5, I6, I8, I9, I12 (blocked on capture), I13, I15, I17, I18, I20, I21, I22.
 
 ## Approval log
 
 - 2026-09-24T13:39:40+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T11:13:12+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 28
 
 ## Advisor verdict
 

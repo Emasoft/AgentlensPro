@@ -104,8 +104,9 @@ export function portHolder(port: number): string {
   } catch { return 'an unknown process' }
 }
 
-/** Decide the three listener ports for `alcore serve` (owner rule 2026-10-02). `ours` says whether
- *  a held port belongs to OUR server.
+/** Decide the three listener ports for `alcore serve` (owner rule 2026-10-02). `ours(kind, port)` says
+ *  whether THAT held port belongs to OUR server. Per port (TRDD-V2HFI30L): a server that is ours on the
+ *  UI port says nothing about a stranger on 4318, so the question names the port it is about.
  *  A PINNED port — OTLP always (Claude Code's exporters target a fixed endpoint), UI/MCP when
  *  UI_PORT/MCP_PORT is explicitly set — NEVER moves: held by a stranger means a loud refusal
  *  naming the holder, because moving it would send clients/telemetry to the squatter or nowhere.
@@ -114,14 +115,14 @@ export function portHolder(port: number): string {
 export async function chooseServerPorts(
   preferred: { otlp: number; ui: number; mcp: number },
   pinned: { ui: boolean; mcp: boolean },
-  ours: () => Promise<boolean>,
+  ours: (kind: 'otlp' | 'ui' | 'mcp', port: number) => Promise<boolean>,
 ): Promise<{ otlp: number; ui: number; mcp: number }> {
-  const refuse = async (what: string, port: number, remedy: string): Promise<void> => {
-    if (!(await isPortFree(port)) && !(await ours())) {
+  const refuse = async (what: string, kind: 'otlp' | 'ui' | 'mcp', port: number, remedy: string): Promise<void> => {
+    if (!(await isPortFree(port)) && !(await ours(kind, port))) {
       throw new Error(`${what} port ${port} is in use by ${portHolder(port)} — refusing to start: ${remedy}`)
     }
   }
-  await refuse('OTLP', preferred.otlp,
+  await refuse('OTLP', 'otlp', preferred.otlp,
     'telemetry exporters target it, so moving the listener would lose data.\n' +
     'Free the port, or set OTLP_PORT=<other> and re-run `agentlenspro --install-otel`, then restart Claude Code.')
   const exclude = new Set<number>([preferred.otlp])
@@ -129,10 +130,10 @@ export async function chooseServerPorts(
   for (const key of ['ui', 'mcp'] as const) {
     const env = key === 'ui' ? 'UI_PORT' : 'MCP_PORT'
     if (pinned[key]) {
-      await refuse(key === 'ui' ? 'UI' : 'MCP', preferred[key], `it is pinned by ${env}. Free the port, or change/unset ${env}.`)
+      await refuse(key === 'ui' ? 'UI' : 'MCP', key, preferred[key], `it is pinned by ${env}. Free the port, or change/unset ${env}.`)
       chosen[key] = preferred[key]
     } else {
-      const { port, switched } = await pickPort(preferred[key], ours, exclude)
+      const { port, switched } = await pickPort(preferred[key], () => ours(key, preferred[key]), exclude)
       if (switched) console.log(`port ${preferred[key]} is in use by another process — using ${port}`)
       chosen[key] = port
     }

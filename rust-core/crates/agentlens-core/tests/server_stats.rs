@@ -41,7 +41,9 @@ fn body_matches_the_frozen_key_order_exactly() {
     assert_eq!(keys(&body), [
         "pid", "version", "startedAt", "uptimeSec", "ports", "canonical", "dataDir", "memory", "spans", "logSessions",
         "persistence", "bodies", "hookEvents", "statusline", "logEvents", "admission", "resources", "gate",
-        "otlpDroppedLogEvents", "degradations", "otlp",
+        "otlpDroppedLogEvents", "degradations", "otlp", "collection", "startedBy",
+        // `collection` + `startedBy` ADDED 2026-11-04 (TRDD-RBBEX59R step c1), appended after `otlp`:
+        // additive only, same precedent as `otlp` below. A fresh CoreState collects and has no stamp.
     ]);
     assert_eq!(keys(&body["ports"]), ["ui", "mcp", "otlp"]);
     assert_eq!(keys(&body["memory"]), ["rssMb", "heapUsedMb", "heapLimitMb"]);
@@ -75,7 +77,8 @@ fn body_matches_the_frozen_key_order_exactly() {
     // TRDD-HDUETCU7 started sending both — additive, same precedent as the notes above; `spool` REMOVED from
     // the emitter 2026-09-26, TRDD-Z53IJFE9 step D — the RAM-disk spool is gone, so the gauge had
     // nothing left to report). TRDD-FGN5TY7E's producer↔consumer gate is therefore half-built: this half.
-    assert_eq!(keys(&body["bodies"]), ["archive", "lastPass", "reclaimedSinceBoot", "lastNonZeroPassAt", "live", "captureDownSince", "sinkProblem", "parked"]);
+    // `stateSaveFails` + `lastStateSaveFailAt` ADDED 2026-10-29 (TRDD-5K0YLLEF) — additive only, same precedent as the notes above.
+    assert_eq!(keys(&body["bodies"]), ["archive", "lastPass", "reclaimedSinceBoot", "lastNonZeroPassAt", "stateSaveFails", "lastStateSaveFailAt", "live", "captureDownSince", "sinkProblem", "parked"]);
     assert_eq!(body["bodies"]["captureDownSince"], Value::Null, "fresh boot, no activity ⇒ up");
     assert_eq!(keys(&body["bodies"]["archive"]), ["volumes", "bytes", "entries"]);
     assert_eq!(keys(&body["hookEvents"]), ["files", "bytes", "receivedSinceBoot", "spooled"]);
@@ -89,6 +92,8 @@ fn body_matches_the_frozen_key_order_exactly() {
     // `otlp` ADDED 2026-09-23 (TRDD-9SOYXKNE) — the first TOP-LEVEL addition to the frozen shape;
     // additive only, every pre-existing key keeps its name and relative position.
     assert_eq!(keys(&body["otlp"]), ["tracesPayloads", "logsPayloads", "metricsPayloads", "parseErrors"]);
+    assert_eq!(body["collection"], "on");
+    assert_eq!(body["startedBy"], Value::Null);
 
     // Process facts are real.
     assert_eq!(body["pid"], std::process::id());

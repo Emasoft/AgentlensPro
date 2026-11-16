@@ -1,8 +1,8 @@
 ---
 name: otlp-ingest-topology
-description: "which OTLP ingest path is actually live / codex sessions grouped wrong / grouped by conversation not per prompt / multiple otlp parsers or processLogs copies / where does the shipped ingest live / second router is a second truth / why did an ingest fix not take effect / how many places parse the OTLP wire format / what OTEL attributes does Claude Code emit / which telemetry fields are we not reading / where does client_request_id or tool_source go"
+description: "which OTLP ingest path is actually live / codex sessions grouped wrong / grouped by conversation not per prompt / multiple otlp parsers or processLogs copies / where does the shipped ingest live / second router is a second truth / why did an ingest fix not take effect / how many places parse the OTLP wire format / what OTEL attributes does Claude Code emit / which telemetry fields are we not reading / where does client_request_id or tool_source go / body-links rows lost or link key collision / two body pointers in one OTLP payload overwrite each other in body-links (BodyPointer ts key, DeltaLog replay)"
 ocd: 2026-07-11
-lmd: 2026-09-04
+lmd: 2026-10-17
 metadata:
   node_type: memory
   tier: hub
@@ -36,7 +36,7 @@ truth" trap, see [[agentlens-burn-token-model]] lesson on rich-event drift).
    into a not-yet-arrived span, so it needs a `genAiResponseBuffer` — the segmented store's
    overlay does not).
 3. **`src/otlpParser.ts` — only `classifyOtlpPayload` is used in prod.** Its
-   `parseLogPayload`/`parseTracePayload` are dead-but-tested.
+   `parseLogPayload`/`parseTracePayload` are dead-but-tested. [^5]
 
 ^3NI1EKHC [desc:"Codex per-prompt session grouping (codex:<conv>:prompt-N) is single-sourced in CodexSessionNormalizer, shared by otlpParser/otlpCollector/standalone server", keywords:"codex_per_prompt_session_grouping codexSessionNormalizer_shared_grouper codex_conv_prompt_n_key shipped_processLogs_had_drifted_to_group_by_conversation_id_alone where_does_codex_grouping_live codex_sessions_grouped_wrong grouped_by_conversation_not_per_prompt", ocd:2026-07-11, lmd:2026-07-30]
 **Codex per-prompt session grouping (`codex:<conv>:prompt-N`) — the shared normalizer.**
@@ -47,13 +47,13 @@ collector + the standalone server each hold one long-lived instance (state persi
 across payloads/requests). Before S3-F3a the shipped `processLogs` had drifted to group
 Codex by conversation-id alone.
 
-^7VDN6TUV [desc:"src/summarizers/codex.ts groupCodexSpansBySession is a FOURTH, separate re-derivation of codex prompt grouping that determines the user-visible /api/summary grouping", keywords:"fourth_copy_of_codex_grouping groupCodexSpansBySession summarizer_grouper user_visible_api_summary_grouping ingest_grouping_change_has_zero_summary_effect how_many_places_parse_the_otlp_wire_format", ocd:2026-07-11, lmd:2026-07-30]
+^7VDN6TUV [desc: "src/summarizers/codex.ts groupCodexSpansBySession is a FOURTH, separate re-derivation of codex prompt grouping that determines the user-visible /api/summary grouping", keywords: fourth_copy_of_codex_grouping groupCodexSpansBySession summarizer_grouper user_visible_api_summary_grouping ingest_grouping_change_has_zero_summary_effect how_many_places_parse_the_otlp_wire_format, ocd: 2026-07-11, lmd: 2026-10-17]
 **THE FOURTH copy — the summarizer.** `src/summarizers/codex.ts` `groupCodexSpansBySession`
 re-derives the SAME `codex:<conv>:prompt-N` grouping from stored spans (honoring an
 explicit `codex.session.id` first, else re-deriving via its own ordinal). It is a fourth
 grouper — and the one that determines the **user-visible** `/api/summary` grouping. The
 ingest store-key (impls 1-3) and the summarized view (impl 4) are grouped by SEPARATE
-logic, so an ingest-side grouping change (S3-F3a) has ~zero `/api/summary` effect.
+logic, so an ingest-side grouping change (S3-F3a) has ~zero `/api/summary` effect.[^1]
 
 ^CGMU661G [desc:"Phase 0b unified only the shared atoms (prompt-event predicate + key format) between the batch grouper and the streaming normalizer; a full fold was rejected — it would change user-visible grouping", keywords:"phase_0b_partial_unification full_fold_rejected batch_grouper_vs_streaming_resolver isCodexPromptEventName isCodexPromptSpanName codexPromptSessionId characterization_test_codexGrouping_test_ts why_was_the_fourth_copy_not_merged", ocd:2026-07-11, lmd:2026-07-30]
 **Phase 0b (2026-07-11) — analyzed and PARTIALLY unified; full fold REJECTED.** impl 4 is a
@@ -165,3 +165,4 @@ EXACTLY; the flat $6.25 gives 2.569146. Recomputing is only needed on the JSONL-
   changing). Verify the merge preserves output with a characterization test BEFORE assuming a
   fold is mechanical — the fourth copy had zero tests, so "output unchanged" was unprovable until
   one existed.
+[^5]: [id: ATOM-47YJ-YIMA, status: valid, desc: "two body pointers in one OTLP payload overwrite each other in body-links; body-links rows lost or link key collision", keywords: "body-links BodyPointer ts ingest_time collision DeltaLog key two_body_pointers_overwrite body-links_rows_lost link_key_collision spanless_pointer DeltaLog_replay_last_row_wins", ocd: 2026-10-17, lmd: 2026-10-17] DO NOT key per-pointer rows by the BodyPointer `ts`, BECAUSE `ts` is the ingest time of the whole OTLP payload, shared by every pointer in it, and span_id is None when the log record carries none. Two different same-kind spanless pointers in one payload then share the key, and DeltaLog replay keeps only the last row. DO key by a hash of the full row content (TRDD-N6A8VX3G D4; commits 531b3b62, 54f7b978; test 1b40ac9a).

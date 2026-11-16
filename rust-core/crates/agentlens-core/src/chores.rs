@@ -66,7 +66,7 @@ pub fn with_chores_lock<T>(data_dir: &Path, body: impl FnOnce() -> T) -> Option<
 /// segment enumeration outside the lock and re-acquire per file, which is only safe once the
 /// index is separable from the writer.
 fn span_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
-    let Ok(mut st) = state.lock_timed() else { return };
+    let mut st = state.lock_timed();
     let data_dir = st.data_dir.clone();
     let days = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::SPANS_RETENTION_DAYS);
     let ran = with_chores_lock(&data_dir, || {
@@ -127,7 +127,7 @@ pub fn hook_events_retention_days(vars: &std::collections::HashMap<String, Strin
 /// straight through would let `logEventsRetentionDays: 0` wipe the store.
 fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let (data_dir, sl_root) = {
-        let Ok(st) = state.lock_timed() else { return };
+        let st = state.lock_timed();
         (st.data_dir.clone(), st.statusline.root.clone())
     };
 
@@ -207,6 +207,155 @@ const DRAIN_MAX_PASSES: usize = 16;
 /// below can read it; nothing else needs to reach it from outside `bodies_pass`.
 static FSYNCED_PARTS: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
 
+/// The bodies store, opened ONCE per process and kept (TRDD-2HRA270Y step 3). open_store rebuilds
+/// the in-memory dedup tables (known_blob, part_file, body_durable, about 1 GB on the real store)
+/// from every parquet part, and the bodies pass used to pay that on every 60s tick. Now the
+/// bodies pass (lazily, after the idle exit, `.pass.lock` and the HEAVY slot), export and purge (through
+/// `bodies_store_open_or_get`) open it on first use, and each tick refreshes it with `sync_new_parts`.
+/// Export reads through the `reader` connection; purge borrows the writer with try_lock.
+///
+/// KEYED BY `store_dir`: a call for a different store dir drops the open store and reopens.
+/// Production has one data dir; the test binaries run tests in parallel threads with one data dir
+/// each, and serving one test's dedup tables to another would be wrong.
+///
+/// LOCK ORDER: `.pass.lock`, then HEAVY, then the slot (briefly), then the writer mutex, then
+/// FSYNCED_PARTS. Export holds only the reader mutex and nothing waits for the writer while holding
+/// the reader. Purge only try_locks the writer, so it can never deadlock with a pass.
+struct SharedBodiesStore {
+    store_dir: PathBuf,
+    writer: Arc<Mutex<agentlens_store::Store>>,
+    reader: Arc<Mutex<agentlens_store::StoreReader>>,
+}
+
+static BODIES_STORE: Mutex<Option<SharedBodiesStore>> = Mutex::new(None);
+static BODIES_STORE_OPENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The handles a caller of the shared store gets: the writer (bodies pass, purge) and the reader
+/// (export). Both point at the one store the slot holds (TRDD-2HRA270Y step 3).
+#[derive(Clone)]
+pub struct BodiesStoreHandles {
+    pub writer: Arc<Mutex<agentlens_store::Store>>,
+    pub reader: Arc<Mutex<agentlens_store::StoreReader>>,
+}
+
+type RetiredStore = (std::sync::Weak<Mutex<agentlens_store::Store>>, std::sync::Weak<Mutex<agentlens_store::StoreReader>>);
+/// The weak handles of the store that drop_poisoned_bodies_store last released (TRDD-2HRA270Y step 3,
+/// F3). Releasing the slot does not free the database while a caller still holds a clone (export holds
+/// the reader, purge the writer), and a reader connection keeps the same in-memory DuckDB alive. A second
+/// open while either handle still upgrades would run two ~1 GB instances spilling into one store/tmp.
+static RETIRED_STORE: Mutex<Option<RetiredStore>> = Mutex::new(None);
+
+fn bodies_slot() -> std::sync::MutexGuard<'static, Option<SharedBodiesStore>> {
+    // The slot only holds Arcs and is never held across store work, so a poison here carries no
+    // half-done state; the store mutexes have their own poison handling (drop_poisoned_bodies_store).
+    BODIES_STORE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Test-only: how many times this process has opened the shared bodies store.
+pub fn bodies_store_opens_for_test() -> u64 {
+    BODIES_STORE_OPENS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Test-only: poison the writer mutex of the open store for `store_dir` (a thread panics while
+/// holding it), to drive the poison path. No-op when that store is not open.
+pub fn poison_bodies_store_writer_for_test(store_dir: &Path) {
+    if let Some(w) = bodies_store_writer(store_dir) {
+        let _ = std::thread::spawn(move || {
+            let _g = w.lock();
+            panic!("poisoning the bodies store writer for a test");
+        })
+        .join();
+    }
+}
+
+/// A poisoned writer or reader mutex means a thread panicked mid-operation, so the store's tables
+/// may be half-updated. Drop the shared store and let the next bodies pass reopen it from the
+/// parquet parts, the only durable truth (TRDD-2HRA270Y step 3, A6).
+pub fn drop_poisoned_bodies_store(which: &str) {
+    eprintln!(
+        "{} alcore: bodies store {which} mutex is POISONED — dropping the shared store; the next bodies pass reopens it (TRDD-2HRA270Y)",
+        crate::log_ts()
+    );
+    // WHY keep Weak handles (F3, TRDD-2HRA270Y step 3): an export or a purge may still hold a clone of
+    // the released store, and dropping the slot does not free the database while one exists. Recording
+    // the Weaks lets open_shared_bodies_writer refuse a second open until they are gone.
+    let released = bodies_slot().take();
+    if let Some(old) = released {
+        *RETIRED_STORE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Arc::downgrade(&old.writer), Arc::downgrade(&old.reader)));
+    }
+}
+
+/// The writer of the open bodies store for `store_dir`, or None when it is not open.
+pub fn bodies_store_writer(store_dir: &Path) -> Option<Arc<Mutex<agentlens_store::Store>>> {
+    bodies_slot().as_ref().filter(|s| s.store_dir == store_dir).map(|s| s.writer.clone())
+}
+
+/// The reader of the open bodies store for `store_dir`, or None when it is not open.
+pub fn bodies_store_reader(store_dir: &Path) -> Option<Arc<Mutex<agentlens_store::StoreReader>>> {
+    bodies_slot().as_ref().filter(|s| s.store_dir == store_dir).map(|s| s.reader.clone())
+}
+
+/// The shared store handles for `store_dir`, opening the store when it is not open (TRDD-2HRA270Y step
+/// 3, F1). Export and purge call this: an idle server runs no bodies pass, and a store that only a pass
+/// opens would answer "not open" to both routes for the life of the process. None means a released
+/// instance is still referenced (F3), and the caller answers 503.
+pub fn bodies_store_open_or_get(store_dir: &Path) -> Result<Option<BodiesStoreHandles>, String> {
+    open_shared_bodies_writer(store_dir, crate::cores::duckdb_threads())
+}
+
+/// The handles of the shared store for `store_dir`, opening it when it is not open (or open for another
+/// dir). None means a released instance is still referenced (F3): the caller skips and retries later.
+/// The open itself is serialized by the slot mutex, which is held across it.
+fn open_shared_bodies_writer(store_dir: &Path, threads: usize) -> Result<Option<BodiesStoreHandles>, String> {
+    let mut slot = bodies_slot();
+    if let Some(s) = slot.as_ref().filter(|s| s.store_dir == store_dir) {
+        return Ok(Some(BodiesStoreHandles { writer: s.writer.clone(), reader: s.reader.clone() }));
+    }
+    // WHY (F3, TRDD-2HRA270Y step 3): a released instance must be gone before a new one opens. Its
+    // clones are released by the callers that still hold them, not by this function, so refuse while
+    // either one still upgrades; the next tick (or request) retries.
+    {
+        let mut retired = RETIRED_STORE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((writer, reader)) = retired.as_ref() {
+            if writer.upgrade().is_some() || reader.upgrade().is_some() {
+                return Ok(None);
+            }
+        }
+        *retired = None;
+    }
+    // Drop the other dir's store BEFORE opening, so two stores' tables are never resident at once.
+    *slot = None;
+    // STORE_MEMORY_LIMIT, not SERVER_MEMORY_LIMIT: open_store builds ART indexes on known_blob/body_durable that cannot spill, and at 512MiB the sha probe runs out of memory (measured 2026-10-22, TRDD-2HRA270Y).
+    let store = agentlens_store::open_store(store_dir, agentlens_store::STORE_MEMORY_LIMIT, threads).map_err(|e| e.to_string())?;
+    let reader = store.reader().map_err(|e| format!("cannot clone a reader connection: {e}"))?;
+    BODIES_STORE_OPENS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let writer = Arc::new(Mutex::new(store));
+    let reader = Arc::new(Mutex::new(reader));
+    *slot = Some(SharedBodiesStore { store_dir: store_dir.to_path_buf(), writer: writer.clone(), reader: reader.clone() });
+    Ok(Some(BodiesStoreHandles { writer, reader }))
+}
+
+/// Unreadable parts sync_new_parts already reported, so each is logged once, not every tick.
+static SYNC_SKIPS_LOGGED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+/// The last "staging cleared" log line and when it was printed (one per distinct error or minute).
+static LEFTOVER_LOGGED: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+/// Last time the "bodies store busy" and "still referenced by a released instance" lines were printed:
+/// each is rate-limited to one line a minute, because the bodies pass retries every tick (TRDD-2HRA270Y).
+static BUSY_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static REOPEN_REFUSED_LOGGED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Consecutive failed saves of `.pass-state.json` (TRDD-ZR3OGSAV): the pass runs every 60s, so a
+/// persistent failure (full disk) is logged on the first failure only, then counted and summarized on recovery.
+/// Per PROCESS (one alcore = one data dir): any test forcing a save failure through bodies_pass must reset it.
+static STATE_SAVE_FAILS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Epoch ms of the last failed `.pass-state.json` save (0 = never), TRDD-5K0YLLEF. A successful save clears the
+/// count but not this: the count answers "how many in a row now", this answers "when did the disk last refuse us".
+static LAST_STATE_SAVE_FAIL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Consecutive ticks on which an unreadable `.pass-state.json` could not be moved aside (TRDD-FINMFYDE). The move is
+/// retried every tick, so the failure is logged on its first tick only, counted while it persists, and the next readable load logs once.
+/// Per PROCESS (one alcore = one data dir): any test forcing a move failure through bodies_pass must reset it.
+static STATE_LOAD_FAILS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The last bodies-pass reading (TRDD-HDUETCU7), held here and not in `CoreState`; `server_stats`
 /// reads it through `bodies_pass_stats()`. The type is `crate::BodiesPassStats`.
@@ -226,6 +375,17 @@ pub fn bodies_pass_stats() -> crate::BodiesPassStats {
     *BODIES_PASS_STATS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// `(consecutive failed .pass-state.json saves, epoch ms of the last failed save)`, read by `server_stats` (TRDD-5K0YLLEF).
+/// Two separate loads, not one snapshot: a save can land between them. The reader is a diagnostic, so that skew is harmless.
+pub fn state_save_failures() -> (u64, u64) {
+    (STATE_SAVE_FAILS.load(std::sync::atomic::Ordering::Relaxed), LAST_STATE_SAVE_FAIL_MS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Test-only: zero both counters so a test that forces a save failure starts from a known state (TRDD-5K0YLLEF).
+pub fn reset_state_save_failures_for_test() {
+    STATE_SAVE_FAILS.store(0, std::sync::atomic::Ordering::Relaxed);
+    LAST_STATE_SAVE_FAIL_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
 /// Record one COMPLETED pass (TRDD-HDUETCU7). The TS overwrote its last-pass object on every pass,
 /// an empty one included. Only `bodies_pass` calls this, and only on the paths that ran a pass (or
 /// found nothing staged): the other early exits did not run one, so they must not claim one, and
@@ -238,6 +398,67 @@ fn record_bodies_pass(now_ms: f64, deleted: u64, bytes_freed: u64) {
     s.reclaimed_since_boot += deleted;
     if deleted > 0 {
         s.last_non_zero_pass_at_ms = now_ms as i64;
+    }
+}
+
+/// Print `msg` unless the same kind of line was printed in the last minute (TRDD-2HRA270Y). The bodies
+/// pass retries every tick, so an unrepeated line per tick would flood server.log.
+fn log_at_most_once_a_minute(last: &Mutex<Option<std::time::Instant>>, msg: &str) {
+    let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(*last, Some(at) if at.elapsed() < Duration::from_secs(60)) {
+        return;
+    }
+    eprintln!("{} alcore: {msg}", crate::log_ts());
+    *last = Some(std::time::Instant::now());
+}
+
+/// Log what one sync_new_parts call found: each unreadable part once, and the count of part files that
+/// vanished whenever it is nonzero (TRDD-2HRA270Y step 3, F4).
+fn log_sync_outcome(sync: &agentlens_store::SyncStats) {
+    let mut logged = SYNC_SKIPS_LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    let logged = logged.get_or_insert_with(Default::default);
+    for (file, err) in &sync.skipped {
+        if logged.insert(file.clone()) {
+            eprintln!("{} alcore: bodies pass: cannot load new part {file}, retrying next tick: {err}", crate::log_ts());
+        }
+    }
+    let removed: u64 = sync.removed_files.iter().sum();
+    if removed > 0 {
+        eprintln!("{} alcore: bodies store: {removed} part file(s) vanished; their dedup rows were removed (TRDD-2HRA270Y)", crate::log_ts());
+    }
+}
+
+/// The idle tick share of the shared store (TRDD-2HRA270Y step 3, F5). It refreshes a store that is
+/// already open and NEVER opens one (chores_bodies_empty_dir_skips_store_open). Nothing here waits: the
+/// pass lock, the HEAVY slot and the writer are all try-taken, and a busy one skips the refresh until the
+/// next tick. Lock order is the same as bodies_pass: .pass.lock, HEAVY, the slot (briefly), the writer.
+fn sync_open_store_idle(store_dir: &Path) {
+    static SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let Some(writer) = bodies_store_writer(store_dir) else {
+        return;
+    };
+    let _lock = match agentlens_store::pass::acquire_pass_lock(store_dir) {
+        Ok(f) => f,
+        Err(agentlens_store::pass::PassLockErr::Busy) => return,
+        Err(agentlens_store::pass::PassLockErr::Io(e)) => {
+            eprintln!("{} alcore: idle bodies sync cannot take the store lock: {e}", crate::log_ts());
+            return;
+        }
+    };
+    let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("bodies sync", &SKIPS) else {
+        return;
+    };
+    let mut store = match writer.try_lock() {
+        Ok(g) => g,
+        Err(std::sync::TryLockError::WouldBlock) => return,
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            drop_poisoned_bodies_store("writer");
+            return;
+        }
+    };
+    match agentlens_store::sync_new_parts(&mut store) {
+        Ok(sync) => log_sync_outcome(&sync),
+        Err(e) => eprintln!("{} alcore: idle bodies sync cannot sync new store parts: {e}", crate::log_ts()),
     }
 }
 
@@ -261,8 +482,28 @@ const SPILL_DIRS: [&str; 3] = ["store/tmp", "statusline/tmp", "tmp/session-summa
 /// older than `max_age`. Returns the count removed. Missing dirs are fine. DuckDB spill files from
 /// a killed process are never cleaned by DuckDB itself, so without this a crash loop fills the disk.
 pub fn clean_spill_dirs(data_dir: &Path, max_age: Option<Duration>) -> usize {
+    clean_spill_dirs_except(data_dir, max_age, &[])
+}
+
+/// The periodic (age-based) spill cleanup. Skips `store/tmp` while the shared bodies store is open
+/// for this data dir (TRDD-2HRA270Y step 3): that DuckDB now lives for the whole process and keeps
+/// its spill blocks there, so an mtime rule cannot tell a dead file from a live one. Boot cleanup
+/// (clean_spill_dirs with None) still empties it, and max_temp_directory_size bounds it meanwhile.
+pub fn clean_spill_dirs_periodic(data_dir: &Path) -> usize {
+    let skip: &[&str] = if bodies_store_writer(&data_dir.join("store")).is_some() { &["store/tmp"] } else { &[] };
+    clean_spill_dirs_except(data_dir, Some(SPILL_MAX_AGE), skip)
+}
+
+/// Total bytes of the files directly in `dir` (0 when missing).
+fn dir_file_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len()).sum())
+        .unwrap_or(0)
+}
+
+fn clean_spill_dirs_except(data_dir: &Path, max_age: Option<Duration>, skip: &[&str]) -> usize {
     let mut removed = 0;
-    for sub in SPILL_DIRS {
+    for sub in SPILL_DIRS.into_iter().filter(|s| !skip.contains(s)) {
         let Ok(rd) = std::fs::read_dir(data_dir.join(sub)) else { continue };
         for e in rd.flatten() {
             let Ok(meta) = e.metadata() else { continue };
@@ -282,10 +523,16 @@ pub fn clean_spill_dirs(data_dir: &Path, max_age: Option<Duration>) -> usize {
 }
 
 pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
-    let (data_dir, tap) = {
-        let Ok(st) = state.lock_timed() else { return };
-        (st.data_dir.clone(), st.spool_tap.clone())
+    let (data_dir, tap, no_collection) = {
+        let st = state.lock_timed();
+        (st.data_dir.clone(), st.spool_tap.clone(), st.no_collection)
     };
+    // TRDD-RBBEX59R no-collection mode: no raw-body pass at all — no drain into the store and no
+    // tap.body call (this pass is its only caller). The boot call and the 60 s timer both land here.
+    // The burn-tick body scan (ui.rs) is a separate guard input and is not affected.
+    if no_collection {
+        return;
+    }
     // The ONE bodies dir, `<data>/otel-bodies` — capture writes straight to it (TRDD-Z53IJFE9
     // step D removed the RAM-disk spool that this chore used to drain alongside it, and with the
     // spool went the free-space back-pressure valve: it existed to relieve a 2GB RAM disk that
@@ -293,14 +540,16 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // below still guards it).
     let scope = crate::burn::guard::resolve_bodies_read_scope(&data_dir);
 
-    // WHY no capture switch here: raw-body capture is mandatory (owner order 2026-10-02), so the
-    // sink probe, the drain and the over-cap valve below run on every tick unconditionally. The
-    // old opt-in gated only this probe (never the drain), so a fresh install silently skipped the
-    // one check that says "the capture dir is not writable".
+    // WHY no capture switch here: raw-body capture is mandatory (owner order 2026-10-02), so outside
+    // no-collection mode the sink probe, the drain and the over-cap valve below run on every tick
+    // unconditionally. The old opt-in gated only this probe (never the drain), so a fresh install
+    // silently skipped the one check that says "the capture dir is not writable". The ONE exception
+    // is no-collection mode (TRDD-RBBEX59R), which returns before all of it, above.
     // server.ts:818-823 — the sink precondition, once per pass tick, warnings on TRANSITIONS
     // only (a per-tick repeat is filtered out by the day it matters). TRDD-U0L78B3Z.
     let problem = crate::server_stats::probe_sink(&crate::burn::guard::default_bodies_dir(&data_dir));
-    if let Ok(mut st) = state.lock_timed() {
+    {
+        let mut st = state.lock_timed();
         if problem != st.sink_problem {
             match &problem {
                 Some(p) => eprintln!("{} alcore: bodies sink precondition FAILED: {p} (TRDD-4FMHW124)", crate::log_ts()),
@@ -321,15 +570,18 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // opening the store, so an idle minute costs a directory read instead of a DuckDB open for
     // nothing. `over_cap`/emergency-valve reasoning below still re-checks per dir once real work
     // exists — this is only the fast "nothing to do" exit.
+    let store_dir = data_dir.join("store");
     if scope.dirs.iter().all(|d| staged_body_bytes(d) == 0) {
+        // WHY (F5, TRDD-2HRA270Y step 3): an idle tick still refreshes a store that is already open, so
+        // a part another writer added reaches the dedup tables without waiting for a busy tick. It never
+        // opens the store (chores_bodies_empty_dir_skips_store_open pins that).
+        sync_open_store_idle(&store_dir);
         // TRDD-HDUETCU7: an idle tick is a completed, empty pass. The TS overwrote its last-pass
         // object every pass; without this a healthy idle server shows a stale `at` that reads as
         // a dead chore.
         record_bodies_pass(now_ms, 0, 0);
         return;
     }
-
-    let store_dir = data_dir.join("store");
 
     let max_gb = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::BODIES_MAX_GB);
     let cap_bytes = (max_gb * 1024.0 * 1024.0 * 1024.0) as u64;
@@ -350,11 +602,12 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // CLI pass — `DEFAULT_MEMORY_LIMIT` ("8GB") + available_parallelism() is the `alstore pass`
     // CLI's sizing. Measured 2026-09-02: at that sizing the pass's DuckDB scans became the
     // machine's dominant IO/CPU load (stall samples: 10,694 DuckDB frames, all inside
-    // `MultiFileFunction<Parquet>` waits). Match the server's other two in-process DuckDB uses
-    // (statusline_store.rs, bodies_evidence.rs): threads=2, memory_limit=SERVER_MEMORY_LIMIT.
-    let threads = 2;
+    // `MultiFileFunction<Parquet>` waits). Match the server's other in-process DuckDB uses:
+    // threads = crate::cores::duckdb_threads() (TRDD-YH822LDI), memory_limit=STORE_MEMORY_LIMIT.
+    let threads = crate::cores::duckdb_threads();
     // Timed from the store open, not the tick: TRDD-768NEX6E's acceptance wants one pass's wall
-    // time on the log line, and the open is where the per-pass parquet rebuild scans happen.
+    // time on the log line. Since TRDD-2HRA270Y step 3 the store is opened once per process, so
+    // only the first busy tick includes the parquet rebuild; later ticks time the sync and the pass.
     let started = std::time::Instant::now();
     // Same heavy-DuckDB slot as transcript/seismic queries (budget: card 256MB + ONE transient 1GB);
     // busy => skip this tick, the next one retries. Declared before `store` so it drops after it.
@@ -362,15 +615,125 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("bodies pass", &SKIPS) else {
         return;
     };
-    let mut store = match agentlens_store::open_store(&store_dir, agentlens_store::SERVER_MEMORY_LIMIT, threads) {
-        Ok(s) => s,
+    // The shared store (see SharedBodiesStore for the lock order): opened on the first busy tick,
+    // kept after. An open error leaves it unopened and the next tick retries.
+    let handles = match open_shared_bodies_writer(&store_dir, threads) {
+        Ok(Some(h)) => h,
+        // WHY skip (F3, TRDD-2HRA270Y step 3): a released instance is still referenced, and a second
+        // store would be a second ~1 GB DuckDB spilling into the same store/tmp. Retry on a later tick.
+        Ok(None) => {
+            log_at_most_once_a_minute(&REOPEN_REFUSED_LOGGED, "bodies store still referenced by a released instance; pass skipped (TRDD-2HRA270Y)");
+            return;
+        }
         Err(e) => {
             eprintln!("{} alcore: bodies pass cannot open the store: {e}", crate::log_ts());
             return;
         }
     };
+    // WHY try_lock and not lock (F2, TRDD-2HRA270Y step 3): a purge holds the writer through a long
+    // verify, and blocking here would keep HEAVY taken for that whole time and stall every dashboard
+    // query. WouldBlock skips this tick: the staged bodies stay on disk and the next tick retries.
+    // The guards already taken (HEAVY, .pass.lock) release when this function returns.
+    let mut store = match handles.writer.try_lock() {
+        Ok(g) => g,
+        Err(std::sync::TryLockError::WouldBlock) => {
+            log_at_most_once_a_minute(&BUSY_LOGGED, "bodies store busy (purge); pass skipped (TRDD-2HRA270Y)");
+            return;
+        }
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            drop_poisoned_bodies_store("writer");
+            return;
+        }
+    };
+    // TRDD-2HRA270Y: the shared bodies store is open and its writer locked; opens the sync_new_parts window.
+    static BP_STORE_READY: std::sync::Once = std::sync::Once::new();
+    BP_STORE_READY.call_once(|| crate::rss_guard::log_boot_phase("bp_store_ready", None));
+    // Refresh the dedup tables with parts another writer (alstore pass/ingest) added since the last
+    // tick. Under `.pass.lock`, so no locked writer is mid-write; an unreadable file is skipped and
+    // retried next tick, logged once.
+    match agentlens_store::sync_new_parts(&mut store) {
+        Ok(sync) => log_sync_outcome(&sync),
+        Err(e) => {
+            eprintln!("{} alcore: bodies pass cannot sync new store parts: {e}", crate::log_ts());
+            return;
+        }
+    }
     let state_file = store_dir.join(agentlens_store::pass::PASS_STATE_FILE);
-    let (mut skip, mut stranded) = agentlens_store::pass::load_pass_state(&state_file);
+    // WHY move the file aside and rebuild it, rather than skip the tick (TRDD-FINMFYDE): the save at the end of
+    // this pass writes its sets over the state file, so an unreadable file must not stay where that save can
+    // overwrite it, and it must not be read as empty and silently lose its bookkeeping. Moving it aside keeps the
+    // bytes for inspection, and the pass starts from empty sets. That is safe: a skip name is only a shortcut,
+    // because the delete gate re-reads the store and the body before any delete, and a stranded name is routed to
+    // that same gate. Only a failed move skips the tick, because then the unreadable file is still in place for the
+    // save to overwrite. An idle tick returns earlier and never reaches this load, so it never reads the state.
+    // TRDD-2HRA270Y: opens the load_pass_state window; `bp_store_ready` .. here is sync_new_parts.
+    static BP_PASS_STATE_START: std::sync::Once = std::sync::Once::new();
+    BP_PASS_STATE_START.call_once(|| crate::rss_guard::log_boot_phase("bp_pass_state_start", None));
+    // TRDD-2HRA270Y: load and prune in one streaming step. `.pass-state.json` is ~75 MB (~1.49M names) and no pass
+    // completes, so it is never pruned; loading it whole (String, Value tree, two full sets) raised the process net
+    // commit by ~465 MB that the allocator never gave back. The listing is taken first and only names present in the
+    // bodies dirs are kept; an incomplete listing keeps everything (a dropped stranded name loses data).
+    let (mut skip, mut stranded) = match agentlens_store::pass::load_pass_state_pruned(
+        &state_file,
+        &scope.dirs,
+    ) {
+        Ok(loaded) => {
+            let n = STATE_LOAD_FAILS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            if n > 0 {
+                eprintln!("{} alcore: bodies pass: pass state {} is readable again after {n} ticks it could not be moved aside", crate::log_ts(), state_file.display());
+            }
+            if let Some(line) = &loaded.summary {
+                eprintln!("{} alcore: bodies pass: {line}", crate::log_ts());
+            }
+            // WHY print only on a change: the pass runs on a 60 s tick, so an unconditional line is one
+            // per minute of identical text; the first tick always prints because the slot starts empty.
+            // Named so clippy::type_complexity passes; the tuple is (kept skip, total skip, kept stranded, total stranded, listing complete).
+            type Kept = (usize, usize, usize, usize, bool);
+            static LAST_KEPT_LINE: Mutex<Option<Kept>> = Mutex::new(None);
+            let kept = (
+                loaded.skip.len(),
+                loaded.total_skip,
+                loaded.stranded.len(),
+                loaded.total_stranded,
+                loaded.listing_complete,
+            );
+            let mut last = LAST_KEPT_LINE.lock().unwrap_or_else(|e| e.into_inner());
+            if *last != Some(kept) {
+                eprintln!(
+                    "{} alcore: bodies pass: pass state kept {}/{} skip, {}/{} stranded (listing {})",
+                    crate::log_ts(),
+                    kept.0,
+                    kept.1,
+                    kept.2,
+                    kept.3,
+                    if kept.4 { "complete" } else { "incomplete" }
+                );
+                *last = Some(kept);
+            }
+            drop(last);
+            (loaded.skip, loaded.stranded)
+        }
+        Err(e) => {
+            let aside = std::path::PathBuf::from(format!("{}.corrupt-{}", state_file.display(), crate::now_ms()));
+            match std::fs::rename(&state_file, &aside) {
+                Ok(()) => {
+                    // The loud line below reports this move, so a count of failed moves starts over.
+                    STATE_LOAD_FAILS.store(0, std::sync::atomic::Ordering::Relaxed);
+                    eprintln!("{} alcore: bodies pass: cannot read the pass state ({e}); moved it aside to {} and rebuilt it from empty", crate::log_ts(), aside.display());
+                    (Default::default(), Default::default())
+                }
+                Err(move_err) => {
+                    if STATE_LOAD_FAILS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                        eprintln!("{} alcore: bodies pass skipped (repeats suppressed until it recovers): cannot read the pass state ({e}) and cannot move it aside to {}: {move_err}", crate::log_ts(), aside.display());
+                    }
+                    return;
+                }
+            }
+        }
+    };
+    // TRDD-2HRA270Y: closes the load_pass_state window opened by `bp_pass_state_start`.
+    static BP_PASS_STATE_DONE: std::sync::Once = std::sync::Once::new();
+    BP_PASS_STATE_DONE.call_once(|| crate::rss_guard::log_boot_phase("bp_pass_state_done", None));
     // B-1 (advisor verdict): parquet parts are immutable once written (`agentlens_store::lib.rs`
     // never merges/rewrites one), so a part fsynced on an earlier tick is fsynced for the life of
     // the process — recomputing the set fresh every tick (the old `HashSet::new()` here) made the
@@ -381,6 +744,29 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // again" behavior.
     let fsynced_lock = FSYNCED_PARTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
     let mut fsynced = fsynced_lock.lock().unwrap_or_else(|e| e.into_inner());
+    // Staging rows a previous tick's failed flush left behind: flush them, or clear them when that
+    // fails again (the sources are still on disk and re-ingest). Staging never grows across ticks.
+    // Runs while FSYNCED_PARTS is held; the parts it writes are fsynced by the settle barrier
+    // (pass.rs sweeps all four part dirs) before any source is deleted.
+    // TRDD-2HRA270Y: opens the leftover-staging flush window; `bp_prune_start` closes it (the max-bytes env read rides in it).
+    // `bp_pass_state_done` .. here is only the FSYNCED_PARTS get_or_init + lock.
+    static BP_FLUSH_LEFTOVERS_START: std::sync::Once = std::sync::Once::new();
+    BP_FLUSH_LEFTOVERS_START.call_once(|| crate::rss_guard::log_boot_phase("bp_flush_leftovers_start", None));
+    match agentlens_store::flush_or_clear_leftovers(&mut store) {
+        Ok(agentlens_store::Leftovers::Cleared(e)) => {
+            let mut last = LEFTOVER_LOGGED.lock().unwrap_or_else(|p| p.into_inner());
+            let repeat = last.as_ref().is_some_and(|(prev, at)| *prev == e && at.elapsed() < Duration::from_secs(60));
+            if !repeat {
+                eprintln!("{} alcore: bodies pass: staging cleared after a failed flush (sources stay on disk and re-ingest): {e}", crate::log_ts());
+                *last = Some((e, std::time::Instant::now()));
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("{} alcore: bodies pass cannot flush or clear leftover staging: {e}", crate::log_ts());
+            return;
+        }
+    }
     let max_bytes_per_pass = ingest_max_bytes_per_pass(&std::env::vars().collect());
 
     let mut ingested = 0u64;
@@ -390,6 +776,12 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     let mut failed = 0u64;
     let mut any_over_cap = false;
 
+    // The prune is not a separate step any more: `load_pass_state_pruned` above prunes the name sets against ALL the
+    // bodies dirs of the tick while it loads them (the sets are shared by every dir, so a per-dir prune would drop the
+    // other dirs names). TRDD-2HRA270Y: `bp_prune_start` is kept as a marker so the readings stay comparable with
+    // earlier rounds; the window it opens (`bp_staged_bytes_start` closes it) no longer holds the prune.
+    static BP_PRUNE_START: std::sync::Once = std::sync::Once::new();
+    BP_PRUNE_START.call_once(|| crate::rss_guard::log_boot_phase("bp_prune_start", None));
     for bodies_dir in &scope.dirs {
         // `ingest_pass` is THROTTLED BY DESIGN — it returns `throttled: true` when it stopped at
         // `max_bytes_per_pass` with work left. One call per tick is therefore not a drain: it is a
@@ -401,6 +793,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         for pass_num in 0..DRAIN_MAX_PASSES {
             // Re-evaluated per pass: draining changes the staged size, and a dir that starts over
             // cap should stop draining at age 0 once it is back under.
+            // TRDD-2HRA270Y: opens the staged-size + PassOptions/closure build window; `first_ingest_start` closes it.
+            static BP_STAGED_BYTES_START: std::sync::Once = std::sync::Once::new();
+            BP_STAGED_BYTES_START.call_once(|| crate::rss_guard::log_boot_phase("bp_staged_bytes_start", None));
             let over_cap = staged_body_bytes(bodies_dir) > cap_bytes;
             any_over_cap |= over_cap;
             let opts = agentlens_store::pass::PassOptions {
@@ -454,6 +849,10 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             let mut raw_facts_extractor = |raw: &str| {
                 crate::burn::investigator_scan::extract_raw_facts(raw, 6 * 1024 * 1024)
             };
+            // TRDD-2HRA270Y: taken with the store in hand, immediately before the first ingest pass of the
+            // process; the window to the existing `first_bodies_ingest` reading is that one pass.
+            static FIRST_INGEST_START: std::sync::Once = std::sync::Once::new();
+            FIRST_INGEST_START.call_once(|| crate::rss_guard::log_boot_phase("first_ingest_start", None));
             let res = agentlens_store::pass::ingest_pass_observed_with(
                 &mut store,
                 &opts,
@@ -465,6 +864,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
                 Some(&mut raw_facts_extractor),
             );
             ingested += res.ingested;
+            // TRDD-2HRA270Y: one boot-phase reading after the first ingest of the process returns.
+            static FIRST_INGEST: std::sync::Once = std::sync::Once::new();
+            FIRST_INGEST.call_once(|| crate::rss_guard::log_boot_phase("first_bodies_ingest", None));
             deleted += res.deleted;
             bytes_freed += res.bytes_freed;
             reemitted += res.reclaimed_reemitted;
@@ -485,7 +887,35 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             }
         }
     }
-    agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded);
+    // TRDD-ZR3OGSAV: this tick's deletions already ran, so a failed save cannot be rolled back and the
+    // tick cannot return an error. WHY state-change-only: the pass ticks every 60s, so a full disk would
+    // otherwise repeat this line forever; log the first failure, count repeats, log recovery once.
+    // Real risk of a lost save (the next tick RELOADS the old file from disk, nothing stays in memory):
+    // a body never reaches the delete gate on the strength of these name sets — the gate re-verifies
+    // the content against the store (verify_bodies_in_store + content_unchanged_since_read) — so no
+    // unverified body is deleted. The loss is wasted work: skip names are forgotten (bodies re-ingested,
+    // dedup makes that a no-op), a pending stranded->skip move or prune is redone. Stranded names are
+    // only consulted for `relocate_stranded_to`, which this chore never sets. And on a full disk this
+    // very log line may itself be lost.
+    match agentlens_store::pass::save_pass_state(&state_file, &skip, &stranded) {
+        Err(e) => {
+            // TRDD-5K0YLLEF: stamped on EVERY failure, not only the first one the log prints, so the time is the LAST failure.
+            LAST_STATE_SAVE_FAIL_MS.store(now_ms as u64, std::sync::atomic::Ordering::Relaxed);
+            if STATE_SAVE_FAILS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                eprintln!("{} alcore: bodies pass: FAILED to persist {} (repeats suppressed until it recovers): {e}", crate::log_ts(), state_file.display());
+            }
+        }
+        Ok(()) => {
+            let n = STATE_SAVE_FAILS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            if n > 0 {
+                eprintln!("{} alcore: bodies pass: persisting {} recovered after {n} failed saves", crate::log_ts(), state_file.display());
+            }
+        }
+    }
+    // Release in reverse lock order (FSYNCED_PARTS, writer, then `.pass.lock`); the store itself
+    // stays open in the slot for the next tick.
+    drop(fsynced);
+    drop(store);
     drop(lock);
     // TRDD-HDUETCU7: publish the real counts (the locals used to reach only the log line below).
     record_bodies_pass(now_ms, deleted, bytes_freed);
@@ -495,7 +925,7 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // PARKED gauge reads the state file, which the drain empties BEFORE the gate decides.
     if ingested > 0 || deleted > 0 || failed > 0 {
         println!(
-            "{} alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s) in {} ms{}",
+            "{} alcore: bodies pass: ingested {}, deleted {} ({} of them re-emitted), failed {}, freed {:.1}MB across {} dir(s) in {} ms, store spill {:.1}MB{}",
             crate::log_ts(),
             ingested,
             deleted,
@@ -504,6 +934,9 @@ pub fn bodies_pass(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             bytes_freed as f64 / 1_048_576.0,
             scope.dirs.len(),
             started.elapsed().as_millis(),
+            // TRDD-2HRA270Y step 3 (A7): the long-lived store keeps its spill files, so their size
+            // is reported where an operator already looks.
+            dir_file_bytes(&store_dir.join(agentlens_store::TMP_DIR)) as f64 / 1_048_576.0,
             if any_over_cap { " (OVER CAP — drained at age 0)" } else { "" }
         );
     }
@@ -565,7 +998,8 @@ async fn resident_blob_scan(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         None,
     );
     let rows = project_resident_blobs(&out);
-    if let Ok(mut st) = state.lock_timed() {
+    {
+        let mut st = state.lock_timed();
         st.latest_resident_blobs = rows;
     }
 }
@@ -597,6 +1031,17 @@ pub fn project_resident_blobs(engine_out: &Value) -> Vec<Value> {
 }
 
 /// Shared by the boot drain and the periodic tick (TRDD-L6V1UUW0) so the two report identically.
+/// TRDD-RBBEX59R: one hook-spool drain pass, run ONLY on the hook write path (mode off AND capture
+/// on); `None` = skipped. Both drain callers (boot and the periodic tick) go through here. Without
+/// the check the ring-only path would re-ingest every kept spool file on every tick: the drain keeps
+/// a file whose ingest appended nothing, so each tick would push it into the ring again with `ts`
+/// set to now, and the gate would count stale events as fresh.
+pub fn spool_drain_tick(st: &mut CoreState, now_ms: i64, max_files: usize) -> Option<crate::hook_events::SpoolDrain> {
+    if crate::hook_events::hook_ring_only_reason(st).is_some() {
+        return None;
+    }
+    Some(crate::hook_events::drain_hook_spool(st, now_ms, max_files))
+}
 fn log_spool_drain(d: &crate::hook_events::SpoolDrain) {
     if *d != crate::hook_events::SpoolDrain::default() {
         println!(
@@ -604,6 +1049,33 @@ fn log_spool_drain(d: &crate::hook_events::SpoolDrain) {
             crate::log_ts(),
             d.drained, d.rejected, d.unverified, d.kept
         );
+    }
+}
+
+/// TRDD-2JOIAH2G — what the composition line reports for one derived cache: a session COUNT, read
+/// under the state lock, never a serialized size. Three states because "absent" and "present but
+/// uncountable" are different facts: `Absent` prints `none`, and nothing else may.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheSessions {
+    /// No cached value (cold boot, or the cache was taken by an in-flight rebuild).
+    Absent,
+    /// A cached value with a top-level `sessions` array of this length.
+    Sessions(usize),
+    /// A cached value with no top-level `sessions` array (not an object, or the key missing).
+    Unknown,
+}
+
+impl CacheSessions {
+    /// Classify a borrowed cache value. Takes `&Value`, never an `Arc`, so the caller's handle
+    /// can be dropped inside the lock block (see `composition_tick`).
+    pub fn of(cached: Option<&Value>) -> Self {
+        match cached {
+            None => CacheSessions::Absent,
+            Some(v) => match v.get("sessions").and_then(Value::as_array) {
+                Some(arr) => CacheSessions::Sessions(arr.len()),
+                None => CacheSessions::Unknown,
+            },
+        }
     }
 }
 
@@ -629,23 +1101,24 @@ pub fn composition_line(
     card_rows: usize,
     card_text_mb: u64,
     _persist_bytes: u64,
-    summary_cache_mb: Option<u64>,
-    stripped_cache_mb: Option<u64>,
+    summary_cache: CacheSessions,
 ) -> String {
     let slack = commit_mb.saturating_sub(window_est_mb);
-    // `None` = no cached value for either cache (cold boot, or nothing derived yet) — reported
-    // as `none`, never as 0 MB, because "zero bytes" and "nothing cached" are different facts.
-    let cache_field = |mb: Option<u64>, name: &str| match mb {
-        Some(v) => format!("{name} {v} MB"),
-        None => format!("{name} none MB"),
+    // `Absent` = no cached value (cold boot, or nothing derived yet) — reported as `none`, and
+    // `none` means ONLY that: a present cache with zero sessions prints `0 sessions`, and a
+    // present cache whose shape carries no `sessions` array prints `present (count unknown)`.
+    // "nothing cached" and "cached but empty" are different facts and the line must not blur them.
+    let cache_field = |c: CacheSessions, name: &str| match c {
+        CacheSessions::Absent => format!("{name} none"),
+        CacheSessions::Sessions(n) => format!("{name} {n} sessions"),
+        CacheSessions::Unknown => format!("{name} present (count unknown)"),
     };
     format!(
         "alcore: composition: mimalloc commit {commit_mb} MB, process rss {rss_mb} MB, \
-         window.spans {window_count} (~{window_est_mb} MB sampled est), {}, {}, \
+         window.spans {window_count} (~{window_est_mb} MB sampled est), {}, \
          card rows {card_rows} (~{card_text_mb} MB text, DuckDB own allocator, limit 256 MiB), \
          derived slack = commit - window est = {slack} MB",
-        cache_field(summary_cache_mb, "summary-cache"),
-        cache_field(stripped_cache_mb, "stripped-cache"),
+        cache_field(summary_cache, "summary-cache"),
     )
 }
 
@@ -661,7 +1134,7 @@ pub fn composition_line(
 ///   holds (partially-used pages + freed-but-undecommitted), the number Phases C/F/D re-rank
 ///   against.
 /// * A failed walk (`None`) prints `?` for BOTH fields: an unmeasurable quantity must be
-///   visible, not read as 0 — same contract as `none MB` for the caches above.
+///   visible, not read as 0 — same contract as `none` for the caches above.
 fn mi_suffix(mi: &crate::rss_guard::MimallocInfo, live_bytes: Option<u64>) -> String {
     const MB: u64 = 1024 * 1024;
     let mut s = String::new();
@@ -688,11 +1161,12 @@ fn mi_suffix(mi: &crate::rss_guard::MimallocInfo, live_bytes: Option<u64>) -> St
 
 /// TRDD-2JOIAH2G — one composition report: what the committed bytes ARE, in one server.log line.
 /// Phase 1 runs under the state lock and touches nothing heavier than counter reads, ≤20 `Arc`
-/// refcount bumps and one aggregate SELECT (see the comment at that call); phase 2 — the only
+/// refcount bumps, two cache session counts (their handles dropped inside the lock) and one
+/// aggregate SELECT (see the comment at that call); phase 2 — the only
 /// allocation-heavy step, serializing the sample — runs OFF the lock.
 fn composition_tick(state: &Arc<Mutex<CoreState>>) {
-    let (window_count, sample, card_corpus, summary_cached, stripped_cached) = {
-        let st = state.lock_timed().unwrap_or_else(|e| e.into_inner());
+    let (window_count, sample, card_corpus, summary_cache) = {
+        let st = state.lock_timed();
         let window_count = st.window.spans.len();
         // An even sample across the window, at most 20 handles: cloning an `Arc` is a refcount
         // bump, so the whole lock hold stays in microseconds. `step >= 1` here because the
@@ -702,19 +1176,21 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
         } else {
             st.window.spans.iter().step_by(window_count / 20).take(20).cloned().collect()
         };
-        // TRDD-2JOIAH2G round-73: the two derived caches are the PRIME-but-UNMEASURED
-        // candidate for the ~2.3 GB unexplained live memory. Same contract as the window
-        // sample: an Arc clone under the lock, the multi-MB serialize happens below OFF the
-        // lock. `cached_value` (not `cached_any`) deliberately: a 60s measurement read must
-        // not inflate the served hit/miss ratio.
-        let summary_cached = st.summary_cache.cached_value();
-        let stripped_cached = st.stripped_cache.cached_value();
+        // TRDD-2JOIAH2G: the derived summary cache is reported as a SESSION COUNT computed here,
+        // under the lock, from a statement-scoped `Arc` that is dropped before the lock is
+        // released. No `Arc<Value>` of the cache may leave this block: while this tick held
+        // it across an off-lock serialize, every rebuild landing in that window found the
+        // previous summary shared and `take_sessions` (summary_engine.rs) deep-copied the whole
+        // sessions array (rig: sharedCopies 0 -> 2 at +71 s, footprint 1,590 -> 2,365 MB).
+        // `cached_value` (not `cached_any`) deliberately: a 60s measurement read must not
+        // inflate the served hit/miss ratio.
+        let summary_cache = CacheSessions::of(st.summary_cache.cached_value().as_deref());
         // Card corpus, one aggregate. DEVIATION from the card's "never under the state lock":
         // `CardStore` is a plain field of `CoreState` with no lock of its own, so its connection
         // is only reachable from here — and the boot restore already holds this lock across
         // THOUSANDS of DuckDB puts (log_reader.rs `restore`). One aggregate SELECT over ≤32k
         // rows is bounded and strictly cheaper than that precedent.
-        (window_count, sample, st.cards.corpus_bytes(), summary_cached, stripped_cached)
+        (window_count, sample, st.cards.corpus_bytes(), summary_cache)
     };
 
     let (card_rows, card_text_bytes) = match card_corpus {
@@ -756,18 +1232,10 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
         0
     };
     const MB: u64 = 1024 * 1024;
-    // Off the lock, same as the sample serialization: each cache holds ONE big Value (the
-    // merged summary / its stripped form over the whole corpus), so this can move real bytes.
-    // A value that fails to serialize (or is absent) reports `none` — the tick continues either
-    // way; a cache size we cannot measure must not cost the whole composition line.
-    let cache_mb = |cached: &Option<Arc<Value>>| -> Option<u64> {
-        cached.as_ref().map(|v| match serde_json::to_vec(v.as_ref()) {
-            Ok(b) => (b.len() as u64) / MB,
-            Err(_) => 0,
-        })
-    };
-    let summary_cache_mb = cache_mb(&summary_cached);
-    let stripped_cache_mb = cache_mb(&stripped_cached);
+    // TRDD-2JOIAH2G: the cache-size serialization is DELETED outright (no env var, no opt-in).
+    // Serializing the ~70 MB summary cache meant holding its Arc across a
+    // multi-MB serialize, which forced full summary copies in `take_sessions` whenever a rebuild
+    // landed meanwhile (sizes recorded on TRDD-2JOIAH2G). The line reports session counts instead.
     let mi = crate::rss_guard::mimalloc_info();
     let commit_mb = mi.current_commit_bytes / MB;
     let live_bytes = crate::rss_guard::mi_live_bytes();
@@ -784,8 +1252,7 @@ fn composition_tick(state: &Arc<Mutex<CoreState>>) {
             card_rows,
             card_text_bytes / MB,
             0, // persist_bytes: spec-reserved parameter; the line's shape does not print it
-            summary_cache_mb,
-            stripped_cache_mb,
+            summary_cache,
         ),
         suffix
     );
@@ -1002,7 +1469,7 @@ fn control_passes(delta_pages: i64) -> bool {
 /// seal, spill cleanup).
 pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, state: Arc<Mutex<CoreState>>) {
     // Spill dirs are emptied BEFORE any DuckDB connection of this process opens (none has yet).
-    let data_dir = state.lock_timed().unwrap_or_else(|e| e.into_inner()).data_dir.clone();
+    let data_dir = state.lock_timed().data_dir.clone();
     clean_spill_dirs(&data_dir, None);
     let dd = data_dir.clone();
     // TRDD-RVKQDLRD: spill cleanup is disk housekeeping -> `bg`.
@@ -1012,9 +1479,10 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         loop {
             tick.tick().await;
             let dd = dd.clone();
-            // Unlinking a spill file a live query still holds is safe on macOS/Linux (the open fd keeps
-            // the data until close) and no Windows binary ships, so this age sweep cannot break a query.
-            let _ = tokio::task::spawn_blocking(move || clean_spill_dirs(&dd, Some(SPILL_MAX_AGE))).await;
+            // Skips store/tmp while the long-lived bodies store is open (TRDD-2HRA270Y step 3): its
+            // DuckDB keeps spill blocks there for the life of the process, and an age rule cannot
+            // tell those from a dead process's leftovers. The other dirs keep the age sweep.
+            let _ = tokio::task::spawn_blocking(move || clean_spill_dirs_periodic(&dd)).await;
         }
     });
     // Boot passes, in the TS's order.
@@ -1029,11 +1497,12 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
     // moved to the background task, a live hook event arriving on the freshly bound listener
     // could be ingested before older spooled events. Only the expensive passes below moved.
     {
-        let mut st = state.lock_timed().unwrap_or_else(|e| e.into_inner());
+        let mut st = state.lock_timed();
         let now = crate::now_ms();
         // Boot pass has no lock contention yet — drain the whole backlog, unbounded.
-        let d = crate::hook_events::drain_hook_spool(&mut st, now, usize::MAX);
-        log_spool_drain(&d);
+        if let Some(d) = spool_drain_tick(&mut st, now, usize::MAX) {
+            log_spool_drain(&d);
+        }
     }
     // TRDD-RVKQDLRD: span_tick, purge_tick, bodies_pass and composition_tick run as ONE task on
     // `bg` (the background-QoS runtime built in alcore.rs), NOT inline before the listeners bind.
@@ -1107,7 +1576,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
     // runs as a child process under its own `.collect.lock` — NOT `with_chores_lock`, which a
     // ten-minute collect would hold against the bodies pass and the status-line seal — so a busy
     // tick is skipped rather than queued. One task awaiting each tick means ticks never overlap.
-    let tap = state.lock_timed().unwrap_or_else(|e| e.into_inner()).spool_tap.clone();
+    let tap = state.lock_timed().spool_tap.clone();
     if let Some(tap) = tap {
         bg.spawn(async move {
             let mut tick = tokio::time::interval(tap.interval());
@@ -1150,7 +1619,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         let mut tick = tokio::time::interval(Duration::from_secs(5));
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock_timed() {
+            {
+                let mut st = s.lock_timed();
                 if st.writer.pending_appends() > 0 {
                     st.flush_spans();
                 }
@@ -1182,7 +1652,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         let mut tick = tokio::time::interval(Duration::from_millis(account_flush));
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock_timed() {
+            {
+                let mut st = s.lock_timed();
                 st.account_timeline.flush();
             }
         }
@@ -1199,7 +1670,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         tick.tick().await; // boot just wrote the start marker
         loop {
             tick.tick().await;
-            if let Ok(mut st) = s.lock_timed() {
+            {
+                let mut st = s.lock_timed();
                 let file = crate::collector_lifecycle::lifecycle_file(&st.data_dir);
                 crate::collector_lifecycle::record_heartbeat(&file, &mut st.lifecycle, crate::now_ms());
             }
@@ -1210,7 +1682,7 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
     // deliberately shares only the root path + the Arc'd counters with the store, NEVER the state
     // lock — a seal must not stall every reader for the length of a re-encode.
     let (sl_root, sl_counters) = {
-        let Ok(st) = state.lock_timed() else { return };
+        let st = state.lock_timed();
         (st.statusline.root.clone(), st.statusline.counters.clone())
     };
     let sl_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -1248,10 +1720,13 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
         tick.tick().await; // boot pass already drained; wait a full period before the first tick
         loop {
             tick.tick().await;
-            let mut st = s.lock_timed().unwrap_or_else(|e| e.into_inner());
+            let mut st = s.lock_timed();
             let now = crate::now_ms();
-            let d = crate::hook_events::drain_hook_spool(&mut st, now, 200);
-            log_spool_drain(&d);
+            // TRDD-RBBEX59R: the write-path condition is re-checked on EVERY tick (capture can be
+            // toggled through POST /api/hook-config); spool_drain_tick skips the drain otherwise.
+            if let Some(d) = spool_drain_tick(&mut st, now, 200) {
+                log_spool_drain(&d);
+            }
         }
     });
 
@@ -1294,7 +1769,8 @@ pub fn spawn_all(rt: &tokio::runtime::Runtime, bg: &tokio::runtime::Runtime, sta
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_drop_pct, composition_line, control_passes, mi_suffix};
+    use super::{collect_drop_pct, composition_line, control_passes, mi_suffix, CacheSessions};
+    use serde_json::json;
     use crate::rss_guard::MimallocInfo;
 
     /// A stats-shaped MimallocInfo for suffix tests: the fields the mi-suffix reads, at
@@ -1316,12 +1792,20 @@ mod tests {
 
     #[test]
     fn composition_line_subtracts_window_est_from_commit() {
-        let line = composition_line(2048, 1800, 5000, 400, 32_000, 120, 0, Some(500), Some(300));
+        let line = composition_line(
+            2048,
+            1800,
+            5000,
+            400,
+            32_000,
+            120,
+            0,
+            CacheSessions::Sessions(500),
+        );
         assert_eq!(
             line,
             "alcore: composition: mimalloc commit 2048 MB, process rss 1800 MB, \
-             window.spans 5000 (~400 MB sampled est), summary-cache 500 MB, \
-             stripped-cache 300 MB, card rows 32000 (~120 MB text, \
+             window.spans 5000 (~400 MB sampled est), summary-cache 500 sessions, card rows 32000 (~120 MB text, \
              DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 1648 MB"
         );
     }
@@ -1344,16 +1828,14 @@ mod tests {
                 32_000,
                 120,
                 0,
-                Some(500),
-                Some(300),
+                CacheSessions::Sessions(500),
             ),
             mi_suffix(&mi, Some(live))
         );
         assert_eq!(
             line,
             "alcore: composition: mimalloc commit 2048 MB, process rss 1800 MB, \
-             window.spans 5000 (~400 MB sampled est), summary-cache 500 MB, \
-             stripped-cache 300 MB, card rows 32000 (~120 MB text, \
+             window.spans 5000 (~400 MB sampled est), summary-cache 500 sessions, card rows 32000 (~120 MB text, \
              DuckDB own allocator, limit 256 MiB), derived slack = commit - window est = 1648 MB, \
              mi committed 2048 MB, mi reset 3 MB, mi purged 0 MB, mi abandoned 146 pages \
              (peak 19600), mi live 640 MB, mi free-in-page 1408 MB"
@@ -1363,7 +1845,7 @@ mod tests {
     #[test]
     fn mi_suffix_unmeasured_live_prints_question_marks() {
         // A failed walk must print `?` for BOTH fields, never 0 — "unmeasured" and
-        // "zero bytes" are different facts (same contract as the caches' `none MB`).
+        // "zero bytes" are different facts (same contract as the caches' `none`).
         let s = mi_suffix(&fake_mi(), None);
         assert!(s.ends_with(", mi live ? MB, mi free-in-page ? MB"), "{s}");
         assert!(s.contains("mi committed 2048 MB"), "{s}");
@@ -1379,22 +1861,45 @@ mod tests {
 
     #[test]
     fn composition_line_prefix_is_exact() {
-        assert!(composition_line(1, 1, 0, 0, 0, 0, 0, None, None).starts_with("alcore: composition:"));
+        assert!(
+            composition_line(1, 1, 0, 0, 0, 0, 0, CacheSessions::Absent)
+                .starts_with("alcore: composition:")
+        );
     }
 
     #[test]
     fn composition_line_none_reports_none_not_zero() {
-        // `None` (nothing cached) must print as `none`, never `0 MB` — "zero bytes" and
-        // "nothing cached" are different facts and the line must not blur them.
-        let line = composition_line(100, 90, 1000, 400, 10, 5, 0, None, None);
-        assert!(line.contains("summary-cache none MB"), "{line}");
-        assert!(line.contains("stripped-cache none MB"), "{line}");
+        // `Absent` (nothing cached) must print as `none`, and `none` must mean ONLY that: a
+        // present cache with zero sessions prints `0 sessions`, and a present cache with no
+        // countable `sessions` array prints `present (count unknown)` — "nothing cached",
+        // "cached but empty" and "cached, uncountable" are different facts.
+        let line = composition_line(100, 90, 1000, 400, 10, 5, 0, CacheSessions::Absent);
+        assert!(line.contains("summary-cache none,"), "{line}");
         assert!(line.ends_with("derived slack = commit - window est = 0 MB"), "{line}");
+
+        let line = composition_line(100, 90, 1000, 400, 10, 5, 0, CacheSessions::Sessions(0));
+        assert!(line.contains("summary-cache 0 sessions,"), "{line}");
+        assert!(!line.contains("summary-cache none"), "{line}");
+
+        let line = composition_line(100, 90, 1000, 400, 10, 5, 0, CacheSessions::Unknown);
+        assert!(line.contains("summary-cache present (count unknown),"), "{line}");
+        assert!(!line.contains("summary-cache none"), "{line}");
+    }
+
+    #[test]
+    fn cache_sessions_classifies_absent_counted_and_uncountable() {
+        // The three states come from the cached value's shape, not its size: absent → Absent,
+        // a top-level `sessions` array → its length (0 included), anything else → Unknown.
+        assert_eq!(CacheSessions::of(None), CacheSessions::Absent);
+        assert_eq!(CacheSessions::of(Some(&json!({"sessions": []}))), CacheSessions::Sessions(0));
+        assert_eq!(CacheSessions::of(Some(&json!({"sessions": [1, 2, 3], "k": 1}))), CacheSessions::Sessions(3));
+        assert_eq!(CacheSessions::of(Some(&json!({"k": 1}))), CacheSessions::Unknown);
+        assert_eq!(CacheSessions::of(Some(&json!({"sessions": "x"}))), CacheSessions::Unknown);
     }
 
     #[test]
     fn composition_line_zero_window_yields_full_commit_as_slack() {
-        let line = composition_line(2048, 1800, 0, 0, 10, 5, 0, None, None);
+        let line = composition_line(2048, 1800, 0, 0, 10, 5, 0, CacheSessions::Absent);
         assert!(line.ends_with("derived slack = commit - window est = 2048 MB"), "{line}");
     }
 

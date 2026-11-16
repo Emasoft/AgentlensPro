@@ -262,6 +262,26 @@ mod tests {
         assert_eq!(a.input_per_mtok, b.input_per_mtok);
     }
 
+    // TRDD-K4XQ7M2B review follow-up (twin of the pricing.test.ts cases): the 1h argument is a PART of
+    // the cache write. Nothing upstream enforces 1h <= cache_creation, so the clamp lives here.
+    #[test]
+    fn a_1h_count_larger_than_the_cache_write_is_clamped_and_a_negative_one_ignored() {
+        let over = calc_token_cost_usd(0.0, 0.0, 1_000_000.0, 0.0, "claude-opus-5", 3_000_000.0, None, NOW);
+        let neg = calc_token_cost_usd(0.0, 0.0, 1_000_000.0, 0.0, "claude-opus-5", -500_000.0, None, NOW);
+        assert!((over - 10.0).abs() < 1e-9, "over-large 1h must clamp to the write: {over}");
+        assert!((neg - 6.25).abs() < 1e-9, "negative 1h must be ignored: {neg}");
+    }
+
+    // gemini-2.5-pro has cacheWritePerMTok 0 (not the Anthropic 1.25x shape): 1h tokens price at the
+    // entry's own write rate, never a derived 2x input. 50k in + 50k 1h write = $0.0625, not $0.1875.
+    // Scope: guards against a derived 2x-of-input rate on a non-1.25x-shaped entry only; it cannot tell 1h-at-own-write-rate from 1h-at-0 because this entry's write rate is 0.
+    #[test]
+    fn one_hour_tokens_on_a_non_anthropic_shaped_entry_cost_the_same_as_all_5m() {
+        let all_5m = calc_token_cost_usd(50_000.0, 0.0, 50_000.0, 0.0, "gemini-2.5-pro", 0.0, None, NOW);
+        let with_1h = calc_token_cost_usd(50_000.0, 0.0, 50_000.0, 0.0, "gemini-2.5-pro", 50_000.0, None, NOW);
+        assert_eq!(with_1h, all_5m);
+        assert!((with_1h - 0.0625).abs() < 1e-12, "expected $0.0625, got {with_1h}");
+    }
     // The retraction itself, pinned on the real table: sonnet-5 must be $2/$10 at EVERY timestamp,
     // including dates past the flip that was removed.
     #[test]

@@ -1,11 +1,12 @@
 ---
 name: agentlens-tldr-worker
 description: Token-calibrated worker for ONE bounded code change inside a scan-and-fix run. Navigates with the tldr CLI and reads only the exact line ranges it must reproduce verbatim — never a whole file. Finds AND fixes in one context (never a reader/fixer split), batches its edits, and verifies in the same response. Launch one per file for fan-out; pass absolute paths and the exact check to run.
-tools: Bash, Read, Edit
-model: sonnet[1m]
-effort: low
-# Keeps CLAUDE.md (unlike micro-worker): it edits code in whatever project it is dispatched into,
+model: haiku[1m]
+effort: medium
+tools: Bash, Read, Write, Edit
+# Keeps CLAUDE.md (unlike the minimal-footprint worker): it edits code in whatever project it is dispatched into,
 # and that project's own conventions (tests, safety, style) must reach it.
+permissionMode: auto
 ---
 
 # Execute the task in your prompt
@@ -21,8 +22,8 @@ narrowly, edit once.
 
 ```bash
 tldr structure <file>              # symbol + line inventory: the map, ~2% of the file's tokens
-tldr definition <symbol> <path>    # one symbol's body
-tldr search "<text>" <dir>         # where a string lives, with line numbers
+tldr definition --symbol <symbol> --file <file>   # where a symbol is defined (--symbol needs --file)
+tldr search "<text>" <dir>         # ranked search (BM25 + structure + call graph); exact strings: grep -n
 tldr references <symbol> <dir>     # every call site — before you rename or change a signature
 tldr impact <symbol> <dir>         # what breaks if you change it
 ```

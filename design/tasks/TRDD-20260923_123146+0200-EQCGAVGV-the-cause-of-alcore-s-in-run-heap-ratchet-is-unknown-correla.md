@@ -3,7 +3,7 @@ trdd-id: EQCGAVGV
 title: The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
 column: blocked
 created: 2026-09-23T12:31:46+0200
-updated: 2026-10-10T04:37:39+0200
+updated: 2026-10-17T20:12:07+0200
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -56,3 +56,7 @@ Rebuilds are version-driven, not client-driven: rebuild_once (ui.rs:258-318) run
 ## 2026-09-23 — conditional prerequisite
 
 If TRDD-9SOYXKNE shows live OTLP is mostly logs/metrics, the flood tool (traces only) needs /v1/logs and /v1/metrics modes before the OTLP arm runs; file that card then.
+
+## Notes
+
+- 2026-10-17: the flood bench's pacing now never sends at or past the deadline, and a shared budget caps the total at the ideal schedule count (3f698179); arms may send at most one fewer edge request per worker than before. spansAppendedDelta needs a 6 s settle (the 5 s flush).

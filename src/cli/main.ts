@@ -28,8 +28,9 @@ import { runEnvCli } from './envCli'
 import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
-import { forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
-import { disabledNotice } from './foreignTelemetry'
+import { autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
+import { disabledNotice, isAllAccountsStatus } from './foreignTelemetry'
+import { beginLaunchNotices, endLaunchNotices, flushNoticesToStderr } from './launchNotices'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
@@ -43,6 +44,9 @@ import { runLastCompactCli } from './lastCompactCli'
 import { runModelHeadroomCli } from './modelHeadroomCli'
 import { runSearchCli } from './searchCli'
 import { runHookContextCostCli } from './hookContextCostCli'
+import { runDiskSampleCli } from './diskSample'
+import { runDiskCli, runDiskWatchCli } from './diskCli'
+import { runDiskMonitorCli } from './diskLaunchd'
 
 /** CLI entry. `startServer` lazily imports standalone/server (injected by the shim — src/
  *  cannot import standalone/ without inverting the build layering). Returns the exit code. */
@@ -94,9 +98,11 @@ export const HOT_PATH_BUDGET_MS: Readonly<Record<string, number>> = {
   hook: 2_000,
   gate: 2_500,
   statusline: 2_000,
-  // Not run by Claude Code, but polled in loops by agents and heartbeats, and both are documented to
-  // answer with the server DOWN. Neither touches the network today; the budget is what catches the
-  // day one of them grows a fetch.
+  // Not run by Claude Code, but polled in loops by agents and heartbeats, and documented to answer with the
+  // server DOWN. cache-state and last-compact read only local files; cache-expired queries the server over MCP
+  // when no harness-reported sample exists, bounded by the connect deadline (cliCore.ts CONNECT_TIMEOUT_MS,
+  // 800 ms), and its budget covers that wait. None of them may run the launch self-heal (READ_ONLY_VERBS;
+  // autoSetup.test.ts pins every key here to AUTOSETUP_EXCLUDED_VERBS).
   'cache-expired': 1_500,
   'cache-state': 1_500,
   'last-compact': 1_500,
@@ -111,7 +117,7 @@ export const MANAGEMENT_VERBS: ReadonlySet<string> = new Set([
   'hook', 'gate', 'review-gate', 'review-supervisor', 'delegate-gate', 'statusline', 'statusline-history', 'get_account_status', 'disable', 'enable',
   'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired', 'cache-state', 'last-compact',
   'budget', 'watch', 'heartbeat-cost', 'config', 'env', 'ctxmap', 'ctxvis', 'list',
-  'search', 'model-headroom', 'hook-context-cost',
+  'search', 'model-headroom', 'hook-context-cost', 'disk-sample', 'disk', 'disk-watch', 'disk-monitor',
 ])
 
 export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
@@ -138,9 +144,60 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'model-headroom': 'FETCHES the OAuth usage endpoint (10-minute cached), so it is network-bound by design and cannot carry a hot-path ceiling. It is not on any per-turn path: an agent calls it ONCE before deciding whether to spawn the advisor, which is itself a minutes-long operation — the check cannot be the expensive half',
   store: 'operator repair verb (repair-parked STAGES and fully re-verifies the whole bodies table) — run with the server stopped, a human watching',
   'hook-context-cost': 'an analysis verb that streams the day buckets of the log-event sink (~170 MB/day); asked deliberately, never per turn',
+  // The four disk-monitor verbs (TRDD-HTARKH87) — disk-sample, disk, disk-watch and disk-monitor install/uninstall/status — are all
+  // DISABLED-exempt by owner decision 2026-11-16 (foreignTelemetry.ts READ_ONLY_VERBS). None is on a harness hot path.
+  'disk-sample': 'run by its own launchd jobs (--volumes-only every minute, --walks-only every 5 minutes), never by Claude Code; it is bounded by its own budget (statfs/diskutil/osascript 5 s each, folder walks 40 s in total) and exits via exitNow',
+  disk: 'an investigation verb a human or agent invokes deliberately; read-only DuckDB queries over the monitor history, retrying briefly on the sampler writer lock',
+  'disk-watch': 'edits the watch list in the monitor DuckDB file; an operator action, not on any per-turn path',
+  'disk-monitor': 'installs/removes the launchd job and reads launchctl; one-shot operator action a human waits for',
 }
 
-export async function cliMain(rawArgv: string[], startServer: () => Promise<unknown>): Promise<number> {
+/** Test seams for the server/daemon verbs — the verb itself and the install check that follows it — so a test can
+ *  prove the wiring (the check runs, and runs AFTER the verb) without spawning a collector; and for the launch check
+ *  and the diagnostics surface, so a test can prove WHEN the launch notices print (TRDD-YL3EWT6N item 7) without a
+ *  server or a real install. Production passes none. */
+export interface CliMainDeps {
+  serverCommand?: (argv: string[]) => Promise<void>
+  daemonCommand?: (argv: string[]) => Promise<void>
+  serverStartCheck?: (argv: string[]) => Promise<void>
+  launchCheck?: (argv: string[]) => Promise<number | null>
+  diagnostics?: (argv: string[]) => Promise<void>
+}
+
+/** Every verb the dispatch switch in cliMainBody handles itself; any other name falls to its `default`, the
+ *  diagnostics surface. Pinned to the switch's `case` labels by a test (autoSetup.test.ts), so a new case cannot be
+ *  missed here — a miss would hold that verb's launch notices until it returns, or forever if it never does. */
+export const DISPATCHED_VERBS: ReadonlySet<string> = new Set([
+  'hook', 'gate', 'review-gate', 'review-supervisor', 'delegate-gate', 'statusline', 'statusline-history',
+  'get_account_status', 'disable', 'enable', 'telemetry', 'setup', 'server', 'daemon', 'dashboard', 'cache-expired',
+  'cache-state', 'last-compact', 'model-headroom', 'hook-context-cost', 'search', 'budget', 'watch',
+  'heartbeat-cost', 'config', 'store', 'env', 'ctxmap', 'ctxvis', 'disk-sample', 'disk', 'disk-watch', 'disk-monitor',
+])
+
+/** Does this invocation go to the diagnostics surface (runDiagnosticsCli) — the only place a tool can refuse? */
+function reachesDiagnosticsSurface(cmd: string | undefined, argv: string[]): boolean {
+  if (cmd === undefined) return false // the bare foreground server
+  // only the plural form needs no server; it writes no user config, so the brake must not block it (owner directive 2026-10-29)
+  if (cmd === 'get_account_status') return !isAllAccountsStatus(argv)
+  return !DISPATCHED_VERBS.has(cmd)
+}
+
+// The CLI dispatcher. `deps` is a test seam only (CliMainDeps); production calls it with two arguments.
+export async function cliMain(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps = {}): Promise<number> {
+  // The launch install check's notices belong to THIS invocation only (launchNotices.ts, TRDD-YL3EWT6N item 7):
+  // reset first, so an earlier in-process call can never leak lines in; and whatever is still held when the verb
+  // returns — not printed on entry, not folded into a refusal — prints now, after the verb's own output. Then the
+  // invocation ends: a notice pushed outside it prints at once instead of waiting in a buffer nobody flushes.
+  beginLaunchNotices()
+  try {
+    return await cliMainBody(rawArgv, startServer, deps)
+  } finally {
+    flushNoticesToStderr()
+    endLaunchNotices()
+  }
+}
+
+async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps): Promise<number> {
   // `--force-install-telemetry` is a GLOBAL, per-invocation flag (owner order 2026-10-02): consumed here, before
   // any verb parses its own flags, so no verb ever sees it and nothing persists it.
   const forceInstall = rawArgv.includes('--force-install-telemetry')
@@ -210,7 +267,9 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
     if (code !== null) return code
     if (cmd === undefined) return 0
   } else {
-    const blocked = await maybeAutoSetup(argv)
+    const blocked = await (deps.launchCheck ?? maybeAutoSetup)(argv)
+    // A non-null code means the check STOPPED the verb (another telemetry setup is in place): its held lines are the
+    // reason, and the finally in cliMain prints them on the way out — no verb output can come before them.
     if (blocked !== null) return blocked
   }
 
@@ -220,10 +279,17 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
   // setup is gone. Hook-path verbs, enable/disable/setup and `server status` pass through.
   const disabled = disabledNotice(argv)
   if (disabled) {
+    flushNoticesToStderr() // the launch check's lines came first; keep that order
     console.error(disabled.text)
     return disabled.code
   }
 
+  // ONE decision for the launch notices (launchNotices.ts, TRDD-YL3EWT6N item 7): only the diagnostics surface can end
+  // in a tool refusal, whose stderr must be exactly one JSON object, so only there do they wait (runDiagnosticsCli
+  // folds them into a refusal or prints them for its own non-tool sub-commands). Every other verb prints them now,
+  // BEFORE it runs, exactly as before — including the ones that never return (watch, budget --watch, the bare
+  // foreground server), which would otherwise hold them forever.
+  if (!reachesDiagnosticsSurface(cmd, argv)) flushNoticesToStderr()
   switch (cmd) {
     case 'hook':
       return exitNow(await runHookCommand('hook'))
@@ -252,20 +318,21 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
       // burned the window is exactly when the server may be down.
       return runStatuslineHistoryCli(argv.slice(1))
     case 'get_account_status':
-      // Only the PLURAL form short-circuits the server. `--all` is assembled entirely from files (the
-      // account-state timeline + the per-account usage archive), and its whole audience is a rotator
+      // Only the PLURAL form short-circuits the server. `--all` is assembled from files (the
+      // account-state timeline + the per-account usage archive) plus one probe per owner-supplied long-lived key (src/longOAuthKeys.ts); it needs no server, and its whole audience is a rotator
       // deciding what to do about a wedged machine — where proxying to a server that may itself be
       // down turns the one useful answer into "cannot reach localhost:4316". The singular form still
       // goes over the wire: it needs the live session accessors, which only the server has.
-      if (argv.includes('--all')) return runAllAccountsCli(argv.slice(1))
+      if (isAllAccountsStatus(argv)) return await runAllAccountsCli(argv.slice(1))
       // Not `--all`: fall through to the diagnostics surface, which proxies it to the server.
-      await runDiagnosticsCli(argv)
+      await (deps.diagnostics ?? runDiagnosticsCli)(argv)
       return 0
     case 'disable':
-      // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms every hook, the burn-gate, server
-      // auto-revive and all background ingestion — in EVERY Claude session already running, on its
-      // next hook fire. This is the only channel that reaches an agent whose env and settings were
-      // fixed at launch; a settings edit reaches nothing that is already running (see killSwitch.ts).
+      // THE GLOBAL BRAKE. Arms <dataDir>/DISABLED, which disarms server auto-revive, all background
+      // ingestion and every hook except the review gate and the review supervisor — in EVERY Claude
+      // session already running, on its next hook fire. This is the only channel that reaches an
+      // agent whose env and settings were fixed at launch; a settings edit reaches nothing that is
+      // already running (see killSwitch.ts).
       return runDisableCli(argv.slice(1))
     case 'enable':
       return runEnableCli(forceInstall)
@@ -274,12 +341,22 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
     case 'setup':
       return runSetupCli(argv.slice(1), forceInstall)
     case 'server':
-      await serverCommand(argv.slice(1))
+      // The install heals itself when the server is STARTED too (owner 2026-10-14, TRDD-YL3EWT6N): `server` is excluded
+      // from maybeAutoSetup above because hooks reach it, so `start`/`restart` run the check here. `revive` (the hook
+      // path) does not. The check runs AFTER the verb, never before it: run first, every millisecond of it (drift
+      // hashing, a safeConfigEdit subprocess under a lock, a synchronous `--version` probe) was collector downtime, and
+      // run "concurrently" its synchronous prefix would still execute before the verb's first await. `start`/`restart`
+      // resolve once the server answers; `--supervise` resolves once the child is spawned. Never throws.
+      await (deps.serverCommand ?? serverCommand)(argv.slice(1))
+      await (deps.serverStartCheck ?? autoSetupOnServerStart)(argv)
       return 0
     case 'daemon':
       // The always-on ingestion daemon (D3K7QM2P) — same process as `server`, named for its role;
       // adds hook-spool depth to status. `daemon start --supervise` is what launchd runs.
-      await daemonCommand(argv.slice(1))
+      // `daemon start|restart` (incl. the launchd `daemon start --supervise`) is a server start: same check as `server`,
+      // after the verb for the same reason.
+      await (deps.daemonCommand ?? daemonCommand)(argv.slice(1))
+      await (deps.serverStartCheck ?? autoSetupOnServerStart)(argv)
       return 0
     case 'dashboard':
       await ensureServer('dashboard')
@@ -357,6 +434,18 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
       // says what changed on the agent's SECOND turn and whether that broke the cache prefix —
       // which is what decides whether the agent is cheap to keep running or only cheap to start.
       return runCtxvisCli(argv.slice(1))
+    case 'disk-sample':
+      // ONE sample of every volume into disk.duckdb, then exit (TRDD-HTARKH87). Run each minute by the launchd job
+      // `disk-monitor install` writes. Exits via exitNow: a statfs stuck on a dead mount cannot be cancelled, and it
+      // must not hold the process (or the next minute) open.
+      return exitNow(await runDiskSampleCli(argv.slice(1)))
+    case 'disk':
+      // Read-only queries over the recorded history (now/history/changes/top-change/trees/sql); disk-only, no server.
+      return runDiskCli(argv.slice(1))
+    case 'disk-watch':
+      return runDiskWatchCli(argv.slice(1))
+    case 'disk-monitor':
+      return runDiskMonitorCli(argv.slice(1))
     case undefined:
       // Bare `agentlenspro` / `npx agentlenspro`: the original behavior — run the server in
       // the foreground; it serves the dashboard (and opens the browser unless
@@ -367,7 +456,7 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
     default:
       // Everything else — list/help <tool>/call/batch/<tool>/ops flags — is the diagnostics
       // surface (schemas fetched live from the server).
-      await runDiagnosticsCli(argv)
+      await (deps.diagnostics ?? runDiagnosticsCli)(argv)
       return 0
   }
 }

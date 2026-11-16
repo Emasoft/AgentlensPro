@@ -5,6 +5,7 @@ import * as path from 'path'
 import {
   gatedCall, scanCycles, mayWrite, roledForkRunnerAllowed, roledForkExemptScript,
   MEASURE_HEADING, REVIEW_HEADING,
+  resultRole,
 } from '../cli/reviewLoop'
 import type { GatedCallInput } from '../cli/reviewLoop'
 
@@ -453,4 +454,12 @@ suite('review-loop: roled-fork runner allow-list and plugin-script exemption', (
     assert.strictEqual(roledForkExemptScript(armPrepare, '/proj', undefined, home), true)
     assert.strictEqual(roledForkExemptScript(other, '/proj', undefined, home), false)
   })
+
+
+  test('a RESULT text whose lines open with BOTH markers is neither role; one marker alone classifies', () => {
+    assert.strictEqual(resultRole(`${MEASURE_HEADING}\nfindings.\n${REVIEW_HEADING}\nconfirmed.`), null)
+    assert.strictEqual(resultRole(`${MEASURE_HEADING}\nfindings.`), 'measure')
+    assert.strictEqual(resultRole(`${REVIEW_HEADING}\nconfirmed.`), 'review')
+  })
+
 })

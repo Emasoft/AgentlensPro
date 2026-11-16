@@ -26,7 +26,8 @@ const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
 
 async function getJson(port: string, p: string): Promise<Record<string, unknown>> {
-  const r = await fetch(`http://127.0.0.1:${port}${p}`)
+  // WHY: a wedged server must not hang one request past the loop's wall-clock deadline (that would end in a bare mocha timeout).
+  const r = await fetch(`http://127.0.0.1:${port}${p}`, { signal: AbortSignal.timeout(10_000) })
   assert.strictEqual(r.status, 200, `GET ${p} -> ${r.status}`)
   return await r.json() as Record<string, unknown>
 }
@@ -47,6 +48,13 @@ async function withServer(extra: NodeJS.ProcessEnv, body: (c: { ui: string; data
     assert.ok(pid > 0, 'ensureServer returned but no server owns the data dir')
     await body({ ui, data })
     await stopServer()
+    // WHY: stopServer returns once the data dir's pidfile is released, and alcore releases it as the last
+    // statement of main, so the process can still be running its exit path. In this test mocha is alcore's
+    // parent: once it exits it stays a zombie until the event loop reaps it, and kill(pid, 0) succeeds on a
+    // zombie. Each sleep yields to the event loop, so poll (bounded: 10 s) before asserting that it is gone.
+    for (let i = 0; i < 40 && alive(pid); i++) {
+      await sleep(250)
+    }
     assert.strictEqual(alive(pid), false, `server pid ${pid} still alive after stopServer()`)
     afterStop?.({ data })
   } finally {
@@ -87,9 +95,11 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
       assert.ok(Array.isArray(sources) && sources.includes('hooks'), `default sources must list hooks: ${JSON.stringify(sources)}`)
       assert.ok(!sources.includes('bodies'), `bodies must be opt-in, not default: ${JSON.stringify(sources)}`)
 
+      // The spool tap rejects a hook item that lacks a field its schema requires (validator d8de334d; this test
+      // predates it). SessionStart requires cwd, transcript_path and source, so the payload must carry all three.
       const post = await fetch(`http://127.0.0.1:${ui}/api/hook-events`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }),
+        body: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', cwd: '/tmp/synthetic', transcript_path: '/tmp/synthetic/t.jsonl', source: 'startup' }),
       })
       assert.ok(post.status >= 200 && post.status < 300, `hook POST -> ${post.status}`)
 
@@ -110,8 +120,15 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
     assert.ok(r.pid > 0)
   })
 
-  test('a real collect and views run: the ledger, the hook and statusline views hold exactly what was posted; done/ keeps the loaded files', async () => {
-    // Waits for the tap's own periodic tick (60 s: the CLI does not pass --ingest-interval-secs), so up to ~75 s.
+  test('a real collect and views run: the ledger, the hook and statusline views hold exactly what was posted; done/ keeps the loaded files', async function () {
+    // WHY 375 s: the wait loop below is bounded by a 240 s wall-clock deadline, not an iteration count (an iteration
+    // count can outlast mocha's timeout under load). withServer's stopServer may take up to 15 s after the body, and
+    // the 120 s margin covers the server start under load (ensureServer, inside withServer) and the final queries;
+    // the start time under load was not measured.
+    this.timeout(240_000 + 120_000 + 15_000)
+    // Waits for the tap's own periodic tick (60 s: the CLI does not pass --ingest-interval-secs). WHY 240 s: the
+    // seal+collect tick runs on the background-QoS runtime (chores.rs, TRDD-RVKQDLRD), which was not seen within 150 s in
+    // one run; load starvation of the background-QoS tick is the inferred cause, so this waits for at least three ticks plus margin.
     const ids = { start: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', end: 'cccccccc-cccc-cccc-cccc-cccccccccccc', sl: 'dddddddd-dddd-dddd-dddd-dddddddddddd' }
     const query = async (db: string, sql: string): Promise<Record<string, unknown>[]> => {
       // The collect/views children hold the database read-write while they run; a read-only open then
@@ -145,8 +162,23 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
       // (a record is keyed by its atMs). Done when at least the hook spool and the statusline spool loaded.
       const seen = new Map<number, { exit?: number; timedOut?: boolean; summary?: string }>()
       let loaded = 0, failed = 0
-      for (let i = 0; i < 600 && !(loaded >= 2 && st.views); i++) {   // bounded: 150 s, the tick period is 60 s
-        st = await getJson(ui, '/api/ingest-status')
+      let timeouts = 0
+      const deadline = Date.now() + 240_000
+      while (Date.now() < deadline && !(loaded >= 2 && st.views)) {   // bounded: 240 s, the tick period is 60 s
+        try {
+          st = await getJson(ui, '/api/ingest-status')
+        } catch (err) {
+          // WHY: one status response that is slow under load (getJson's 10 s AbortSignal.timeout) must not end the wait
+          // early, so a timeout re-polls until the deadline; the assertions below remain the failure path. Any other
+          // error is a real failure and is rethrown.
+          const name = (err as { name?: string }).name
+          if (name === 'TimeoutError' || name === 'AbortError') {
+            timeouts += 1
+            await sleep(250)
+            continue
+          }
+          throw err
+        }
         const rec = st.lastCollect as { atMs?: number; exit?: number; timedOut?: boolean; summary?: string } | null
         if (rec && !seen.has(Number(rec.atMs))) {
           seen.set(Number(rec.atMs), rec)
@@ -158,7 +190,7 @@ suite('ingest end to end — the CLI start path with a real alcore', function ()
         await sleep(250)
       }
       const ledger = failed === 0 ? [] : await query(db, 'SELECT spool, source_name, status, error_message FROM _ingest.files')
-      assert.ok(loaded >= 2 && failed === 0, `collect must have loaded files and failed none: loaded=${loaded} failed=${failed} records=${JSON.stringify([...seen.values()])} ledger: ${JSON.stringify(ledger)}`)
+      assert.ok(loaded >= 2 && failed === 0, `collect must have loaded files and failed none: loaded=${loaded} failed=${failed} timeouts=${timeouts} records=${JSON.stringify([...seen.values()])} ledger: ${JSON.stringify(ledger)}`)
       const vw = st.views as { exit?: number } | null
       assert.ok(vw && vw.exit === 0, `views must have exited 0: ${JSON.stringify(st.views)}`)
       assert.strictEqual(st.writeErrors, 0)

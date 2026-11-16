@@ -459,6 +459,11 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // It just never surfaced it, so every swallowed payload was invisible.
     let degradations = {
         let mut d = Map::new();
+        // TRDD-KMF02UEX — `demote_cold` failures under the state lock, counted (and retried on the
+        // next ingest batch) instead of panicking. Inserted first: this map is name-sorted.
+        if st.counters.demote_cold_errors > 0 {
+            d.insert("alcore.demoteColdError".into(), Value::from(st.counters.demote_cold_errors));
+        }
         if st.counters.parse_errors > 0 {
             d.insert("standalone.otlpIngestError".into(), Value::from(st.counters.parse_errors));
         }
@@ -485,6 +490,7 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
     // kept them as the same object). `keptBytes` is read LIVE here, never stored: a stored figure goes
     // stale on every skipped tick and the CLI prints it as "backlog ... not yet reclaimed".
     let bp = crate::chores::bodies_pass_stats();
+    let (state_save_fails, last_state_save_fail_at) = crate::chores::state_save_failures();
     let kept_bytes: u64 = bodies_scope.dirs.iter().map(|d| crate::chores::staged_body_bytes(d)).sum();
     let last_pass = json!({
         "at": bp.last_at_ms, "removedFiles": bp.last_removed_files, "freedBytes": bp.last_freed_bytes,
@@ -559,13 +565,21 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "lastPass": last_pass,
             "reclaimedSinceBoot": bp.reclaimed_since_boot,
             "lastNonZeroPassAt": bp.last_non_zero_pass_at_ms,
+            // TRDD-5K0YLLEF: consecutive failed `.pass-state.json` saves (0 = healthy) and the epoch ms of the last failed
+            // save (0 = never). A full disk shows here even when its one-time log line was lost.
+            "stateSaveFails": state_save_fails,
+            "lastStateSaveFailAt": last_state_save_fail_at,
             "live": { "files": live_files, "newestMs": live_newest_ms.map(num).unwrap_or(Value::Null) },
             // TRDD-U0L78B3Z: null = up, else the CLI prints `CAPTURE DOWN <N>m` (serverControl.ts
             // `bodiesCaptureLine`). Direct child of `bodies`, which is where the CLI reads it.
-            "captureDownSince": capture_down_since(
+            // TRDD-RBBEX59R item 7: forced null in no-collection mode, checked HERE at the caller so the
+            // pure 4-argument predicate keeps its contract. In the mode no body can ever arrive while
+            // status-line samples keep `last_ingest_activity_ms` fresh, so the predicate would report
+            // CAPTURE DOWN for a capture that was switched off on purpose.
+            "captureDownSince": if st.no_collection { None } else { capture_down_since(
                 now_ms, st.last_ingest_activity_ms,
                 live_newest_ms.map(|n| n as i64), st.started_at_ms,
-            ).map(Value::from).unwrap_or(Value::Null),
+            ) }.map(Value::from).unwrap_or(Value::Null),
             // Read, never probed here: the chore probes once per pass tick (chores.rs)
             // and this route reports its last reading — server.ts:2947 read a variable too.
             "sinkProblem": st.sink_problem.clone().map(Value::from).unwrap_or(Value::Null),
@@ -574,7 +588,9 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
                 None => Value::Null,
             },
         },
-        "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": p.hook_event_writes, "spooled": hook_spooled },
+        // TRDD-RBBEX59R D4: receivedSinceBoot = hook events ACCEPTED (the write path and the ring-only
+        // path). The write count stays in persistence.hookEventWrites; one meaning per field.
+        "hookEvents": { "files": hook_files, "bytes": hook_bytes, "receivedSinceBoot": st.counters.hook_events_accepted, "spooled": hook_spooled },
         "statusline": {
             "parts": sl["parts"], "partBytes": sl["partBytes"], "walBytes": sl["walBytes"],
             "bufferedRows": sl["bufferedRows"], "sealedParts": sl["sealedParts"],
@@ -625,6 +641,12 @@ pub fn server_stats(st: &CoreState, now_ms: i64) -> Value {
             "metricsPayloads": st.counters.metrics_payloads,
             "parseErrors": st.counters.parse_errors,
         },
+        // TRDD-RBBEX59R item 8, appended after the frozen keys (additive): `collection` says whether
+        // this process stores telemetry ("off" = no-collection mode), `startedBy` is the trimmed
+        // AGENTLENS_STARTED_BY read at boot, null when unset or blank. The CLI enable verb reads both
+        // to decide whether and how to restart a server that is still in the mode.
+        "collection": if st.no_collection { "off" } else { "on" },
+        "startedBy": st.started_by.clone().map(Value::from).unwrap_or(Value::Null),
     })
 }
 
@@ -731,7 +753,8 @@ mod capture_block_tests {
             &store_dir.join(agentlens_store::pass::PASS_STATE_FILE),
             &std::collections::HashSet::new(),
             &["a.request.json".to_string(), "gone.request.json".to_string()].into_iter().collect(),
-        );
+        )
+        .unwrap();
 
         let (files, bytes, on_disk) = parked_bodies_gauge(&store_dir, std::slice::from_ref(&live_dir)).unwrap();
         assert_eq!(files, 2, "files counts the persisted stranded-name set, not just what's on disk");

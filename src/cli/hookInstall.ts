@@ -109,6 +109,15 @@ export const SUPERVISOR_CMD = 'agentlenspro review-supervisor'
 // described, so verify against the binary before trusting any claim here.
 export const SUPERVISOR_EVENTS = ['UserPromptSubmit', 'Stop']
 
+// EVERY event the installer registers on, as ONE list that the installer and setup's two drift checks
+// (hooksConverged, hookDriftList) all read. They were three hand-spelled unions, and the two drift checks
+// never learned SUPERVISOR_EVENTS/DELEGATE_EVENTS: with no `UserPromptSubmit` key at all they reported
+// "converged", so the supervisor's registration was never repaired — not by a launch, not even by
+// `setup`, whose verify then failed on it with nothing able to fix it. A new event family goes HERE.
+export const INSTALLED_EVENTS: readonly string[] = [
+  ...new Set([...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS, ...SUPERVISOR_EVENTS, ...DELEGATE_EVENTS]),
+]
+
 // EVERY command this generation registers. `isStaleGeneration` is what setup uses to decide an
 // entry is a leftover to strip, and it MUST be derived from this set rather than re-spelled as a
 // chain of `!==` at each call site. It was three such chains, and when SUPERVISOR_CMD was added
@@ -122,6 +131,18 @@ export const SUPERVISOR_EVENTS = ['UserPromptSubmit', 'Stop']
 // install log line) still need their own edit, because they say something different about each
 // command rather than treating them as a set. Checked by enumerating every reference to the *_CMD
 // constants across src/, standalone/ and skills/; do that again rather than trusting this sentence.
+/** True when the agentlenspro-review-mod plugin is installed (TRDD-KZCSO0R2). That mod runs the adversarial
+ *  review and the measurement ITSELF at every Stop; the review-gate and review-supervisor hooks tell the MODEL
+ *  to spawn review forks, so registering both would give the model contradictory orders and double the cost.
+ *  Read from Claude Code's own installed-plugins registry; an unreadable registry means not installed. */
+export function reviewModInstalled(home: string = os.homedir()): boolean {
+  try {
+    const reg = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8')) as { plugins?: Record<string, unknown> }
+    return Object.keys(reg?.plugins ?? {}).some((k) => k.startsWith('agentlenspro-review-mod@'))
+  } catch {
+    return false
+  }
+}
 export const CURRENT_CMDS: readonly string[] = [HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, DELEGATE_CMD]
 export function isStaleGeneration(command: string): boolean {
   return isOurHookCommand(command) && !CURRENT_CMDS.includes(command)
@@ -253,11 +274,11 @@ export function rebuildEventMatchers(
     out.rebuilt.push(gateMatcher(gateCmd))
     out.installed = true
   }
-  if (!uninstall && REVIEW_EVENTS.includes(ev)) {
+  if (!uninstall && REVIEW_EVENTS.includes(ev) && !reviewModInstalled()) {
     out.rebuilt.push(reviewGateMatcher(reviewCmd))
     out.installed = true
   }
-  if (!uninstall && SUPERVISOR_EVENTS.includes(ev)) {
+  if (!uninstall && SUPERVISOR_EVENTS.includes(ev) && !reviewModInstalled()) {
     out.rebuilt.push(reviewSupervisorMatcher(SUPERVISOR_CMD))
     out.installed = true
   }
@@ -325,10 +346,10 @@ export function buildEventOps(
   if (!uninstall && GATE_EVENTS.includes(ev)) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: gateMatcher(gateCmd), unique_by_substring: gateCmd })
   }
-  if (!uninstall && REVIEW_EVENTS.includes(ev)) {
+  if (!uninstall && REVIEW_EVENTS.includes(ev) && !reviewModInstalled()) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewGateMatcher(reviewCmd), unique_by_substring: reviewCmd })
   }
-  if (!uninstall && SUPERVISOR_EVENTS.includes(ev)) {
+  if (!uninstall && SUPERVISOR_EVENTS.includes(ev) && !reviewModInstalled()) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewSupervisorMatcher(SUPERVISOR_CMD), unique_by_substring: SUPERVISOR_CMD })
   }
   // delegate-gate registration removed until TRDD-SA99VCPZ closes (six accepted review
@@ -400,7 +421,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   let removedSpyglass = 0
   let removedOurs = 0
   let added = 0
-  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : [...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS, ...SUPERVISOR_EVENTS, ...DELEGATE_EVENTS])])
+  const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : INSTALLED_EVENTS)])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
     const r = rebuildEventMatchers(matchers, ev, uninstall, HOOK_CMD, GATE_CMD, REVIEW_CMD)
@@ -720,19 +741,34 @@ export function skillFiles(dir: string): string[] {
   return out.sort()
 }
 
-/** One hash over a skill's WHOLE tree — every shipped file's relative path AND bytes. Returns
- *  null when the directory has no SKILL.md (not installed / not shipped).
+/** One hash over a skill's tree — every listed file's relative path AND bytes. Returns null when
+ *  the directory has no SKILL.md (not installed / not shipped).
  *
  *  Hashing only SKILL.md would make setup's drift check blind to exactly the payload that makes
  *  a multi-file skill worth shipping: a changed template or script would read as "current"
- *  forever, and the user would keep running last release's template while setup reported green. */
-export function skillTreeHash(dir: string): string | null {
+ *  forever, and the user would keep running last release's template while setup reported green.
+ *
+ *  `files` restricts the hash to a given relative-path list: pass `skillFiles(<shipped dir>)` when
+ *  hashing an INSTALLED copy. Without it every file found in `dir` is hashed, which is right for the
+ *  shipped side and wrong for the installed side: installSkill deliberately leaves unshipped extras
+ *  in place (a user's note, a file an older release shipped), so hashing them made installed ≠
+ *  shipped FOREVER — every launch re-ran the skill repair, rewrote nothing, failed verify and printed
+ *  "could not restore skills". A listed file that is absent (or not a regular file) still differs:
+ *  its absence is hashed under a separator (`\x01`) that a present file never uses, so the result
+ *  stays a hex digest and still differs from the shipped hash. */
+export function skillTreeHash(dir: string, files?: readonly string[]): string | null {
   if (!fs.existsSync(path.join(dir, 'SKILL.md'))) return null
   const h = crypto.createHash('sha256')
-  for (const rel of skillFiles(dir)) {
+  for (const rel of files ?? skillFiles(dir)) {
+    const file = path.join(dir, rel)
+    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) {
+      h.update(rel)
+      h.update('\x01')      // a separator no present file uses: an absent file never hashes like a present one
+      continue
+    }
     h.update(rel)         // a rename with identical bytes is still drift
     h.update('\0')
-    h.update(fs.readFileSync(path.join(dir, rel)))
+    h.update(fs.readFileSync(file))
   }
   return h.digest('hex')
 }
@@ -796,7 +832,15 @@ export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'upd
  *  a worker by NAME; if the definition is not on the machine the spawn fails, so the agents ride
  *  along with the skills that dispatch them. */
 export const AGENT_NAMES: readonly string[] = [
-  'agentlens-tldr-worker', 'lean-worker', 'micro-worker',
+  'agentlens-tldr-worker',
+  'lean-worker',
+  'micro-worker',
+  'cheap-worker',
+  'fast-worker',
+  'sonnet-worker',
+  'smart-worker',
+  'js-test-writer',
+  'python-test-writer',
 ]
 
 /** (Re)install the shipped agent definitions at user scope, same discipline as the skills:

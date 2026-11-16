@@ -89,8 +89,8 @@ fn sse_frame(payload: &str) -> Bytes {
 /// `__psynch_mutexwait` — every poster queued behind the 4 s ticks rebuilding a whole-window
 /// summary while holding the mutex that `ingest_parsed` needs.
 ///
-/// Returns the data version the summary was built for, so a derived view (the stripped body)
-/// memoizes against the SAME version rather than whatever `data_version` reads afterwards.
+/// Returns the data version the summary was built for, so a derived view memoizes against the
+/// SAME version rather than whatever `data_version` reads afterwards.
 ///
 /// SINGLE-FLIGHT: at most one rebuild runs at a time. This gate was review F1 of `5e7f455`, was
 /// assigned to an agent that stalled before landing it, and its absence was measured on 2026-08-29
@@ -259,8 +259,21 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     // Cheap pre-check before touching the gate: under fleet ingest this is a miss and we proceed,
     // but on an idle server it is a hit and the task costs one version compare per tick.
     {
-        let Ok(mut st) = state.lock_timed() else { return };
+        let mut st = state.lock_timed();
         let version = st.data_version;
+        // WHY (TRDD-735Q3JF4 increment 1, item 1): build nothing until a reader has asked. Before this gate the
+        // 25 ms loop passed the back-off at boot (flight.last is None) and built the whole summary (~43,811 sessions)
+        // for no reader at all; run C2 measured mimalloc commit at ~660 MB with the build off against ~1964 MB on.
+        // Trade-off: the first reader after boot pays one cold build (same as after a stage-2 cache clear); once
+        // any reader has asked, behaviour is unchanged. CAVEAT: the burn tick and resident_blob_scan no longer call
+        // summary_now (item 2: a card subset, see CoreState::burn_subset_summary; item 3: the cards table, see
+        // composition_projects). Other summary_now callers (the dashboard, SSE, the MCP and HTTP routes, the
+        // pre-warm, the composition-index route) still build the whole summary on their first request.
+        // The flag is monotonic and advisory, written under the state lock that every reader and this pass already
+        // take, so no atomic ordering is involved.
+        if !st.summary_asked {
+            return;
+        }
         if st.summary_cache.current(version).is_some() {
             return;
         }
@@ -300,7 +313,7 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     // the state lock, and that is part of the cost being rationed (and the part that blocks ingest).
     let started = std::time::Instant::now();
     let mut inputs = {
-        let Ok(mut st) = state.lock_timed() else { return };
+        let mut st = state.lock_timed();
         let version = st.data_version;
         if st.summary_cache.current(version).is_some() {
             return;
@@ -309,7 +322,8 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     };
     let build = CoreState::summary_from(&mut inputs, crate::now_ms() as f64);
     let took = started.elapsed();
-    if let Ok(mut st) = state.lock_timed() {
+    {
+        let mut st = state.lock_timed();
         st.store_summary(inputs.version, build);
     }
     // Recorded even if the store above failed on a poisoned lock: the CPU and the allocation churn
@@ -317,14 +331,17 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     flight.last = Some((std::time::Instant::now(), took));
 }
 
-pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, Arc<Value>), String> {
+pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Value>) {
     // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
     // essentially always (see `cached_any`), so `stale` is what actually answers the request.
     let stale = {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        // Releases rebuild_once (TRDD-735Q3JF4 item 1): a reader has now asked. Set before the cache check so a
+        // warm-cache hit also counts.
+        let mut st = state.lock_timed();
+        st.summary_asked = true;
         let version = st.data_version;
         if let Some(cached) = st.summary_cache.current(version) {
-            return Ok((version, cached));
+            return (version, cached);
         }
         st.summary_cache.cached_any()
     };
@@ -368,10 +385,10 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(2));
                 {
-                    let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                    let mut st = state.lock_timed();
                     let version = st.data_version;
                     if let Some(cached) = st.summary_cache.current(version) {
-                        return Ok((version, cached));
+                        return (version, cached);
                     }
                 }
                 if std::time::Instant::now() >= deadline {
@@ -379,10 +396,10 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
                     // reusing the pre-wait snapshot, since a newer one may have landed meanwhile
                     // and serving it is free.
                     let newest = {
-                        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                        let mut st = state.lock_timed();
                         st.summary_cache.cached_any()
                     };
-                    return Ok(newest.unwrap_or(stale_pair));
+                    return newest.unwrap_or(stale_pair);
                 }
             }
         }
@@ -416,10 +433,10 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
                 std::thread::sleep(std::time::Duration::from_millis(2));
                 // The rebuild we are waiting on may have stored exactly the version we want.
                 {
-                    let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                    let mut st = state.lock_timed();
                     let version = st.data_version;
                     if let Some(cached) = st.summary_cache.current(version) {
-                        return Ok((version, cached));
+                        return (version, cached);
                     }
                 }
                 match rebuild_gate().try_lock() {
@@ -433,11 +450,11 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
                     // the snapshot taken before the wait — one may have landed meanwhile, and
                     // serving the newer one is free.
                     let newest = {
-                        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                        let mut st = state.lock_timed();
                         st.summary_cache.cached_any()
                     };
                     if let Some(pair) = newest.or(stale) {
-                        return Ok(pair);
+                        return pair;
                     }
                     // COLD BOOT ONLY: no summary has ever been built, so there is nothing to
                     // serve and waiting is the only correct answer. It can happen at most once per
@@ -449,33 +466,42 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<(u64, A
     };
 
     let mut inputs = {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let mut st = state.lock_timed();
         let version = st.data_version;
         // Re-check under the gate — the rebuild we waited for very likely stored this version.
         if let Some(cached) = st.summary_cache.current(version) {
-            return Ok((version, cached));
+            return (version, cached);
         }
         st.summary_snapshot()
     };
     let build = CoreState::summary_from(&mut inputs, now_ms);
-    let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-    Ok((inputs.version, st.store_summary(inputs.version, build)))
+    let mut st = state.lock_timed();
+    (inputs.version, st.store_summary(inputs.version, build))
 }
 
-/// `/api/summary`'s body and the shell's inlined copy: strip_session_detail over `summary_now`,
-/// memoized on the summary's OWN version and — like the summary — computed off the lock. The
-/// strip clones every card, so doing it under the lock was the same stall one layer down.
-pub fn stripped_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Arc<Value>, String> {
-    let (version, summary) = summary_now(state, now_ms)?;
-    {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-        if let Some(cached) = st.stripped_cache.current(version) {
-            return Ok(cached);
+/// The merged summary restricted to what the burn computation reads, built with the state lock
+/// RELEASED and memoized on `data_version` (TRDD-735Q3JF4 item 2). The lock is held only to check the memo
+/// and take `burn_snapshot` (Arc clones); the card selection and the merge run after it, and the result is
+/// stored only if no write moved `data_version` meanwhile. The 4 s tick and every burn route share the one
+/// computation per version. The memo is the SUMMARY, not the burn status: `burn_status_for` depends on `now`.
+/// Does not touch `summary_cache` and does not set `summary_asked`: asking for burn status must not start
+/// the whole-summary rebuilder.
+pub(crate) fn burn_summary_now(state: &Arc<Mutex<CoreState>>) -> Arc<Value> {
+    let (version, inputs) = {
+        let st = state.lock_timed();
+        if let Some((v, memo)) = &st.burn_subset_memo {
+            if *v == st.data_version {
+                return memo.clone();
+            }
         }
+        (st.data_version, st.burn_snapshot())
+    };
+    let built = Arc::new(CoreState::burn_subset_summary(&inputs.spans, &inputs.cards, &inputs.accounts));
+    let mut st = state.lock_timed();
+    if st.data_version == version {
+        st.burn_subset_memo = Some((version, built.clone()));
     }
-    let stripped = strip_session_detail(&summary);
-    let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-    Ok(st.stripped_cache.store_if_newer(version, stripped))
+    built
 }
 
 /// The request-path twin of the 4 s tick's off-lock compute (TRDD-O3ICDRLO): the burn status
@@ -486,18 +512,19 @@ pub fn stripped_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Arc<Va
 /// 4,894 ms inside the `get_burn_status` tool route — `live_burn_status` is a whole-window
 /// `build_session_summary` PLUS the gather + `compute_burn_status`, all under the lock, and the
 /// sweeper's `save_cards` (4.7 s) and the rebuilder (2.9 s) queued behind that one request. The
-/// summary comes from `summary_now` (cache-served, off-lock; the same slightly-stale-under-rebuild
-/// trade the tick already makes), the only two lock-guarded inputs are snapshotted in a short
-/// hold, and `burn_status_for` runs released. Callers hold the lock again only for what they
+/// summary comes from `burn_summary_now` (the burn subset built off the lock and memoized per data_version,
+/// TRDD-735Q3JF4 item 2; the lock is taken twice (summary, then ttl/config), so the two can come from slightly
+/// different moments, which is harmless), the only two lock-guarded inputs are snapshotted in a short hold, and
+/// `burn_status_for` runs released. Callers hold the lock again only for what they
 /// store or read next (`current_account`, `latest_resident_blobs`) — do not fold the compute
 /// back under a guard.
-pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Value, String> {
-    let (_, summary) = summary_now(state, now_ms)?;
+pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Value {
+    let summary = burn_summary_now(state);
     let (ttl, config) = {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let mut st = state.lock_timed();
         (st.burn.ttl_context(now_ms), st.burn.config.clone())
     };
-    Ok(crate::burn_status_for(&summary, &config, &ttl, now_ms))
+    crate::burn_status_for(&summary, &config, &ttl, now_ms)
 }
 
 /// TRDD-QE114936 site 20: the value `CoreState::burn_risk_report` used to produce for itself, by
@@ -509,15 +536,15 @@ pub fn burn_status_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Val
 /// unconditionally would trade a rare lock-held rebuild for a per-request cost on every call. The
 /// peek's own hold is a single `is_none()`. Racing another seeder is harmless — `burn_risk_report`
 /// re-checks under its own guard and keeps whichever landed first.
-fn burn_status_seed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Result<Option<Value>, String> {
+fn burn_status_seed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> Option<Value> {
     let missing = {
-        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let st = state.lock_timed();
         st.burn.last_status.is_none()
     };
     if !missing {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(burn_status_now(state, now_ms)?))
+    Some(burn_status_now(state, now_ms))
 }
 
 /// pushUpdate — ONE full rebuild broadcast to every client. Called from the coalesced timer.
@@ -525,14 +552,13 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
     if hub.client_count() == 0 {
         return;
     }
-    let Ok((_, summary)) = summary_now(state, now_ms) else { return };
+    let (_, summary) = summary_now(state, now_ms);
     // The lock covers ONLY the three cheap reads; the payload assembly (which walks every span
     // and re-strips every card) runs after it is released.
-    let Ok((spans, gaps, build_id)) = state.lock_timed().map(|st| {
+    let (spans, gaps, build_id) = {
+        let st = state.lock_timed();
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
         (st.window.spans.clone(), gaps, st.build_id.clone())
-    }) else {
-        return;
     };
     let payload = build_update_payload(&summary, &spans, &build_id, gaps, now_ms).to_string();
     hub.broadcast(sse_frame(&payload));
@@ -620,6 +646,75 @@ pub(crate) fn strip_one_session(s: &Value) -> Value {
     Value::Object(c)
 }
 
+/// Byte-identical streaming twin of `strip_session_detail(summary).to_string()`.
+// WHY: the stripped summary used to be a second resident per-session Value tree (removed by
+// TRDD-091Z1FU0); both of its readers immediately serialize it, so writing the stripped form
+// straight from the summary removes the tree without changing a byte. Every branch mirrors
+// strip_session_detail / strip_one_session; `preserve_order` keeps key positions, so the order
+// below IS the contract.
+pub struct StrippedView<'a>(pub &'a Value);
+
+const EMPTY_TIMELINE: &[Value] = &[];
+
+impl serde::Serialize for StrippedView<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let Some(obj) = self.0.as_object() else { return self.0.serialize(ser) };
+        let mut m = ser.serialize_map(Some(obj.len()))?;
+        for (k, v) in obj {
+            if k == "sessions" {
+                if let Some(arr) = v.as_array() {
+                    m.serialize_entry(k, &StrippedSessions(arr))?;
+                    continue;
+                }
+            }
+            m.serialize_entry(k, v)?;
+        }
+        m.end()
+    }
+}
+
+struct StrippedSessions<'a>(&'a [Value]);
+
+impl serde::Serialize for StrippedSessions<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = ser.serialize_seq(Some(self.0.len()))?;
+        for s in self.0 {
+            seq.serialize_element(&StrippedSession(s))?;
+        }
+        seq.end()
+    }
+}
+
+struct StrippedSession<'a>(&'a Value);
+
+impl serde::Serialize for StrippedSession<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let Some(sobj) = self.0.as_object() else {
+            let mut m = ser.serialize_map(Some(1))?;
+            m.serialize_entry("timeline", EMPTY_TIMELINE)?;
+            return m.end();
+        };
+        let mut m = ser.serialize_map(None)?;
+        let mut saw_timeline = false;
+        for (k, v) in sobj {
+            match k.as_str() {
+                "timeline" => {
+                    m.serialize_entry(k, EMPTY_TIMELINE)?;
+                    saw_timeline = true;
+                }
+                "fileOps" | "generatedFiles" | "generatedFilesTruncated" => {}
+                _ => m.serialize_entry(k, v)?,
+            }
+        }
+        if !saw_timeline {
+            m.serialize_entry("timeline", EMPTY_TIMELINE)?;
+        }
+        m.end()
+    }
+}
 
 /// Default and ceiling for `GET /api/cards/page?limit=`.
 const CARDS_PAGE_DEFAULT_LIMIT: usize = 50;
@@ -640,7 +735,7 @@ fn cards_route(
 ) -> (StatusCode, String) {
     let bad = |msg: &str| (StatusCode::BAD_REQUEST, error_json(msg));
     let strip_all = |v: Vec<Value>| -> Vec<Value> { v.iter().map(strip_one_session).collect() };
-    let Ok(st) = state.lock_timed() else { return (StatusCode::INTERNAL_SERVER_ERROR, error_json("state poisoned")) };
+    let st = state.lock_timed();
     match path {
         "/api/cards/page" => {
             let limit = match q.get("limit") {
@@ -789,9 +884,14 @@ async fn read_body_keep_under(mut body: hyper::body::Incoming, max: usize) -> Re
 ///
 /// NOT PORTED: the TS `heavyGuard` admission deferral. It keeps concurrent heavy parses from
 /// blowing the V8 heap; this core has no V8 heap and the work is already off the executor.
-async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f64) -> Result<Value, String> {
+async fn composition_for(
+    state: &Arc<Mutex<CoreState>>,
+    session_id: &str,
+    now: f64,
+    projects: &std::collections::HashMap<String, String>,
+) -> Result<Value, String> {
     let cached = {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let mut st = state.lock_timed();
         st.composition.get_cached(session_id)
     };
     if let Some(c) = cached {
@@ -802,12 +902,15 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
     // P4x.2c) makes every composition read `project: "unknown"` and every project-scoped query
     // match nothing — while still answering 200.
     //
-    // Read the summary OFF the lock (TRDD-UTFVMVT8): resolving it under the guard rebuilt the whole
-    // summary inline on a cache miss, and this guard held the state lock for seconds doing it.
-    let (_, summary) = summary_now(state, now)?;
-    let project = crate::composition_project_map(&summary).remove(session_id);
+    // The map is BUILT BY THE CALLER and passed in. Building it here was O(sessions) per
+    // session: `compositions_in_scope` calls this once per in-scope session, and each call
+    // rebuilt the whole `sessionId → project` map over the entire summary — O(sessions²) map
+    // probes per scope pass. The live profile put 14,071 of 14,071 samples in exactly that
+    // shape (`composition_project_map` → `IndexMap::get_index_of` → `_platform_memcmp`).
+    // The map is now built ONCE per pass and borrowed.
+    let project = projects.get(session_id).cloned();
     let refs = {
-        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let st = state.lock_timed();
         crate::context_composition_index::resolve_refs(&st.bodies, session_id)
     };
     let sid = session_id.to_owned();
@@ -826,7 +929,7 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
     // ponytail: a session whose card NEVER appears re-parses its bodies on every call — key the
     // cache on data_version if that ever shows up in the timings.
     if project_known {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let mut st = state.lock_timed();
         st.composition.put(session_id, built.clone());
     }
     Ok(built)
@@ -837,17 +940,17 @@ async fn composition_for(state: &Arc<Mutex<CoreState>>, session_id: &str, now: f
 /// bounds the work — fanning them out would just make the same bounded work concurrent while
 /// multiplying peak memory.
 pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: Option<&str>, now: f64) -> Result<(Vec<Value>, Value), String> {
-    // The project map comes from the summary read OFF the lock (TRDD-UTFVMVT8). This guard was
-    // the top state-lock holder on the live server — 82 `held` lines on one pid, 16 of them ≥ 10 s,
-    // the worst 274 s — and a per-statement split measured 100 % of it in the inline summary
-    // rebuild the old `CoreState::composition_project_map` ran under the lock (12.6 s and 30.1 s),
-    // with the id collect and `resolve_scope` at 0 ms. Only those two run under the guard now.
-    let (_, summary) = summary_now(state, now)?;
-    let projects = crate::composition_project_map(&summary);
+    // The project map comes from the cards table and the burn subset, never from `summary_now` (TRDD-735Q3JF4
+    // item 3). This scan used to build the whole summary at boot and every 30 s, one of the summary_now callers
+    // that run C2 measured against the idle commit fill. The state lock is held only for the two short reads
+    // below; TRDD-UTFVMVT8 measured the inline rebuild this replaced at 12.6 s and 30.1 s under that same lock.
+    let all_ids: Vec<String> = {
+        let st = state.lock_timed();
+        st.bodies.session_ids().iter().map(|s| (*s).to_owned()).collect()
+    };
+    let projects = composition_projects(state, &all_ids).await?;
     let (ids, coverage) = {
-        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
-        let ids: Vec<String> = st.bodies.session_ids().iter().map(|s| (*s).to_owned()).collect();
-        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let refs: Vec<&str> = all_ids.iter().map(String::as_str).collect();
         crate::context_composition_index::resolve_scope(
             &refs,
             scope,
@@ -857,9 +960,86 @@ pub(crate) async fn compositions_in_scope(state: &Arc<Mutex<CoreState>>, scope: 
     };
     let mut comps = Vec::with_capacity(ids.len());
     for id in ids {
-        comps.push(composition_for(state, &id, now).await?);
+        // The SAME map, borrowed: the per-session rebuild of this map was the O(sessions²)
+        // shape the live profile sampled (14,071/14,071 frames in
+        // `composition_project_map` → `IndexMap::get_index_of` → `_platform_memcmp`).
+        comps.push(composition_for(state, &id, now, &projects).await?);
     }
     Ok((comps, coverage))
+}
+
+/// TRDD-735Q3JF4 item 3 — the `sessionId → project` map `compositions_in_scope` needs for the bodies in
+/// `ids`: exactly `composition_project_map` over the full summary, for those ids, with no summary built.
+///
+/// The full merge settles an id's project from three things, and each is read here: its own card row (its
+/// project, and whether a log card displaces an OTEL twin of the same id); the `agent-<id>` row, which the
+/// feed merge collapses with the placeholder `<id>`; and that placeholder row, whose workspace the collapsed
+/// transcript falls back to. So the card read covers the closure of every bodies id, `{id, agent-<id>, id
+/// without an agent- prefix}`. The OTEL-window sessions come from `burn_summary_now`: its OTEL survivors are
+/// the full merge's own, because every card with an OTEL id is in the burn subset, so the displacement is the
+/// same. The merge is `feed_merge`'s, run unchanged over light copies of the values it reads.
+///
+/// The DuckDB read runs on a second connection (`CardStore::read_connection`, taken under the lock) and on
+/// the blocking pool. The merge and the projection run on this task, so the thread-local
+/// `composition_project_map_builds` counter sees this pass's build. A failed step (the clone, the blocking task,
+/// the query, one row's parse) returns an error naming it; `compositions_in_scope` propagates it with `?`.
+///
+/// KNOWN GAP, theoretical and not reachable by the ids seen so far (the review judged that real ids never take
+/// this shape; not checked here): the closure fetches an id's own `agent-` twin, not that twin's twin. If a bodies
+/// id `X` is an `agent-Y` transcript that is itself a placeholder candidate (it carries a parent), the full merge may
+/// consume `X` through its own twin row `agent-agent-Y`, which this closure does not fetch. `X` would then map here
+/// and be absent from the full summary.
+pub(crate) async fn composition_projects(state: &Arc<Mutex<CoreState>>, ids: &[String]) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut closure: Vec<String> = Vec::with_capacity(ids.len() * 3);
+    for id in ids {
+        closure.push(id.clone());
+        // The twin rule of `feed_merge::link_twin_id`, applied to an id: `agent-` followed by the sessionId.
+        closure.push(format!("agent-{id}"));
+        if let Some(placeholder) = id.strip_prefix("agent-") {
+            closure.push(placeholder.to_owned());
+        }
+    }
+    closure.sort();
+    closure.dedup();
+    let conn = state.lock_timed().cards.read_connection()?;
+    let burn = burn_summary_now(state);
+    let rows = {
+        let read = closure.clone();
+        tokio::task::spawn_blocking(move || crate::card_store::composition_rows(&conn, &read))
+            .await
+            .map_err(|e| format!("the composition card read did not finish: {e}"))??
+    };
+    let in_closure: std::collections::HashSet<&str> = closure.iter().map(String::as_str).collect();
+    // Only the OTEL-fed entries of the burn subset: its log cards are already in `rows`. Light copies, so the
+    // window sessions' timelines are not cloned on every pass.
+    let otel: Vec<Value> = burn
+        .get("sessions")
+        .and_then(Value::as_array)
+        .map(|sessions| {
+            sessions
+                .iter()
+                .filter(|s| s.get("dataSource").and_then(Value::as_str) == Some("otel"))
+                .filter(|s| s.get("sessionId").and_then(Value::as_str).is_some_and(|id| in_closure.contains(id)))
+                .map(light_session)
+                .collect()
+        })
+        .unwrap_or_default();
+    let merged = crate::feed_merge::link_subagent_transcripts(crate::feed_merge::merge_otel_and_log_sessions(otel, rows));
+    let mut root = Map::new();
+    root.insert("sessions".into(), Value::Array(merged));
+    Ok(crate::composition_project_map(&Value::Object(root)))
+}
+
+/// The fields of a session that the feed merge and the project resolver read, copied. The rest, the
+/// timeline above all, stays where it is.
+fn light_session(session: &Value) -> Value {
+    let mut light = Map::new();
+    for key in ["sessionId", "source", "dataSource", "projectPath", "workspace"] {
+        if let Some(value) = session.get(key) {
+            light.insert(key.into(), value.clone());
+        }
+    }
+    Value::Object(light)
 }
 
 /// resolveSessionCard (server.ts) — the summary card with its timeline made REAL. Shared by freeze
@@ -998,21 +1178,21 @@ fn resolve_session_card_offlock(
     if timeline_empty(session.as_ref()) {
         // Lock 1: one indexed point query on the card table.
         let has_log = {
-            let st = st2.lock_timed().ok()?;
+            let st = st2.lock_timed();
             st.cards.contains(session_id)
         };
         if has_log {
             // NO GUARD IS ALIVE HERE — this is the multi-MB disk read + JSONL parse.
             if let Some(card) = reparse_session_card(env, session_id, now) {
                 // Lock 2: the accountId stamp + the store.
-                let mut st = st2.lock_timed().ok()?;
+                let mut st = st2.lock_timed();
                 session = Some(stamp_and_store_reparsed(&mut st, card));
             }
         }
     }
     if let Some(s) = session.as_mut() {
         // Lock 3: the OTEL graft's one map read and in-memory merge.
-        let st = st2.lock_timed().ok()?;
+        let st = st2.lock_timed();
         graft_otel_attribution_onto(&st, s, session_id);
     }
     session
@@ -1038,7 +1218,7 @@ async fn resolve_block_content(
     let n = crate::summarize::helpers::num;
     let fmt = crate::summarize::helpers::fmt_js_num;
     let pointer = {
-        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let st = state.lock_timed();
         // requestPointers(session)[turn - 1] — 1-based turns.
         let ptrs = st.bodies.request_pointers(session_id);
         let idx = turn - 1.0;
@@ -1084,7 +1264,7 @@ async fn resolve_call_context(
     span_id: Option<&str>,
 ) -> Result<Value, String> {
     let ptr = {
-        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let st = state.lock_timed();
         st.bodies.resolve_request(session_id, request_id, span_id).cloned()
     };
     let Some(p) = ptr else { return Ok(Value::Null) };
@@ -1108,7 +1288,7 @@ async fn resolve_call_context(
         p.model.as_deref(),
     );
     if let Some(acct) = ctx.get("accountUuid").and_then(Value::as_str).filter(|a| !a.is_empty()) {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let mut st = state.lock_timed();
         st.accounts.record(session_id, acct);
     }
     Ok(ctx)
@@ -1123,11 +1303,11 @@ fn json_response(status: StatusCode, body: String) -> Response<SseBody> {
 
 /// The `/events` response: preamble ping + the on-connect update frame, then every broadcast
 /// frame for as long as the client stays connected.
-fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Result<Response<SseBody>, String> {
+fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Response<SseBody> {
     use http_body_util::BodyExt;
-    let (_, summary) = summary_now(state, now_ms)?;
+    let (_, summary) = summary_now(state, now_ms);
     let (spans, gaps, build_id) = {
-        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let st = state.lock_timed();
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
         (st.window.spans.clone(), gaps, st.build_id.clone())
     };
@@ -1157,7 +1337,7 @@ fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Res
     h.insert("Content-Type", hyper::header::HeaderValue::from_static("text/event-stream"));
     h.insert("Cache-Control", hyper::header::HeaderValue::from_static("no-cache"));
     h.insert("Connection", hyper::header::HeaderValue::from_static("keep-alive"));
-    Ok(resp)
+    resp
 }
 
 /// A frame stream: the fixed head chunks first, then the client's queue until it closes.
@@ -1179,7 +1359,26 @@ impl futures_core::Stream for SseStream {
 /// server.ts safeJson — JSON inlined into a `<script>` must not be able to close that script,
 /// open a comment, or start a template expression.
 fn safe_json(v: &Value) -> String {
-    v.to_string().replace("</", "<\\/").replace("<!--", "<\\!--").replace("${", "\\${")
+    safe_json_text(v.to_string())
+}
+
+/// safe_json over already-serialized JSON text — the same three replacements, so the shell bytes
+/// are identical whether the JSON came from a Value or from StrippedView (TRDD-091Z1FU0).
+fn safe_json_text(s: String) -> String {
+    s.replace("</", "<\\/").replace("<!--", "<\\!--").replace("${", "\\${")
+}
+
+#[cfg(test)]
+mod safe_json_tests {
+    use super::*;
+
+    /// safe_json_text over the serialized JSON gives the same bytes as safe_json over the Value,
+    /// for each breakout sequence the three replacements neutralize.
+    #[test]
+    fn safe_json_text_matches_safe_json() {
+        let v = serde_json::json!({"a": "</script><!-- ${x} \u{2028}", "b": ["\u{0001}", "🚀"]});
+        assert_eq!(safe_json_text(v.to_string()), safe_json(&v));
+    }
 }
 
 /// src/shellTemplate.ts substituteTokens — ONE left-to-right scan. A chain of `replace` calls
@@ -1202,10 +1401,9 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     let now = crate::now_ms() as f64;
     // Read per request, like the TS: 28 KB, and a dev can edit the shell without a restart.
     let tmpl = std::fs::read_to_string(media_dir.join("index.html")).map_err(|e| format!("index.html: {e}"))?;
-    let (_, summary) = summary_now(state, now)?;
-    let stripped = stripped_now(state, now)?;
+    let (_, summary) = summary_now(state, now);
     let (spans, build_id) = {
-        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let st = state.lock_timed();
         // The SAME build_id the update frames carry — the dashboard reloads on a mismatch, so a
         // different fingerprint here (the TS's bundle mtimes) would reload it on first connect.
         (st.window.spans.clone(), st.build_id.clone())
@@ -1215,7 +1413,8 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     } else {
         crate::update_payload::compute_sidebar_payload(&summary, &spans, now)
     };
-    let (summary_json, sidebar_json) = (safe_json(&stripped), safe_json(&sidebar));
+    let summary_json = safe_json_text(serde_json::to_string(&StrippedView(&summary)).expect("stripped summary serializes: string keys only"));
+    let sidebar_json = safe_json(&sidebar);
     // The mount prefix is EMPTY here, deliberately, and not read from AGENTLENS_BASE_PATH: the
     // base-path STRIP in handle() is still on this module's deferred list, and a shell that emits
     // `/lens/dashboard.js` to a router that only knows `/dashboard.js` is a 200 page that can never
@@ -1325,7 +1524,7 @@ async fn handle(
         let mut vals = req.headers().get_all(crate::embed_auth::VIEWER_HEADER).iter();
         let first = vals.next();
         let duplicated = vals.next().is_some();
-        let key = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.embed_key.clone();
+        let key = state.lock_timed().embed_key.clone();
         if duplicated {
             crate::embed_auth::ViewerRole::Invalid
         } else {
@@ -1360,7 +1559,7 @@ async fn handle(
         // already what /api/server-stats reports, so admission decisions and the numbers an
         // operator reads to explain them can never disagree.
         let sample = {
-            let data_dir = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.data_dir.clone();
+            let data_dir = state.lock_timed().data_dir.clone();
             let v = crate::server_stats::resource_sample(&data_dir);
             crate::admission::ResourceSample {
                 rss_mb: v.get("rssMb").and_then(Value::as_f64).unwrap_or(0.0),
@@ -1419,12 +1618,14 @@ async fn handle(
             error_json("restricted viewer — this surface requires a maestro assertion (AgentlensPro#4)"),
         )
     } else if path == "/events" {
-        sse_response(&state, &hub, crate::now_ms() as f64)?
+        sse_response(&state, &hub, crate::now_ms() as f64)
     } else if method == Method::GET && path == "/api/summary" {
-        json_response(StatusCode::OK, stripped_now(&state, crate::now_ms() as f64)?.to_string())
+        let (_, summary) = summary_now(&state, crate::now_ms() as f64);
+        let body = serde_json::to_string(&StrippedView(&summary)).expect("stripped summary serializes: string keys only");
+        json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/server-stats" {
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             crate::server_stats::server_stats(&st, crate::now_ms()).to_string()
         };
         json_response(StatusCode::OK, body)
@@ -1435,7 +1636,7 @@ async fn handle(
         // `keyLoaded` is FALSE only when the key file was unusable at boot, so the embedding side
         // sees WHY a present header 403s instead of guessing. Vary, so a cache cannot serve one
         // viewer role's response to another.
-        let key_loaded = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.embed_key.is_some();
+        let key_loaded = state.lock_timed().embed_key.is_some();
         let body = serde_json::json!({
             "mode": if viewer_role == crate::embed_auth::ViewerRole::Standalone { "standalone" } else { "embedded" },
             "role": match viewer_role {
@@ -1451,7 +1652,7 @@ async fn handle(
         r
     } else if method == Method::GET && path == "/api/hook-config" {
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             let mut m = Map::new();
             m.insert("config".into(), st.hook_runtime.to_value());
             m.insert("file".into(), crate::server_stats::hook_config_file(&st.data_dir).to_string_lossy().into_owned().into());
@@ -1465,7 +1666,7 @@ async fn handle(
         let applied: Result<Value, String> = (|| {
             let patch = serde_json::from_slice::<Value>(&buf).map_err(|e| e.to_string())?;
             let patch = patch.as_object().cloned().ok_or_else(|| "patch must be a JSON object".to_owned())?;
-            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let mut st = state.lock_timed();
             let next = crate::server_stats::save_hook_runtime_config(&st.data_dir, st.hook_runtime, &patch)?;
             st.hook_runtime = next;
             println!(
@@ -1488,7 +1689,7 @@ async fn handle(
         // 200 with NO Content-Type and an empty body; the full re-scan runs on the sweeper
         // thread after the clear, so the client sees the cleared state first.
         {
-            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let mut st = state.lock_timed();
             st.clear_all();
         }
         push_update(&state, &hub, crate::now_ms() as f64);
@@ -1502,7 +1703,7 @@ async fn handle(
         match serde_json::from_slice::<Value>(&buf) {
             Ok(v) if v.get("type").and_then(Value::as_str) == Some("clearAll") => {
                 {
-                    let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                    let mut st = state.lock_timed();
                     st.clear_spans();
                 }
                 push_update(&state, &hub, crate::now_ms() as f64);
@@ -1526,7 +1727,7 @@ async fn handle(
                 Some(payload) => {
                     let stream = if v.get("statusline_stream").and_then(Value::as_str) == Some("subagent") { "subagent" } else { "main" };
                     {
-                        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                        let mut st = state.lock_timed();
                         let now = crate::now_ms();
                         st.statusline.append(payload, stream, now as f64);
                         st.persist.statusline_samples += 1;
@@ -1555,8 +1756,8 @@ async fn handle(
         match serde_json::from_slice::<Value>(&buf) {
             Err(e) => json_response(StatusCode::BAD_REQUEST, error_json(&e.to_string())),
             Ok(payload) => {
-                let (status, body) = {
-                    let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                let (status, body, _proof) = {
+                    let mut st = state.lock_timed();
                     // `buf` is the exact POST body: the spool tap writes these bytes, not a re-serialised Value.
                     crate::hook_events::ingest_hook_event(&mut st, &payload, &buf, crate::now_ms())
                 };
@@ -1567,7 +1768,7 @@ async fn handle(
         let q = query_of(&req);
         let num = |k: &str| q.get(k).filter(|v| !v.is_empty()).and_then(|v| v.parse::<i64>().ok());
         let events = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             crate::hook_events::read_hook_events(
                 &st.data_dir.join("hook-events"),
                 &crate::hook_events::HookEventFilter {
@@ -1586,7 +1787,7 @@ async fn handle(
         let kinds: Option<Vec<String>> = q.get("kinds").map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect());
         let session = q.get("session").map(String::as_str);
         let (dir, records) = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             let dir = st.data_dir.join("hook-events");
             let records = crate::hook_events::read_hook_events(&dir, &crate::hook_events::HookEventFilter { session, limit: Some(1000), ..Default::default() });
             (dir, records)
@@ -1612,7 +1813,7 @@ async fn handle(
                 None => json_response(StatusCode::BAD_REQUEST, error_json("sessions array required")),
                 Some(sessions) => {
                     let (imported, skipped) = {
-                        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                        let mut st = state.lock_timed();
                         crate::import_card::import_sessions(&mut st, sessions, crate::now_ms())
                     };
                     push_update(&state, &hub, crate::now_ms() as f64);
@@ -1731,7 +1932,7 @@ async fn handle(
         // place the STORE-level Codex grouping is directly observable (the summarizer re-groups
         // downstream, so /api/summary would mask a per-prompt vs per-conversation regression).
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             let mut ids: Vec<&str> = st
                 .window
                 .spans
@@ -1756,7 +1957,7 @@ async fn handle(
         let now = crate::now_ms();
         let from_ms = q.get("fromMs").and_then(|v| v.parse::<i64>().ok()).filter(|v| *v > 0).unwrap_or(now - 24 * 3_600_000);
         let body = {
-            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let mut st = state.lock_timed();
             let span = st
                 .writer
                 .load_range(from_ms, i64::MAX, now)
@@ -1779,7 +1980,7 @@ async fn handle(
         // neighbouring /api route, so it passes the same viewer-role, cross-origin and admission
         // gates above; it carries counts and names only, no paths.
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             crate::spool_tap::status(&st).to_string()
         };
         json_response(StatusCode::OK, body)
@@ -1794,7 +1995,7 @@ async fn handle(
         // `active` boolean — the consumers are tests that assert the raw bump, and the window
         // comparison belongs to the caller (server.ts kept CAPTURE_ACTIVITY_WINDOW_MS on its side).
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             serde_json::json!({ "lastIngestActivityAt": st.last_ingest_activity_ms }).to_string()
         };
         json_response(StatusCode::OK, body)
@@ -1802,7 +2003,7 @@ async fn handle(
         // Row 26: the recent-request ring + heap pressure. No V8 ⇒ the heap object is honest
         // zeros (over: false), as /api/server-stats reports; rssMb per row carries the story.
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             serde_json::json!({
                 "heap": { "heapUsedMb": 0, "limitMb": 0, "hwmMb": 0, "over": false },
                 "requests": st.requests.recent(200),
@@ -1812,10 +2013,9 @@ async fn handle(
         json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/debug/log-scan-stats" {
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             let s = st.log_scan;
             let (sh, sm) = st.summary_cache.stats();
-            let (th, tm) = st.stripped_cache.stats();
             let (readdirs, lhits, cached) = crate::generated_files::scratch_listing_stats();
             // NOT PORTED: the sidebar/analytics caches (those views are built inside the update
             // payload here, not as separate routes) — idle zeros.
@@ -1829,7 +2029,6 @@ async fn handle(
                 "summaryEngine": { "sharedCopies": crate::summary_engine::shared_copies() },
                 "derivedCaches": {
                     "summary": { "hits": sh, "misses": sm },
-                    "stripped": { "hits": th, "misses": tm },
                     "sidebar": { "hits": 0, "misses": 0 },
                     "analytics": { "hits": 0, "misses": 0 },
                 },
@@ -1845,9 +2044,9 @@ async fn handle(
         let now = crate::now_ms() as f64;
         // TRDD-XX1UAZHS: the status is computed OFF the lock; the guard below only reads the
         // account and the resident blobs.
-        let status = burn_status_now(&state, now)?;
+        let status = burn_status_now(&state, now);
         let body = {
-            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let mut st = state.lock_timed();
             let account = st.burn.current_account(now);
             crate::burn::runtime::enrich_burn_status(&status, &account, &st.latest_resident_blobs).to_string()
         };
@@ -1861,8 +2060,8 @@ async fn handle(
             // TRDD-QE114936 site 20: computed OFF the lock, and only when the 4 s tick has not
             // stored a status yet — `burn_risk_report` used to fill it in by rebuilding the whole
             // summary under this guard.
-            let seed = burn_status_seed(&state, now)?;
-            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let seed = burn_status_seed(&state, now);
+            let mut st = state.lock_timed();
             st.burn_risk_report(now, seed, None, None).to_string()
         };
         json_response(StatusCode::OK, body)
@@ -1893,7 +2092,7 @@ async fn handle(
                 Some(tp) => agent_gate::read_transcript_context(std::path::Path::new(tp), now, agent_gate::TRANSCRIPT_TAIL_BYTES),
                 None => serde_json::json!({ "contextTokens": null, "idleMs": null }),
             };
-            let Ok(mut st) = state.lock_timed() else { return no_content() };
+            let mut st = state.lock_timed();
             let mut gate_state = agent_gate::build_gate_state(&mut st, now, parent, session_id, transcript_path, cwd);
             st.persist.gate_checks += 1;
 
@@ -2017,7 +2216,7 @@ async fn handle(
             .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect::<Vec<_>>())
             .filter(|v: &Vec<String>| !v.is_empty());
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             let dirs = agentlens_logscan::discovery::claude_projects_dirs(&st.log_env);
             crate::cache_risk_commands::cache_risk_commands_response(&dirs, crate::now_ms() as f64, window_hours, kinds.as_deref(), limit)
                 .to_string()
@@ -2040,7 +2239,7 @@ async fn handle(
                 // guard is an O(window) rebuild that measured 12–64 s holds on the live server,
                 // during which every ingest and read path queues behind it. Nothing else in this
                 // route needs `CoreState`, so the guard disappears entirely.
-                let (_, summary) = summary_now(&state, crate::now_ms() as f64)?;
+                let (_, summary) = summary_now(&state, crate::now_ms() as f64);
                 let body = {
                     // `(s.workspace ?? '') === workspace || s.workspace?.startsWith(workspace)`
                     let sessions: Vec<Value> = summary
@@ -2112,7 +2311,7 @@ async fn handle(
         let Some(buf) = read_body_capped(req.into_body(), 1024 * 1024).await? else {
             return Err("/api/bodies/export body over 1MB cap — connection aborted".to_owned());
         };
-        let data_dir = { state.lock_timed().map_err(|_| "state poisoned".to_owned())?.data_dir.clone() };
+        let data_dir = { state.lock_timed().data_dir.clone() };
         let (status, body) = tokio::task::spawn_blocking(move || crate::body_archive::bodies_export(&data_dir, &buf))
             .await
             .map_err(|e| e.to_string())?;
@@ -2120,7 +2319,7 @@ async fn handle(
     } else if method == Method::POST && path == "/api/bodies/purge" {
         // Row 15 (server.ts:3711): the request body is never read (the TS handler does not
         // consume it either); destruction is per-volume verify-before-delete (TRDD-K3WDPR7M).
-        let data_dir = { state.lock_timed().map_err(|_| "state poisoned".to_owned())?.data_dir.clone() };
+        let data_dir = { state.lock_timed().data_dir.clone() };
         let (status, body) = tokio::task::spawn_blocking(move || crate::body_archive::bodies_purge(&data_dir))
             .await
             .map_err(|e| e.to_string())?;
@@ -2129,7 +2328,7 @@ async fn handle(
         // Row 29 (server.ts:4038, TRDD-PJC8N1HO spec 2): the lifecycle-derived downtime windows.
         // The TS wraps computeCollectorGaps in a catch → []; the Rust compute cannot throw.
         let body = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             serde_json::json!({ "collectorGaps": crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS) })
                 .to_string()
         };
@@ -2154,7 +2353,7 @@ async fn handle(
         let session_id = percent_decode(&path["/api/composition/".len()..]);
         let parent = query_of(&req).get("parent").map(|s| s.to_owned()).filter(|s| !s.is_empty());
         let env = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             st.log_env.clone()
         };
         let composition = tokio::task::spawn_blocking(move || {
@@ -2173,7 +2372,7 @@ async fn handle(
         let session_id = percent_decode(&path["/api/history/".len()..]);
         let parent = query_of(&req).get("parent").map(|s| s.to_owned()).filter(|s| !s.is_empty());
         let env = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             st.log_env.clone()
         };
         let history = tokio::task::spawn_blocking(move || {
@@ -2244,8 +2443,8 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-XX1UAZHS: this guard held 4,894 ms with the compute inside it.
                         // The status is computed off the lock; the hold is the account read only.
-                        let status = burn_status_now(&state, now)?;
-                        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                        let status = burn_status_now(&state, now);
+                        let mut st = state.lock_timed();
                         let account = st.burn.current_account(now);
                         drop(st);
                         let payload = crate::burn::runtime::label_burn_status_accounts(&status, Some(&account));
@@ -2262,8 +2461,8 @@ async fn handle(
                         // eighteen direct sites, one call deep where a grep here could not see it.
                         // Renamed `session_status_over` (it computes OVER a summary, it does not
                         // build one) and the summary is read off the lock and passed in.
-                        let (_, summary) = summary_now(&state, now)?;
-                        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                        let (_, summary) = summary_now(&state, now);
+                        let mut st = state.lock_timed();
                         let payload = st.session_status_over(&summary, sid.as_deref(), ws.as_deref(), now);
                         drop(st);
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
@@ -2271,8 +2470,8 @@ async fn handle(
                     "get_window_budget" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-XX1UAZHS: compute off the lock, hold only for the account read.
-                        let status = burn_status_now(&state, now)?;
-                        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                        let status = burn_status_now(&state, now);
+                        let mut st = state.lock_timed();
                         let account = st.burn.current_account(now);
                         drop(st);
                         let payload = crate::mcp_tools::get_window_budget(Some(&status), Some(&account), s("accountId").as_deref());
@@ -2283,10 +2482,10 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock; the guard is kept only for the
                         // lifecycle gaps, which read the live `CoreState`.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let gaps = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS)
                         };
                         let payload = if name == "get_recent_sessions" {
@@ -2385,7 +2584,7 @@ async fn handle(
                         // lock across it would stall every other request for its duration.
                         let now = crate::now_ms() as f64;
                         let dirs = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             agentlens_logscan::discovery::claude_projects_dirs(&st.log_env)
                         };
                         // Non-finite is treated as ABSENT: in the TS a NaN window is falsy (so no
@@ -2408,13 +2607,13 @@ async fn handle(
                         // TRDD-QE114936: ONE off-lock summary read for the WHOLE handler — the
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. Both used to be O(window) rebuilds taken under the state lock.
-                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
+                        let (_, timeline_summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-MVR6PXC0: the log env, cloned off the lock ONCE for the whole scan.
                         // It is the only input the per-candidate reparse needs, which is what lets
                         // that reparse run with no guard alive.
-                        let env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
+                        let env = state.lock_timed().log_env.clone();
                         let (a, st2) = (args.clone(), state.clone());
                         let payload = tokio::task::spawn_blocking(move || {
                             let timeline_of = |c: &Value| -> Vec<Value> {
@@ -2442,7 +2641,7 @@ async fn handle(
                         // TRDD-QE114936: summary and id selection happen OFF the lock; the guard
                         // below covers only the `resolve_session_card` loop, which needs
                         // `&mut CoreState` for its reparse-on-demand fallback.
-                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let (_, summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // The matched card is not known until the shaper runs, so resolve only
                         // the ONE id the query can possibly name — the normalized equivalence
@@ -2459,7 +2658,7 @@ async fn handle(
                             .map(str::to_owned)
                             .collect();
                         let timelines: std::collections::HashMap<String, Vec<Value>> = {
-                            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let mut st = state.lock_timed();
                             let mut timelines = std::collections::HashMap::new();
                             for id in ids {
                                 let tl = resolve_session_card(&mut st, &summary, &id, now)
@@ -2477,7 +2676,7 @@ async fn handle(
                     }
                     "get_account_state_at" => {
                         let path = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             crate::account_state_timeline::account_state_timeline_path(&st.data_dir)
                         };
                         let payload = crate::mcp_tools::get_account_state_at(&args, &path);
@@ -2489,9 +2688,9 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                        let env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
+                        let env = state.lock_timed().log_env.clone();
                         let a = args.clone();
                         let payload = tokio::task::spawn_blocking(move || {
                             let file_ids = crate::context_composition::list_session_file_ids(&env);
@@ -2521,9 +2720,9 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                        let env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
+                        let env = state.lock_timed().log_env.clone();
                         let a = args.clone();
                         let payload = tokio::task::spawn_blocking(move || {
                             let file_ids = crate::context_composition::list_session_file_ids(&env);
@@ -2553,13 +2752,13 @@ async fn handle(
                         // TRDD-QE114936: the summary is read OFF the lock; the guard covers only
                         // the resolved timeline (the same reparse-on-demand + OTEL graft path
                         // row 30 uses), which needs `&mut CoreState`.
-                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let (_, summary) = summary_now(&state, now as f64);
                         let card = summary
                             .get("sessions")
                             .and_then(Value::as_array)
                             .and_then(|v| v.iter().find(|c| c.get("sessionId").and_then(Value::as_str) == Some(session_id.as_str())).cloned());
                         let timeline: Vec<Value> = {
-                            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let mut st = state.lock_timed();
                             resolve_session_card(&mut st, &summary, &session_id, now)
                                 .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                 .unwrap_or_default()
@@ -2575,7 +2774,7 @@ async fn handle(
                     "get_subagent_tree" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock — nothing else here needs the state.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let payload = crate::mcp_tools::get_subagent_tree(&sessions, &s("sessionId").unwrap_or_default(), now);
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
@@ -2586,7 +2785,7 @@ async fn handle(
                         // stats the whole plugin cache.
                         let now = crate::now_ms() as f64;
                         let (dirs, cache_root) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             (
                                 agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
                                 // The TS uses os.homedir() directly here, NOT the CLAUDE_CONFIG_DIR
@@ -2626,7 +2825,7 @@ async fn handle(
                     "get_cost_rollup" | "predict_session_cost" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock — nothing else here needs the state.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let payload = if name == "get_cost_rollup" {
                             crate::mcp_tools::get_cost_rollup(&sessions, &args, now)
@@ -2643,10 +2842,10 @@ async fn handle(
                         // uses — reparse-on-demand + OTEL graft) and the fork-ancestor walk, both
                         // of which need `CoreState`. The multi-GB transcript parse then runs with
                         // the lock RELEASED.
-                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let (_, summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let (timeline, env, ancestor) = {
-                            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let mut st = state.lock_timed();
                             let timeline: Vec<Value> = resolve_session_card(&mut st, &summary, &session_id, now)
                                 .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                 .unwrap_or_default();
@@ -2705,10 +2904,10 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock; the guard covers only the two
                         // path/home reads that need `CoreState`.
-                        let (_, summary) = summary_now(&state, now)?;
+                        let (_, summary) = summary_now(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let (dir, home) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             let dir = crate::burn::guard::default_bodies_dir(&st.data_dir);
                             let home = st.burn.home_dir.to_string_lossy().into_owned();
                             (dir, home)
@@ -2752,7 +2951,7 @@ async fn handle(
                         // slice), so it runs on spawn_blocking with the state lock released.
                         let now = crate::now_ms() as f64;
                         let dir = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             crate::burn::guard::default_bodies_dir(&st.data_dir)
                         };
                         let group_by = args.get("groupBy").and_then(Value::as_str).unwrap_or("session").to_owned();
@@ -2789,7 +2988,7 @@ async fn handle(
                         // bounded request slice AND builds a call composition per turn.
                         let now = crate::now_ms() as f64;
                         let dir = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             crate::burn::guard::default_bodies_dir(&st.data_dir)
                         };
                         let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
@@ -2827,7 +3026,7 @@ async fn handle(
                         // spawn_blocking with the state lock released.
                         let now = crate::now_ms() as f64;
                         let dir = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             crate::burn::guard::default_bodies_dir(&st.data_dir)
                         };
                         let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
@@ -2850,7 +3049,7 @@ async fn handle(
                         // and the CoreState lock is released before any of it (the P4s rule).
                         let is_timeline = name == "get_cache_break_timeline";
                         let (data_dir, projects_dirs) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             (st.data_dir.clone(), agentlens_logscan::discovery::claude_projects_dirs(&st.log_env))
                         };
                         let session_id = args.get("sessionId").and_then(Value::as_str).map(str::to_owned);
@@ -2890,7 +3089,7 @@ async fn handle(
                     }
                     "burn_seismic" => {
                         let (dirs, tmp_dir) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             (
                                 agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
                                 st.data_dir.join("store").join(agentlens_store::TMP_DIR),
@@ -2982,7 +3181,7 @@ async fn handle(
                         // Same fact store, same lazy index, same blocking shape as
                         // run_diagnostics_sql below — the two tools are one engine's two front ends.
                         let data_dir = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             st.data_dir.clone()
                         };
                         let a = args.clone();
@@ -3030,7 +3229,7 @@ async fn handle(
                         // SQLite over the forensics fact store, plus the lazy index pass that fills
                         // it — both blocking, so spawn_blocking with the state lock released first.
                         let data_dir = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             st.data_dir.clone()
                         };
                         let a = args.clone();
@@ -3086,7 +3285,7 @@ async fn handle(
                         // DuckDB over a BOUNDED set of transcript files — blocking, so
                         // spawn_blocking with the state lock released first.
                         let (dirs, tmp_dir) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             (
                                 agentlens_logscan::discovery::claude_projects_dirs(&st.log_env),
                                 st.data_dir.join("store").join(agentlens_store::TMP_DIR),
@@ -3118,7 +3317,7 @@ async fn handle(
                         // TRDD-GVA8TTJF — DuckDB over the api_call parts + body-links + the
                         // statusline stream. Blocking; spawn_blocking with the lock released.
                         let data_dir = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             st.data_dir.clone()
                         };
                         let preset = args.get("preset").and_then(Value::as_str).map(str::to_owned);
@@ -3145,7 +3344,7 @@ async fn handle(
                         // The one tool here that talks to the network. Blocking transport + file
                         // locks, so it runs on spawn_blocking with the state lock released first.
                         let (data_dir, home) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             (st.data_dir.clone(), st.log_env.home.clone())
                         };
                         let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
@@ -3202,7 +3401,7 @@ async fn handle(
                         // a bounded body scan — spawn_blocking, lock released first.
                         let now = crate::now_ms() as f64;
                         let (rl_data_dir, hook_dir, home, projects_dirs) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             (
                                 st.data_dir.clone(),
                                 st.data_dir.join("hook-events"),
@@ -3272,7 +3471,7 @@ async fn handle(
                         // answered with confident numbers about the wrong hours.
                         let bad_iso = until_iso.as_ref().filter(|_| until_ms.is_none()).cloned();
                         let (data_dir, hook_dir, home, projects_dirs) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             (
                                 st.data_dir.clone(),
                                 st.data_dir.join("hook-events"),
@@ -3325,11 +3524,11 @@ async fn handle(
                         } else {
                             // TRDD-QE114936: summary OFF the lock; the guard covers only the
                             // bodies-dir path read.
-                            let (_, summary) = summary_now(&state, now)?;
+                            let (_, summary) = summary_now(&state, now);
                             let sessions: Vec<Value> =
                                 summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                             let bodies_dir = {
-                                let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                                let st = state.lock_timed();
                                 crate::burn::guard::default_bodies_dir(&st.data_dir)
                             };
                             let opts = crate::session_burn_profile::SessionBurnProfileOptions {
@@ -3378,7 +3577,7 @@ async fn handle(
                         // with the state lock released.
                         let now = crate::now_ms() as f64;
                         let (bodies_dir, spans_dir, store_dir) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             (crate::burn::guard::default_bodies_dir(&st.data_dir), st.data_dir.join("spans"), st.data_dir.join("store"))
                         };
                         let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_owned);
@@ -3429,7 +3628,7 @@ async fn handle(
                     "get_cache_break_gap_report" => {
                         let now = crate::now_ms() as f64;
                         let dir = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             crate::burn::guard::default_bodies_dir(&st.data_dir)
                         };
                         let opts = crate::cache_creation_forensics::ScanOptions {
@@ -3458,7 +3657,7 @@ async fn handle(
                         // (a file read) out from under the lock, and skips the summary entirely on
                         // the two error arms below, which never look at it.
                         let timeline_path = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             crate::account_state_timeline::account_state_timeline_path(&st.data_dir)
                         };
                         let segments = crate::account_burners::read_account_segments(&timeline_path);
@@ -3474,14 +3673,14 @@ async fn handle(
                                     crate::account_burners::known_accounts(&segments)
                                 )),
                                 Some(target) => {
-                                    let (_, summary) = summary_now(&state, now)?;
+                                    let (_, summary) = summary_now(&state, now);
                                     let sessions: Vec<Value> =
                                         summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                                     let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
                                     let rate_window_ms =
                                         args.get("rate_window_min").and_then(Value::as_f64).unwrap_or(30.0).max(1.0) * 60_000.0;
                                     let observed = {
-                                        let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                                        let st = state.lock_timed();
                                         st.burn.config.observed.clone()
                                     };
                                     crate::window_eta::build_window_eta_report(&crate::window_eta::WindowEtaOpts {
@@ -3511,7 +3710,7 @@ async fn handle(
                         // no guard live, the segment file read leaves the lock, and the error arms
                         // never pay for a summary they do not read.
                         let timeline_path = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             crate::account_state_timeline::account_state_timeline_path(&st.data_dir)
                         };
                         let segments = crate::account_burners::read_account_segments(&timeline_path);
@@ -3532,7 +3731,7 @@ async fn handle(
                                     match err {
                                         Some(e) => crate::mcp_tools::error_payload(&e),
                                         None => {
-                                            let (_, summary) = summary_now(&state, now)?;
+                                            let (_, summary) = summary_now(&state, now);
                                             let sessions: Vec<Value> =
                                                 summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                                             let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
@@ -3556,7 +3755,7 @@ async fn handle(
                                             // resolves the machine's home, so the table's `~/…`
                                             // abbreviation matches every other burn surface.
                                             let (home, observed) = {
-                                                let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                                                let st = state.lock_timed();
                                                 (st.burn.home_dir.to_string_lossy().into_owned(), st.burn.config.observed.clone())
                                             };
                                             crate::account_burners::build_account_burners_report(&crate::account_burners::AccountBurnersOpts {
@@ -3587,14 +3786,14 @@ async fn handle(
                         // TRDD-QE114936: ONE off-lock summary read for the WHOLE handler — the
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. The lock is now taken only for the log env.
-                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
+                        let (_, timeline_summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
                         // idle-break judgment now reads each gap's MEASURED write tier off the
                         // session's own timeline (cache_break.rs), not the regime right now.
                         let env = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             st.log_env.clone()
                         };
                         let (a, st2) = (args.clone(), state.clone());
@@ -3659,14 +3858,14 @@ async fn handle(
                         // benefit) and threaded into every candidate instead. The SAME read also
                         // supplies this handler's session list, so the lock is taken only for the
                         // log env.
-                        let (_, timeline_summary) = summary_now(&state, now as f64)?;
+                        let (_, timeline_summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
                         // idle-gap judgment now reads each gap's MEASURED write tier off the
                         // session's own timeline (cache_break.rs), not the regime right now.
                         let env = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             st.log_env.clone()
                         };
                         let (a, st2) = (args.clone(), state.clone());
@@ -3722,10 +3921,10 @@ async fn handle(
                         // this guard rebuilt the summary inline on a miss and then deep-cloned
                         // every card while holding the state lock — 10.2 s measured live. Only
                         // the TTL context still needs the guard.
-                        let (_, summary) = summary_now(&state, now as f64)?;
+                        let (_, summary) = summary_now(&state, now as f64);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let ttl = {
-                            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let mut st = state.lock_timed();
                             st.burn.ttl_context(now as f64)
                         };
                         let (a, st2) = (args.clone(), state.clone());
@@ -3733,7 +3932,7 @@ async fn handle(
                         // Cloned OUT of the state before spawn_blocking — the closure must be 'static,
                         // and holding the state lock across a 256KB read per candidate would block
                         // every other reader for the whole scan.
-                        let log_env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
+                        let log_env = state.lock_timed().log_env.clone();
                         // TRDD-QE114936: `summary` (already read off-lock above) is moved into the
                         // closure and threaded into resolve_session_card, instead of it rebuilding
                         // its own copy under st2's per-candidate guard.
@@ -3790,8 +3989,8 @@ async fn handle(
                         } else {
                             let now = crate::now_ms() as f64;
                             // TRDD-XX1UAZHS: compute off the lock, hold only for account + TTL.
-                            let status = burn_status_now(&state, now)?;
-                            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let status = burn_status_now(&state, now);
+                            let mut st = state.lock_timed();
                             let account = st.burn.current_account(now);
                             let ttl = st.burn.ttl_context(now);
                             drop(st);
@@ -3810,8 +4009,8 @@ async fn handle(
                         let n = |k: &str| args.get(k).and_then(Value::as_f64);
                         // TRDD-QE114936 site 20 — see the `/api/burn-risk` route: off the lock,
                         // and only when the tick has not stored a status yet.
-                        let seed = burn_status_seed(&state, now)?;
-                        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                        let seed = burn_status_seed(&state, now);
+                        let mut st = state.lock_timed();
                         let payload = st.burn_risk_report(now, seed, n("fanoutThreshold"), n("spikeTokensPerMin"));
                         drop(st);
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
@@ -3828,7 +4027,7 @@ async fn handle(
                         // `since_ms: Some(0.0)` would read the same records but claim a bound.
                         let since_ms = n("window").map(|h| crate::now_ms() - (h * 3_600_000.0) as i64);
                         let (dir, records) = {
-                            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+                            let st = state.lock_timed();
                             let dir = st.data_dir.join("hook-events");
                             let records = crate::hook_events::read_hook_events(
                                 &dir,
@@ -3856,7 +4055,7 @@ async fn handle(
                         // branch that needs it — the other two tools never read a card model, so
                         // they must not pay for a summary read at all.
                         let card_model = if name == "get_context_history" {
-                            let (_, summary) = summary_now(&state, crate::now_ms() as f64)?;
+                            let (_, summary) = summary_now(&state, crate::now_ms() as f64);
                             summary
                                 .get("sessions")
                                 .and_then(Value::as_array)
@@ -3866,7 +4065,7 @@ async fn handle(
                         } else {
                             None
                         };
-                        let env = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.log_env.clone();
+                        let env = state.lock_timed().log_env.clone();
                         let sid = session_id.clone();
                         let tool = name.clone();
                         // Streaming a transcript is blocking, multi-GB-capable work — off the
@@ -3933,7 +4132,7 @@ async fn handle(
         let session_id = percent_decode(&path["/api/conversation/".len()..]);
         let parent = query_of(&req).get("parent").map(|s| s.to_owned()).filter(|s| !s.is_empty());
         let env = {
-            let st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let st = state.lock_timed();
             st.log_env.clone()
         };
         let conversation = tokio::task::spawn_blocking(move || {
@@ -3960,7 +4159,9 @@ async fn handle(
         // CoreState would stall every other request on the server.
         let session_id = percent_decode(&path["/api/composition-index/".len()..]);
         let now = crate::now_ms() as f64;
-        let comp = composition_for(&state, &session_id, now).await?;
+        let (_, comp_summary) = summary_now(&state, now);
+        let comp_projects = crate::composition_project_map(&comp_summary);
+        let comp = composition_for(&state, &session_id, now, &comp_projects).await?;
         let summary = crate::context_composition_index::session_composition_summary(&comp);
         json_response(StatusCode::OK, serde_json::json!({ "summary": summary }).to_string())
     } else if method == Method::GET && path.starts_with("/api/block-content/") {
@@ -4001,9 +4202,9 @@ async fn handle(
         let now = crate::now_ms();
         // TRDD-QE114936: summary read OFF the lock before the guard below, instead of
         // resolve_session_card rebuilding it inline while holding `st`.
-        let (_, summary) = summary_now(&state, now as f64)?;
+        let (_, summary) = summary_now(&state, now as f64);
         let body = {
-            let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+            let mut st = state.lock_timed();
             let session = resolve_session_card(&mut st, &summary, &session_id, now);
             // `session?.<k> ?? <default>` — nullish: an explicit null falls back too.
             let field = |k: &str, default: Value| {
@@ -4021,7 +4222,7 @@ async fn handle(
     } else {
         // The dashboard shell and its assets (server.ts:4407-4439). Neither TS branch checks the
         // method, so neither does this one; the CSRF/viewer gates above already ran.
-        let media_dir = state.lock_timed().map_err(|_| "state poisoned".to_owned())?.media_dir.clone();
+        let media_dir = state.lock_timed().media_dir.clone();
         let served = match media_dir {
             Some(dir) if path == "/" || path == "/index.html" => {
                 Some(dashboard_html(&state, &dir, viewer_role == crate::embed_auth::ViewerRole::Restricted)?)
@@ -4054,7 +4255,8 @@ async fn handle(
     {
         use hyper::body::Body;
         let bytes = resp.body().size_hint().exact().unwrap_or(0);
-        if let Ok(mut st) = state.lock_timed() {
+        {
+            let mut st = state.lock_timed();
             let dur = t0.elapsed().as_millis() as i64;
             st.requests.record(method.as_str(), &path, resp.status().as_u16(), dur, bytes, crate::now_ms());
         }
@@ -4202,7 +4404,7 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         // every install, with or without a dashboard connected, and `live_burn_status` rebuilt the
         // whole window inside the lock — the single biggest source of the 83k `__psynch_mutexwait`
         // samples under an ingest flood. `burn_status_over` below now gets a ready summary.
-        let Ok((_, tick_summary)) = summary_now(&state, crate::now_ms() as f64) else { continue };
+        let tick_summary = burn_summary_now(&state);
         // Declared OUTSIDE the lock blocks (uninitialized — the only paths that skip the
         // assignment are the `continue`s below, which also skip every read): the rotation edge is
         // detected under the lock, and the capture it triggers runs after the lock is released.
@@ -4220,29 +4422,40 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
         // hold snapshots those two inputs, the status is computed with the lock RELEASED, and the
         // second hold stores it and does the rest. Every ingest and read path was queued behind
         // that 1.5 s four times a minute — do not fold the compute back under either guard.
-        let (ttl, config, t_poll, t_flush, held_a) = {
-            let Ok(mut st) = state.lock_timed() else { continue };
+        let (ttl, config, t_flush, held_a, bodies_in_flight) = {
+            let mut st = state.lock_timed();
             let t0 = std::time::Instant::now();
-            // The bodies watcher's poll cadence (the TS runs a dedicated 5s timer; folding it
-            // into this 4s tick keeps the same ≤5s staleness with one fewer task). The gate's
-            // buildGateState reads the report WITHOUT polling — a poll landing on new multi-MB
-            // response files costs 100-400ms of parsing, the TRDD-9CNHP8CN request-latency
-            // outlier — so this tick is what keeps its snapshot fresh.
-            st.burn.bodies.poll(now);
-            let t_poll = t0.elapsed();
+            // TRDD-H3D5ZBO1: the bodies scan is NOT run here. Its first pass after boot held this
+            // lock for 534-588 s; it runs in a blocking task started below that takes the lock
+            // only for the merge. The gate and the risk report read the last merged result.
+            let bodies_in_flight = st.burn.bodies.in_flight_handle();
             // The statusline WAL flush (the TS runs a dedicated 5s timer; this 4s tick gives
             // the same ≤5s durability window with one fewer task). Sealing is NOT here — it
             // runs DuckDB over whole WALs and lives on alcore's own 60s task, outside the lock.
             st.statusline.flush(None);
             let t_flush = t0.elapsed();
             let ttl = st.burn.ttl_context(now);
-            (ttl, st.burn.config.clone(), t_poll, t_flush, t0.elapsed())
+            (ttl, st.burn.config.clone(), t_flush, t0.elapsed(), bodies_in_flight)
         };
+        // The bodies watcher's cadence (the TS runs a dedicated 5s timer; this 4s tick gives the
+        // same ≤5s staleness with one fewer task). Fire-and-forget and never awaited: a scan that
+        // outlasts the tick must not stall it, and `in_flight` stops the next tick stacking a
+        // second one. The task's own compare_exchange is the authority; this load only skips a
+        // pointless spawn.
+        if !bodies_in_flight.load(std::sync::atomic::Ordering::Acquire) {
+            let scan_state = state.clone();
+            tokio::task::spawn_blocking(move || crate::burn::bodies_activity::run_bodies_scan(&scan_state));
+        }
         let t_off = std::time::Instant::now();
         let status = crate::burn_status_for(&tick_summary, &config, &ttl, now);
         let off_lock = t_off.elapsed();
+        // TRDD-2JOIAH2G: release the summary `Arc` the moment its last use is done (`status` is
+        // owned, nothing borrows from it). Held to the end of the tick, it made the previous
+        // summary shared whenever a rebuild landed in that window, so `take_sessions`
+        // (summary_engine.rs) deep-copied the whole sessions array (rig: +1 shared copy at +116 s).
+        drop(tick_summary);
         {
-            let Ok(mut st) = state.lock_timed() else { continue };
+            let mut st = state.lock_timed();
             let t1 = std::time::Instant::now();
             st.burn.last_status = Some(status.clone());
             let account = st.burn.current_account(now);
@@ -4298,11 +4511,10 @@ pub async fn run_burn_tick(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
             let threshold = std::time::Duration::from_millis(crate::lock_trace_threshold_ms());
             if held_a >= threshold || held_b >= threshold {
                 eprintln!(
-                    "{} alcore: burn tick guard split: lock_a {} ms (bodies_poll {} ms, statusline_flush {} ms, ttl_config {} ms), off_lock burn_status {} ms, lock_b {} ms (account_timeline {} ms, alerts_notify {} ms)",
+                    "{} alcore: burn tick guard split: lock_a {} ms (statusline_flush {} ms, ttl_config {} ms), off_lock burn_status {} ms, lock_b {} ms (account_timeline {} ms, alerts_notify {} ms)",
                     crate::log_ts(),
                     held_a.as_millis(),
-                    t_poll.as_millis(),
-                    (t_flush - t_poll).as_millis(),
+                    t_flush.as_millis(),
                     (held_a - t_flush).as_millis(),
                     off_lock.as_millis(),
                     held_b.as_millis(),
@@ -4366,10 +4578,7 @@ pub async fn run_push_loop(state: Arc<Mutex<CoreState>>, hub: Arc<SseHub>) {
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(PUSH_COALESCE_MS));
     loop {
         tick.tick().await;
-        let version = match state.lock_timed() {
-            Ok(st) => st.data_version,
-            Err(_) => continue,
-        };
+        let version = state.lock_timed().data_version;
         if version != last_pushed {
             last_pushed = version;
             // push_update does the rebuild + the payload assembly off the lock (summary_now); the
@@ -4436,13 +4645,13 @@ mod rebuild_admission_tests {
         let dir = std::env::temp_dir().join(format!("al-admission-{}-{}", tag, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let state = Arc::new(Mutex::new(CoreState::open(&dir)));
-        let (version, _) = summary_now(&state, crate::now_ms() as f64).expect("warm the cache");
+        let (version, _) = summary_now(&state, crate::now_ms() as f64);
         (state, version)
     }
 
     /// The fix. With the gate held by someone else, a cache-missing reader is answered from the
     /// last good summary instead of queueing — promptly, and with the version that summary was
-    /// actually built for (never the current `data_version`, which is what keeps `stripped_cache`
+    /// actually built for (never the current `data_version`, which is what keeps a derived view
     /// keyed to inputs it really derives from).
     #[test]
     fn reader_does_not_block_behind_an_in_flight_rebuild() {
@@ -4453,15 +4662,15 @@ mod rebuild_admission_tests {
         let (state, warm_version) = state_with_a_warm_summary("nonblock");
 
         // Force the fast path to miss exactly the way sustained ingest does: bump the key.
-        state.lock_timed().unwrap().data_version += 1;
-        let current = state.lock_timed().unwrap().data_version;
+        state.lock_timed().data_version += 1;
+        let current = state.lock_timed().data_version;
         assert_ne!(current, warm_version, "the cache key must have moved, or this proves nothing");
 
         // Stand in for a 20-second rebuild.
         let held = rebuild_gate().lock().unwrap_or_else(|e| e.into_inner());
 
         let began = Instant::now();
-        let (served_version, _summary) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        let (served_version, _summary) = summary_now(&state, crate::now_ms() as f64);
         let waited = began.elapsed();
         drop(held);
 
@@ -4491,11 +4700,11 @@ mod rebuild_admission_tests {
         // a sibling has the flag set.
         let _serial = serial();
         let (state, warm_version) = state_with_a_warm_summary("fresh");
-        state.lock_timed().unwrap().data_version += 1;
-        let current = state.lock_timed().unwrap().data_version;
+        state.lock_timed().data_version += 1;
+        let current = state.lock_timed().data_version;
 
         // Nobody holds the gate here — the reader must rebuild rather than serve the warm value.
-        let (served_version, _) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        let (served_version, _) = summary_now(&state, crate::now_ms() as f64);
         assert_eq!(served_version, current, "an uncontended reader must serve the CURRENT version");
         assert_ne!(served_version, warm_version, "serving the pre-bump summary is the read-your-writes bug");
     }
@@ -4522,8 +4731,10 @@ mod rebuild_admission_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let state = Arc::new(Mutex::new(CoreState::open(&dir)));
         let set_record = |last| rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = last;
+        // A reader has asked, or the item-1 gate would make every pass below a no-op.
+        state.lock_timed().summary_asked = true;
         let is_current = |state: &Arc<Mutex<CoreState>>| {
-            let mut st = state.lock_timed().unwrap();
+            let mut st = state.lock_timed();
             let version = st.data_version;
             st.summary_cache.current(version).is_some()
         };
@@ -4535,7 +4746,7 @@ mod rebuild_admission_tests {
         assert!(is_current(&state), "the first pass must build — nothing is recorded yet");
 
         // Move the cache key the way ingest does, and put an expensive pass on the record.
-        state.lock_timed().unwrap().data_version += 1;
+        state.lock_timed().data_version += 1;
         set_record(Some((Instant::now(), Duration::from_secs(60))));
         rebuild_once(&state);
         assert!(
@@ -4559,7 +4770,7 @@ mod rebuild_admission_tests {
 
         // Clear the window and the SAME tick must build: that is what shows the skips above were the
         // back-off and not a version compare, an empty window, or a poisoned gate.
-        state.lock_timed().unwrap().data_version += 1;
+        state.lock_timed().data_version += 1;
         set_record(Some((Instant::now(), Duration::from_secs(60))));
         rebuild_once(&state);
         assert!(!is_current(&state), "sanity: inside the window, no reader waiting, must skip");
@@ -4567,6 +4778,89 @@ mod rebuild_admission_tests {
         rebuild_once(&state);
         assert!(is_current(&state), "with the window cleared the loop must rebuild");
         set_record(None);
+    }
+
+    /// Removes its directory on drop, so a failing assertion still cleans up (pattern of the TRDD-R36S0PS9 test).
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A fresh temp dir unique per call (pid plus counter) and its cleanup guard. Declare the guard BEFORE the
+    /// state that opens the dir, so the state drops first and the removal runs after its files are closed.
+    fn unique_dir(tag: &str) -> (std::path::PathBuf, RemoveOnDrop) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("al-{}-{}-{}", tag, std::process::id(), n));
+        std::fs::create_dir_all(&dir).unwrap();
+        (dir.clone(), RemoveOnDrop(dir))
+    }
+
+    /// TRDD-735Q3JF4 item 1: the loop must not pre-build for nobody. A fresh state that no reader has
+    /// asked about stays unbuilt across a pass, even with the back-off record empty (the boot condition).
+    ///
+    /// MUTATION CHECK: delete the `summary_asked` early return in `rebuild_once` and this MUST fail.
+    #[test]
+    fn the_rebuild_loop_builds_nothing_before_a_reader_has_asked() {
+        let _serial = serial();
+        let (dir, _cleanup) = unique_dir("unasked");
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        state.lock_timed().data_version += 1;
+
+        rebuild_once(&state);
+        let mut st = state.lock_timed();
+        let version = st.data_version;
+        assert!(st.summary_cache.current(version).is_none(), "the loop built a summary no reader had asked for");
+    }
+
+    /// TRDD-735Q3JF4 item 1, other half: one `summary_now` call releases the loop, which then builds
+    /// the next version exactly as before.
+    ///
+    /// MUTATION CHECK: delete the `summary_asked = true` write in `summary_now` and this MUST fail.
+    #[test]
+    fn after_one_reader_has_asked_the_rebuild_loop_builds() {
+        let _serial = serial();
+        let (dir, _cleanup) = unique_dir("asked");
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        summary_now(&state, crate::now_ms() as f64);
+        state.lock_timed().data_version += 1;
+
+        rebuild_once(&state);
+        let mut st = state.lock_timed();
+        let version = st.data_version;
+        assert!(st.summary_cache.current(version).is_some(), "the loop must build once a reader has asked");
+    }
+
+    /// TRDD-735Q3JF4 item 2 check: PINS CURRENT BEHAVIOUR at boot. Rebuilder active, nothing ever cached, no reader
+    /// has asked yet. `stale` is None so the REBUILDER_ACTIVE wait block is skipped (it needs a stale value) and the
+    /// first reader falls through to the inline build: with the gate free it wins it and returns the REAL summary for
+    /// the current version (it carries the seeded session), building on the request path (the cold-boot exception).
+    /// Only the stale = None case is tested. The gate-held case (the reader polls for up to 500 ms, then blocks on
+    /// rebuild_gate().lock() until the rebuilder's in-flight build finishes, and the re-check under the gate avoids
+    /// a second build) is reasoned from code, not tested here.
+    #[test]
+    fn at_boot_with_the_rebuilder_active_and_nothing_cached_the_first_reader_builds_inline() {
+        let _active = RebuilderActive::on();
+        let (dir, _cleanup) = unique_dir("boot-inline");
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        // Seed one session so an empty summary tagged with the current version cannot pass.
+        state.lock_timed().put_log_session(serde_json::json!({ "sessionId": "boot-seed-session", "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": [] }));
+        rebuild_gate().lock().unwrap_or_else(|e| e.into_inner()).last = None;
+        assert!(!state.lock_timed().summary_asked, "precondition: no reader has asked");
+        assert!(rebuild_gate().try_lock().is_ok(), "the gate must be free — that is the case under test");
+        let (served_version, summary) = summary_now(&state, crate::now_ms() as f64);
+        let listed = summary.get("sessions").and_then(|v| v.as_array()).map(|a| a.iter().any(|s| s["sessionId"] == "boot-seed-session"));
+        assert_eq!(listed, Some(true), "the served summary must contain the seeded session, got {summary}");
+
+        let mut st = state.lock_timed();
+        let current = st.data_version;
+        assert_eq!(served_version, current, "the first boot reader must get the real current summary, not a stale or empty one");
+        assert!(st.summary_cache.current(current).is_some(), "the inline build must have stored the summary");
+        assert!(st.summary_asked, "summary_now must release the rebuild loop");
     }
 
     /// THE FIX FOR THE GATE WINNER (TRDD-2R36W8Q1). With a background rebuilder owning rebuilds,
@@ -4587,8 +4881,8 @@ mod rebuild_admission_tests {
         let _active = RebuilderActive::on();
         let (state, warm_version) = state_with_a_warm_summary("owned");
 
-        state.lock_timed().unwrap().data_version += 1;
-        let current = state.lock_timed().unwrap().data_version;
+        state.lock_timed().data_version += 1;
+        let current = state.lock_timed().data_version;
         assert_ne!(current, warm_version, "the cache key must have moved, or this proves nothing");
 
         // Deliberately NOT holding the gate: the winner is the case the budget cannot fix.
@@ -4596,7 +4890,7 @@ mod rebuild_admission_tests {
 
         READER_WAITING.store(false, Ordering::Relaxed);
         let began = Instant::now();
-        let (served_version, _) = summary_now(&state, crate::now_ms() as f64).expect("served");
+        let (served_version, _) = summary_now(&state, crate::now_ms() as f64);
         let waited = began.elapsed();
 
         assert_eq!(
@@ -4650,7 +4944,7 @@ mod rebuild_admission_tests {
     /// the receiver is not part of the needle, so renaming `st` cannot hide an occurrence.
     #[test]
     fn mcp_handlers_never_rebuild_the_summary_under_the_lock() {
-        let rebuilders = ["build_session_summary", "build_stripped_summary", "live_burn_status", "session_summary"];
+        let rebuilders = ["build_session_summary", "live_burn_status", "session_summary"];
         let needles: Vec<String> = rebuilders.iter().map(|n| format!(".{n}(")).collect();
         let hits: Vec<String> = include_str!("ui.rs")
             .lines()
@@ -4673,8 +4967,8 @@ mod rebuild_admission_tests {
     /// above so `ui.rs` is checked against it too.
     #[test]
     fn no_new_core_state_method_wraps_a_summary_rebuild() {
-        // Known wrappers: `build_stripped_summary` and `live_burn_status`. (`session_summary` is a
-        // third rebuilder but reaches `summary_over` directly, and is already in the list above.)
+        // Known wrapper: `live_burn_status`. (`session_summary` is a rebuilder that reaches
+        // `summary_over` directly, and is already in the list above.)
         let needle = format!("self.build_{}(", "session_summary");
         let hits: Vec<String> = include_str!("lib.rs")
             .lines()
@@ -4683,7 +4977,7 @@ mod rebuild_admission_tests {
             .filter(|(_, l)| l.contains(needle.as_str()))
             .map(|(i, l)| format!("{}: {}", i + 1, l.trim()))
             .collect();
-        assert_eq!(hits.len(), 2, "a CoreState method that wraps a summary rebuild was added or removed; keep `rebuilders` in the test above in step with it:\n{hits:#?}");
+        assert_eq!(hits.len(), 1, "a CoreState method that wraps a summary rebuild was added or removed; keep `rebuilders` in the test above in step with it:\n{hits:#?}");
     }
 
     /// The third of the pair's blind spots, and the one that found site 21. The two tests above
@@ -4696,7 +4990,7 @@ mod rebuild_admission_tests {
     /// look at; silence is a debt nobody can see — and silence is what let site 20 through.
     #[test]
     fn no_other_file_rebuilds_the_summary_from_a_caller_holding_the_lock() {
-        let rebuilders = ["build_session_summary", "build_stripped_summary", "live_burn_status", "session_summary"];
+        let rebuilders = ["build_session_summary", "live_burn_status", "session_summary"];
         // BOTH spellings. Method-call form is what the code uses today; UFCS
         // (`CoreState::build_session_summary(&mut st, …)`) is the same call and would otherwise
         // walk straight past a needle that only knows the dot.
@@ -4834,5 +5128,63 @@ mod shell_tests {
         assert_eq!(substitute_tokens("a=@@A@@;b=@@B@@", &[("@@A@@", "\"@@B@@\""), ("@@B@@", "INJECTED")]), "a=\"@@B@@\";b=INJECTED");
         assert_eq!(substitute_tokens("@@NOPE@@ @@P@@/a @@P@@/b", &[("@@P@@", "/lens")]), "@@NOPE@@ /lens/a /lens/b");
         assert_eq!(substitute_tokens("x=@@V@@", &[("@@V@@", "$& $1 $$")]), "x=$& $1 $$");
+    }
+}
+
+#[cfg(test)]
+mod composition_project_map_tests {
+    use std::sync::Arc;
+
+    use super::compositions_in_scope;
+    use crate::call_body_registry::{CallBodyPointer, CallBodyRegistry};
+    use crate::{composition_project_map_builds, CoreState};
+
+    /// A pointer with no body — the composition builder then has nothing to parse, so the
+    /// scope pass exercises the MAP path without needing body files on disk.
+    fn pointer() -> CallBodyPointer {
+        CallBodyPointer {
+            kind: "request",
+            body_ref: None,
+            inline_body: Some("{}".to_owned()),
+            request_id: None,
+            span_id: None,
+            model: None,
+            query_source: None,
+            request_body_id: None,
+            message_id: None,
+            message_uuid: None,
+            ts: 0,
+        }
+    }
+
+    /// TRDD-9VX3WTGU: a scope pass over N sessions must build the `sessionId → project` map
+    /// ONCE. The pre-fix shape rebuilt it once per session — O(sessions²) map probes per
+    /// pass — and the live profile put 14,071 of 14,071 samples in exactly that shape
+    /// (`composition_project_map` → `IndexMap::get_index_of` → `_platform_memcmp`).
+    ///
+    /// The counter is thread-local, and this test runs on a single-threaded tokio runtime, so
+    /// the delta is exactly this pass's own build count — no other test can contribute to it.
+    #[tokio::test]
+    async fn a_scope_pass_builds_the_project_map_once_not_once_per_session() {
+        const N: usize = 12;
+        let dir = std::env::temp_dir().join(format!("al-compscope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut st = CoreState::open(&dir);
+        let mut registry = CallBodyRegistry::new(64, 16);
+        for i in 0..N {
+            registry.record(&format!("sess-{i:04}"), pointer());
+        }
+        st.bodies = registry;
+        let state = Arc::new(std::sync::Mutex::new(st));
+
+        let before = composition_project_map_builds();
+        let _ = compositions_in_scope(&state, None, crate::now_ms() as f64).await;
+        let builds = composition_project_map_builds() - before;
+
+        assert!(
+            builds <= 1,
+            "a scope pass over {N} sessions must build the project map ONCE, not once per session: {builds} builds"
+        );
     }
 }

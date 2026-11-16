@@ -11,6 +11,7 @@
 //! Default ports are 4319/3001 — NOT 4318/3000: the TS server still owns the canonical ports
 //! until the P4 cutover, and 4318 doubles as the canonicality key (server.ts IS_CANONICAL).
 
+use std::io::Write;
 use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -56,13 +57,54 @@ async fn terminate_signal() {
     std::future::pending::<()>().await;
 }
 
+/// TRDD-3RVTC1HY: a panic on any thread but main (an unjoined std thread such as the log-sweeper, or a
+/// tokio task, which tokio catches) leaves the process running. On 2026-10-14 16:21 a log-sweeper panic
+/// poisoned the state lock and the process stayed up 28+ hours ingesting nothing, and no revive or
+/// supervisor could see it as dead. Exiting makes the death visible so the hook revive or the supervisor
+/// restarts a clean process. The hook must never take the state lock.
+fn install_exit_on_panic() {
+    static ALARM_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let default_hook = std::panic::take_hook();
+    // SAFETY: signal(2) changes only the process-wide disposition and touches no Rust memory, so it is safe
+    // with or without other threads. It restores SIGALRM's default action (terminate): an ignored disposition
+    // (SIG_IGN) survives exec from a parent that ignores it, and would silently turn the alarm backstop below
+    // into a no-op.
+    unsafe { libc::signal(libc::SIGALRM, libc::SIG_DFL) };
+    std::panic::set_hook(Box::new(move |info| {
+        // SAFETY: alarm(2) is async-signal-safe and takes no lock. Nothing in alcore handles SIGALRM (tokio
+        // registers only SIGINT and SIGTERM), so its default action terminates the process if anything below
+        // blocks, for example a full stderr pipe or a slow backtrace symbolication. A blocked hook would be
+        // the same live-looking zombie this hook exists to remove. Armed only by the first panic, because
+        // alarm(2) re-arms on every call and a panic stream would otherwise postpone the backstop indefinitely.
+        if !ALARM_ARMED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            unsafe { libc::alarm(10) };
+        }
+        let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "unknown location".to_owned());
+        // Written BEFORE the default hook on purpose: with RUST_BACKTRACE set, the default hook captures and
+        // symbolicates a backtrace, which can itself panic under memory pressure (a double panic aborts with
+        // exit 134), so the FATAL line with the location must already be in the log. writeln with its result
+        // ignored, NOT eprintln: eprintln panics when the stderr write fails, and a panic inside the hook aborts.
+        let _ = writeln!(std::io::stderr(), "{} alcore: FATAL — a thread panicked at {loc}; exiting so the hook revive or supervisor restarts a clean process", agentlens_core::log_ts());
+        default_hook(info);
+        // SAFETY: _exit(2) is async-signal-safe and never returns. std::process::exit runs atexit handlers and
+        // DuckDB C++ static destructors while other threads may still hold DuckDB locks, so it can block, and a
+        // blocked exit is the zombie again; _exit cannot block. Nothing is flushed on this path either way: spans
+        // not yet written by the 5 s chores flush are lost, the same as kill -9.
+        unsafe { libc::_exit(1) };
+    }));
+}
 fn usage(msg: &str) -> ! {
     eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
-    eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
+    eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--no-collection] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
     exit(64);
 }
 
 fn main() {
+    install_exit_on_panic();
+    // TRDD-2HRA270Y: permanent boot diagnostic — the probe slot logs mimalloc commit at each open_store phase;
+    // boot_start seeds the `up=` clock of every boot-phase line.
+    agentlens_core::rss_guard::install_open_phase_probe();
+    agentlens_core::rss_guard::log_boot_phase("boot_start", None);
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) != Some("serve") {
         usage("command required (serve)");
@@ -82,11 +124,17 @@ fn main() {
     let mut mcp_port: u16 = 4317;
     let mut bind = "127.0.0.1".to_owned();
     let mut log_scan = true;
+    // TRDD-RBBEX59R: no-collection mode, the authoritative input from the CLI spawn site
+    // (alcoreServeArgs pushes it while the kill switch is armed for this data dir).
+    let mut no_collection_flag = false;
     // The digest spool tap (spool_tap.rs): ON only when BOTH --ingest-manifest and --aldigest-bin
     // are given. --ingest-interval-secs is a hidden test knob (the seal + collect period).
     let mut ingest_manifest: Option<String> = None;
     let mut aldigest_bin: Option<String> = None;
     let mut ingest_interval_secs: Option<u64> = None;
+    // Hidden test knob, like --ingest-interval-secs (deliberately not in usage()): it can only crash the
+    // process its own spawner started. The trigger thread itself is spawned just before block_on.
+    let mut panic_after_ready = false;
     // --ingest-sources hooks,statusline,events,spans,bodies (default: all but bodies). API bodies are
     // OFF unless asked for: measured at about 7 GB/day of spool plus about 16 GB/day of events.duckdb
     // growth (the typed tables store each body's messages again, with no de-duplication).
@@ -95,6 +143,8 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--no-log-scan" => log_scan = false,
+            "--no-collection" => no_collection_flag = true,
+            "--panic-after-ready" => panic_after_ready = true,
             "--ingest-manifest" => {
                 i += 1;
                 ingest_manifest = Some(args.get(i).cloned().unwrap_or_else(|| usage("--ingest-manifest needs a path")));
@@ -160,6 +210,24 @@ fn main() {
     if !media_dir.join("index.html").is_file() {
         usage(&format!("--media-dir {}: no index.html there", media_dir.display()));
     }
+    // NO-COLLECTION MODE (TRDD-RBBEX59R step c), replacing the TRDD-NZ9Z9ALO exit-78 gate. Under the
+    // kill switch alcore now BOOTS and keeps the guards running (the hook ring, the burn gate, status-line
+    // ingest, the log sweeper) but stores no OTLP telemetry, no raw bodies and no hook-event log. The
+    // old gate kept the server down, which left `agentlenspro gate` allowing every agent launch.
+    //
+    // `--no-collection` is the authoritative input (the CLI decides, env half and file half alike).
+    // The `<data_dir>/DISABLED` file read is a BACKSTOP for an alcore started outside the CLI. Read once,
+    // here: a restart is the only transition in or out of the mode. Path::exists reads an unreadable
+    // flag as absent, the same fail-open direction as killSwitch.ts.
+    let disabled_flag = std::path::Path::new(&data_dir).join("DISABLED");
+    let no_collection = no_collection_flag || disabled_flag.exists();
+    if no_collection {
+        println!(
+            "{} alcore: no-collection mode ({}) — telemetry, raw bodies and hook events are not stored; the guards keep running",
+            agentlens_core::log_ts(),
+            if no_collection_flag { "--no-collection".to_owned() } else { format!("DISABLED flag {}", disabled_flag.display()) }
+        );
+    }
     // BOOT PROVENANCE + THE NO_REVIVE BRAKE WARN (TRDD-Q8ZW00CI, ported from standalone/server.ts
     // :293-307 as part of TRDD-1B98LCVR).
     //
@@ -176,12 +244,17 @@ fn main() {
     // that operator "the starter did not honour it, clear the brake with `server start`" both
     // accuses the wrong party and advises the command that just ran. Provenance-blind wording is
     // the bug; the WARN stays verbatim for every other starter, where it is true and wanted.
+    // TRDD-RBBEX59R: the stamp is kept as an Option for /api/server-stats `startedBy` (null when unset
+    // or blank). The "unknown (...)" text below is for the log line only and must never reach the API,
+    // or a consumer could not tell a missing stamp from a real starter name.
+    let started_by_stamp: Option<String> = std::env::var("AGENTLENS_STARTED_BY").ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
     {
-        let started_by = std::env::var("AGENTLENS_STARTED_BY").ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| {
+        let started_by = started_by_stamp.clone().unwrap_or_else(|| {
             "unknown (no AGENTLENS_STARTED_BY — launched by hand, or by a spawner without the stamp)".to_owned()
         });
-        // NO_REVIVE only, never the global DISABLED switch: DISABLED is terminal and is handled by
-        // the CLI gate; NO_REVIVE is a pause whose stated scope is resurrection (killSwitch.ts:56).
+        // NO_REVIVE only: the global DISABLED switch no longer stops a boot (it selects no-collection
+        // mode, above); NO_REVIVE is a pause whose stated scope is resurrection (killSwitch.ts:56), so it
+        // stays a warning only.
         let brake_present = std::path::Path::new(&data_dir).join("NO_REVIVE").exists();
         let brake = if brake_present { "PRESENT" } else { "absent" };
         println!(
@@ -263,7 +336,13 @@ fn main() {
             exit(78);
         }
     };
+    // TRDD-2HRA270Y: opens the CoreState::open window; boot_start .. here is arg parsing, pid lock, embed key.
+    static BEFORE_CORE_OPEN: std::sync::Once = std::sync::Once::new();
+    BEFORE_CORE_OPEN.call_once(|| agentlens_core::rss_guard::log_boot_phase("before_core_open", None));
     let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
+    // TRDD-2HRA270Y: with `before_core_open` brackets CoreState::open (the largest candidate for the ~780 MB).
+    static AFTER_CORE_OPEN: std::sync::Once = std::sync::Once::new();
+    AFTER_CORE_OPEN.call_once(|| agentlens_core::rss_guard::log_boot_phase("after_core_open", None));
     // Kept outside the state for the final seal in the shutdown sequence below.
     let mut spool_tap: Option<Arc<agentlens_core::spool_tap::SpoolTap>> = None;
     let mut spool_tap_off_reason: Option<String> = None;
@@ -286,7 +365,7 @@ fn main() {
         }
     }
     {
-        let mut st = state.lock_timed().expect("state");
+        let mut st = state.lock_timed();
         st.spool_tap = spool_tap.clone();
         if let Some(reason) = spool_tap_off_reason {
             st.spool_tap_off_reason = reason;
@@ -299,6 +378,9 @@ fn main() {
         st.ports.ui = ui_port;
         st.ports.otlp = port;
         st.ports.mcp = mcp_port;
+        // TRDD-RBBEX59R: both set once here, before any listener or chore reads them.
+        st.no_collection = no_collection;
+        st.started_by = started_by_stamp.clone();
         let (segments, total_spans, _) = st.writer.stats();
         println!(
             "{} alcore: loaded {} span(s) (last {}h window) from {} — store holds {total_spans} span(s) across {segments} segment(s), nothing evicted",
@@ -309,13 +391,17 @@ fn main() {
         );
     }
 
+    // Read once here, before the rayon pool, so rayon and both tokio runtimes take the same cap.
+    let cores = agentlens_core::cores::max_cores();
+
     // TRDD-RVKQDLRD: the global rayon pool is used by the log scan (`cold_scan_chunked`). It is
     // deliberately NOT lowered to background QoS: rayon also runs the pre-bind boot sweep (and a
     // stale-version cold scan) that the listeners wait on, so starving it would delay startup.
-    // Only the thread count is pinned: 4 threads, a prior measurement found 4 faster than the ncpu
-    // default for the cold scan. Must be configured before the first `par_iter` (the pool is
-    // created lazily on first use); fail loudly if a pool already exists.
-    if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(4).build_global() {
+    // Only the thread count is pinned, to the core cap (TRDD-YH822LDI, user ruling "2 cores,
+    // strict"). An earlier measurement found 4 threads faster than the ncpu default for the cold
+    // scan; the cap takes precedence over that speed-up. Must be configured before the first
+    // `par_iter` (the pool is created lazily on first use); fail loudly if a pool already exists.
+    if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(cores).build_global() {
         eprintln!("{} alcore: rayon pool: {e}", agentlens_core::log_ts());
         exit(1);
     }
@@ -326,8 +412,14 @@ fn main() {
         // the same thread then re-sweeps every LOG_SWEEP_INTERVAL, touching only files whose
         // stat moved (P5d tail + offset gate).
         let env = agentlens_logscan::discovery::Env::from_process();
+        // TRDD-2HRA270Y: opens the start_sweeper window; the wall time to `sweeper_restore_start` is thread spawn + DurableState::open.
+        static BEFORE_START_SWEEPER: std::sync::Once = std::sync::Once::new();
+        BEFORE_START_SWEEPER.call_once(|| agentlens_core::rss_guard::log_boot_phase("before_start_sweeper", None));
         match agentlens_core::log_reader::start_sweeper(state.clone(), env, std::path::PathBuf::from(&data_dir), LOG_SWEEP_INTERVAL) {
             Ok((boot, handle)) => {
+                // TRDD-2HRA270Y: closes the start_sweeper window (restore + boot sweep, synchronous).
+                static AFTER_START_SWEEPER: std::sync::Once = std::sync::Once::new();
+                AFTER_START_SWEEPER.call_once(|| agentlens_core::rss_guard::log_boot_phase("after_start_sweeper", None));
                 if boot.restored_cards > 0 || boot.offsets_imported > 0 {
                     println!(
                         "{} alcore: resumed {} log tail offsets ({} invalid/rotated → cold read); restored {} session cards",
@@ -337,12 +429,13 @@ fn main() {
                 }
                 let s = boot.sweep;
                 println!(
-                    "{} alcore: log scan files={} changed={} parsed={} cards={} elapsed_ms={} threads={}",
+                    "{} alcore: log scan files={} changed={} parsed={} cards={} flushes={} elapsed_ms={} threads={}",
                     agentlens_core::log_ts(),
                     s.files,
                     s.changed,
                     s.parsed,
                     s.cards,
+                    s.flushes,
                     s.elapsed_ms,
                     rayon::current_num_threads()
                 );
@@ -375,17 +468,30 @@ fn main() {
         }
     }
 
-    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
-        eprintln!("{} alcore: runtime: {e}", agentlens_core::log_ts());
-        exit(1);
-    });
+    // TRDD-YH822LDI: `Runtime::new()` ran one worker per core (14 here) and up to 512 blocking
+    // threads. Workers now follow the core cap. Blocking threads mostly wait rather than burn CPU,
+    // so the cap does not size them: a pool of 4 can starve the span and account flushes.
+    // TRDD-2HRA270Y: splits the unmeasured main window: boot_start .. before_core_open (args, pid lock, key)
+    // | CoreState::open | after_core_open .. before_runtimes | before_runtimes .. after_serve_ui.
+    static BEFORE_RUNTIMES: std::sync::Once = std::sync::Once::new();
+    BEFORE_RUNTIMES.call_once(|| agentlens_core::rss_guard::log_boot_phase("before_runtimes", None));
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(cores)
+        .max_blocking_threads(64)
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| {
+            eprintln!("{} alcore: runtime: {e}", agentlens_core::log_ts());
+            exit(1);
+        });
     // TRDD-RVKQDLRD: a SECOND runtime for the chores, every thread (workers AND its blocking pool)
     // at background QoS. macOS QoS is per-thread and tokio reuses blocking threads across tasks,
     // so the only clean split from the request-serving runtime above is a separate runtime.
-    // Small on purpose (2 workers, 4 blocking): chores must not out-run the user's apps.
+    // Small on purpose (half the core cap for workers, the whole cap for blocking threads,
+    // TRDD-YH822LDI): chores must not out-run the apps the user is running.
     let bg_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
+        .worker_threads((cores / 2).max(1))
+        .max_blocking_threads(cores)
         .thread_name("alcore-bg")
         .on_thread_start(agentlens_core::bg_qos::set_background_qos)
         .enable_all()
@@ -432,10 +538,32 @@ fn main() {
     let serve_ui = agentlens_core::ui::serve_ui(ui_addr, state.clone(), hub.clone(), |bound| {
         println!("{} alcore: UI/API listening on http://{bound}", agentlens_core::log_ts());
     });
+    // TRDD-2HRA270Y: closes the window opened by `before_runtimes`: both runtimes, the chores boot
+    // (`spawn_all`), serve_otlp, the push/burn/summary spawns and the construction of the serve_ui future. The
+    // listener only binds once block_on runs, so this is NOT a reading at "UI is serving".
+    static AFTER_SERVE_UI: std::sync::Once = std::sync::Once::new();
+    AFTER_SERVE_UI.call_once(|| agentlens_core::rss_guard::log_boot_phase("after_serve_ui", None));
     let mcp_addr: std::net::SocketAddr = format!("{bind}:{mcp_port}").parse().unwrap_or_else(|_| usage("bad bind/mcp-port"));
     let serve_mcp = agentlens_core::ui::serve_mcp(mcp_addr, state.clone(), hub, |bound| {
         println!("{} alcore: MCP listening on http://{bound}/mcp", agentlens_core::log_ts());
     });
+    // TEST KNOB (--panic-after-ready): reproduces the zombie PRECONDITION, a panic while holding the state
+    // lock. It waits for the UI listener, which binds only once block_on runs, and never gives up (the test
+    // deadline bounds it). With the hook installed the lock cannot poison: _exit runs before the unwind drops
+    // the guard. The zombie itself appears only when the hook is removed (the mutation check).
+    if panic_after_ready {
+        let trigger_state = state.clone();
+        std::thread::Builder::new()
+            .name("panic-trigger".to_owned())
+            .spawn(move || {
+                while std::net::TcpStream::connect(ui_addr).is_err() {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let _guard = trigger_state.lock_timed();
+                panic!("alcore: --panic-after-ready test trigger");
+            })
+            .expect("panic-trigger thread spawns");
+    }
     rt.block_on(async move {
         tokio::select! {
             r = serve => {
@@ -522,10 +650,6 @@ fn main() {
                 stop_timeout.as_millis()
             );
         }
-        // `flush_with_deadline` recovers a poisoned mutex via `into_inner()` and returns
-        // `Flushed` instead — this arm exists only for the enum's API completeness (see
-        // `shutdown::Outcome::Poisoned`'s doc comment for why nothing constructs it today).
-        agentlens_core::shutdown::Outcome::Poisoned => {}
     }
 
     if let Some(h) = sweeper {

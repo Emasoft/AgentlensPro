@@ -1,7 +1,10 @@
 import * as assert from 'assert'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import { judge, scanSupervision, gateIsRegistered, contextEvent, UNREVIEWED_ALARM } from '../cli/reviewSupervisor'
 import { commandWriteReason } from '../cli/reviewGateTriggers'
-import { NO_REVIEW_SENTINEL } from '../cli/reviewGate'
+import { NO_REVIEW_SENTINEL, readCurrentTurn } from '../cli/reviewGate'
 import { DELEGATE_DENY_REASON } from '../cli/delegateGate'
 
 // The supervisor's whole purpose is to be the check that STILL WORKS when the review gate does not,
@@ -189,14 +192,14 @@ suite('reviewSupervisor — judgement', () => {
     assert.ok(/UNVERIFIED/.test(v.message))
   })
 
-  // Its own review caught this: the scan reads a bounded TAIL, so a session-wide claim can be false.
+  // The scan reads only the current turn (readCurrentTurn), so a claim about the whole session would be false.
   test('messages never claim to describe the whole session', () => {
     const msgs = [
       judge({ work: 9, forks: 1, unreviewed: 4 }, true, true).message,
       judge({ work: 2, forks: 0, unreviewed: 2 }, true, true).message,
       judge({ work: 5, forks: 3, unreviewed: 0 }, true, true).message,
     ]
-    for (const m of msgs) assert.ok(!/this session/i.test(m), `claims session-wide truth from a tail scan: ${m}`)
+    for (const m of msgs) assert.ok(!/this session/i.test(m), `claims session-wide truth from a per-turn scan: ${m}`)
   })
 })
 
@@ -254,4 +257,65 @@ suite('reviewSupervisor — a delegate-gate-denied edit is not work (TRDD-PNB9FN
     const bash = { type: 'tool_use', id: 't3', name: 'Bash', input: { command: 'sed -i s/a/b/ /proj/src/a.ts' } }
     assert.deepStrictEqual(scanSupervision([assistant([bash]), result('t3', true)], CWD), { work: 1, forks: 0, unreviewed: 1 })
   })
+
+
+  // ── The supervisor reads the same window as the gate (QQ2XIIZ6) ─────────────────────────────────────
+  suite('reviewSupervisor — turn scope and the fork-only credit (QQ2XIIZ6)', () => {
+    const isolatedFork = { type: 'tool_use', name: 'Agent', input: { subagent_type: 'fork', isolation: 'worktree', prompt: 'ROLE: REVIEW\ndo it' } }
+    const turnStart = (text: string, turnIndex = 1): string => JSON.stringify({
+      type: 'user', isSidechain: false, message: { role: 'user', content: text }, turnOrigin: 'human', turnPosition: { promptIndex: turnIndex, turnIndex },
+    })
+    const stopFeedback = JSON.stringify({ type: 'user', isMeta: true, message: { role: 'user', content: 'Stop hook feedback: demanded a review' } })
+    const withFile = (lines: string[], run: (file: string) => void): void => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-turn-'))
+      try {
+        const file = path.join(dir, 'main.jsonl')
+        fs.writeFileSync(file, lines.join('\n') + '\n')
+        run(file)
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
+    test('an isolated REVIEW fork does not clear the backlog: the gate refuses to credit it, so the supervisor must not either', () => {
+      const s = scanSupervision([assistant([edit]), assistant([isolatedFork])], CWD)
+      assert.deepStrictEqual(s, { work: 1, forks: 0, unreviewed: 1 })
+    })
+
+    test('the same REVIEW fork without isolation clears the backlog', () => {
+      const s = scanSupervision([assistant([edit]), assistant([reviewFork])], CWD)
+      assert.deepStrictEqual(s, { work: 1, forks: 1, unreviewed: 0 })
+    })
+
+    test('an edit in an earlier turn is not a backlog for the turn that follows: the supervisor reads the current turn only', () => {
+      withFile([turnStart('edit it'), assistant([edit]), turnStart('what time is it', 2), assistant([{ type: 'text', text: 'noon' }])], (file) => {
+        const lines = readCurrentTurn(file)
+        assert.ok(lines !== null)
+        const s = scanSupervision(lines, CWD)
+        assert.deepStrictEqual(s, { work: 0, forks: 0, unreviewed: 0 })
+        assert.strictEqual(judge(s, true, true).level, 'ok')
+      })
+    })
+
+    test('an edit in the current turn, followed by the Stop-hook feedback, is still an unreviewed change', () => {
+      withFile([turnStart('edit it'), assistant([edit]), stopFeedback], (file) => {
+        const lines = readCurrentTurn(file)
+        assert.ok(lines !== null)
+        assert.deepStrictEqual(scanSupervision(lines, CWD), { work: 1, forks: 0, unreviewed: 1 })
+      })
+    })
+
+
+    test('UserPromptSubmit can run after the new prompt is written: the supervisor judges the last completed turn, which still has an unreviewed edit', () => {
+      withFile([turnStart('edit it'), assistant([edit]), turnStart('next question', 2)], (file) => {
+        const lines = readCurrentTurn(file, { skipUnstartedTurn: true })
+        assert.ok(lines !== null)
+        const s = scanSupervision(lines, CWD)
+        assert.deepStrictEqual(s, { work: 1, forks: 0, unreviewed: 1 })
+        assert.strictEqual(judge(s, true, true).level, 'warn')
+      })
+    })
+
+  })
+
 })

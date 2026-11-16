@@ -27,7 +27,7 @@
 //     and a cross-process lock so two callers cannot double-hit and then fail to escalate.
 
 import { execFileSync } from 'child_process'
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -54,6 +54,9 @@ export const TTL_MS = 600_000          // never refetch inside this window
 const BACKOFF_BASE_MS = 600_000        // first 429 (when the server names no Retry-After)...
 const BACKOFF_CAP_MS = 7_200_000       // ...doubling per CONSECUTIVE 429, capped at 2h
 const HTTP_TIMEOUT_MS = 8_000
+// WHY three timeouts: the lock holder awaits the usage fetch AND then fetchTokenIdentity, each bounded by HTTP_TIMEOUT_MS,
+// so a healthy holder can take two of them, plus parse and write time. A lock must not be reclaimed while its holder works.
+const LOCK_STALE_MS = HTTP_TIMEOUT_MS * 3
 
 /** One limit bucket as the endpoint reports it. Read `limits[]` rather than the named `five_hour` /
  *  `seven_day` fields: the payload already carries several unreleased buckets, and per-model
@@ -114,6 +117,11 @@ export interface SubscriptionUsage {
    *  to 5 minutes, and therefore changes which cache-write rate every main-conversation turn pays. */
   usageCreditsEnabled: boolean | null
   spendPercent: number | null
+  /** WHERE the reading came from. Absent on every reading the usage endpoint wrote. 'ratelimit-headers' marks a
+   *  reading built from the rate-limit headers of an owner-supplied long-lived key's message reply (src/longOAuthKeys.ts). */
+  source?: 'usage-endpoint' | 'ratelimit-headers'
+  /** Extra-usage (credits) state. Only the header reading sets it: null when the reading did not carry it. */
+  overage?: { status: string; disabledReason: string | null } | null
   note: string
 }
 
@@ -302,7 +310,13 @@ export function armCooldown(retryAfterSeconds: number | null, now = Date.now()):
   const delay = retryAfterSeconds && retryAfterSeconds > 0
     ? Math.max(retryAfterSeconds * 1000, 60_000)
     : Math.min(BACKOFF_BASE_MS * 2 ** (consecutive - 1), BACKOFF_CAP_MS)
-  try { fs.writeFileSync(cooldownPath(), JSON.stringify({ until: now + delay, consecutive })) } catch { /* best effort */ }
+  // WHY write-then-rename: readCooldown in another process must never see half a file, which would read as no cooldown.
+  // A crash between the write and the rename leaves one <file>.tmp-<pid> behind; nothing reads it, and nothing removes it.
+  try {
+    const tmp = `${cooldownPath()}.tmp-${process.pid}`
+    fs.writeFileSync(tmp, JSON.stringify({ until: now + delay, consecutive }))
+    fs.renameSync(tmp, cooldownPath())
+  } catch { /* best effort */ }
   return delay
 }
 
@@ -323,7 +337,9 @@ export function retryAfterSeconds(headers: Headers | null, now = Date.now()): nu
   if (ra) {
     if (/^\d+$/.test(ra)) return Number(ra)
     const t = Date.parse(ra)
-    if (!isNaN(t)) return Math.max(0, Math.round((t - now) / 1000))
+    // WHY Number.isNaN: the global isNaN coerces its argument, so a non-number would be tested by coercion. Every operand
+    // here is a number from Date.parse or getTime, so the strict check is the one that says what is meant.
+    if (!Number.isNaN(t)) return Math.max(0, Math.round((t - now) / 1000))
   }
   for (const key of ['anthropic-ratelimit-unified-reset', 'anthropic-ratelimit-unified-5h-reset',
                      'anthropic-ratelimit-requests-reset', 'anthropic-ratelimit-tokens-reset']) {
@@ -331,7 +347,7 @@ export function retryAfterSeconds(headers: Headers | null, now = Date.now()): nu
     if (!v) continue
     if (/^\d+$/.test(v)) { const s = Number(v) - Math.floor(now / 1000); if (s > 0) return s }
     const t = Date.parse(v)
-    if (!isNaN(t)) { const s = Math.round((t - now) / 1000); if (s > 0) return s }
+    if (!Number.isNaN(t)) { const s = Math.round((t - now) / 1000); if (s > 0) return s }
   }
   return null
 }
@@ -339,7 +355,7 @@ export function retryAfterSeconds(headers: Headers | null, now = Date.now()): nu
 function secsUntil(iso: string | null, now: number): number | null {
   if (!iso) return null
   const t = Date.parse(iso)
-  return isNaN(t) ? null : Math.round((t - now) / 1000)
+  return Number.isNaN(t) ? null : Math.round((t - now) / 1000)
 }
 
 /** A window's fill, whichever way the endpoint spelled it this time. Both are percentages (0-100). */
@@ -372,13 +388,13 @@ export function normalizeResetsAt(raw: unknown): string | null {
       n = Number(s)
     } else {
       const t = Date.parse(s)
-      return isNaN(t) ? null : s          // already a date string — keep it verbatim
+      return Number.isNaN(t) ? null : s          // already a date string — keep it verbatim
     }
   }
   if (n === null) return null
   const ms = n < 1e12 ? n * 1000 : n
   const d = new Date(ms)
-  return isNaN(d.getTime()) ? null : d.toISOString()
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
 }
 
 export function normalize(
@@ -568,7 +584,7 @@ export function staleReason(u: SubscriptionUsage, now: number): 'too-old' | 'win
   const rolled = u.limits.some(l => {
     if (l.resetsAt === null) return false
     const t = Date.parse(l.resetsAt)
-    return !isNaN(t) && t <= now
+    return !Number.isNaN(t) && t <= now
   })
   return rolled ? 'window-reset' : null
 }
@@ -654,17 +670,26 @@ export async function getSubscriptionUsage(
 
   // Cross-process guard. Two callers can both clear the cooldown check above before either fires;
   // without this they double-hit the endpoint and, reading the same consecutive-429 count, fail to
-  // escalate the back-off. `wx` is the atomic create-or-fail primitive; a stale lock older than the
-  // HTTP timeout is reclaimed so a crashed holder cannot wedge this forever.
+  // escalate the back-off. `wx` is the atomic create-or-fail primitive; a stale lock older than LOCK_STALE_MS is
+  // reclaimed so a crashed holder cannot wedge this forever.
+  // WHY a per-call nonce: the lock names its holder, so release unlinks only its own lock. Without it, a holder whose
+  // lock went stale and was reclaimed would unlink the reclaimer's fresh lock.
+  // Residual race, stated honestly: fs has no compare-and-swap. The window lies between the stat and the unlink by a waiter
+  // that saw a stale lock: in that gap another waiter can take the lock over, and the unlink then removes that fresh lock.
+  // Only waiters that saw the SAME stale lock can collide this way, and several waiters may share one. Before this change
+  // every waiter that saw a stale lock took it.
+  const nonce = `${process.pid}:${randomUUID()}`
   let held = false
   try {
-    fs.writeFileSync(lockPath(), String(process.pid), { flag: 'wx' })
+    fs.writeFileSync(lockPath(), nonce, { flag: 'wx' })
     held = true
   } catch {
-    try {
-      const age = now - fs.statSync(lockPath()).mtimeMs
-      if (age > HTTP_TIMEOUT_MS * 2) { fs.writeFileSync(lockPath(), String(process.pid)); held = true }
-    } catch { /* fall through */ }
+    let stale = false
+    try { stale = now - fs.statSync(lockPath()).mtimeMs > LOCK_STALE_MS } catch { /* vanished: not stale, the next call takes it */ }
+    if (stale) {
+      try { fs.unlinkSync(lockPath()) } catch { /* another waiter reclaimed it first */ }
+      try { fs.writeFileSync(lockPath(), nonce, { flag: 'wx' }); held = true } catch { /* another waiter won the create */ }
+    }
     if (!held) return serve(cached, 'lock_contended')
   }
   try {
@@ -704,7 +729,13 @@ export async function getSubscriptionUsage(
       const identity = await fetchTokenIdentity(token)
       const claimed = getCurrentAccount().email
       const usage = normalize(await res.json() as RawUsage, now, 'ok', now, currentFp, identity, claimed)
-      try { fs.writeFileSync(cachePath(), JSON.stringify(usage)) } catch { /* best effort */ }
+      // WHY write-then-rename: a concurrent readCache must never parse half a file, which would read as no cache at all.
+      // A crash between the write and the rename leaves one <file>.tmp-<pid> behind; nothing reads it, and nothing removes it.
+      try {
+        const tmp = `${cachePath()}.tmp-${process.pid}`
+        fs.writeFileSync(tmp, JSON.stringify(usage))
+        fs.renameSync(tmp, cachePath())
+      } catch { /* best effort */ }
       // The SAME reading, also filed under its own account. This is the only moment it can be kept:
       // the next fetch overwrites the line above, and a reading not archived here is gone forever.
       archiveAccountUsage(usage)
@@ -714,7 +745,8 @@ export async function getSubscriptionUsage(
   } catch {
     return serve(cached, 'http_error')
   } finally {
-    if (held) { try { fs.unlinkSync(lockPath()) } catch { /* already gone */ } }
+    // WHY the nonce check: a holder whose lock went stale and was reclaimed must not unlink the reclaimer's lock.
+    if (held) { try { if (fs.readFileSync(lockPath(), 'utf8') === nonce) fs.unlinkSync(lockPath()) } catch { /* already gone */ } }
   }
 }
 
@@ -745,7 +777,7 @@ function rolledNote(u: SubscriptionUsage): string {
   const rolled = u.limits.filter(l => {
     if (l.resetsAt === null) return false
     const t = Date.parse(l.resetsAt)
-    return !isNaN(t) && t <= Date.now()
+    return !Number.isNaN(t) && t <= Date.now()
   })
   if (rolled.length === 0) return ''
   const which = rolled.length === u.limits.length

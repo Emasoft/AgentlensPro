@@ -6,7 +6,7 @@ import * as path from 'path'
 import { spawn } from 'child_process'
 import { freePort } from './helpers/freePort'
 import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
-import { runSetup, runSetupCli, SetupOutcome } from '../cli/setup'
+import { NO_COMPOSITION_LINE_DETAIL, runSetup, runSetupCli, SetupOutcome } from '../cli/setup'
 import { GATE_CMD, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, REVIEW_CMD, SUPERVISOR_CMD } from '../cli/hookInstall'
 import { ownedTelemetryKeys } from '../telemetryConfig'
 
@@ -23,11 +23,13 @@ import { ownedTelemetryKeys } from '../telemetryConfig'
 // mocha run), reviveDaemonDetached() spawns a REAL `alcore serve` with `alcoreServeArgs()` called
 // with NO args — so it takes the fixture's `--data-dir` (from AGENTLENS_DATA_DIR, set below by
 // execRegisteredCommand) but the DEFAULT ports 3000/4316/4318, because that env carries no
-// UI_PORT/MCP_PORT/OTLP_PORT. Root-cause fix (not ours to make — non-test code): setup.ts
-// execRegisteredCommand (src/cli/setup.ts:286-299) should add `AGENTLENS_NO_REVIVE: '1'` to the
-// env it builds for the hook/gate/review execs — the self-test already owns the server's
-// lifecycle end-to-end, so a revive-on-failure during it is never wanted. Belt-and-suspenders
-// here: brake every revive the exec'd hook could ever trigger — it inherits `process.env` via
+// UI_PORT/MCP_PORT/OTLP_PORT. That missing port pin IS the product-side defect: execRegisteredCommand
+// pins the data dir but not the ports, so a revive it triggers binds the canonical ones. It is
+// non-test code and is tracked in TRDD-4EV3OJ19, not fixed here. An earlier version of this comment
+// recommended adding `AGENTLENS_NO_REVIVE: '1'` inside execRegisteredCommand instead; that
+// recommendation was REJECTED (TRDD-YGEV6QDD STATE) because the brake does not address the real
+// defect, the missing port pins. What this file does is test-side only: brake every revive the
+// exec'd hook could ever trigger — it inherits `process.env` via
 // execRegisteredCommand's spread (src/cli/setup.ts:287), which is how setting this IN-PROCESS
 // var reaches the child — scoped per-suite (never root-level: a root suiteSetup/suiteTeardown in
 // mocha's TDD ui attaches to the WHOLE RUN, leaking into every other test file) to just the
@@ -102,6 +104,26 @@ function stepOf(o: SetupOutcome, name: string) {
   return s
 }
 
+/** memory-check may SKIP with exactly "no composition line in server.log yet". WHY: since 0a9efdf7
+ *  (TRDD-RVKQDLRD) the boot composition pass runs at background QoS after the other boot chores, so on a
+ *  loaded machine its first line can land after setup's last step reads server.log, and the step maps that
+ *  to SKIP by design. Every other SKIP, and every other memory-check outcome, still fails. */
+function assertStepVerified(s: { step: string; verify: string; detail?: string }): void {
+  if (s.step === 'memory-check' && s.verify === 'SKIP' && s.detail === NO_COMPOSITION_LINE_DETAIL) return
+  assert.strictEqual(s.verify, 'PASS', `${s.step}: ${s.detail}`)
+}
+
+/** Polls server.log every 2 s for up to 120 s for the boot composition line. The SKIP above is honest only if
+ *  that pass does write its line later: a composition pass that never writes one must fail here, not pass. */
+async function awaitCompositionLine(logFile: string): Promise<void> {
+  const deadline = Date.now() + 120_000
+  for (;;) {
+    if (fs.existsSync(logFile) && fs.readFileSync(logFile, 'utf8').includes('alcore: composition:')) return
+    if (Date.now() >= deadline) assert.fail(`no 'alcore: composition:' line in ${logFile} within 120 s: the composition pass never wrote one (0a9efdf7, TRDD-RVKQDLRD)`)
+    await new Promise(resolve => setTimeout(resolve, 2_000))
+  }
+}
+
 /** Structural snapshot of a tree: sorted relative paths + content sha256 (mtime-free). */
 function treeSnapshot(root: string): string {
   const entries: string[] = []
@@ -156,11 +178,13 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
     f?.cleanup()
   })
 
-  test('first run converges a virgin HOME: every step verifies PASS, exit 0', () => {
+  test('first run converges a virgin HOME: every step verifies PASS, exit 0', async function () {
+    this.timeout(150_000)
     // The full install path — data, hooks, skill, otel, server, self-test — green in one run.
     assert.strictEqual(first.exitCode, 0, JSON.stringify(first.steps, null, 2))
-    for (const s of first.steps) assert.strictEqual(s.verify, 'PASS', `${s.step}: ${s.detail}`)
+    for (const s of first.steps) assertStepVerified(s)
     assert.ok(first.actions >= 4, `expected >=4 acting steps on a virgin HOME, got ${first.actions}`)
+    if (stepOf(first, 'memory-check').detail === NO_COMPOSITION_LINE_DETAIL) await awaitCompositionLine(path.join(f.dataDir, 'server.log'))
   })
 
   test('hooks land exactly once per lifecycle event as v2 command strings (independent re-parse)', () => {
@@ -201,7 +225,7 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
     // "already current" and act on nothing, while VERIFY still re-proves the state.
     assert.strictEqual(second.exitCode, 0, JSON.stringify(second.steps, null, 2))
     assert.strictEqual(second.actions, 0, JSON.stringify(second.steps, null, 2))
-    for (const s of second.steps) assert.strictEqual(s.verify, 'PASS', `${s.step}: ${s.detail}`)
+    for (const s of second.steps) assertStepVerified(s)
     assert.strictEqual(stepOf(second, 'server').action, 'none', 'the healthy server must not be restarted')
   })
 })

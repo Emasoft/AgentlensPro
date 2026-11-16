@@ -1,9 +1,9 @@
 ---
 trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
-column: testing
+column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-09-03T06:08:16+0200
+updated: 2026-10-16T11:16:40+0200
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -11,11 +11,12 @@ min-approval-requirement: none
 created-by: UTFVMVT8
 related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
 implementation-commits: [420e6bb9]
+status: tasked
 ---
 
 # The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T06:08:16+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03T06:08:16+0200 (see also the 2026-10-15 note under Notes and lessons learned: the save_cards full-corpus hold is gone since e3c3c388)
 
 **Owed post-deploy check DONE — PASS, but it closes no acceptance box.** `agentlenspro server
 stop` on pid 2074 (the new binary, 60+ min uptime) returned in **7s** (exit 0, well under the 15s
@@ -193,3 +194,10 @@ cooperative request path.
 ## Notes and lessons learned
 
 - Empty section on creation.
+2026-10-15 (TRDD-DA0GN1CS commit e3c3c388): the periodic save_cards no longer runs persist_records' whole-table DuckDB scan under the state lock; it copies the resident layer's Arc handles under a short lock and strips them off it. Long-holder analyses on this card that count the save's full-corpus hold must not count it after e3c3c388. The remaining corpus-scaled DuckDB query under the lock on the sweeper is demote_cold's window query (TRDD-KMF02UEX).
+2026-10-16: moved to todo by the board triage (row 32). The fix (420e6bb9) is on main and deployed; the post-deploy check passed on 2026-10-15. What remains is only the acceptance evidence: its three boxes need a 120 s synthetic state-lock holder (a test-only knob, never built) or a real starvation event. Do not redo the fix.
+2026-10-16: The approval-log reason for this move ('work stalled mid-way or never started') is inaccurate for this card.
+
+## Approval log
+
+- 2026-10-16T11:13:15+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 32

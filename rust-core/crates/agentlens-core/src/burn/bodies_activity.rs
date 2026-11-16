@@ -13,6 +13,10 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use crate::{CoreState, LockTimed};
 
 use crate::summarize::helpers::{find_session_id, js_slice, js_to_fixed_num, num};
 
@@ -216,11 +220,33 @@ impl BodiesActivityOptions {
     }
 }
 
-pub struct BodiesActivityTracker {
+/// What one directory scan found. Produced by `BodiesPoller::scan` (read-only), consumed by
+/// `BodiesActivity::merge` and then `BodiesPoller::commit`.
+#[derive(Default)]
+struct BodiesDelta {
+    /// False when the dir could not be listed — poll then does nothing at all (fail-open).
+    listed: bool,
+    /// Every listed name not yet in `seen` (request/response or not, stat ok or not): today's
+    /// poll inserts all of them into `seen`, so commit must too.
+    new_names: Vec<String>,
+    /// The whole live listing — drives the `seen` drift rebuild in commit.
+    listing: Vec<String>,
+    large_requests: Vec<LargeRequestEntry>,
+    responses: Vec<ResponseEntry>,
+    msg_session: Vec<(String, (String, f64))>,
+}
+
+/// The filesystem half: knows which names were already consumed. `scan` never mutates it.
+struct BodiesPoller {
     dir: PathBuf,
-    opts: BodiesActivityOptions,
     seen: HashSet<String>,
     seeded: bool,
+}
+
+/// The state half: the rings the report reads. Fed only by `merge`.
+struct BodiesActivity {
+    dir: PathBuf,
+    opts: BodiesActivityOptions,
     large_requests: Vec<LargeRequestEntry>,
     responses: Vec<ResponseEntry>,
     /// The previous_message_id chain: a request from session S carrying previous_message_id=m
@@ -230,29 +256,166 @@ pub struct BodiesActivityTracker {
     msg_session: IndexMap<String, (String, f64)>,
 }
 
+pub struct BodiesActivityTracker {
+    poller: Arc<Mutex<BodiesPoller>>,
+    activity: BodiesActivity,
+    /// True while a background scan owns the poller; the burn tick reads it to avoid piling up
+    /// spawns, and `bodiesScan.inProgress` reports it.
+    in_flight: Arc<AtomicBool>,
+    /// Merge time of the last applied scan (state-side, so a reader never locks the poller).
+    last_merge_ms: Option<f64>,
+    /// State-side copy of `BodiesPoller::seeded`, set at merge time for the same reason.
+    seeded: bool,
+}
+
 impl BodiesActivityTracker {
     pub fn new(dir: PathBuf, opts: BodiesActivityOptions) -> BodiesActivityTracker {
         BodiesActivityTracker {
-            dir,
-            opts: opts.clamped(),
-            seen: HashSet::new(),
+            poller: Arc::new(Mutex::new(BodiesPoller { dir: dir.clone(), seen: HashSet::new(), seeded: false })),
+            activity: BodiesActivity { dir, opts: opts.clamped(), large_requests: Vec::new(), responses: Vec::new(), msg_session: IndexMap::new() },
+            in_flight: Arc::new(AtomicBool::new(false)),
+            last_merge_ms: None,
             seeded: false,
-            large_requests: Vec::new(),
-            responses: Vec::new(),
-            msg_session: IndexMap::new(),
         }
     }
 
-    /// One incremental pass. A missing dir returns silently — report() says available:false.
+    /// One incremental pass, inline (scan, merge, commit). A missing dir returns silently —
+    /// report() says available:false.
+    ///
+    /// Test-only inline scan. Never call while holding the state lock (it takes the poller: reverse lock order, deadlocks against a background scan). Production uses run_bodies_scan.
+    #[doc(hidden)]
     pub fn poll(&mut self, now: f64) {
-        let Ok(rd) = std::fs::read_dir(&self.dir) else { return };
+        let mut poller = self.poller.lock().unwrap_or_else(|p| p.into_inner());
+        let mut d = poller.scan(now);
+        if !d.listed {
+            return;
+        }
+        // WHY this order: names enter `seen` only AFTER the merge succeeded, so a delta that is
+        // scanned but never merged is simply re-read by the next scan instead of being lost.
+        self.activity.merge(&mut d, now);
+        self.last_merge_ms = Some(now);
+        self.seeded = true;
+        poller.commit(d);
+    }
+
+    pub fn session_warm_since(&self, session: &str, since_ms: f64, warm_read_floor: f64) -> bool {
+        self.activity.session_warm_since(session, since_ms, warm_read_floor)
+    }
+
+    /// The BodiesActivityReport wire shape.
+    pub fn report(&mut self, now: f64) -> Value {
+        self.activity.report(now)
+    }
+
+    /// The `bodiesScan` block of `/api/burn-risk`: the scan runs in the background, so the
+    /// report says how fresh it is instead of polling.
+    pub fn scan_status(&self, now: f64) -> Value {
+        let mut m = Map::new();
+        m.insert("seeded".into(), Value::Bool(self.seeded));
+        m.insert("inProgress".into(), Value::Bool(self.in_flight.load(Ordering::Acquire)));
+        m.insert("lastMergeAgeMs".into(), self.last_merge_ms.map_or(Value::Null, |t| num(now - t)));
+        Value::Object(m)
+    }
+
+    /// The flag the burn tick checks (under its state lock) before starting a background scan.
+    pub fn in_flight_handle(&self) -> Arc<AtomicBool> {
+        self.in_flight.clone()
+    }
+}
+
+/// Clears `in_flight` on every exit path of a background scan, including a panic.
+struct ClearInFlight(Arc<AtomicBool>);
+
+impl Drop for ClearInFlight {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// One background scan of the bodies folder with NO state lock held during the filesystem work
+/// (the first pass after boot held it for 534-588 s). The burn tick starts this in a blocking
+/// task and never awaits it.
+pub fn run_bodies_scan(state: &Arc<Mutex<CoreState>>) {
+    let scan_now = crate::now_ms() as f64;
+    run_bodies_scan_with(state, scan_now, || crate::now_ms() as f64, &mut || {});
+}
+
+/// `run_bodies_scan` with injectable clocks and a hook `on_entry` called once per unseen name
+/// inside the scan (tests park the scan there).
+///
+/// Lock order: poller, then state. Nothing that holds the state lock touches the poller.
+///
+/// `merge_now` is read AFTER the scan on purpose: the rings are pruned against merge time (the
+/// wall clock when the findings land, as the old inline poll did after its scan), while the seed
+/// floor uses scan time, the moment the directory was listed. A slow first pass must not age
+/// its own findings out against a clock taken before it started.
+///
+/// A scan that never returns (a wedged volume) leaves in_flight true and the rings stale; bodiesScan.inProgress=true with a growing lastMergeAgeMs is how that shows.
+pub fn run_bodies_scan_with(state: &Arc<Mutex<CoreState>>, scan_now: f64, merge_now: impl FnOnce() -> f64, on_entry: &mut dyn FnMut()) {
+    let (poller, in_flight) = {
+        let st = state.lock_timed();
+        (st.burn.bodies.poller.clone(), st.burn.bodies.in_flight.clone())
+    };
+    if in_flight.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return;
+    }
+    let _clear = ClearInFlight(in_flight);
+    // A panic inside a previous scan poisons this mutex; that is safe to ignore because `scan`
+    // is `&self` and `seen` changes only in `commit`, so a poisoned poller is still consistent.
+    let mut poller = poller.lock().unwrap_or_else(|p| p.into_inner());
+    // TRDD-2HRA270Y: opens the burn bodies scan window (list + parse of the unseen body names), taken
+    // after the poller lock is held and before the scan reads the directory.
+    static BURN_SCAN_START: std::sync::Once = std::sync::Once::new();
+    BURN_SCAN_START.call_once(|| crate::rss_guard::log_boot_phase("burn_scan_start", None));
+    let t0 = std::time::Instant::now();
+    let mut d = poller.scan_with(scan_now, on_entry);
+    if !d.listed {
+        return;
+    }
+    let scan_ms = t0.elapsed().as_millis();
+    let new_names = d.new_names.len();
+    let t1 = std::time::Instant::now();
+    let merged_at = merge_now();
+    {
+        let mut st = state.lock_timed();
+        st.burn.bodies.activity.merge(&mut d, merged_at);
+        st.burn.bodies.last_merge_ms = Some(merged_at);
+        st.burn.bodies.seeded = true;
+    }
+    let merge_ms = t1.elapsed().as_millis();
+    // Names enter `seen` only after the merge landed, so a scan that dies before it is re-read.
+    poller.commit(d);
+    if scan_ms >= 1000 {
+        eprintln!("{} alcore: burn bodies scan {scan_ms} ms, merge {merge_ms} ms, new {new_names}", crate::log_ts());
+    }
+    // TRDD-2HRA270Y: taken after the scan, merge and commit, whether or not the line above printed (it
+    // prints only at >= 1000 ms); with `burn_scan_start` it splits the one burn bodies scan window. NOT reached on the
+    // `!d.listed` early return above (the scan listed nothing), so a later scan can pair this reading with an earlier
+    // `burn_scan_start`: a `burn_scan_start` with no `burn_scan_done` after it means that scan returned early.
+    static BURN_SCAN_DONE: std::sync::Once = std::sync::Once::new();
+    BURN_SCAN_DONE.call_once(|| crate::rss_guard::log_boot_phase("burn_scan_done", None));
+}
+
+impl BodiesPoller {
+    /// Read-only pass over the dir: lists, stats and parses every unseen name. `&self` on
+    /// purpose — marking names seen is `commit`'s job, after the merge.
+    fn scan(&self, scan_now: f64) -> BodiesDelta {
+        self.scan_with(scan_now, &mut || {})
+    }
+
+    /// `scan`, calling `on_entry` once per unseen name before it is read.
+    fn scan_with(&self, scan_now: f64, on_entry: &mut dyn FnMut()) -> BodiesDelta {
+        let mut d = BodiesDelta::default();
+        let Ok(rd) = std::fs::read_dir(&self.dir) else { return d };
+        d.listed = true;
         let names: Vec<String> = rd.flatten().filter_map(|e| e.file_name().to_str().map(str::to_owned)).collect();
-        let seed_floor = if self.seeded { 0.0 } else { now - SEED_LOOKBACK_MS };
+        let seed_floor = if self.seeded { 0.0 } else { scan_now - SEED_LOOKBACK_MS };
         for name in &names {
             if self.seen.contains(name) {
                 continue;
             }
-            self.seen.insert(name.clone());
+            on_entry();
+            d.new_names.push(name.clone());
             let is_req = name.ends_with(".request.json");
             let is_resp = name.ends_with(".response.json");
             if !is_req && !is_resp {
@@ -272,9 +435,9 @@ impl BodiesActivityTracker {
             if is_req {
                 if size >= ATTRIB_REQUEST_BYTES {
                     let (session_id, model, previous_message_id) = extract_request_attribution(&path, size);
-                    self.large_requests.push(LargeRequestEntry { t: mtime, bytes: size, huge: size > HUGE_REQUEST_BYTES, session_id: session_id.clone(), model });
+                    d.large_requests.push(LargeRequestEntry { t: mtime, bytes: size, huge: size > HUGE_REQUEST_BYTES, session_id: session_id.clone(), model });
                     if let (Some(sid), Some(pm)) = (session_id, previous_message_id) {
-                        self.msg_session.insert(pm, (sid, mtime));
+                        d.msg_session.push((pm, (sid, mtime)));
                     }
                 }
                 continue;
@@ -286,17 +449,35 @@ impl BodiesActivityTracker {
             if let Some(body) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
                 if let Some((model, cc, cr, id)) = extract_response_usage(&body) {
                     let (tier_1h, miss_reason) = extract_miss_diagnostics(&body);
-                    self.responses.push(ResponseEntry { t: mtime, model, cc, cr, id, tier_1h, miss_reason });
+                    d.responses.push(ResponseEntry { t: mtime, model, cc, cr, id, tier_1h, miss_reason });
                 }
             }
         }
+        d.listing = names;
+        d
+    }
+
+    /// Mark the delta's names consumed. Call only after the delta was merged.
+    fn commit(&mut self, d: BodiesDelta) {
+        self.seen.extend(d.new_names);
         self.seeded = true;
-        self.prune(now);
         // The hourly archiver removes old files; rebuild `seen` from the live listing when it
         // drifts well past the dir's contents so memory stays bounded.
-        if self.seen.len() > names.len() * 2 + 512 {
-            self.seen = names.into_iter().collect();
+        if self.seen.len() > d.listing.len() * 2 + 512 {
+            self.seen = d.listing.into_iter().collect();
         }
+    }
+}
+
+impl BodiesActivity {
+    /// Apply a scan's findings in scan order, then age the rings out against `merge_now`.
+    fn merge(&mut self, d: &mut BodiesDelta, merge_now: f64) {
+        self.large_requests.extend(std::mem::take(&mut d.large_requests));
+        self.responses.extend(std::mem::take(&mut d.responses));
+        for (pm, v) in std::mem::take(&mut d.msg_session) {
+            self.msg_session.insert(pm, v);
+        }
+        self.prune(merge_now);
     }
 
     fn prune(&mut self, now: f64) {
@@ -516,5 +697,166 @@ impl BodiesActivityTracker {
         out.insert("thrash".into(), Value::Object(thrash));
         out.insert("premium".into(), Value::Object(premium));
         Value::Object(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    const SID: &str = "11111111-aaaa-bbbb-cccc-000000000001";
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("bodies-activity-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn now_ms() -> f64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f64
+    }
+
+    /// A fat request: model in the first 2KB, session id + previous message id in the last 4KB.
+    fn write_request(dir: &Path, name: &str, prev: &str) {
+        let body = format!(
+            "{{\"model\":\"claude-opus-5\",\"pad\":\"{}\",\"metadata\":{{\"user_id\":\"{{\\\"session_id\\\":\\\"{SID}\\\"}}\"}},\"diagnostics\":{{\"previous_message_id\":\"{prev}\"}}}}",
+            "x".repeat(ATTRIB_REQUEST_BYTES as usize + 100)
+        );
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    fn write_response(dir: &Path, name: &str, id: &str, cc: u64, cr: u64) {
+        let body = serde_json::json!({
+            "id": id, "model": "claude-opus-5",
+            "usage": { "cache_creation_input_tokens": cc, "cache_read_input_tokens": cr,
+                       "cache_creation": { "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": cc } },
+            "diagnostics": { "cache_miss_reason": { "type": "previous_message_not_found" } }
+        });
+        std::fs::write(dir.join(name), body.to_string()).unwrap();
+    }
+
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn seed_first_batch(dir: &Path) {
+        write_request(dir, "r1.request.json", "msg_w"); // its response lands in poll 2
+        write_request(dir, "r2.request.json", "msg_a");
+        write_response(dir, "a.response.json", "msg_a", 150_000, 100);
+        std::fs::write(dir.join("notes.txt"), "noise").unwrap();
+        std::fs::write(dir.join("small.request.json"), "{}").unwrap();
+    }
+
+    /// Prune is judged at merge time, not scan time: a delta scanned 11 minutes before its merge drops its large request but keeps its response.
+    #[test]
+    fn merge_time_not_scan_time_decides_prune() {
+        let dir = temp_dir("c");
+        let _guard = TempDir(dir.clone());
+        seed_first_batch(&dir);
+        let t1 = now_ms();
+        let t2 = t1 + 11.0 * 60_000.0; // past the 10-min large ring, inside the 15-min response ring
+        let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
+        let mut d = new.poller.lock().unwrap().scan(t1);
+        new.activity.merge(&mut d, t2);
+        new.poller.lock().unwrap().commit(d);
+        assert!(new.activity.large_requests.is_empty(), "pruned against merge time");
+        assert_eq!(new.activity.responses.len(), 1);
+    }
+
+    /// A scanned but never merged or committed delta leaves its names unseen, so the next scan re-reads the same files.
+    #[test]
+    fn unmerged_delta_is_rescanned() {
+        let dir = temp_dir("d");
+        let _guard = TempDir(dir.clone());
+        write_response(&dir, "a.response.json", "msg_a", 150_000, 100);
+        let t = now_ms();
+        let p = BodiesPoller { dir: dir.clone(), seen: HashSet::new(), seeded: false };
+        drop(p.scan(t)); // scanned, never merged or committed
+        assert!(p.seen.is_empty(), "scan must not mark names seen");
+        let again = p.scan(t);
+        assert_eq!(again.new_names, vec!["a.response.json".to_owned()]);
+        assert_eq!(again.responses.len(), 1);
+    }
+
+    /// A missing dir consumes no seed pass, the seed window skips a 20-minute-old response, and a later poll never resurrects a seen file.
+    #[test]
+    fn seed_window_and_missing_dir_and_no_resurrection() {
+        let base = temp_dir("e");
+        let _guard = TempDir(base.clone());
+        let dir = base.join("later");
+        let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
+
+        // (a) the dir does not exist yet: nothing is listed, so the seed pass must not be spent
+        let t0 = now_ms();
+        new.poll(t0);
+        assert!(!new.poller.lock().unwrap().seeded, "a missing dir must not consume the seed pass");
+
+        // (b) the dir appears with one fresh and one 20-minute-old response
+        std::fs::create_dir_all(&dir).unwrap();
+        write_response(&dir, "fresh1.response.json", "msg_f1", 150_000, 100);
+        write_response(&dir, "old.response.json", "msg_old", 150_000, 100);
+        let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(1200);
+        std::fs::File::options().write(true).open(dir.join("old.response.json")).unwrap().set_modified(stale).unwrap();
+        // The floor is asserted at the delta: SEED_LOOKBACK_MS equals the response ring window, so prune hides it in the rings; the floor only saves first-pass parse work.
+        let tf = now_ms();
+        let unseeded = BodiesPoller { dir: dir.clone(), seen: HashSet::new(), seeded: false }.scan(tf);
+        let ids: Vec<_> = unseeded.responses.iter().map(|r| r.id.as_deref()).collect();
+        assert!(ids.contains(&Some("msg_f1")) && !ids.contains(&Some("msg_old")), "unseeded scan must skip the old response, got {ids:?}");
+        let seeded = BodiesPoller { dir: dir.clone(), seen: HashSet::new(), seeded: true }.scan(tf);
+        let ids: Vec<_> = seeded.responses.iter().map(|r| r.id.as_deref()).collect();
+        assert!(ids.contains(&Some("msg_old")), "seeded scan must not apply the floor, got {ids:?}");
+        let t1 = now_ms();
+        new.poll(t1);
+        assert!(new.poller.lock().unwrap().seeded);
+        assert_eq!(new.activity.responses.len(), 1, "only the fresh response is inside the seed window");
+        assert!(new.activity.responses.iter().all(|r| r.id.as_deref() != Some("msg_old")), "old response must be skipped by the seed floor");
+
+        // (c) a later poll must not resurrect the old file: it is already in `seen`
+        write_response(&dir, "fresh2.response.json", "msg_f2", 150_000, 100);
+        let t2 = now_ms();
+        new.poll(t2);
+        assert_eq!(new.activity.responses.len(), 2);
+        assert!(new.activity.responses.iter().all(|r| r.id.as_deref() != Some("msg_old")), "old response stays absent once seen");
+    }
+
+    /// A request seen in one scan and its response seen in a LATER scan are joined by the persisted previous_message_id chain: report() names the request's session, model and sizes in topSource, suspects and missReasons.
+    #[test]
+    fn response_in_later_scan_is_attributed_to_earlier_request() {
+        let dir = temp_dir("f");
+        let _guard = TempDir(dir.clone());
+        write_request(&dir, "q.request.json", "msg_x");
+        let bytes = std::fs::metadata(dir.join("q.request.json")).unwrap().len();
+        let mut new = BodiesActivityTracker::new(dir.clone(), BodiesActivityOptions::default());
+
+        new.poll(now_ms()); // scan 1: only the request exists
+        assert_eq!(new.activity.large_requests.len(), 1);
+        assert!(new.activity.responses.is_empty());
+
+        write_response(&dir, "p.response.json", "msg_x", 150_000, 100);
+        new.poll(now_ms()); // scan 2: only the response is new
+        assert_eq!(new.activity.large_requests.len(), 1);
+        assert_eq!(new.activity.responses.len(), 1);
+
+        let report = new.report(now_ms() + 1000.0);
+        let expected = serde_json::json!({
+            "available": true,
+            "hugeRequests90s": { "count": 0, "bytes": 0, "senders": [] },
+            "thrash": {
+                "active": false, "count": 1, "rebilledTokens": 150_000, "model": "claude-opus-5", "windowMs": 300_000,
+                "suspects": [ { "session": SID, "model": "claude-opus-5", "count": 1, "bytes": bytes } ],
+                "topSource": { "session": SID, "count": 1, "rebilledTokens": 150_000 },
+                "unattributed": { "count": 0, "rebilledTokens": 0 },
+                "coldStartSessions": 1, "coldStartRebilledTokens": 150_000,
+                "subagentWrites": { "count": 0, "rebilledTokens": 0 },
+                "missReasons": { "previous_message_not_found": 1 }
+            },
+            "premium": { "share": 1, "sampled": 1, "lastModel": "claude-opus-5" }
+        });
+        assert_eq!(report, expected);
     }
 }

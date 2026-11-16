@@ -369,14 +369,14 @@ struct StoreWindow {
 
 /// scan_window's store half (QSFYIHUO step 3): responses and request facts from ONE windowed SQL
 /// SELECT each over the api_call parts — the connection discipline of step-1's load_store_facts
-/// (cache_event_log.rs): in-memory connection, 256 MiB, threads=2, `ts_ms >= since AND ts_ms <= until`.
+/// (cache_event_log.rs): in-memory connection, 256 MiB, threads per `crate::cores::duckdb_threads()` (TRDD-YH822LDI), `ts_ms >= since AND ts_ms <= until`.
 /// Returns None when the store has no parts or the query fails (A3d: fail-open — the caller then
 /// walks the bodies, the pre-step-3 behavior). Rows come back ORDERED BY ts_ms (A3c) because the
 /// attribution table and fingerprint-family tallies are insertion-ordered.
 fn load_store_window(store_dir: &Path, since_ms: f64, until_ms: f64) -> Option<StoreWindow> {
     let parts = agentlens_store::parquet_scan(store_dir, agentlens_store::API_CALLS_DIR)?;
     let con = Connection::open_in_memory().ok()?;
-    if con.execute_batch("SET memory_limit='256MiB'; SET threads=2;").is_err() {
+    if con.execute_batch(&format!("SET memory_limit='256MiB'; SET threads={};", crate::cores::duckdb_threads())).is_err() {
         return None;
     }
     let window = format!("ts_ms >= {} AND ts_ms <= {}", since_ms as i64, until_ms as i64);

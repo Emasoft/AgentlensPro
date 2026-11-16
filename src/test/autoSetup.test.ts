@@ -9,16 +9,18 @@ import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, detectDrift, forceInstallTelemetry, maybeAutoSetup } from '../cli/autoSetup'
+import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, autoSetupOnServerStart, claudeCodePresent, detectDrift, forceInstallTelemetry, maybeAutoSetup } from '../cli/autoSetup'
 import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runEnableCli } from '../cli/disableCli'
-import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
-import { AGENT_NAMES, SKILL_NAMES, installAgents, installHooks, installSkills } from '../cli/hookInstall'
-import { agentlensDisabled, armKillSwitch, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
-import { cliMain } from '../cli/main'
-import { Ctx, REPAIR_STEPS, resolveCtx, runSetup } from '../cli/setup'
+import { FOREIGN_REASON, HOOK_PATH_VERBS, disabledNotice, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
+import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
+import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, overrideKillSwitchEnv } from '../cli/killSwitch'
+import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
+import { DISPATCHED_VERBS, HOT_PATH_BUDGET_MS, cliMain } from '../cli/main'
+import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
 import { freePort } from './helpers/freePort'
+import { startMcpStub } from './helpers/mcpStub'
 import { RULE_NAMES, disableAgentlensSurfaces, enableAgentlensSurfaces } from '../cli/surfaces'
 import { TelemetryVerdictRow, ensureTelemetryConfig, telemetryVerdict } from '../telemetryConfig'
 
@@ -170,6 +172,54 @@ suite('autoSetup — every launch checks presence + drift and repairs only what 
     assert.ok(l.out.some(x => x.includes(`${SKILL_NAMES[0]} stale`)))
   })
 
+  // installSkill deliberately leaves unshipped files in place, and the drift check used to hash EVERY file in the
+  // installed dir: one extra file made installed ≠ shipped forever, so every launch re-ran the skill repair,
+  // rewrote nothing, failed verify and printed "could not restore skills". Only shipped paths are compared now.
+  test('an unshipped extra file in an installed skill is NOT drift: no repair, silent, and setup verifies PASS', async () => {
+    const f = s.f()
+    const extra = path.join(f.skillsDir, SKILL_NAMES[0], 'my-own-note.md')
+    fs.writeFileSync(extra, 'user content\n')
+    assert.deepStrictEqual(detectDrift(f.ctx).drifts, [], 'an extra file must not read as drift')
+    const r = recorder(['skill']); const l = lines()
+    assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: l.say }), null)
+    assert.deepStrictEqual(r.calls, [])
+    assert.deepStrictEqual(l.out, [])
+    const { result } = await REPAIR_STEPS.skill.run(f.ctx)
+    assert.strictEqual(result.verify, 'PASS', `setup's skill step must verify with an extra present: ${JSON.stringify(result)}`)
+    assert.strictEqual(result.action, 'none')
+    assert.ok(fs.existsSync(extra), 'the extra file is never deleted')
+  })
+
+  test('a CHANGED shipped payload file (not SKILL.md) is drift and is repaired', async () => {
+    const f = s.f()
+    const name = 'agentlenspro-scan-and-fix'
+    const rel = skillFiles(path.join(REPO_ROOT, 'skills', name)).find(x => x !== 'SKILL.md')
+    assert.ok(rel, 'the fixture skill must ship a payload file beyond SKILL.md')
+    const victim = path.join(f.skillsDir, name, rel as string)
+    fs.writeFileSync(victim, 'tampered\n')
+    const r = recorder(['skill']); const l = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, ['skill'])
+    assert.ok(l.out.some(x => x.includes(`${name} stale`)), l.out.join('|'))
+    assert.ok(fs.readFileSync(victim).equals(fs.readFileSync(path.join(REPO_ROOT, 'skills', name, rel as string))), 'the real step restored the shipped bytes')
+    assert.deepStrictEqual(detectDrift(f.ctx).drifts, [])
+  })
+
+  test('a DELETED shipped payload file (not SKILL.md) is drift and is repaired', async () => {
+    const f = s.f()
+    const name = 'agentlenspro-scan-and-fix'
+    const rel = skillFiles(path.join(REPO_ROOT, 'skills', name)).find(x => x !== 'SKILL.md')
+    assert.ok(rel, 'the fixture skill must ship a payload file beyond SKILL.md')
+    const victim = path.join(f.skillsDir, name, rel as string)
+    fs.rmSync(victim)
+    const r = recorder(['skill']); const l = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, ['skill'])
+    assert.ok(l.out.some(x => x.includes(`${name} stale`)), l.out.join('|'))
+    assert.ok(fs.existsSync(victim), 'the real step put the shipped file back')
+    assert.deepStrictEqual(detectDrift(f.ctx).drifts, [])
+  })
+
   test('a missing agent restores ONLY the skill step (it owns skills + agents)', async () => {
     const f = s.f()
     fs.rmSync(path.join(f.agentsDir, `${AGENT_NAMES[0]}.md`))
@@ -197,6 +247,26 @@ suite('autoSetup — every launch checks presence + drift and repairs only what 
     assert.deepStrictEqual(r.calls, ['hooks'])
   })
 
+  // The two drift checks once iterated the HOOK/GATE/REVIEW events only, so a settings.json with NO
+  // UserPromptSubmit key read as "converged" and the supervisor's registration was never restored —
+  // not by a launch, not even by `setup` (whose verify then failed with nothing able to repair it).
+  // Both checks now read hookInstall's INSTALLED_EVENTS, the installer's own list.
+  test('the supervisor UserPromptSubmit registration removed entirely is detected and repaired', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    const hooks = cfg.hooks as Record<string, unknown>
+    assert.ok(JSON.stringify(hooks.UserPromptSubmit ?? null).includes(SUPERVISOR_CMD), 'baseline: the installer registered the supervisor on UserPromptSubmit')
+    delete hooks.UserPromptSubmit
+    writeSettings(f, cfg)
+    assert.strictEqual(hooksConverged(readSettings(f)), false, 'the drift check must see the missing event')
+    assert.ok(hookDriftList(f.settingsPath).some(d => d.event === 'UserPromptSubmit'), 'the --json drift list must name it')
+    const r = recorder(['hooks'])
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r.repair, stderr: lines().say })
+    assert.deepStrictEqual(r.calls, ['hooks'])
+    const after = readSettings(f).hooks as Record<string, unknown>
+    assert.ok(JSON.stringify(after.UserPromptSubmit ?? null).includes(SUPERVISOR_CMD), 'the repair put the supervisor back on UserPromptSubmit')
+    assert.strictEqual(hooksConverged(readSettings(f)), true)
+  })
   test('a missing telemetry key AND a wrong local endpoint are restored; every OTHER key is preserved and a backup is made', async () => {
     const f = s.f()
     const cfg = readSettings(f)
@@ -266,6 +336,13 @@ suite('autoSetup — every launch checks presence + drift and repairs only what 
     }
   })
 
+  // TRDD-CS2W7E77, gate run B2: cache-expired, a hot-path read verb polled in loops, was not excluded from the
+  // launch self-heal, so in an empty HOME it ran a full first-run setup inside its 1.5 s latency budget. The
+  // self-heal is unbounded work no hot path can afford, so EVERY hot-path verb must be excluded from it.
+  test('every hot-path verb (HOT_PATH_BUDGET_MS) is excluded from the launch self-heal', () => {
+    const missing = Object.keys(HOT_PATH_BUDGET_MS).filter(v => !AUTOSETUP_EXCLUDED_VERBS.has(v))
+    assert.deepStrictEqual(missing, [], `hot-path verb(s) that would run the first-run setup: ${missing.join(', ')}`)
+  })
   test('AGENTLENS_NO_AUTOSETUP=1 never repairs', async () => {
     const f = s.f()
     fs.rmSync(path.join(f.skillsDir, SKILL_NAMES[0]), { recursive: true })
@@ -636,7 +713,9 @@ suite('enable — the telemetry verdict comes first, then the restore, then the 
     let code: number
     try { code = await runEnableCli(false, { ctx: f.ctx, repair: r.repair, stderr: lines().say }) } finally { console.log = log }
     assert.strictEqual(code, EXIT.OK)
-    assert.deepStrictEqual(r.calls, ['otel-env', 'skill'], 'the telemetry repair is the FIRST action')
+    // The telemetry repair is the FIRST action; the trailing one is the converge after the lift, which writes the
+    // raw-body key the pre-lift converge held absent (TRDD-RBBEX59R: every lift is followed by one telemetry converge).
+    assert.deepStrictEqual(r.calls, ['otel-env', 'skill', 'otel-env'], 'the telemetry repair is the FIRST action')
     assert.ok(!agentlensDisabled(), 'switch disarmed')
     assert.strictEqual(readSettings(f).env!.OTEL_LOGS_EXPORT_INTERVAL, '5000')
     for (const name of SKILL_NAMES) assert.ok(fs.existsSync(path.join(f.skillsDir, name, 'SKILL.md')), `${name} restored`)
@@ -876,6 +955,317 @@ suite('server verbs under DISABLED hit serverControl\'s own terminal handling, n
   })
 })
 
+// TRDD-YL3EWT6N item 3: `server|daemon start|restart` run the install check too — they are excluded from the
+// per-launch check (maybeAutoSetup) because hooks reach them, so before this a server start never repaired anything.
+// Real files in a temp HOME; only the repair runner is injected (it runs the REAL step where a test restores).
+suite('server start — the install heals itself when the server is started (TRDD-YL3EWT6N)', () => {
+  const s = fixtureSuite(true)
+  const skill0 = (f: Fx): string => path.join(f.skillsDir, SKILL_NAMES[0])
+
+  test('server start/restart and daemon start/restart restore a missing skill; stop, status and revive never run the check', async () => {
+    const f = s.f()
+    for (const argv of [['server', 'start'], ['server', 'restart'], ['daemon', 'start', '--supervise'], ['daemon', 'restart']]) {
+      fs.rmSync(skill0(f), { recursive: true })
+      const r = recorder(['skill']); const l = lines()
+      await autoSetupOnServerStart(argv, { ctx: f.ctx, repair: r.repair, stderr: l.say })
+      assert.deepStrictEqual(r.calls, ['skill'], argv.join(' '))
+      assert.ok(fs.existsSync(path.join(skill0(f), 'SKILL.md')), `${argv.join(' ')} must restore the skill`)
+      assert.ok(l.out.some(x => x.includes('restored skills')), l.out.join('|'))
+    }
+    fs.rmSync(skill0(f), { recursive: true })
+    for (const argv of [['server', 'stop'], ['server', 'status'], ['server', 'revive'], ['daemon', 'status'], ['daemon'], ['budget']]) {
+      const r = recorder(['skill']); const l = lines()
+      await autoSetupOnServerStart(argv, { ctx: f.ctx, repair: r.repair, stderr: l.say })
+      assert.deepStrictEqual(r.calls, [], `${argv.join(' ')} must not run the check (revive is the hook path)`)
+      assert.deepStrictEqual(l.out, [])
+    }
+  })
+
+  test('AGENTLENS_NO_AUTOSETUP=1: a server start does not repair', async () => {
+    const f = s.f()
+    fs.rmSync(skill0(f), { recursive: true })
+    const r = recorder(['skill']); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say, env: { AGENTLENS_NO_AUTOSETUP: '1' } })
+    assert.deepStrictEqual(r.calls, [])
+    assert.deepStrictEqual(l.out, [])
+    assert.ok(!fs.existsSync(skill0(f)), 'nothing restored')
+  })
+
+  test('a fresh lock held by another process: the server start skips the repair AND says so in one line', async () => {
+    const f = s.f()
+    fs.rmSync(skill0(f), { recursive: true })
+    fs.writeFileSync(path.join(f.dataDir, '.autosetup.lock'), '')
+    const r = recorder(['skill']); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, [])
+    assert.deepStrictEqual(l.out, ['agentlenspro: install check skipped: another agentlenspro is repairing'])
+    // The launch path keeps its silent skip — only the server trigger reports it.
+    const l2 = lines()
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: recorder().repair, stderr: l2.say })
+    assert.deepStrictEqual(l2.out, [], 'a launch still skips silently')
+  })
+
+  test('Claude Code absent (no ~/.claude, no `claude` on PATH): skipped and nothing created; a `claude` on PATH alone counts as present', async () => {
+    const e = makeFx()
+    try {
+      const binOnly = path.join(e.home, 'bin')
+      const ctx: Ctx = { ...e.ctx, pathEnv: binOnly }
+      assert.strictEqual(claudeCodePresent(ctx), false)
+      const r = recorder(); const l = lines()
+      await autoSetupOnServerStart(['server', 'start'], { ctx, repair: r.repair, stderr: l.say, fullSetup: async () => { throw new Error('full setup must not run') } })
+      assert.deepStrictEqual(r.calls, [])
+      assert.deepStrictEqual(l.out, [])
+      assert.ok(!fs.existsSync(path.join(e.home, '.claude')), 'no ~/.claude tree is created where Claude Code is absent')
+      fs.writeFileSync(path.join(binOnly, 'claude'), '#!/bin/sh\nexit 0\n')
+      fs.chmodSync(path.join(binOnly, 'claude'), 0o755)
+      assert.strictEqual(claudeCodePresent(ctx), true)
+      // fullSetup is injected so a regression onto the launch-only first-run path is a FAILED assert, never a real
+      // runSetup — which would start a real collector on the fixture's data dir.
+      let full = 0
+      const r2 = recorder()
+      await autoSetupOnServerStart(['server', 'start'], { ctx, repair: r2.repair, stderr: lines().say, fullSetup: async () => { full++; return true } })
+      assert.strictEqual(full, 0, 'a server start never runs the first-run full setup (it starts a server)')
+      assert.deepStrictEqual(r2.calls, ['otel-env', 'hooks', 'skill'], 'nothing installed + Claude present: the per-piece repairs, never a full setup')
+    } finally { e.cleanup() }
+  })
+
+  test('a parked surface stays parked across a server start, whoever armed the switch (operator or foreign telemetry)', async () => {
+    for (const reason of ['operator reason', FOREIGN_REASON]) {
+      const f = s.f()
+      disableAgentlensSurfaces(reason, { dataDir: f.dataDir, skillsDir: f.skillsDir, rulesDir: path.join(f.home, '.claude', 'rules') })
+      assert.ok(!fs.existsSync(skill0(f)), 'baseline: the skill is parked')
+      const r = recorder(['skill']); const l = lines()
+      await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+      assert.deepStrictEqual(r.calls, [], reason)
+      assert.ok(!fs.existsSync(skill0(f)), `${reason}: the skill stays parked`)
+      assert.ok(agentlensDisabled(), `${reason}: the switch stays armed`)
+      enableAgentlensSurfaces({ dataDir: f.dataDir, skillsDir: f.skillsDir, rulesDir: path.join(f.home, '.claude', 'rules') })
+    }
+  })
+
+  test('foreign telemetry: a server start writes nothing, arms nothing, prints one line, and never refuses', async () => {
+    const f = s.f()
+    const cfg = readSettings(f)
+    cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example:4318/v1'
+    writeSettings(f, cfg)
+    const bytes = fs.readFileSync(f.settingsPath, 'utf8')
+    fs.rmSync(skill0(f), { recursive: true })
+    const r = recorder(['skill']); const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: r.repair, stderr: l.say })
+    assert.deepStrictEqual(r.calls, [])
+    assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), bytes, 'settings.json byte-identical')
+    assert.strictEqual(agentlensDisabled(), false, 'a server start never arms the kill-switch')
+    assert.ok(!fs.existsSync(path.join(f.dataDir, 'disabled-surfaces')), 'nothing parked')
+    assert.deepStrictEqual(l.out.filter(x => x.includes('install check skipped')).length, 1, l.out.join('|'))
+  })
+
+  test('a check that throws never escapes: one line, and the start goes on', async () => {
+    const f = s.f()
+    fs.rmSync(skill0(f), { recursive: true })
+    const l = lines()
+    await autoSetupOnServerStart(['server', 'start'], { ctx: f.ctx, repair: async () => { throw new Error('boom') }, stderr: l.say })
+    assert.ok(l.out.some(x => x.includes('boom')), l.out.join('|'))
+  })
+
+  // The wiring itself: the tests above call autoSetupOnServerStart directly, so deleting its call from main.ts failed
+  // nothing. This drives cliMain with the verb and the check injected (no collector is ever spawned) and pins both
+  // that the check runs and that it runs AFTER the verb — run first, the check was collector downtime.
+  test('cliMain runs the install check AFTER the verb for server/daemon start|restart (deleting either call fails this)', async () => {
+    const f = s.f()
+    for (const argv of [['server', 'start'], ['server', 'restart'], ['daemon', 'start'], ['daemon', 'restart']]) {
+      const order: string[] = []
+      const verb = async (a: string[]): Promise<void> => { order.push(`verb ${a.join(' ')}`) }
+      const code = await cliMain(argv, async () => undefined, {
+        serverCommand: verb,
+        daemonCommand: verb,
+        serverStartCheck: async (a: string[]) => { order.push(`check ${a.join(' ')}`) },
+      })
+      assert.strictEqual(code, 0, argv.join(' '))
+      assert.deepStrictEqual(order, [`verb ${argv.slice(1).join(' ')}`, `check ${argv.join(' ')}`], argv.join(' '))
+    }
+    assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), 'no collector was started')
+  })
+
+  // The wiring test above INJECTS serverStartCheck, so a cliMain whose DEFAULT check were a no-op would still pass it.
+  // This drives cliMain with only the verb stubbed: the REAL autoSetupOnServerStart must run after it. A fresh repair
+  // lock keeps it from writing anything, so its server trigger prints one "install check skipped" line (or, when this
+  // machine's own telemetry env reads as foreign, the foreign-telemetry skip line, which has the same prefix).
+  test('the DEFAULT check of cliMain is the real autoSetupOnServerStart (a no-op default fails this)', async () => {
+    const f = s.f()
+    fs.writeFileSync(path.join(f.dataDir, '.autosetup.lock'), '')
+    // Without a ~/.claude dir, an armed kill-switch or AGENTLENS_DISABLED, the real check returns before printing its line.
+    fs.mkdirSync(path.join(f.home, '.claude'), { recursive: true })
+    overrideKillSwitchEnv(false)
+    const savedEnv: Record<string, string | undefined> = {}
+    for (const k of ['HOME', 'DATA_DIR', 'AGENTLENS_NO_AUTOSETUP', 'AGENTLENS_CLAUDE_SETTINGS', 'AGENTLENS_DISABLED']) savedEnv[k] = process.env[k]
+    process.env.HOME = f.home
+    process.env.DATA_DIR = f.dataDir
+    delete process.env.AGENTLENS_NO_AUTOSETUP
+    delete process.env.AGENTLENS_CLAUDE_SETTINGS
+    delete process.env.AGENTLENS_DISABLED
+    const err: string[] = []
+    const realWrite = process.stderr.write
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => { err.push(String(chunk)); return true }) as typeof process.stderr.write
+    try {
+      assert.strictEqual(await cliMain(['server', 'start'], async () => undefined, { serverCommand: async () => undefined }), 0)
+    } finally {
+      process.stderr.write = realWrite
+      for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+      overrideKillSwitchEnv(false)
+    }
+    assert.ok(err.some(x => x.startsWith('agentlenspro: install check skipped:')), `the default check never ran: ${err.join('|')}`)
+    assert.ok(!fs.existsSync(path.join(f.dataDir, 'server.pid')), 'no collector was started')
+  })
+})
+// TRDD-YL3EWT6N item 7: the launch install check's notices are HELD (launchNotices.ts) and print where they belong —
+// folded into a single tool call's refusal (the exit-2 contract: stderr is exactly one JSON object), after a single
+// tool call's output otherwise, and BEFORE every other verb runs, as they always did. In-process, so the order of
+// stdout and stderr writes is observable in one sequence.
+suite('launch notices — held for a single tool call, printed before every other verb (TRDD-YL3EWT6N item 7)', () => {
+  const s = fixtureSuite(false)
+  type Seq = Array<['out' | 'err', string]>
+  const NOTICE = 'agentlenspro: restored skills (a test notice)'
+  const holdNotice = async (): Promise<null> => { pushNotice(NOTICE); return null }
+  const indexOf = (seq: Seq, stream: 'out' | 'err', text: string): number => seq.findIndex(([s2, t]) => s2 === stream && t.includes(text))
+
+  /** Run `fn` with HOME/DATA_DIR on the fixture and every switch that could stop a launch cleared; restores all. */
+  async function inFixtureEnv<T>(f: Fx, extra: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+    overrideKillSwitchEnv(false)
+    const keys = ['HOME', 'DATA_DIR', 'AGENTLENS_NO_AUTOSETUP', 'AGENTLENS_DISABLED', 'AGENTLENS_MCP_URL']
+    const saved = Object.fromEntries(keys.map(k => [k, process.env[k]]))
+    process.env.HOME = f.home
+    process.env.DATA_DIR = f.dataDir
+    for (const k of ['AGENTLENS_NO_AUTOSETUP', 'AGENTLENS_DISABLED', 'AGENTLENS_MCP_URL']) delete process.env[k]
+    Object.assign(process.env, extra)
+    try { return await fn() } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+      overrideKillSwitchEnv(false)
+    }
+  }
+
+  /** stdout and stderr writes into ONE ordered sequence; process.exitCode restored (a refusal sets it to 2). */
+  async function captured(seq: Seq, fn: () => Promise<number>): Promise<number> {
+    const out = process.stdout.write
+    const err = process.stderr.write
+    const exitCode = process.exitCode
+    process.stdout.write = ((c: string | Uint8Array): boolean => { seq.push(['out', String(c)]); return true }) as typeof process.stdout.write
+    process.stderr.write = ((c: string | Uint8Array): boolean => { seq.push(['err', String(c)]); return true }) as typeof process.stderr.write
+    try { return await fn() } finally {
+      process.stdout.write = out
+      process.stderr.write = err
+      process.exitCode = exitCode
+    }
+  }
+
+  test('a single tool call prints the held notices AFTER its own output (seam: injected diagnostics surface)', async () => {
+    const seq: Seq = []
+    const code = await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['get_burn_status'], async () => undefined, {
+      launchCheck: holdNotice, diagnostics: async () => { console.log('TOOL RESULT') },
+    })))
+    assert.strictEqual(code, 0)
+    const iOut = indexOf(seq, 'out', 'TOOL RESULT')
+    const iNote = indexOf(seq, 'err', NOTICE)
+    assert.ok(iOut >= 0 && iNote > iOut, JSON.stringify(seq))
+  })
+
+  test('a real single tool call holds the notices past the server round trip and prints them after the result', async () => {
+    const seq: Seq = []
+    let noticeAtFirstRequest: boolean | null = null
+    const stub = await startMcpStub([{ name: 'get_burn_status', description: 'x' }], () => ({ ok: 'the result' }),
+      () => { if (noticeAtFirstRequest === null) noticeAtFirstRequest = indexOf(seq, 'err', NOTICE) >= 0 })
+    try {
+      const code = await inFixtureEnv(s.f(), { AGENTLENS_MCP_URL: stub.url }, () => captured(seq, () =>
+        cliMain(['get_burn_status'], async () => undefined, { launchCheck: holdNotice })))
+      assert.strictEqual(code, 0)
+      assert.strictEqual(noticeAtFirstRequest, false, 'the notice must still be held while the tool runs')
+      const iOut = indexOf(seq, 'out', 'the result')
+      assert.ok(iOut >= 0 && indexOf(seq, 'err', NOTICE) > iOut, JSON.stringify(seq))
+    } finally { await stub.close() }
+  })
+
+  test('a real refusal folds the held notices into its ONE JSON object and prints nothing else', async () => {
+    const seq: Seq = []
+    const stub = await startMcpStub([{ name: 'get_burn_status', description: 'x' }], () => ({ error: 'nothing to report' }))
+    try {
+      await inFixtureEnv(s.f(), { AGENTLENS_MCP_URL: stub.url }, () => captured(seq, () =>
+        cliMain(['get_burn_status'], async () => undefined, { launchCheck: holdNotice })))
+      assert.strictEqual(seq.filter(([st]) => st === 'out').map(([, t]) => t).join(''), '', 'stdout stays empty on a refusal')
+      const payload = JSON.parse(seq.filter(([st]) => st === 'err').map(([, t]) => t).join('')) as Record<string, unknown>
+      assert.deepStrictEqual(payload, { tool: 'get_burn_status', error: 'nothing to report', notices: [NOTICE] })
+    } finally { await stub.close() }
+  })
+
+  test('a non-tool diagnostics sub-command (batch) prints the held notices BEFORE it reaches the server', async () => {
+    const seq: Seq = []
+    let noticeAtFirstRequest: boolean | null = null
+    const stub = await startMcpStub([], () => ({}),
+      () => { if (noticeAtFirstRequest === null) noticeAtFirstRequest = indexOf(seq, 'err', NOTICE) >= 0 })
+    try {
+      const code = await inFixtureEnv(s.f(), { AGENTLENS_MCP_URL: stub.url }, () => captured(seq, () =>
+        cliMain(['batch', '[]'], async () => undefined, { launchCheck: holdNotice })))
+      assert.strictEqual(code, 0)
+      assert.strictEqual(noticeAtFirstRequest, true, `batch must print the notice before it runs: ${JSON.stringify(seq)}`)
+    } finally { await stub.close() }
+  })
+
+  test('a verb the switch handles prints the held notices BEFORE it runs (watch and the foreground server never return)', async () => {
+    const seq: Seq = []
+    const code = await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['server', 'status'], async () => undefined, {
+      launchCheck: holdNotice, serverCommand: async () => { console.log('SERVER VERB') }, serverStartCheck: async () => undefined,
+    })))
+    assert.strictEqual(code, 0)
+    const iNote = indexOf(seq, 'err', NOTICE)
+    assert.ok(iNote >= 0 && iNote < indexOf(seq, 'out', 'SERVER VERB'), JSON.stringify(seq))
+  })
+
+  test('a launch check that STOPS the verb prints its held lines, and the verb never runs', async () => {
+    const seq: Seq = []
+    let ran = false
+    const code = await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['server', 'status'], async () => undefined, {
+      launchCheck: async () => { pushNotice('agentlenspro: BLOCKED by another telemetry setup'); return EXIT.CONFIG },
+      serverCommand: async () => { ran = true }, serverStartCheck: async () => undefined,
+    })))
+    assert.strictEqual(code, EXIT.CONFIG)
+    assert.strictEqual(ran, false)
+    assert.ok(indexOf(seq, 'err', 'BLOCKED by another telemetry setup') >= 0, JSON.stringify(seq))
+  })
+
+  test('held lines never leak from an earlier in-process invocation into the next one', async () => {
+    // An earlier invocation that never ended (an active buffer still holding a line): the reset must drop it.
+    beginLaunchNotices()
+    pushNotice('agentlenspro: LEFTOVER from an earlier call')
+    const seq: Seq = []
+    await inFixtureEnv(s.f(), {}, () => captured(seq, () => cliMain(['server', 'status'], async () => undefined, {
+      launchCheck: async () => null, serverCommand: async () => undefined, serverStartCheck: async () => undefined,
+    })))
+    assert.strictEqual(indexOf(seq, 'err', 'LEFTOVER'), -1, JSON.stringify(seq))
+  })
+
+  // A caller of the launch check that is NOT inside a cliMain invocation has nobody to flush the buffer: its lines
+  // must print at once, never wait in a buffer that vanishes with the process (review of 6a31062d).
+  test('outside a cliMain invocation a notice prints at once; inside one it is held', () => {
+    endLaunchNotices()
+    const err: string[] = []
+    const realWrite = process.stderr.write
+    process.stderr.write = ((c: string | Uint8Array): boolean => { err.push(String(c)); return true }) as typeof process.stderr.write
+    try {
+      pushNotice('agentlenspro: OUTSIDE an invocation')
+      assert.ok(err.some(t => t.includes('OUTSIDE an invocation')), 'a notice outside an invocation must print at once')
+      beginLaunchNotices()
+      pushNotice('agentlenspro: INSIDE an invocation')
+      assert.ok(!err.some(t => t.includes('INSIDE an invocation')), 'a notice inside an invocation must be held')
+      assert.deepStrictEqual(takeNotices(), ['agentlenspro: INSIDE an invocation'])
+    } finally {
+      process.stderr.write = realWrite
+      endLaunchNotices()
+    }
+  })
+  test('DISPATCHED_VERBS is exactly the set of case labels of the cliMain switch', () => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'cli', 'main.ts'), 'utf8')
+    const labels = [...src.matchAll(/case '([^']+)':/g)].map(m => m[1])
+    assert.deepStrictEqual([...new Set(labels)].sort(), [...DISPATCHED_VERBS].sort())
+  })
+})
 suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', () => {
   const s = fixtureSuite(true)
 
@@ -1124,5 +1514,118 @@ suite('setup --json: one untruncated document, same exit codes, nothing mutated'
     assert.strictEqual(row.wouldWrite, '1')
     assert.ok(r.doc.hookDrift.some(d => /timeout 30 → 120/.test(d.problem)), JSON.stringify(r.doc.hookDrift))
     assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), before)
+  })
+})
+
+// ── `get_account_status --all` while DISABLED (TRDD-HO94JMKD, owner directive 2026-10-29) ───────────────────────
+// "are you saying that in reduced mode you cannot determine the accounts status?? this is bad. fix this."
+// The plural form only reads files, so neither the off-switch brake nor the launch self-heal may touch it.
+suite('get_account_status --all works while DISABLED — and the singular form still refuses', () => {
+  const s = fixtureSuite(true)
+  let savedLog: string | undefined
+  setup(() => {
+    savedLog = process.env.AGENTLENS_ACCOUNT_STATE_LOG
+    const f = s.f()
+    const tl = path.join(f.dataDir, 'account-state.ndjson')
+    fs.writeFileSync(tl, JSON.stringify({
+      ts: Date.now() - 3_600_000, accountId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', email: 'roster-row@x',
+      mode: 'subscription (within plan)', plan: 'Max 20x', authRegime: 'subscription', ttlMinutes: 60, ttlSource: 'doc-matrix',
+    }) + '\n')
+    process.env.AGENTLENS_ACCOUNT_STATE_LOG = tl
+    armKillSwitch('operator reason')
+  })
+  teardown(() => {
+    if (savedLog === undefined) delete process.env.AGENTLENS_ACCOUNT_STATE_LOG; else process.env.AGENTLENS_ACCOUNT_STATE_LOG = savedLog
+  })
+
+  /** every file under dir -> content digest, so "byte-identical" is a real comparison */
+  function digest(dir: string): Record<string, string> {
+    const out: Record<string, string> = {}
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else out[p] = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')
+      }
+    }
+    walk(dir)
+    return out
+  }
+  async function capture(fn: () => Promise<number>): Promise<{ code: number; out: string; err: string }> {
+    const out: string[] = []; const err: string[] = []
+    const rl = console.log; const re = console.error
+    console.log = (...a: unknown[]): void => { out.push(a.join(' ')) }
+    console.error = (...a: unknown[]): void => { err.push(a.join(' ')) }
+    try { const code = await fn(); return { code, out: out.join('\n'), err: err.join('\n') } } finally { console.log = rl; console.error = re }
+  }
+
+  test('the predicate: only the plural form, --all in any position', () => {
+    assert.strictEqual(isAllAccountsStatus(['get_account_status', '--all']), true)
+    // main.ts has always matched `--all` anywhere in argv; kept identical so dispatch and gate cannot disagree.
+    assert.strictEqual(isAllAccountsStatus(['get_account_status', '--out', 'x', '--all']), true)
+    assert.strictEqual(isAllAccountsStatus(['get_account_status']), false)
+    assert.strictEqual(isAllAccountsStatus(['budget', '--all']), false)
+    assert.strictEqual(isAllAccountsStatus([]), false)
+  })
+
+  test('armed the production way (killSwitchHalf), --all answers: exit 0 and a roster row', async () => {
+    const f = s.f(); const r = recorder()
+    assert.strictEqual(killSwitchHalf(), 'file', 'precondition: the switch is armed')
+    const res = await capture(() => cliMain(['get_account_status', '--all'], async () => undefined,
+      { launchCheck: argv => maybeAutoSetup(argv, { ctx: f.ctx, repair: r.repair, stderr: quiet }) }))
+    assert.strictEqual(res.code, 0, res.err)
+    assert.ok(res.out.includes('roster-row@x'), res.out)
+  })
+
+  test('the singular form stays refused (69) and its notice points at --all', async () => {
+    const f = s.f(); const r = recorder()
+    const res = await capture(() => cliMain(['get_account_status'], async () => undefined,
+      { launchCheck: argv => maybeAutoSetup(argv, { ctx: f.ctx, repair: r.repair, stderr: quiet }) }))
+    assert.strictEqual(res.code, EXIT.DISABLED)
+    assert.ok(res.err.includes('get_account_status --all'), res.err)
+    assert.ok(!res.err.includes('Do not retry the original command'), 'the generic retry ban would contradict the pointer')
+  })
+
+  test('self-heal: a non-exempt verb restores a missing skill; --all leaves HOME/.claude byte-identical', async () => {
+    // The self-heal itself is off while the switch is armed (ensureInstalled), so disarm to exercise the exemption.
+    disarmKillSwitch()
+    const f = s.f()
+    const skill = path.join(f.skillsDir, SKILL_NAMES[0])
+    fs.rmSync(skill, { recursive: true })
+    // control: the same drift IS repaired for an ordinary verb (so the --all assertion below can fail)
+    const control = recorder(['skill'])
+    await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: control.repair, stderr: quiet })
+    assert.deepStrictEqual(control.calls, ['skill'])
+    assert.ok(fs.existsSync(path.join(skill, 'SKILL.md')), 'control: the skill was written back')
+    fs.rmSync(skill, { recursive: true })
+    const before = digest(path.join(f.home, '.claude'))
+    const r = recorder(['skill'])
+    assert.strictEqual(await maybeAutoSetup(['get_account_status', '--all'], { ctx: f.ctx, repair: r.repair, stderr: quiet }), null)
+    assert.deepStrictEqual(r.calls, [], 'no repair step ran')
+    assert.deepStrictEqual(digest(path.join(f.home, '.claude')), before)
+    // and the singular form keeps its self-heal
+    const single = recorder()
+    await maybeAutoSetup(['get_account_status'], { ctx: f.ctx, repair: single.repair, stderr: quiet })
+    assert.deepStrictEqual(single.calls, ['skill'])
+  })
+  test('normal mode (switch not armed): --all and --all --with-headroom pass the real dispatcher with exit 0', async () => {
+    disarmKillSwitch()
+    const f = s.f(); const r = recorder()
+    for (const argv of [['get_account_status', '--all'], ['get_account_status', '--all', '--with-headroom']]) {
+      const res = await capture(() => cliMain(argv, async () => undefined,
+        { launchCheck: a => maybeAutoSetup(a, { ctx: f.ctx, repair: r.repair, stderr: quiet }) }))
+      assert.strictEqual(res.code, 0, `${argv.join(' ')}: ${res.err}`)
+    }
+  })
+
+  test('the singular get_account_status still runs the launch self-heal where it would write (the exemption is --all only)', async () => {
+    disarmKillSwitch()
+    const f = s.f()
+    const skill = path.join(f.skillsDir, SKILL_NAMES[0])
+    fs.rmSync(skill, { recursive: true })
+    const r = recorder(['skill'])
+    await maybeAutoSetup(['get_account_status'], { ctx: f.ctx, repair: r.repair, stderr: quiet })
+    assert.deepStrictEqual(r.calls, ['skill'])
+    assert.ok(fs.existsSync(path.join(skill, 'SKILL.md')), 'the skill was written back')
   })
 })

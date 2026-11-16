@@ -20,22 +20,22 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readTranscriptTail, hookCwd, isNoReviewSentinel, toolUseWork, declaredRole, isFloorPrompt, deniedToolUseIds, isDeniedEdit, decideGate, scanTranscriptLines, agentCannotSpawn } from './reviewGate'
+import { readCurrentTurn, hookCwd, isNoReviewSentinel, toolUseWork, declaredRole, isCreditedFork, isFloorPrompt, deniedToolUseIds, isDeniedEdit, decideGate, scanTranscriptLines, agentCannotSpawn } from './reviewGate'
 import type { AssistantContentBlock } from './reviewGate'
 import { textArms, recordWrite } from './reviewGateTriggers'
 
 export interface SupervisorScan {
-  /** Consequential actions (edits, write-shaped commands, marked proposals) seen in the window. */
+  /** Consequential actions (edits, write-shaped commands, marked proposals) seen in this turn. */
   work: number
   /** Adversarial review forks spawned (a spawn whose prompt's FIRST line is `ROLE: REVIEW` —
-   *  `declaredRole`, TRDD-BA0DCW98), or a no-review sentinel emitted — either counts as this
-   *  window's review, so a legitimate "I cannot review" declaration does not nag forever. */
+   *  `declaredRole`, TRDD-BA0DCW98, and passing `isCreditedFork`), or a no-review sentinel emitted —
+   *  either counts as this turn's review, so a legitimate "I cannot review" declaration does not nag forever. */
   forks: number
   /** Work items that appear AFTER the last review — the unreviewed backlog. */
   unreviewed: number
 }
 
-/** Count work and reviews over a transcript tail. Pure, so the thresholds are testable.
+/** Count work and reviews over the lines of the CURRENT turn (readCurrentTurn). Pure, so the thresholds are testable.
  *
  *  USES THE GATE'S OWN PREDICATES (`toolUseWork`/`textArms`/`declaredRole`/`isFloorPrompt`)
  *  instead of re-deriving them: this used to keep its own `EDITORS` set plus a bare
@@ -80,11 +80,11 @@ export function scanSupervision(lines: string[], cwd: string): SupervisorScan {
       }
       if (b?.type !== 'tool_use') continue
       if (b.name === 'Agent') {
-        // REVIEW CREDIT REQUIRES A FORK HERE TOO, same case-folded test as the gate
-        // (reviewGate.ts scanTranscriptLines): a worker brief that merely describes the protocol
-        // must not clear the backlog with no reviewer ever spawned.
-        const isFork = String(b.input?.subagent_type ?? '').trim().toLowerCase() === 'fork'
-        if (declaredRole(String(b.input?.prompt ?? '')) === 'review' && isFork) { forks++; unreviewed = 0 }
+        // REVIEW CREDIT uses the gate's own predicate (isCreditedFork): a fork with no isolation parameter.
+        // WHY the same test: a spawn the gate refuses to credit must not clear this backlog, or the
+        // supervisor would report a change reviewed while the gate still demands a review. A worker
+        // brief that merely describes the protocol must not clear it either.
+        if (declaredRole(String(b.input?.prompt ?? '')) === 'review' && isCreditedFork(b.input ?? {})) { forks++; unreviewed = 0 }
         continue
       }
       // A record write (card append or card commit) after a review, with nothing landed since, is not work.
@@ -145,21 +145,21 @@ export function judge(scan: SupervisorScan, registered: boolean, transcriptReada
   if (scan.unreviewed >= UNREVIEWED_ALARM) {
     return {
       level: 'alarm',
-      // 'in the scanned window', never 'this session': the scan reads a bounded transcript TAIL, so
-      // a long session's earlier turns are simply not in view and a session-wide claim would be false.
+      // 'in this turn', never 'this session': the scan reads only the current turn (readCurrentTurn), so an
+      // earlier turn's changes and reviews are not in view, and a session-wide claim would be false.
       message: `${scan.unreviewed} change(s) have landed with no adversarial review after them `
-        + `(in the scanned window: ${scan.forks} review fork(s), ${scan.work} consequential action(s)). `
+        + `(in this turn: ${scan.forks} review fork(s), ${scan.work} consequential action(s)). `
         + 'Spawn the review fork now — the per-turn review is the check that catches what tests and types cannot.',
     }
   }
   if (scan.work > 0 && scan.forks === 0) {
     return {
       level: 'warn',
-      message: `${scan.work} change(s) in the scanned window with NO adversarial review fork after them. `
+      message: `${scan.work} change(s) in this turn with NO adversarial review fork after them. `
         + 'The gate should have demanded one — if it has not, it is not working.',
     }
   }
-  return { level: 'ok', message: `review supervisor: ${scan.forks} review(s) for ${scan.work} change(s) in the scanned window, ${scan.unreviewed} unreviewed.` }
+  return { level: 'ok', message: `review supervisor: ${scan.forks} review(s) for ${scan.work} change(s) in this turn, ${scan.unreviewed} unreviewed.` }
 }
 
 interface SupervisorInput {
@@ -219,12 +219,24 @@ export async function runReviewSupervisor(): Promise<number> {
   let input: SupervisorInput = {}
   try { input = JSON.parse((await readStdin(process.stdin)).toString('utf8')) as SupervisorInput } catch { /* keep defaults */ }
   const transcript = typeof input?.transcript_path === 'string' ? input.transcript_path : ''
-  const lines = transcript && fs.existsSync(transcript) ? readTranscriptTail(transcript) : null
+  const event = String(input?.hook_event_name ?? input?.hookEventName ?? '')
+  const transcriptExists = transcript !== '' && fs.existsSync(transcript)
+  // The last COMPLETED turn, the same window the gate judges (owner ruling 2026-10-14). UserPromptSubmit can run
+  // after the new prompt is already written, so an unanswered newest turn is skipped in favour of the turn before it.
+  // WHY a missing transcript on UserPromptSubmit means no completed turn, not unreadable (TRDD-FWJXL72Z): a
+  // session's first prompt can run this hook BEFORE Claude Code creates the transcript file (measured on 24 first
+  // prompts: the file was born 0.5-6.4 s after the warning fired), so there is no completed turn to judge yet, and
+  // treating it as unreadable raised a false warning. Stop keeps the warning: by then the turn should have been
+  // written, so a missing file there is a real fault (expected, not measured). An empty transcript_path stays
+  // unreadable on every event. No early return: judge() must still run, so the gate-not-registered alarm fires on
+  // a first prompt too.
+  let lines: string[] | null = null
+  if (transcriptExists) lines = readCurrentTurn(transcript, { skipUnstartedTurn: true, warnNoTurnStart: true })
+  else if (transcript !== '' && event === 'UserPromptSubmit') lines = []
   const scan = lines ? scanSupervision(lines, hookCwd(input)) : { work: 0, forks: 0, unreviewed: 0 }
   const registered = gateIsRegistered(settingsCascade(process.cwd()), p => fs.readFileSync(p, 'utf8'))
   const verdict = judge(scan, registered, lines !== null)
   if (verdict.level === 'ok') return 0
-  const event = String(input?.hook_event_name ?? input?.hookEventName ?? '')
   // Silent ONLY where the gate will speak (its own Stop block repeats this warning). The gate lets a cannot-spawn
   // agent stop silently, so that case stays warned; a throw here answers false, so it never silences.
   const gateSpeaks = (ls: string[]): boolean => {

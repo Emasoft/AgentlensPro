@@ -1,14 +1,19 @@
 ---
 name: hook-events-pipeline
-description: "how does AgentLens capture Claude Code lifecycle events / where do StopFailure PreCompact SessionStart events come from / what is spy-agentlens.sh / hook-events store, --install-hooks, why not PreToolUse / Stop hook error every turn / which timeout does setup write into settings.json, hook timeout 30 s, review-gate timeout"
+description: "how does AgentLens capture Claude Code lifecycle events / where do StopFailure PreCompact SessionStart events come from / what is spy-agentlens.sh / hook-events store, --install-hooks, why not PreToolUse / Stop hook error every turn / which timeout does setup write into settings.json, hook timeout 30 s, review-gate timeout / review gate demands a review for an old command / review hook reads 4MB transcript tail / review gate re-arms every turn / review fork in a worktree credited / goal paused, hook blocked the turn 9 times / stop_hook_active ignored / transcript origin kind human / isMeta hook feedback looks like a new turn / heartbeat cron prompt is a user record with turnPosition / Cannot create agent worktree not in a git repository / review fork launched in a worktree / does the review fork need isolation"
 ocd: 2026-07-10
-lmd: 2026-09-25
+lmd: 2026-10-14
 metadata:
   node_type: memory
   type: project
-  tier: component
+  tier: hub
+  globs: ["src/hookEventStore.ts", "src/lifecycleEvents.ts", "src/cli/hookInstall.ts", "src/cli/reviewGate.ts", "src/cli/reviewSupervisor.ts", "src/cli/delegateGate.ts"]
 publish-globally: false
 ---
+
+# Claude Code hook pipeline — overview
+
+AgentLens hooks Claude Code lifecycle events and runs two gates on them. This page is the overview (what is captured, what is deliberately not hooked, where the full hook catalog lives); the detail lives in the component pages listed under Applies to.
 
 ^FD8NGOP2 [desc:"how AgentLens captures Claude Code lifecycle events: spy-agentlens.sh registered by --install-hooks on 11 events, POSTs to /api/hook-events, stored as NDJSON", keywords:"where_do_stopfailure_precompact_sessionstart_events_come_from what_is_spy_agentlens_sh install_hooks_registers_which_events hook_events_store_location how_does_agentlens_capture_lifecycle_events post_api_hook_events_endpoint hookEventStore_ndjson_retention query_hook_events_by_session which_lifecycle_events_are_hooked configchange_hook_event", ocd:2026-07-10, lmd:2026-09-05]
 AgentLens captures Claude Code **lifecycle hook events** (TRDD-Q6ZOUVK5, commit c923f85):
@@ -27,29 +32,9 @@ rate-limit turn deaths (StopFailure), compaction boundaries + trigger (PreCompac
 session lifecycle. Consumption into burnMonitor (measured window ceiling) and the cache-break
 classifier (COMPACTION with `evidence: hook`) is planned in TRDD-8ENYLEIO.
 
-^LF0R1X1S [desc:"why PreToolUse/PostToolUse/UserPromptSubmit are not hooked, except the narrow burn-gate exception on Task/Agent/Workflow that denies four measured disaster launch patterns", keywords:"why_not_pretooluse_posttooluse_hooked per_tool_call_hook_overhead_and_cache_break burn_gate_exception_task_agent_workflow_matcher spy_agentlens_gate_sh sync_hook_denies_agent_launch agent_gate_endpoint_latency thrash_active_runaway_fanout_cold_resume_fanout_fork_storm_forming agentlens_gate_kill_switch agentlens_gate_mode_warn", ocd:2026-07-10, lmd:2026-09-05]
-**Deliberately NOT hooked unmatched: PreToolUse/PostToolUse/UserPromptSubmit** — fully
-redundant with existing ingestion, and per-tool-call hooks are where all overhead and all
-cache-break damage lives (additionalContext reminders get stripped in place mid-transcript →
-prefix re-bill; that mechanism measured at ≈44% of cache-break waste, see the CHANGELOG 0.9.0
-context).[^1] **The ONE narrow exception (TRDD-GOD0108C, 0.10.0): the burn-gate** —
-`scripts/spy-agentlens-gate.sh` on PreToolUse/PostToolUse **matched to `^(Task|Agent|Workflow)$`
-only** (agent launches are rare). SYNC (async hooks cannot deny), 3s timeout, one curl to
-`POST /api/agent-gate` (decision p50 0.9ms, end-to-end 14ms), fail-open on any error,
-`AGENTLENS_GATE=off` kill-switch, `AGENTLENS_GATE_MODE=warn` downgrade. It denies the four
-measured disaster launches (THRASH_ACTIVE / RUNAWAY_FANOUT / COLD_RESUME_FANOUT /
-FORK_STORM_FORMING) with the reason fed back to the model; PostToolUse injects ONE deduped
-additionalContext advisory per session+risk per 10min. See the burn-gate docs in
-the skill (no dedicated memory page yet on this machine).
-
 ^A5061IN6 [desc:"capture is optional: every future consumer of hook-event data must degrade to inference when the store is empty, and label which evidence it used", keywords:"hook_capture_is_optional degrade_to_inference_when_store_empty label_evidence_used_hook_vs_inference what_if_hook_events_store_is_empty", ocd:2026-07-10, lmd:2026-09-05]
 **Why:** capture is optional — every future consumer must degrade to inference when the store
 is empty and label which evidence it used.
-
-^DJISEOQJ [desc:"how to install/change hook registration: only via --install-hooks (safeConfigEdit transaction); never hand-edit settings.json; needs a session restart to take effect", keywords:"how_to_install_hooks never_hand_edit_settings_json safeconfigedit_transaction_for_hooks hook_config_change_needs_session_restart removes_dead_claude_spyglass_entries preserves_other_tools_hooks", ocd:2026-07-10, lmd:2026-09-05]
-**How to apply:** install/replace via `--install-hooks` ONLY (safeConfigEdit transaction;
-preserves other tools' hooks; removes dead claude-spyglass entries); never hand-edit
-settings.json. Hook config changes need a session restart.
 
 ^KUNASMP4 [desc:"pointer to the full Claude Code hook-event catalog (all ~30 events, payloads, matcher support, IO schema) on the USER-scope reference page claude-code-hook-types", keywords:"full_list_of_claude_code_hook_events hook_payload_schema_reference matcher_support_for_hooks no_plugin_reload_hook_detect_via_configchange claude_code_hook_types_page", ocd:2026-07-10, lmd:2026-09-05]
 **See also** the general Claude Code hook-event catalog (all ~30 events, payloads, matcher
@@ -68,23 +53,13 @@ because it detects a plugin reload; that hypothesis was measured and refuted 202
 See also: [[image-resident-cost-guard]] (the PreToolUse consumer that put `Read` — the first
 non-rare tool — into `GATE_MATCHER`, and how its per-call cost is bounded CLI-side).
 
+## Applies to
 
-^ATOM-FIS4-EY4J [desc: "The burn-gate's RUNAWAY_FANOUT rule (≥8 SubagentStarts machine-wide in 60s) never DENIES a fork (TRDD-3EZ6SJ2Z, in the working tree 2026-09-05, gates/commit/deploy pending — update this line when live", keywords: burn-gate_blocked_my_fork fork_denied_runaway_fan-out review_fork_refused_by_agentlens_gate 8_subagent_launches_in_the_last_60s RUNAWAY_FANOUT_fork stop_hook_review_fork_blocked why_is_the_gate_blocking_fork_agents fork_reuses_parent_context_no_cache_build machine-wide_launch_count fresh_agent_denied_fork_allowed AGENTLENS_GATE=off_fork agentGate.ts_runaway60s, type: project, trdd: TRDD-3EZ6SJ2Z, ocd: 2026-09-05, lmd: 2026-09-05]
-**Status 2026-09-05 16:37: LIVE. TS twin `52155adf`, Rust twin `10715a00` (route test 1/0), release alcore built, `codesign -s - --force`d and running as the collector since 16:37 (`bin-native/darwin-arm64/alcore`, `--version` exit 64 = usage, not 137). Not yet observed on a real ≥8/60 s wave — the first such fork launch will show the warn instead of the deny.** `RUNAWAY_FANOUT` counts SubagentStart events MACHINE-WIDE (all sessions, all projects) over 60 s and denies at ≥8 (`runaway60s`, env `AGENTLENS_GATE_RUNAWAY_60S`). The deny was type-blind, so a stop-hook review FORK was refused whenever OTHER sessions' fresh spawns filled the window — the gate blocked its own mandated review (USER report, TRDD-3EZ6SJ2Z). Fix in both twins (`src/agentGate.ts` runaway branch, `rust-core/…/burn/agent_gate.rs`): `subagent_type == "fork"` (and not the keep-warm pinger) returns `decision: warn`, `code: RUNAWAY_FANOUT`, reason "This fork is allowed: it reads the caller's cache entry and writes no new prefix"; non-forks keep the deny. Basis: the TRDD-DIZ289UQ measurement already used for the THRASH rule (a fork's first request is a warm read, cache_creation 1–3k vs 380k–785k read). The fat-parent-into-COLD-cache fork case keeps its own two rules. The count still includes forks — only the DENY is fork-exempt. Live only after the Rust rebuild + codesign + `agentlenspro server restart` (alcore serves `/api/agent-gate`).
-
-
-## Superseded
-
-^ATOM-5WTK-6YPU [desc: "Hook timeouts doubled 2026-09-05 (USER order, TRDD-GXKRBK1Q, commit 52155adf): settings.json ceilings 10s lifecycle/gate/supervisor, 20s review-gate; live sessions need setup + restart", keywords: hook_timeout hooks_often_hit_the_timeout doubled_hook_timeouts settings.json_timeout_10 review-gate_timeout_20 AGENTLENS_HOOK_TIMEOUT_default AGENTLENS_GATE_TIMEOUT_default gate_fails_open_under_load silently_dropped_capture_event hook_timed_out_warning_in_terminal hookInstall.ts_matcher_timeout relax_the_timeouts_of_all_hooks, type: project, trdd: TRDD-GXKRBK1Q, ocd: 2026-09-05, lmd: 2026-09-05, status:superseded, superseded-by:ATOM-6OC6-575F]
-**Status 2026-09-05 16:05: committed in `52155adf`; `agentlenspro setup --yes` converged the owner machine at 16:05 — JSON read-back: 21 agentlenspro entries at 10/10/20/10 (15 hook, 2 gate, 2 review-gate, 2 supervisor), the one foreign 30 s hook untouched; the installer asks for a session restart to pick the change up.** The `timeout` each installer matcher writes into `~/.claude/settings.json` (`src/cli/hookInstall.ts`): lifecycle forwarder (async) 10 s, burn gate (sync) 10 s, review gate (sync, local disk only) 20 s, review supervisor 10 s — doubled from 5/5/10/5 (TRDD-GXKRBK1Q, USER: "relax the timeouts of all hooks.. they must be doubled"), after the 2026-08-14 raise (forwarder 2→5 s, gate 3→5 s) when the owner's machine measured load-avg 130+ and an 800 ms TCP connect starved. The hooks' OWN network budgets must sit inside those ceilings and doubled with them: `hookHandlers.ts` `AGENTLENS_HOOK_TIMEOUT` default 2 s (was 1), `AGENTLENS_GATE_TIMEOUT` default 4 s (was 2); `setup.ts` verify-exec env 4/4 (was 2/2). Why: every hit on the ceiling is a silently dropped capture event or a sync gate FAILING OPEN; the owner's machine measured load-avg 16–26 on 2026-09-05 (15-min average 164 at 15:56). New values reach a machine only through `agentlenspro setup --yes` / `--install-hooks` (safeConfigEdit). The installer identifies its own entries by COMMAND (`isOurHookCommand(h.command)`, `hookInstall.ts:216`), never by timeout, so old 5 s entries are stripped and rewritten while foreign hooks survive. Read back with a JSON parse of settings.json, never by eye. [^2]
+- [[hook-burn-gate]] — the burn gate: the one PreToolUse/PostToolUse hook (Task/Agent/Workflow matcher), its four denied disaster launches, and the RUNAWAY_FANOUT fork exception.
+- [[hook-install-and-timeouts]] — how hooks are installed (only through --install-hooks) and which timeouts setup writes into settings.json.
+- [[review-gate-per-turn-scan]] — the Stop review gate's per-turn scan: it reads only the current turn, back to readCurrentTurn's start; the 4 MB tail remains only for delegateGate (TRDD-QQ2XIIZ6).
+- [[review-gate-credit-and-isolation]] — which forks the review gate credits (REVIEW and MEASURE predicates) and why a review fork must spawn with no isolation parameter.
+- [[review-gate-stop-hook-cap]] — why runMainGate ignores stop_hook_active, the open question of whether Claude Code's 9-block cap is per hook, and the 2026-10-14 goal pause attribution (TRDD-LR4SI79M).
+- [[claude-code-transcript-turn-shapes]] — the transcript record shapes the review gate's turn-boundary logic depends on (what starts a turn, what only looks like one).
 
 ## Notes and lessons learned
-[^1]: [id:ATOM-BUCKET-NAME-NAN-AND-STOP-HOOK-EXIT, status:valid, keywords:"stop_hook_error_every_turn bucket_name_regex_matches_calendar_invalid_dates NaN_defeats_purge happy_path_must_exit_0_on_absent_optional_input", ocd:2026-07-10, lmd:2026-07-10] Two field lessons from shipping this. (a) The
-  bucket-name regex \d{4}-\d{2}-\d{2} also matches calendar-invalid names ('2026-13-99' →
-  NaN, '2026-02-31' overflows): NaN silently defeated BOTH the read fast-path and the
-  string-compare purge — an unpurgeable file counted forever. Fixed with bucketDayMs()
-  round-trip validation (a5b3519); parse dates once, validate by round-trip, compare
-  numerically. (b) AgentLens's own pending-prompt Stop hook '[ -f "$f" ] && cat …' exited 1
-  on every turn with no pending file → a "Stop hook error" banner every turn (a073e3d). A
-  hook's happy path must be exit 0: absent-optional-input is the NORMAL case, not an error.
-[^2]: [id: ATOM-6OC6-575F, status: valid, supersedes: ATOM-5WTK-6YPU, keywords: "hook_timeout_30 hook_ceiling_30_seconds HOOK_TIMEOUT_SEC settings.json_timeout_30 which_timeout_does_setup_write hook_timed_out_warning review-gate_timeout hooks_timeout_doubled_again installer_hook_timeout_value agentlenspro_hook_timeout", ocd: 2026-09-08, lmd: 2026-09-08] DO NOT quote the 10 s lifecycle/gate/supervisor and 20 s review-gate hook ceilings, BECAUSE the USER ordered a 30 s ceiling on every AgentlensPro hook entry on 2026-09-08 (TRDD-B07NR7ZI, commit a2303f91): one exported constant HOOK_TIMEOUT_SEC = 30 in src/cli/hookInstall.ts drives all four matcher builders and src/test/cliMatchers.test.ts pins it. DO read HOOK_TIMEOUT_SEC for the ceiling; the inner budgets AGENTLENS_HOOK_TIMEOUT 2 s and AGENTLENS_GATE_TIMEOUT 4 s did not change. SUPERSEDED BODY: **Status 2026-09-05 16:05: committed in `52155adf`; `agentlenspro setup --yes` converged the owner machine at 16:05 — JSON read-back: 21 agentlenspro entries at 10/10/20/10 (15 hook, 2 gate, 2 review-gate, 2 supervisor), the one foreign 30 s hook untouched; the installer asks for a session restart to pick the change up.** The `timeout` each installer matcher writes into `~/.claude/settings.json` (`src/cli/hookInstall.ts`): lifecycle forwarder (async) 10 s, burn gate (sync) 10 s, review gate (sync, local disk only) 20 s, review supervisor 10 s — doubled from 5/5/10/5 (TRDD-GXKRBK1Q, USER: "relax the timeouts of all hooks.. they must be doubled"), after the 2026-08-14 raise (forwarder 2→5 s, gate 3→5 s) when the owner's machine measured load-avg 130+ and an 800 ms TCP connect starved. The hooks' OWN network budgets must sit inside those ceilings and doubled with them: `hookHandlers.ts` `AGENTLENS_HOOK_TIMEOUT` default 2 s (was 1), `AGENTLENS_GATE_TIMEOUT` default 4 s (was 2); `setup.ts` verify-exec env 4/4 (was 2/2). Why: every hit on the ceiling is a silently dropped capture event or a sync gate FAILING OPEN; the owner's machine measured load-avg 16–26 on 2026-09-05 (15-min average 164 at 15:56). New values reach a machine only through `agentlenspro setup --yes` / `--install-hooks` (safeConfigEdit). The installer identifies its own entries by COMMAND (`isOurHookCommand(h.command)`, `hookInstall.ts:216`), never by timeout, so old 5 s entries are stripped and rewritten while foreign hooks survive. Read back with a JSON parse of settings.json, never by eye.

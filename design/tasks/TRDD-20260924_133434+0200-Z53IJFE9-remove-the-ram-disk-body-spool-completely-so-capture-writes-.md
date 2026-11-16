@@ -1,9 +1,9 @@
 ---
 trdd-id: Z53IJFE9
 title: Remove the RAM-disk body spool completely so capture writes straight to the SSD bodies dir
-column: dev
+column: human_review
 created: 2026-09-24T13:34:34+0200
-updated: 2026-09-26T17:02:40+0200
+updated: 2026-10-16T11:16:43+0200
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -15,6 +15,7 @@ approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T13:34:34+0200
 implementation-commits: [b0ae59cb, 470ffbb3, 3c031ab8, 0ab28f0d, f579942e, bcbd50d5]
+status: tasked
 ---
 
 # Remove the RAM-disk body spool completely so capture writes straight to the SSD bodies dir
@@ -22,6 +23,7 @@ implementation-commits: [b0ae59cb, 470ffbb3, 3c031ab8, 0ab28f0d, f579942e, bcbd5
 ## Approval log
 
 - 2026-09-24T13:34:34+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-16T11:16:43+0200 — column → human_review by main-agent@agentlenspro. code done and deployed; six live checks are unrecorded and need the live collector (row 18)
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative) — 2026-09-24
 

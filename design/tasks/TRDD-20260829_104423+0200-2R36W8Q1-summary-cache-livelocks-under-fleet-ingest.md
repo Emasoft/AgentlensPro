@@ -5,7 +5,7 @@ column: todo
 pre-block-column: 
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-10-05T02:28:02+0200
+updated: 2026-10-17T20:40:39+0200
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -19,9 +19,10 @@ status: tasked
 
 # Summary cache livelocks under fleet ingest
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T14:35:52+0200
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-05T14:35:52+0200 (triage line added 2026-10-15)
+**2026-10-17 (supersedes the NEXT below where they disagree):** box 4 is re-verified at d8b491f4 (pass 15/15; the named test is the only failure with the guard disabled; see ## Acceptance, c0f1ca8b). NEXT: boxes 2, 3 and 5, waiting on the owner choosing between (A) redeploying the live collector, which matches this card, and (B) an isolated flood-bench rig with a pre-fix A/B and a window prefill, which gives rig figures. B needs no owner action, so the card stays in todo, not blocked. **2026-10-15 triage (reports_dev/2r36w8q1-triage.md):** the frontmatter column `todo` is current; this block's 'blocked by UTFVMVT8' is superseded (UTFVMVT8 is complete; the unblock-when predicate is met). The fix (481c94e4) is on HEAD; later commits e867ad3a (summary patched in place), 13209791 (log_sessions deleted) and the 2048 MB RSS cap mean the 2026-09-05 numbers describe an older binary. NEXT: re-measure boxes 2, 3 and 5 passively on a running current-code collector (the live collector is stuck on old code since 2026-10-14 16:21 until the owner restarts it), run the box-4 test, rewrite this block, then move to ai_review.
 
-**`blocked` (pre-block `ai_review`) — the 14:21 AI review REJECTED on process, not code:** `blocked-by:
+SUPERSEDED 2026-10-15 (see the triage line above): **`blocked` (pre-block `ai_review`) — the 14:21 AI review REJECTED on process, not code:** `blocked-by:
 [UTFVMVT8]` was set deliberately in `061d2ed2` and never cleared, and UTFVMVT8 is still `testing` with
 one open box. The rule makes a non-empty `blocked-by` mean `blocked`, so the column now says what the
 field says; `unblock-when: [trdd:UTFVMVT8 terminal]` matches the drift detector's predicate regex
@@ -44,7 +45,7 @@ the two gates are independent may clear the field with that one-line reason. The
 are carried from the 08-29 runs — re-measure them in the re-submission or state why the carry holds.
 `implementation-commits` now names `481c94e4` (the `REBUILDER_ACTIVE` change), which was missing.
 
-**Previous STATE (12:55) — LAST BOX MET — `ai_review`.** The 1/s × 260 s soak the NEXT ACTION below asked for ran on
+SUPERSEDED 2026-10-15 (see the triage line above): **Previous STATE (12:55) — LAST BOX MET — `ai_review`.** The 1/s × 260 s soak the NEXT ACTION below asked for ran on
 2026-09-05 12:48–12:54 against the live alcore restarted at 11:51 (built from `7caad610`, which
 carries this card's summary-cache change and QE114936's twenty handler rewrites), with no build
 or test overlapping it: p50 0.524 s, p99 0.955 s, max 1.281 s, 1 of 260 samples over 1 s. No
@@ -371,6 +372,7 @@ is not a criterion, so it now names the sample size and the statistic.
       narrowed from the configured 86,400,000 ms. Not comparable to the earlier 17.08 GB figure:
       different run length and a different effective window, so it is recorded, not claimed as
       an improvement.
+- 2026-10-17 box 4 re-verified at HEAD d8b491f4 (ui.rs last changed in 4ebb9196): `cargo test -p agentlens-core --lib ui:: -- --test-threads=1` gave 15 passed. With the guard disabled (`if false &&` at ui.rs:362), only ui::rebuild_admission_tests::a_reader_never_rebuilds_when_the_background_rebuilder_owns_it failed, panicking at its rebuild assertion ui.rs:4600 (14 passed, 1 failed). The other 7 rebuild_admission tests still passed, so the card's earlier '3 passed / 1 failed' counted an older, smaller group. ui.rs was restored byte-identical. Boxes 2, 3 and 5 still need a current-code collector at fleet rate (owner: redeploy the live collector, or an isolated flood-bench rig with a pre-fix A/B and a window prefill).
 
 ## AI review verdict — 2026-09-05T14:21:26+0200
 

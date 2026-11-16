@@ -127,15 +127,31 @@ suite('agentlenspro hook/gate — the exit path must be fast AND complete', () =
 
   for (const sub of ['hook', 'gate'] as const) {
     test(`${sub}: a server that HANGS (not refuses) must not stall the tool call`, async function () {
-      this.timeout(20_000)
+      // Two spawns of the real CLI; under machine starvation each can spend seconds on startup alone.
+      this.timeout(60_000)
+      const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: 'x' } })
+      const timeouts = { AGENTLENS_GATE_TIMEOUT: '1', AGENTLENS_HOOK_TIMEOUT: '1' }
+      // CONTROL: the same subcommand against a port that REFUSES at once. Same process startup and
+      // bundle load, same fail-open exit path (spool, braked revive, exitNow), no abort wait, so
+      // its duration is what the machine charges for one spawn right now.
+      const dead = await freePort()
+      const c0 = Date.now()
+      const control = await run(sub, baseEnv({ AGENTLENS_UI_URL: `http://127.0.0.1:${dead}`, ...timeouts }), payload)
+      const controlMs = Date.now() - c0
+      assert.strictEqual(control.code, 0, 'control: a refused connection fails open')
       // 10.255.255.1 DROPS. A dead port REFUSES instantly and hides this entirely — which is exactly
       // why every other test in this file (they use freePort()) passed while the bug was live.
       const t0 = Date.now()
-      const r = await run(sub, baseEnv({ AGENTLENS_UI_URL: 'http://10.255.255.1:3000', AGENTLENS_GATE_TIMEOUT: '1', AGENTLENS_HOOK_TIMEOUT: '1' }),
-        JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: 'x' } }))
-      const ms = Date.now() - t0
+      const r = await run(sub, baseEnv({ AGENTLENS_UI_URL: 'http://10.255.255.1:3000', ...timeouts }), payload)
+      const hangMs = Date.now() - t0
       assert.strictEqual(r.code, 0, 'fail-open is unconditional: an unreachable server never fails the tool call')
-      assert.ok(ms < 5_000, `${sub} took ${ms}ms — a hung socket is holding the process open`)
+      // WHY the difference against the control, not an absolute bound: an absolute bound measures the
+      // machine. Gate run A1 (TRDD-CS2W7E77) took 5444 ms here at load average 300, where it is
+      // normally about 1.2 s, and the deadline had worked — the time was process startup. The hang
+      // case adds only the 1 s abort over the control; the regression this guards (a socket holding
+      // the process open until the OS connect timeout) adds 9 s or more (10.6 s measured).
+      assert.ok(hangMs - controlMs < 4_000,
+        `${sub} took ${hangMs}ms against a ${controlMs}ms refused-port control — a hung socket is holding the process open`)
     })
   }
 })

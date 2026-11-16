@@ -30,6 +30,11 @@ for (const model of Object.keys(RATES)) {
     cases.push({ model, ...b, at: null })
   }
 }
+// claude-haiku-5-5's prompt-length step sits at 100,000 total input (i + r + w): the exact
+// threshold (flat), one token over it (surcharged), and a mid-tier request (surcharged).
+cases.push({ model: 'claude-haiku-5-5', i: 40000, r: 30000, w: 30000, o: 10000, w1h: 10000, at: null })
+cases.push({ model: 'claude-haiku-5-5', i: 40001, r: 30000, w: 30000, o: 10000, w1h: 10000, at: null })
+cases.push({ model: 'claude-haiku-5-5', i: 50000, r: 60000, w: 40000, o: 10000, w1h: 10000, at: null })
 // Edges: date suffixes, prefix aliases (LONGER than a key), unknown, empty, scheduled change
 // before/after/unparseable atIso.
 const EDGES = [

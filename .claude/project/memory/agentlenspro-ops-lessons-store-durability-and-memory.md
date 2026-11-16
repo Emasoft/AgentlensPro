@@ -2,7 +2,7 @@
 name: agentlenspro-ops-lessons-store-durability-and-memory
 description: "a span segment over 512MB breaks setup or silently drops a day of results / the server hit an out-of-memory heap error / is the parquet part actually durable before we delete the source / does fsync guarantee data is on disk on macOS / the RAM-disk spool never drains and fills to 100% (spool GONE 2026-09-25 — capture writes raw bodies straight to SSD, no spool) / a drain looks stalled but is actually working / DuckDB ignore_errors silently degrades bad NDJSON lines into all-NULL rows / a diagnostics answer changes between runs or a session's turn count shrinks / sync streaming gunzip needed for a huge gz segment / MaxListenersExceededWarning on Gunzip or an uncaught unexpected end of file / heap looks healthy but the server was still killed / where do raw captured bodies land / is the spoolDir config key or spool CLI verb still valid / how much of the footprint is off-heap"
 ocd: 2026-07-11
-lmd: 2026-09-26
+lmd: 2026-10-23
 metadata:
   node_type: memory
   type: project
@@ -204,6 +204,11 @@ removeAllListeners — flat count, harmless re-emit. Pinned by a warning-capture
 (ndjsonLines.test.ts); landed ed084ff.
 
 
+
+
+^ATOM-AWZ8-XYI0 [desc: "every store open fails with a temp-directory-size error after a seed or index change: a shipped NOT EXISTS clause exhausted the 4 GB spill cap", keywords: store_open_fails spill_cap max_temp_directory_size known_part_seed NOT_EXISTS duckdb_memory_regression every_store_open_fails_after_a_seed_change Out_of_Memory_Error_failed_to_offload_data_block correlated_subquery_evaluated_per_row extra_SQL_clause_regressed_a_measured_fix tiny_memory_limit_regression_test open_store_hard-coded_4GB, trdd: TRDD-R36S0PS9, ocd: 2026-10-23, lmd: 2026-10-23]
+
+DO NOT add a clause (NOT EXISTS, extra join, filter) to SQL whose memory behaviour was measured without it, BECAUSE the known_part seed was measured at ~1.5M distinct pairs but shipped with a correlated NOT EXISTS evaluated per parts row (~438.8M rows) and exhausted the 4GB spill cap, failing every store open (TRDD-R36S0PS9, fixed 2405b7b3). DO pin the measured SQL text verbatim in the spec and re-measure any changed statement on a full-size clone store before deploy; a regression test needs a tiny memory_limit/max_temp_directory_size on a bare connection, because open_store hard-codes 4GB.
 
 ## Governed by
 

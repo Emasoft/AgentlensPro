@@ -1,14 +1,15 @@
 ---
 trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
-column: testing
+column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-09-06T02:42:08+0200
+updated: 2026-11-01T02:38:46+0100
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
 parent-trdd: DMWOBWFH
 blocked-by: []
+status: tasked
 ---
 
 # alcore must use all CPU cores
@@ -481,6 +482,8 @@ The reason the Rust rewrite exists at all (USER, same day): *"the typescript was
 16 cores, and the async loading of the data from the jsonl and the duckdb was stalling the
 system."* So this is not a nice-to-have benchmark; it is the acceptance test of the migration's
 purpose.
+2026-10-16: correction to the triage note above: the card's column is now todo; the phrase 'the column still says testing' described it before the move.
+2026-11-01: the all-cores goal of this card is superseded by the owner directive of 2026-10-30 (verbatim in TRDD-7YPQWKPG WHY): CPU must stay below 100 percent per core and no process may starve others, so ingest runs on bounded pools at background QoS (TRDD-7YPQWKPG PLAN v3 step 1b and step S amendment d); the acceptance box asking for (cores - 2) busy cores no longer applies.
 
 ## What to measure (not infer)
 
@@ -509,3 +512,8 @@ most likely finding.
       recorded and stays under 1 s
 
 ## Notes and lessons learned
+2026-10-16: moved to todo by the board triage (row 33). What remains: Box 1 (the script) was never written. AI review on 2026-09-05 rejected the card back to dev; the column still says testing.
+
+## Approval log
+
+- 2026-10-16T11:13:16+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 33; its 2026-09-05 AI review rejected it; box 1, the script, does not exist

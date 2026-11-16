@@ -1,9 +1,9 @@
 ---
 trdd-id: EJDNNDY3
 title: CI unit and browser-smoke jobs never see the alcore binary
-column: testing
+column: human_review
 created: 2026-09-02T21:31:43+0200
-updated: 2026-09-03T11:08:50+0200
+updated: 2026-10-16T11:13:19+0200
 implementation-commits: [48e8193a]
 current-owner: main-session
 task-type: infra
@@ -12,6 +12,7 @@ min-approval-requirement: manager
 blocked-by: []
 related: [1B98LCVR]
 external-refs: [https://github.com/Emasoft/AgentlensPro/actions/runs/33667160582]
+status: tasked
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -93,3 +94,4 @@ gh run view <run-id> --repo Emasoft/AgentlensPro --json jobs --jq '.jobs[] | {na
 - 2026-09-03T11:08:50+0200 — APPROVED by main-session on the USER's delegation
   (min-approval-requirement: manager). Failure reconfirmed live on CI run 33667160582 (main
   red since f8b7560e); diagnosis verified line-by-line in the review sweep.
+- 2026-10-16T11:13:19+0200 — column → human_review by main-agent@agentlenspro. waits on the owner's push to main and a green CI run; row 7

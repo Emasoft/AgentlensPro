@@ -4,7 +4,7 @@ title: Ingest architecture - spool to typed native DuckDB with versioned per-top
 column: todo
 status: tasked
 created: 2026-10-04T03:36:28+0200
-updated: 2026-10-05T01:57:58+0200
+updated: 2026-10-19T00:57:58+0200
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -17,6 +17,7 @@ approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-04T03:36:28+0200
 npt: [VXD881R6]
 implementation-commits: [69b7d406, 6085ee91, 6f8d1d16, fdb7996c, c594c472, e9cc75cf, 125bd44b, 22299b2f, 301d7947, 9cca67b4, 6f9e2727, 8b25ab4a, 852ae3ca, a7cefe42, b8baf734, f97b191b]
+eht: [U50JCH0J, TC8HW857, TXRRF34L, IFOQAQYV, JK4I9MFY, IGPWXZ1M]
 ---
 
 # Ingest architecture - spool to typed native DuckDB with versioned per-topic producer schemas
@@ -29,6 +30,11 @@ NOT covered by any schema: telemetry metrics (nothing captures them), transcript
 SUPERSEDED body sections (kept for history, do NOT act on them): "Design (follows proposal v9 ...)" where it says the collector lives inside alcore and seals to ready/ (the writer seals; the collector is the aldigest binary); "Build order" steps 1-6 (done differently, see "What is built"); the two "OWNER:" bullets and the "How a hook names its producer_type" bullet under "Open" (decided under D-I, see "Decisions"); in "Agent reading" the bullet about a collector-assigned _meta_event_id joining topic tables (the join key is (_meta_ingest_id, _meta_record_ordinal)).
 Related: TRDD-VXD881R6 (first slice, done inside the crate), TRDD-HH1NP0KD (hook binary; alspool now exists and is the writer it should call), TRDD-9VX3WTGU (memory cap).
 Sections before the Approval log: "Switch-on procedure for this machine (owner decision, NOT done)" and "Owner decisions pending (2026-10-04)".
+2026-10-19T00:47:39+0200 — USER DIRECTIVE (PROJECT-scope redacted rendering): “you are filling my hd with your undigested hotel-bodies! `<home>/.agentlens/otel-bodies` .. i told you to digest all into duckdb tables and delete them! 200gb of telemetry is insane!” (home path redacted for PROJECT scope; exact quote retained only in LOCAL scope)
+2026-10-19 point-in-time evidence: 787,715 raw-body files occupy 205,989,780,292 bytes (191.84 GiB) and the corpus is actively growing; the volume has 114 GiB free. The durable legacy store stopped advancing around 2026-10-14. The typed native path is not deployed. These are measurements, not completion claims.
+2026-10-19 architecture decision: migrate this backlog directly into typed native DuckDB plus compressed lossless raw storage; never send it through the legacy Parquet path. Per-source deletion eligibility requires persisted monotonic states `discovered → committed → checkpointed → reconstructed → recovery-proven → source-deleted`. There is no full database snapshot per source. A measured capacity benchmark and 20 GiB reserve gate precede migration. Existing consumer cutover TRDD-QSFYIHUO is linked but is not on the migration critical path.
+2026-10-19 work breakdown: TRDD-U50JCH0J source identity/index; TRDD-TC8HW857 compressed raw plus typed schema/reconstruction; TRDD-TXRRF34L measured capacity gate; TRDD-IFOQAQYV persisted byte-bounded runner; TRDD-JK4I9MFY full reconciliation/audit; TRDD-IGPWXZ1M separately authorized live drain. TRDD-Y1M56VMY continues to own retention. Bidirectional links are recorded in each card.
+2026-10-19 safety state: no migration or deletion has run. TRDD-IGPWXZ1M is in approval with `min-approval-requirement: user`; neither this directive nor this card update records the live drain as complete or approved. RULE 0 still requires presentation and final confirmation of the exact destructive command and affected sources.
 
 
 

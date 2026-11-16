@@ -79,11 +79,12 @@ restart`.
 
 ### Emergency stop: `agentlenspro disable [reason]` / `enable`
 
-The global brake **on AgentlensPro itself** — one flag file that disarms every hook, the burn-gate,
-server auto-revive, and background ingestion in **every** Claude Code session already running, on
-that session's next hook fire. No restart needed (a `settings.json` edit alone cannot reach a
-session that already loaded its config). `disable` also stops a running server and turns raw-body
-capture off; `enable` clears the flag.
+The global brake **on AgentlensPro itself** — one flag file that turns off server auto-revive,
+background ingestion, status-line capture (unless `disable --keep-statusline` was used) and every
+AgentlensPro hook except the review gate and the review supervisor, in **every** Claude Code
+session already running, on that session's next hook fire. No restart needed (a `settings.json` edit
+alone cannot reach a session that already loaded its config). `disable` also stops a running server
+and turns raw-body capture off; `enable` clears the flag.
 
 ⚠ **This is NOT how you stop a burning workload.** It stops the *measurement*, not the burn — it
 removes the gate that was denying disaster launches and blinds you exactly when the numbers matter

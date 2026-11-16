@@ -183,6 +183,135 @@ export function isEphemeralTarget(target: string, cwd: string): boolean {
   return /^(reports|[a-z]+_dev)\//.test(path.relative(cwd, abs))
 }
 
+/** A DECLARED-ROLE worker's write target the classifier cannot resolve, whose STATIC directory is nevertheless
+ *  ephemeral — so the write is that role's report or scratch output. TRDD-QQ2XIIZ6, round-2 review amendment A:
+ *  a role (`ROLE: MEASURE|REVIEW|INVESTIGATE`, read by reviewGate's workerDeclaredRole) relaxes ONLY the fail-closed
+ *  rule for UNRESOLVABLE targets; a resolvable write outside the ephemeral dirs (a role fork writing `src/a.ts`)
+ *  still demands review, so labelling a worker a role never switches review off for its real writes.
+ *  Unresolvable = still holds `$` or a backtick after the same-command literal assignments were applied (a
+ *  `$(date +%s)` stamp, a `for i …` loop variable). Exempt only when (1) the text before the first `$` or backtick,
+ *  cut at its last `/`, is a non-empty directory that is itself ephemeral (judged by isEphemeralTarget on a probe
+ *  file inside it, after normalising `..`), and (2) the DYNAMIC remainder from that `$` or backtick holds no `/`,
+ *  no `..` and no backslash.
+ *  WHY a CONTENT rule (review of 668fc421): the danger is what the dynamic part can expand to, not its syntax. A
+ *  `/` lets it climb or descend (the round-1 review's `$(printf ../src)/a.ts`); `..` as a whole name is the parent
+ *  directory itself (`cp x "reports/$(printf ..)"` and `mv` write into the project root; `rm` itself refuses a
+ *  trailing `..`); a backslash escape spells either without
+ *  writing it (`'..\57src\57a.ts'`, `'\56\56'`). One rule covers `$(…)` and backtick spans alike, so a backtick
+ *  stamp (`docs_dev/`date +%s`-r.md`) passes like `$(date +%s)` does. Only a QUOTED backtick span reaches here
+ *  whole: shellWords treats an unquoted backtick as a command separator, so the target word ends AT the backtick
+ *  and the span's text becomes its own segment — a gap for every caller, not only roles (recorded on TRDD-QQ2XIIZ6).
+ *  Accepted residual: a dynamic part whose OUTPUT is computed rather than spelled — an unassigned or runtime
+ *  variable, a computed `X=$(…)`, a `for X in …` loop variable, `$(cat f)`, `$(printf %s%s . .)` — can still
+ *  expand to `..` or `../`; only a declared-role worker can use it. */
+export function isRoleScratchTarget(target: string, cwd: string): boolean {
+  const cut = target.search(/[$`]/)
+  if (cut < 0) return false
+  if (/[/\\]|\.\./.test(target.slice(cut))) return false
+  const dir = target.slice(0, target.lastIndexOf('/', cut) + 1)
+  if (dir === '' || /[~*?{}[\]]/.test(dir)) return false
+  return isEphemeralTarget(path.join(dir, '_'), cwd)
+}
+
+/** WHY: `(` is a shellWords separator, so an UNQUOTED `docs_dev/$(date +%s)-r.md` reaches the target checks as
+ *  `docs_dev/$` — the substitution and everything after its `)` are out of sight, and that is exactly where the
+ *  round-1 review's `$(printf ../src)/a.ts` puts its `/`, so isRoleScratchTarget's no-`/` rule alone would pass
+ *  it (TRDD-QQ2XIIZ6). For a target the tokenizer cut there (it ends in `$`), the RAW command must show EVERY
+ *  `<target>(` as a flat substitution — no nested paren, quote, backslash or backtick — holding no `/`, then a word
+ *  tail holding none, then the word's end; and neither may hold `..`, the content rule isRoleScratchTarget cannot
+ *  apply to text it never sees (`cp x reports/$(printf ..)` and `mv` write into the project root; `rm` itself
+ *  refuses a trailing `..`). Anything else fails closed. */
+export function isFlatCutSubstitution(cmd: string, target: string): boolean {
+  const opens = cmd.split(`${target}(`).length - 1
+  if (opens === 0) return false
+  const esc = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const flat = new RegExp(`${esc}\\([^()'"\\\\\`/]*\\)[^\\s;&|<>()'"\\\\\`/]*(?=$|[\\s;&|<>()])`, 'g')
+  const found = cmd.match(flat) ?? []
+  return found.length === opens && found.every((m) => !m.includes('..', target.length))
+}
+
+/** The value a same-command `D=$(mktemp …)` records in commandWriteReasons' assignment map: not a path (mktemp's
+ *  output is unknowable here, and on macOS it is under /var/folders, not /tmp), only a mark isMktempTarget reads. */
+const MKTEMP: unique symbol = Symbol('mktemp')
+const MKTEMP_FLAGS = String.raw`(?:[ \t]+(?:-[dq]{1,2}|-t[ \t]+[A-Za-z0-9._-]+))*`
+/** `NAME=$(mktemp …)` where the shell certainly runs it in THIS shell: it STARTS a command (the command's start, a
+ *  new line or a `;` before it) and ENDS one (the end, a new line, `;`, `&&` or `||` after it).
+ *  WHY (round-2 review of d476914a): wherever the assignment may not take effect, D keeps the value it had before —
+ *  empty, or one inherited from the environment — and `$D/<name>` then writes there. A prefix assignment
+ *  (`D=$(mktemp -d) true` sets D for `true` only), a pipeline stage (`D=… | cat`, `x | D=…`), a backgrounded one
+ *  (`D=… &`), a conditional branch (`x && D=…`, `x || D=…`) and a subshell opener (`( D=…`) therefore do not
+ *  match; a subshell the assignment sits deeper inside is atTopLevel's job. */
+const certainMktempAssignment = (name: string): RegExp =>
+  new RegExp(String.raw`(?<=(?:^|[\n;])[ \t]*)${name}=("?)\$\(mktemp${MKTEMP_FLAGS}[ \t]*\)\1(?=[ \t]*(?:$|[\n;]|&&|\|\|))`, 'g')
+
+/** Whether offset `at` of `text` is outside every subshell: no `(`, `$(` or backtick opened before it and not yet
+ *  closed. An assignment inside one (`( a; D=$(mktemp -d); b ); cat > "$D/x"`) dies with it. Single quotes hide
+ *  parens from the shell; whatever this count gets wrong (a `)` ending a `case` arm, a paren in double-quoted prose)
+ *  leaves the depth non-zero, which fails closed. */
+function atTopLevel(text: string, at: number): boolean {
+  let depth = 0
+  let tick = false
+  let q: string | null = null
+  for (let i = 0; i < at; i++) {
+    const c = text[i]
+    if (q === "'") { if (c === "'") q = null; continue }
+    if (c === '\\') { i++; continue }
+    if (c === "'" && q === null) q = c
+    else if (c === '"') q = q === null ? '"' : null
+    else if (c === '`') tick = !tick
+    else if (c === '(') depth++
+    else if (c === ')') depth--
+  }
+  return depth === 0 && !tick
+}
+
+/** Whether the assignment word `name=value` of a pure-assignment segment stores a fresh mktemp path.
+ *  WHY (review of 668fc421): role forks write scratch as `D=$(mktemp -d); cat > "$D/x"`, which armed the gate
+ *  because `$D` is unresolvable and has no static directory. Unquoted `D=$(mktemp -d)` reaches here cut as `D=$`
+ *  (the `(` is a separator) with `mktemp` heading the NEXT segment; quoted `D="$(mktemp -d)"` arrives whole. Either
+ *  way the command TEXT decides (heredoc bodies stripped: they are data, not shell), and it fails closed unless:
+ *  - every mention of `name` is a certain top-level assignment (certainMktempAssignment, atTopLevel). A second
+ *    assignment, `for D in`, `read D`, `D+=`, `export D`, or any `${D…}` other than a plain `${D}` (`${D:=/src}` and
+ *    `${D=/src}` rebind an empty D; round-2 review of d476914a) disqualifies it;
+ *  - every `mktemp` in the command is such an assignment, so a function or alias named mktemp defined in the command
+ *    (`mktemp() { echo /x; }`), or a call this check does not model, disqualifies it;
+ *  - only `-d`, `-q` and `-t <prefix>` are passed — never a template argument (one with no `/` is created in the
+ *    cwd), `-p` or `--tmpdir`;
+ *  - nothing in the command names TMPDIR, PATH, or zsh's `path` array (tied to PATH), which would move mktemp's
+ *    directory or replace the command itself.
+ *  Accepted residual, usable by a declared-role worker only: `eval` of an obfuscated name (`eval "$(printf
+ *  '\104=…')"`); `source` or `.` of a file; an alias or function named mktemp, or a TMPDIR, set OUTSIDE the command
+ *  (the shell profile, the agent's environment); and a failed `mktemp -q`, which leaves D empty — bounded by
+ *  isMktempTarget's one-component rule to a name at the filesystem root. */
+function isMktempAssignment(cmd: string, name: string, value: string, quoted: boolean, nextSeg: Word[] | undefined): boolean {
+  const cutShape = value === '$' && !quoted && nextSeg?.[0]?.word === 'mktemp'
+  const wholeShape = quoted && value.startsWith('$(mktemp')
+  if (!cutShape && !wholeShape) return false
+  if (/TMPDIR|(?<![A-Za-z0-9_])PATH(?![A-Za-z0-9_])|(?<![\w$/.-])path(?:\[[^\]]*\])?\+?=/.test(cmd)) return false
+  const text = stripHeredocBodies(cmd, true)
+  const certain = (re: RegExp): number => {
+    let n = 0
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) if (atTopLevel(text, m.index)) n++
+    return n
+  }
+  const assignments = certain(certainMktempAssignment(name))
+  if (assignments === 0) return false
+  if ((text.match(/(?<![\w-])mktemp(?![\w-])/g) ?? []).length !== certain(certainMktempAssignment('[A-Za-z_][A-Za-z0-9_]*'))) return false
+  const bare = text.match(new RegExp(String.raw`(?<![\w$-])(?<!\$\{)${name}(?!\w)`, 'g')) ?? []
+  const braced = text.match(new RegExp(String.raw`\$\{${name}(?![\w}])`, 'g')) ?? []
+  return bare.length + braced.length === assignments
+}
+
+/** A write target `$D`, `${D}`, `$D/<name>` or `${D}/<name>` whose D holds MKTEMP at this segment, `<name>` ONE path
+ *  component holding no `..`, backslash, `$`, backtick, glob or whitespace. One component is what keeps an EMPTY D
+ *  harmless (round-2 review of d476914a): a failed mktemp turns `$D/<name>` into `/<name>` at the filesystem root,
+ *  where `$D/Volumes/<proj>/src/a.ts` would have become a write into the project. A glob is refused for the same
+ *  reason: `"$D"/*` would become `/*`. */
+function isMktempTarget(target: string, assigned: Map<string, string | typeof MKTEMP> | undefined): boolean {
+  const m = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(?:\/([^/]+))?$/.exec(target)
+  if (m === null || assigned?.get(m[1] ?? m[2]) !== MKTEMP) return false
+  return m[3] === undefined || !/\.\.|[\\$`*?[\]{}~\s]/.test(m[3])
+}
 // Exported as arrays so the tests can LOOP them: a hand-picked sample left most members untested
 // (review 2026-09-08), and an untested alternation is one a refactor can drop unnoticed.
 export const GIT_WRITE_SUBCOMMANDS = ['commit', 'push', 'pull', 'mv', 'rm', 'am', 'apply', 'checkout',
@@ -194,9 +323,21 @@ export const PKG_WRITE_VERBS = ['add', 'remove', 'uninstall', 'rm', 'un', 'link'
 const GIT_WRITE = new Set(GIT_WRITE_SUBCOMMANDS)
 const GH_MUTATING = new Set(GH_MUTATING_VERBS)
 const PKG_WRITE = new Set(PKG_WRITE_VERBS)
-// Attached spellings count too: `--method=DELETE`, `-XPOST` and `--field=k=v` are what pflag
-// accepts, and an exact-word match released every one of them as a read.
-const GH_API_WRITE = /^(?:-X|-f|-F)|^--(?:method|field|raw-field|input)(?:=|$)/
+// gh api classifies on the METHOD, not on the flags: `-X GET` / `--method=GET` is a READ, while
+// `-f`/`-F`/`--field` alone are query params for a default GET (also a read) — gh#23 released a
+// mutating `-X DELETE` when the old regex keyed on the mere presence of `-X` or a field flag.
+function ghApiIsMutating(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    let method: string | undefined
+    if (a === "-X" || a === "--method") method = args[i + 1]
+    else if (a.startsWith("-X")) method = a.slice(2)
+    else if (a.startsWith("--method=")) method = a.slice("--method=".length)
+    if (method === undefined) continue
+    return !/^get$/i.test(method)
+  }
+  return false
+}
 // Prefix words that are not the command: wrappers, and the shell keywords that head a compound
 // body or condition (`for …; do git commit; done` put `do` in command position and released the
 // commit; `if git commit; then` and `while ! git push` did the same one review later).
@@ -219,6 +360,10 @@ const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
  *  assignment only takes effect for LATER segments). Any other shape (`$(mktemp)`, `${NAME:-x}`,
  *  a name with no recorded literal) is returned unchanged and arms. */
 type Resolve = (word: string, segIdx: number) => string
+/** Whether a write target is exempt: `isEphemeralTarget` after `resolve`, or — for a declared-role worker only
+ *  — `isRoleScratchTarget`. Built once per command in commandWriteReasons and threaded to every target check, so
+ *  the redirect pass, the tee/rm/cp targets and the fastedit file-first target all judge alike (TRDD-QQ2XIIZ6). */
+type Scratch = (target: string, segIdx: number) => boolean
 
 // TRDD-J2K6IM4R: `fastedit multi-edit --help` armed the gate — argparse prints help and exits
 // before ANY subcommand handler runs, so nothing is written, yet the classifier only looked at
@@ -243,9 +388,9 @@ function hasStandaloneHelp(args: string[]): boolean {
 }
 
 /** `via` names the launcher (`xargs`, `find -exec`) when the targets are not in this segment's text. */
-function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
+function segmentWriteReason(base: string, args: string[], via: string | null, cwd: string, scratch: Scratch, segIdx: number): string | null {
   const flagless = args.filter((a) => !a.startsWith('-'))
-  const deployOrDesign = deployOrDesignVerbWriteReason(base, args, cwd)
+  const deployOrDesign = deployOrDesignVerbWriteReason(base, args, scratch, segIdx)
   if (deployOrDesign !== null) return deployOrDesign
   if (base === 'git') {
     let j = 0 // skip global options; `-C dir` / `-c k=v` / `--git-dir x` take a value
@@ -256,7 +401,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
     return `git ${sub}`
   }
   if (base === 'gh') {
-    if (args[0] === 'api') return args.some((a) => GH_API_WRITE.test(a)) ? 'gh api (mutating)' : null
+    if (args[0] === 'api') return ghApiIsMutating(args) ? 'gh api (mutating)' : null
     return GH_MUTATING.has(args[1] ?? '') ? `gh ${args[0]} ${args[1]}` : null
   }
   // A shell given a command STRING runs it; classify the string, not the shell. Quoting hid
@@ -286,7 +431,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
     if (args.includes('-delete')) return 'find -delete'
     for (let e = 0; e < args.length; e++) {
       if (!/^-(exec|execdir|ok|okdir)$/.test(args[e])) continue
-      const r = classifyCommand(args.slice(e + 1).map((word) => ({ word, quoted: false })), 'find -exec', cwd, resolve, segIdx)
+      const r = classifyCommand(args.slice(e + 1).map((word) => ({ word, quoted: false })), 'find -exec', cwd, scratch, segIdx)
       if (r !== null) return r
     }
     return null
@@ -294,9 +439,9 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
   if (ALL_ARGS_ARE_TARGETS.includes(base) || LAST_ARG_IS_TARGET.includes(base)) {
     if (via !== null) return `${base} via ${via} (targets unknown)`
     const targets = ALL_ARGS_ARE_TARGETS.includes(base) ? flagless : flagless.slice(-1)
-    // `resolve` turns a same-command literal `$VAR` target into its recorded value before the
+    // `scratch` resolves a same-command literal `$VAR` target to its recorded value before the
     // ephemeral check; the reported message still names the original text (`t`), not the value.
-    const bad = targets.find((t) => !isEphemeralTarget(resolve(t, segIdx), cwd))
+    const bad = targets.find((t) => !scratch(t, segIdx))
     return bad === undefined ? null : `${base} ${bad}`
   }
   return null
@@ -304,7 +449,7 @@ function segmentWriteReason(base: string, args: string[], via: string | null, cw
 
 /** The command word of one segment (after wrappers, env assignments and a wrapper's own
  *  options), classified. A quoted word in command position is not a command. */
-function classifyCommand(words: Word[], via: string | null, cwd: string, resolve: Resolve, segIdx: number): string | null {
+function classifyCommand(words: Word[], via: string | null, cwd: string, scratch: Scratch, segIdx: number): string | null {
   let i = 0
   let inWrapper = false
   while (i < words.length && !words[i].quoted) {
@@ -323,7 +468,7 @@ function classifyCommand(words: Word[], via: string | null, cwd: string, resolve
     i++
   }
   if (i >= words.length || words[i].quoted) return null
-  return segmentWriteReason(path.basename(words[i].word), words.slice(i + 1).map((w) => w.word), via, cwd, resolve, segIdx)
+  return segmentWriteReason(path.basename(words[i].word), words.slice(i + 1).map((w) => w.word), via, cwd, scratch, segIdx)
 }
 
 /** Why a shell command is a write, or null when its text shows only reads. Each segment's
@@ -336,8 +481,10 @@ export function commandWriteReason(cmd: string, cwd: string): string | null {
 
 /** Every reason a shell command is a write, in the order the segment pass then the redirect pass
  *  finds them ([] when its text shows only reads). The worker path needs every segment's reason:
- *  a card record chained before a real write must not hide that write. */
-export function commandWriteReasons(cmd: string, cwd: string): string[] {
+ *  a card record chained before a real write must not hide that write.
+ *  `opts.roleScratch`: the caller verified the writer declared a ROLE (reviewGate's workerDeclaredRole), so an
+ *  UNRESOLVABLE target inside an ephemeral directory is that role's scratch, not a write (isRoleScratchTarget). */
+export function commandWriteReasons(cmd: string, cwd: string, opts: { roleScratch?: boolean } = {}): string[] {
   // shortcut: a bash -c / eval string contributes only its first reason, upgrade if workers start chaining inside one
   const reasons: string[] = []
   // `words` drives CLASSIFICATION (does this contain a `git commit`-shaped write?) and must
@@ -370,16 +517,20 @@ export function commandWriteReasons(cmd: string, cwd: string): string[] {
   // (`S=/tmp/b tee …`) records nothing, because that VAR is not yet set for anything in THIS
   // segment. `cumulative[i]` is the literal map as of the START of segment `i` (segments
   // 0..i-1 applied); a later reassignment whose value is not itself a plain literal deletes the
-  // entry rather than keeping the stale value, so it still fails closed.
-  const cumulative: Map<string, string>[] = [new Map()]
-  for (const seg of segments) {
+  // entry rather than keeping the stale value, so it still fails closed. The one non-literal value
+  // recorded is MKTEMP, for a `D=$(mktemp …)` (isMktempAssignment): it never resolves to a path, and
+  // only a declared-role worker's `$D` / `$D/<name>` target may use it (isMktempTarget).
+  const cumulative: Map<string, string | typeof MKTEMP>[] = [new Map()]
+  for (let k = 0; k < segments.length; k++) {
+    const seg = segments[k]
     const next = new Map(cumulative[cumulative.length - 1])
     if (seg.every((w) => ASSIGNMENT_RE.test(w.word))) {
-      for (const w of seg) {
+      seg.forEach((w, j) => {
         const m = ASSIGNMENT_RE.exec(w.word) as RegExpExecArray
-        if (/[$`~*?{}[\]]/.test(m[2])) next.delete(m[1])
-        else next.set(m[1], m[2])
-      }
+        if (!/[$`~*?{}[\]]/.test(m[2])) next.set(m[1], m[2])
+        else if (isMktempAssignment(cmd, m[1], m[2], w.quoted, j === seg.length - 1 ? segments[k + 1] : undefined)) next.set(m[1], MKTEMP)
+        else next.delete(m[1])
+      })
     }
     cumulative.push(next)
   }
@@ -389,11 +540,23 @@ export function commandWriteReasons(cmd: string, cwd: string): string[] {
     const m = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(\/.*)?$/.exec(word)
     if (m === null) return word
     const value = cumulative[segIdx]?.get(m[1] ?? m[2])
-    return value === undefined ? word : value + (m[3] ?? '')
+    return typeof value === 'string' ? value + (m[3] ?? '') : word
   }
 
+  // WHY (TRDD-QQ2XIIZ6, amendment A): every write target is judged here, after `resolve`. A declared-role worker
+  // additionally passes an UNRESOLVABLE target whose static directory is ephemeral (isRoleScratchTarget) and, when
+  // the tokenizer cut it at a `$(`, whose hidden substitution and tail hold no `/` or `..` (isFlatCutSubstitution),
+  // and a `$D` / `$D/<name>` target whose D holds a same-command `$(mktemp …)` (isMktempTarget); a resolvable target
+  // outside the ephemeral dirs still arms for every caller, role or not.
+  const scratch: Scratch = (target, segIdx) => {
+    const r = resolve(target, segIdx)
+    if (isEphemeralTarget(r, cwd)) return true
+    if (opts.roleScratch !== true) return false
+    if (isMktempTarget(target, cumulative[segIdx])) return true
+    return isRoleScratchTarget(r, cwd) && (!r.endsWith('$') || isFlatCutSubstitution(cmd, target))
+  }
   for (let idx = 0; idx < segments.length; idx++) {
-    const reason = classifyCommand(segments[idx], null, cwd, resolve, idx)
+    const reason = classifyCommand(segments[idx], null, cwd, scratch, idx)
     if (reason !== null) reasons.push(reason)
   }
   // The redirect scan is the noisy pass (any bare `>` anywhere counts), so it takes the FAIL
@@ -416,7 +579,7 @@ export function commandWriteReasons(cmd: string, cwd: string): string[] {
     const m = /^\d*(?:>\||>>?)(.*)$/.exec(redirectWords[i].word)
     if (!m || m[1].startsWith('&')) continue
     const target = m[1] !== '' ? m[1] : (redirectWords[i + 1]?.word ?? '')
-    if (!isEphemeralTarget(resolve(target, segIdx), cwd)) reasons.push(`redirect into ${target || '(no target)'}`)
+    if (!scratch(target, segIdx)) reasons.push(`redirect into ${target || '(no target)'}`)
   }
   return reasons
 }
@@ -440,15 +603,17 @@ const TRDDGREP_WRITE_VERBS = new Set(['new', 'set', 'append', 'check-box', 'move
 /** D7: fastedit / trddgrep / prrdgrep / specgrep write verbs, and the deploy commands
  *  (`node esbuild.js`, `pnpm|npm run package|compile|watch|local`, `agentlenspro server
  *  start|stop|restart`). */
-function deployOrDesignVerbWriteReason(base: string, args: string[], cwd: string): string | null {
+function deployOrDesignVerbWriteReason(base: string, args: string[], scratch: Scratch, segIdx: number): string | null {
   if (base === 'fastedit') {
     const sub = args[0] ?? ''
     if (!FASTEDIT_WRITE_VERBS.has(sub)) return null
     if (hasStandaloneHelp(args)) return null
     // WHY: a file-first write into reports/, *_dev/ or /tmp is scratch, not work. Only the first positional
     // counts, and one after a flag arms (`--content-file /tmp/c src/new.ts`: /tmp/c is that flag's value).
+    // The target is judged by `scratch` (TRDD-QQ2XIIZ6), like every redirect and tee target: a same-command literal
+    // `$VAR` resolves first, and only a declared-role worker's unresolvable stamp may pass isRoleScratchTarget.
     const k = args.findIndex((a, n) => n > 0 && !a.startsWith('-'))
-    if (FASTEDIT_FILE_FIRST_VERBS.has(sub) && k > 0 && !args[k - 1].startsWith('-') && isEphemeralTarget(args[k], cwd)) return null
+    if (FASTEDIT_FILE_FIRST_VERBS.has(sub) && k > 0 && !args[k - 1].startsWith('-') && scratch(args[k], segIdx)) return null
     return `fastedit ${sub}`
   }
   if (base === 'trddgrep') {

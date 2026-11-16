@@ -7,7 +7,7 @@
 // test that matters is the one asserting the line says something true in each state.
 
 import * as assert from 'assert'
-import { bodiesCaptureLine } from '../cli/serverControl'
+import { bodiesCaptureLine, stateSaveFailLine } from '../cli/serverControl'
 
 const NOW = Date.parse('2026-08-22T21:00:00Z')
 const stats = (uptimeSec: number, live?: { files: number; newestMs: number | null }) =>
@@ -82,5 +82,31 @@ suite('bodiesCaptureLine — capture-down + sink clauses (TRDD-4FMHW124)', () =>
     const line = bodiesCaptureLine(
       { uptimeSec: 3600, bodies: { live: { files: 0, newestMs: null }, captureDownSince: NOW - 5 * 60_000 } }, NOW)
     assert.ok(/NO BODIES/.test(line) && /CAPTURE DOWN/.test(line), line)
+  })
+})
+
+// TRDD-LDWBRV9B — the save-failure line on `server status`.
+suite('stateSaveFailLine — failed pass-state saves (TRDD-LDWBRV9B)', () => {
+  test('a non-zero failure count prints a line with the count and the last failure time', () => {
+    const line = stateSaveFailLine({ stateSaveFails: 3, lastStateSaveFailAt: NOW - 5 * 60_000 }, NOW)
+    assert.ok(line !== null, 'a failing pass state must print a line')
+    assert.ok(/3 consecutive failed/.test(line), line)
+    assert.ok(/last failure 5m ago/.test(line), line)
+  })
+  test('zero failures print nothing', () => {
+    assert.strictEqual(stateSaveFailLine({ stateSaveFails: 0, lastStateSaveFailAt: 0 }, NOW), null)
+  })
+  test('an older server that omits both fields prints nothing', () => {
+    assert.strictEqual(stateSaveFailLine({}, NOW), null)
+  })
+  test('a failure count with no usable timestamp reports the time as not reported, never as an age', () => {
+    // lastStateSaveFailAt 0 means never, and an older server omits it; either way now - 0 must not
+    // render as a failure about 57 years ago.
+    const zero = stateSaveFailLine({ stateSaveFails: 2, lastStateSaveFailAt: 0 }, NOW)
+    assert.ok(zero !== null, 'a failing pass state must print a line')
+    assert.ok(/last failure time not reported/.test(zero), zero)
+    const absent = stateSaveFailLine({ stateSaveFails: 2 }, NOW)
+    assert.ok(absent !== null, 'a failing pass state must print a line')
+    assert.ok(/last failure time not reported/.test(absent), absent)
   })
 })

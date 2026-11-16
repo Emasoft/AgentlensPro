@@ -38,6 +38,10 @@ pub mod body_archive;
 pub mod body_writers;
 pub mod burn;
 pub mod burn_calibration;
+#[cfg(test)]
+mod burn_subset_tests;
+#[cfg(test)]
+mod composition_subset_tests;
 pub mod cache_break;
 pub mod cache_break_timeline;
 pub mod turn_prefix_codec;
@@ -48,6 +52,7 @@ pub mod heartbeat_cost;
 pub mod session_burn_profile;
 pub mod cache_risk_commands;
 pub mod chores;
+pub mod cores;
 pub mod call_body_registry;
 pub mod card_store;
 pub mod collector_lifecycle;
@@ -128,7 +133,17 @@ pub struct Counters {
     pub logs_payloads: u64,
     pub metrics_payloads: u64,
     pub parse_errors: u64,
+    /// TRDD-KMF02UEX — `demote_cold` calls that returned an error (served as the
+    /// `alcore.demoteColdError` degradation).
+    pub demote_cold_errors: u64,
     pub spans_appended: u64,
+    /// TRDD-RBBEX59R D4: hook events ACCEPTED since boot (the write path and the ring-only path),
+    /// served as `hookEvents.receivedSinceBoot`. Not a PersistStats field: an accepted event under
+    /// no-collection or capture-off writes nothing, and PersistStats counts only bytes written.
+    pub hook_events_accepted: u64,
+    /// TRDD-RBBEX59R: how many times the P5 StopFailure calibration ran. In memory only and not on
+    /// the wire; it exists so a test can prove P5 still runs on the ring-only path.
+    pub stop_failure_calibrations: u64,
 }
 
 
@@ -145,6 +160,12 @@ pub struct BodiesPassStats {
     pub last_non_zero_pass_at_ms: i64,
 }
 
+/// What `CoreState::burn_snapshot` copies under the state lock for the burn path (TRDD-735Q3JF4 item 2).
+pub(crate) struct BurnInputs {
+    pub spans: Vec<Arc<Value>>,
+    pub cards: Vec<Arc<Value>>,
+    pub accounts: IndexMap<String, String>,
+}
 /// A copy of everything a summary rebuild reads, taken under the state lock so the rebuild can
 /// run outside it (TRDD-HFV4AIT7). Every field holds `Arc`s, so building one is a pointer copy per
 /// span/card — never a deep clone of the window or of the card corpus.
@@ -250,10 +271,14 @@ pub struct CoreState {
     /// The sweeper's control channel (set by `start_sweeper`): /api/clear wipes the tail state
     /// and requests the full re-scan through it.
     pub sweeper: Option<log_reader::SweeperControl>,
-    /// server.ts summaryCache / strippedCache — the merged summary and its stripped form,
-    /// memoized by data_version (derived_cache.rs).
+    /// server.ts summaryCache — the merged summary, memoized by data_version (derived_cache.rs).
     pub summary_cache: derived_cache::VersionedCache<Value>,
-    pub stripped_cache: derived_cache::VersionedCache<Value>,
+    /// The burn subset summary memoized by `data_version` (TRDD-735Q3JF4 item 2): `ui::burn_summary_now` computes it once per version, not on every 4 s tick and burn request. Dropped with `summary_cache` under stage-2 memory pressure.
+    pub burn_subset_memo: Option<(u64, Arc<Value>)>,
+    /// Set by the first `ui::summary_now` call and never cleared: "a summary reader has asked since boot".
+    /// `ui::rebuild_once` builds nothing until it is true (TRDD-735Q3JF4 increment 1, item 1). Lives here, not in a
+    /// process-global, so each test's fresh state starts unasked and parallel tests stay isolated.
+    pub summary_asked: bool,
     /// The incremental summary rebuild (TRDD-9VX3WTGU Phase C part 2). `Arc` so the off-lock rebuild
     /// owns a handle without touching the state lock; `force_full` is set wherever the OTEL window
     /// changes wholesale (prune, pressure ladder, clear).
@@ -291,6 +316,10 @@ pub struct CoreState {
     pub latest_resident_blobs: Vec<Value>,
     /// Memory-pressure ladder stage 0..=3 (see `pressure_stage`).
     pub pressure_stage: u8,
+    /// TRDD-KMF02UEX — the last `demote_cold` call failed. While set, further failures are counted
+    /// (`counters.demote_cold_errors`) but not logged again; the next success logs one recovery line
+    /// and clears it.
+    pub demote_failing: bool,
     /// The shared HMAC key behind the signed viewer-role assertion (embedAuth.ts / AgentlensPro#4).
     /// `None` means the embed feature is DISABLED, and a present viewer header then resolves to
     /// `invalid` (403) — never a downgrade to full access. Past boot this is always `Some`: the
@@ -319,13 +348,21 @@ pub struct CoreState {
     /// hold it without the state lock.
     /// TRDD-N6A8VX3G: the durable request↔response link rows (one per BodyPointer ingested).
     /// Key: format!("{span_or_req}:{kind}:{ts}") — unique per pointer. Appended per ingest via
-    /// append_changed (zero bytes when unchanged); load()+compact_now() at boot rewrites the
-    /// delta into the verified snapshot. GVA8TTJF reads the ndjson files directly (DuckDB
-    /// read_ndjson_auto over the body-links.*.ndjson glob).
+    /// append_changed (zero bytes when unchanged); compact_from_disk() at boot rewrites the
+    /// delta into the verified snapshot. GVA8TTJF reads them through DeltaLog::for_each_live into a VARCHAR
+    /// DuckDB table (cache_turns_sql.rs install_body_links), never as raw ndjson.
     pub body_links: delta_log::DeltaLog,
     pub spool_tap: Option<Arc<spool_tap::SpoolTap>>,
     /// Why `spool_tap` is `None`, for `/api/ingest-status`.
     pub spool_tap_off_reason: String,
+    /// TRDD-RBBEX59R no-collection mode: set ONCE at boot (alcore `--no-collection`, or the
+    /// `<data>/DISABLED` file as a backstop) and never changed; a restart is the only transition.
+    /// While set the server stores no OTLP telemetry, no raw bodies and no hook-event log, but the
+    /// in-memory hook ring, the guards and status-line ingest keep running.
+    pub no_collection: bool,
+    /// The trimmed AGENTLENS_STARTED_BY alcore read at boot; `None` when unset or blank (never the
+    /// log line fallback text), so `/api/server-stats` `startedBy` can tell "no stamp" apart.
+    pub started_by: Option<String>,
 }
 
 impl CoreState {
@@ -344,7 +381,32 @@ impl CoreState {
         // run inside the card table — see `CardStore::demote_cold`, which also strips the resident
         // parsed layer (copy-on-write via `Arc::make_mut`, so a rebuild still holding the
         // pre-demotion pointer keeps a consistent view).
-        self.cards.demote_cold(hot_cards);
+        // TRDD-KMF02UEX: a failure is counted and logged, never a panic — this runs under the state
+        // lock, where a panic poisons the mutex for every request thread; the next ingest batch
+        // simply retries. Logged once per failing streak, not once per batch, and the streak's end
+        // is logged too, so the log shows when demotion stopped and when it resumed.
+        match self.cards.demote_cold(hot_cards) {
+            Ok(_) => {
+                if self.demote_failing {
+                    self.demote_failing = false;
+                    eprintln!(
+                        "{} alcore: demote_cold recovered ({} failed call(s) since boot)",
+                        crate::log_ts(),
+                        self.counters.demote_cold_errors
+                    );
+                }
+            }
+            Err(e) => {
+                self.counters.demote_cold_errors += 1;
+                if !self.demote_failing {
+                    self.demote_failing = true;
+                    eprintln!(
+                        "{} alcore: demote_cold failed, retried on the next ingest batch (further failures are counted, not logged): {e}",
+                        crate::log_ts()
+                    );
+                }
+            }
+        }
     }
 
     /// A sweep's output into the card map (server.ts runLogScan's loop): every card through
@@ -391,10 +453,7 @@ impl CoreState {
             accounts: Arc::new(self.accounts.snapshot()),
             // TRDD-9VX3WTGU Phase C part 2: the previous outputs LEAVE the caches here so the
             // engine can patch them in place (see `summary_engine`). `&mut self` is for this.
-            prev: summary_engine::Prev {
-                summary: self.summary_cache.take_arc(),
-                stripped: self.stripped_cache.take_arc(),
-            },
+            prev: summary_engine::Prev { summary: self.summary_cache.take_arc() },
             engine: self.summary_engine.clone(),
         }
     }
@@ -404,7 +463,14 @@ impl CoreState {
     pub fn summary_from(inputs: &mut SummaryInputs, now_ms: f64) -> summary_engine::SummaryBuild {
         let _ = now_ms;
         let prev = std::mem::take(&mut inputs.prev);
-        inputs.engine.build(inputs.version, &inputs.spans, &inputs.log_cards, inputs.epoch, &inputs.accounts, prev)
+        let built = inputs.engine.build(inputs.version, &inputs.spans, &inputs.log_cards, inputs.epoch, &inputs.accounts, prev);
+        // TRDD-2HRA270Y: one boot-phase reading after the first summary build through summary_from returns
+        // (callers: ui::rebuild_once, ui::summary_now). Not every build passes here: summary_over is also
+        // called directly (CoreState::build_session_summary, SummaryEngine::build legacy path), and a probe in
+        // summarize_spans never fired in a 150 s log-only boot.
+        static FIRST_SUMMARY: std::sync::Once = std::sync::Once::new();
+        FIRST_SUMMARY.call_once(|| rss_guard::log_boot_phase("first_summary_build", None));
+        built
     }
 
     /// Store a summary built off the lock, together with the attribution map built WITH it. The
@@ -416,10 +482,6 @@ impl CoreState {
         let stored = self.summary_cache.store_arc_if_newer(version, build.summary);
         if will_store {
             self.otel_attribution = build.attribution;
-            // The stripped twin lands with the summary it was derived from, never alone.
-            if let Some(stripped) = build.stripped {
-                self.stripped_cache.store_arc_if_newer(version, stripped);
-            }
         }
         stored
     }
@@ -447,7 +509,15 @@ impl CoreState {
         // registry holds. With the closure stubbed, every card came out account-less, so
         // `/api/burn-status` reported one `accountUuid: null` bucket instead of per-account
         // windows, and anything keyed on the account (P5 capacity calibration) silently never ran.
-        let mut summary = summarize::summarizer::summarize_spans(spans, &|sid| accounts.get(sid).cloned());
+        let summary = summarize::summarizer::summarize_spans(spans, &|sid| accounts.get(sid).cloned());
+        Self::merge_summary(summary, log_cards)
+    }
+
+    /// The merge half of `summary_over`: the OTEL `summary` already built, folded with `log_cards`
+    /// (feed collision merge, subagent link, newest-first sort). Split out so the burn path's
+    /// subset builder (`burn_subset_summary`) runs THIS code and not a copy of it
+    /// (TRDD-735Q3JF4 item 2).
+    fn merge_summary(mut summary: Value, log_cards: &[Arc<Value>]) -> (Value, IndexMap<String, Vec<Value>>) {
         let mut attribution: IndexMap<String, Vec<Value>> = IndexMap::new();
         if log_cards.is_empty() {
             // No merge: every OTEL card survives into the served summary, so its entries are
@@ -513,6 +583,79 @@ impl CoreState {
         (summary, attribution)
     }
 
+    /// The inputs of one burn-status computation, copied under the state lock (Arc clones only: a
+    /// pointer per span and per card, no card text, no parse). The card SELECTION happens off the
+    /// lock in `burn_subset_summary`, so the lock never waits on a scan of the corpus.
+    pub(crate) fn burn_snapshot(&self) -> BurnInputs {
+        BurnInputs { spans: self.window.spans.clone(), cards: self.cards.parsed_cards(), accounts: self.accounts.snapshot() }
+    }
+
+    /// The merged summary restricted to the cards `burn_status_for` can read, for the 4 s burn tick and
+    /// the burn routes (TRDD-735Q3JF4 item 2). `summary_over` over the whole corpus was ~43,811 sessions
+    /// built every 4 s from boot, for a computation that only reads api_request events.
+    ///
+    /// WHY THE SUBSET IS SAFE. Burn status reads events from session timelines only, and
+    /// `demote_cold` strips the timeline of every card but the most recently active, so a card with an
+    /// empty timeline contributes no event. The merge, though, DECIDES which cards survive, so the
+    /// subset must hold every card the merge needs to decide the same way as the full corpus:
+    ///   (a) every log card with a non-empty timeline: the sources of events;
+    ///   (b) every log card whose sessionId is an OTEL window session: the feed merge lets a log card
+    ///       displace its OTEL twin (`is_displaced_otel`), and a cold log card left out would let the
+    ///       twin survive and contribute ITS events, which the full summary drops;
+    ///   (c) the placeholder / `agent-<id>` twin of every selected card, in both directions and
+    ///       transitively (`link_subagent_transcripts` collapses the pair into the transcript's card,
+    ///       so a hot placeholder over a cold transcript yields the cold card and its events vanish;
+    ///       leaving either side out would keep the hot one).
+    /// The OTEL spans are all kept, and that is not cheap: the window is bounded at up to 1,000,000 spans over
+    /// `summaryWindowHours`, and `summarize_spans` runs over all of them. The memo in `ui::burn_summary_now`
+    /// makes it one computation per data_version.
+    /// Parity argument (by code reading of feed_merge.rs, not proven): every merge step is keyed by sessionId or by the placeholder/twin id pair, so
+    /// restricting its input to a set closed under those two relations changes no decision about any
+    /// kept card, and the dropped cards are event-free. `merge_summary` is the SAME code as the full
+    /// path; `burn_subset_tests` asserts equal output against `summary_over`.
+    /// This is a second summary-shaped path: if `summary_over` grows a new cross-card relation, add it
+    /// to the closure here, or the parity test's fixture must gain a case that breaks.
+    pub(crate) fn burn_subset_summary(spans: &[Arc<Value>], cards: &[Arc<Value>], accounts: &IndexMap<String, String>) -> Value {
+        let summary = summarize::summarizer::summarize_spans(spans, &|sid| accounts.get(sid).cloned());
+        let otel_ids: std::collections::HashSet<&str> = summary
+            .get("sessions")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|c| c.get("sessionId").and_then(Value::as_str)).collect())
+            .unwrap_or_default();
+        let id_of = |c: &Value| c.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned();
+        // An empty sessionId is no identity: indexing it would let "agent-" / "" pair unrelated cards.
+        let index: std::collections::HashMap<String, usize> =
+            cards.iter().enumerate().map(|(i, c)| (id_of(c), i)).filter(|(id, _)| !id.is_empty()).collect();
+        let mut keep = vec![false; cards.len()];
+        let mut work: Vec<usize> = Vec::new();
+        for (i, c) in cards.iter().enumerate() {
+            let hot = c.get("timeline").and_then(Value::as_array).is_some_and(|t| !t.is_empty());
+            let window_twin = c.get("sessionId").and_then(Value::as_str).is_some_and(|id| !id.is_empty() && otel_ids.contains(id));
+            if hot || window_twin {
+                keep[i] = true;
+                work.push(i);
+            }
+        }
+        while let Some(i) = work.pop() {
+            let c = &cards[i];
+            let id = id_of(c);
+            if id.is_empty() {
+                continue;
+            }
+            let twin_of_placeholder = feed_merge::link_twin_id(c);
+            let placeholder_of_twin = id.strip_prefix("agent-");
+            for other in [Some(twin_of_placeholder.as_str()), placeholder_of_twin].into_iter().flatten() {
+                if let Some(&j) = index.get(other) {
+                    if !keep[j] {
+                        keep[j] = true;
+                        work.push(j);
+                    }
+                }
+            }
+        }
+        let subset: Vec<Arc<Value>> = cards.iter().zip(&keep).filter(|(_, k)| **k).map(|(c, _)| c.clone()).collect();
+        Self::merge_summary(summary, &subset).0
+    }
     /// buildSessionSummary — the merged summary, rebuilt only when data_version moved. The
     /// attribution side-map is replaced in the same compute (the TS rebuilds the module-level
     /// Map inside the memoized computeSessionSummary), so map and summary always share a version.
@@ -536,12 +679,6 @@ impl CoreState {
             *otel_attribution = attribution;
             summary
         })
-    }
-
-    /// buildStrippedSummary — `/api/summary`'s body, memoized the same way.
-    pub fn build_stripped_summary(&mut self, now_ms: f64) -> std::sync::Arc<Value> {
-        let summary = self.build_session_summary(now_ms);
-        self.stripped_cache.get(self.data_version, || ui::strip_session_detail(&summary))
     }
 
     /// gatherBurn (server.ts:1448) + computeBurnStatus in one step — shared by the 4s burn
@@ -587,7 +724,7 @@ impl CoreState {
         burn::monitor::compute_session_status(sessions, &events, &self.burn.config, session_id, workspace, now_ms, Some(&ttl))
     }
 
-    /// The `/api/burn-risk` body (freeze row 12): poll the bodies watcher, then checkBurnRisk
+    /// The `/api/burn-risk` body (freeze row 12): read the bodies watcher (scanned off-lock by the burn tick), then checkBurnRisk
     /// over the three feeds, then attach the verbatim spawning calls behind an active fan-out.
     /// `last_status` is filled inline when the 4s tick has not run yet (freshly booted server),
     /// exactly as the TS route does. NOT PORTED: the in-memory hook-event ring (P4m note) — the
@@ -612,7 +749,6 @@ impl CoreState {
         if self.burn.last_status.is_none() {
             self.burn.last_status = status_when_unset;
         }
-        self.burn.bodies.poll(now_ms);
         let bodies = self.burn.bodies.report(now_ms);
         let mut report = burn::guard::check_burn_risk(&burn::guard::BurnGuardOptions {
             now: now_ms,
@@ -626,6 +762,11 @@ impl CoreState {
         });
         let dirs = agentlens_logscan::discovery::claude_projects_dirs(&self.log_env);
         burn::guard::attach_risk_causing_calls(&mut report, &dirs);
+        // TRDD-H3D5ZBO1: the bodies watcher is scanned in the background by the burn tick, so
+        // this report no longer polls; say how fresh the bodies feed is instead.
+        if let Some(obj) = report.as_object_mut() {
+            obj.insert("bodiesScan".into(), self.burn.bodies.scan_status(now_ms));
+        }
         report
     }
 }
@@ -656,8 +797,18 @@ impl CoreState {
     /// data cut — every span is still on disk, `session_summary_sql` aggregates it there, and
     /// `/api/timeline` re-reads one session on demand.
     pub fn open(data_dir: &std::path::Path) -> CoreState {
+        // TRDD-2HRA270Y: one-shot boot-phase reading after a sub-load of `open` (each expansion has its own static
+        // `Once`); with `before_core_open` / `after_core_open` in bin/alcore.rs it splits the CoreState::open window by
+        // sub-load, in struct-literal field order. A reading is NET commit since the previous one, not an attribution.
+        macro_rules! core_open_reading {
+            ($name:literal) => {{
+                static READING: std::sync::Once = std::sync::Once::new();
+                READING.call_once(|| rss_guard::log_boot_phase($name, None));
+            }};
+        }
         let now = now_ms();
         let writer = SpanStoreWriter::open(&data_dir.join("spans"));
+        core_open_reading!("core_open_writer");
         let window = span_window::SpanWindow::new(span_window::summary_window_ms(data_dir));
         CoreState {
             ingest: IngestState::default(),
@@ -671,39 +822,55 @@ impl CoreState {
             media_dir: None,
             // TRDD-TOIM26HP: `<data_dir>/cards.duckdb`, opened EMPTY at every boot — the corpus is
             // on disk so DuckDB's bounded buffer pool decides what is resident, not the process.
-            cards: card_store::CardStore::open(data_dir),
+            cards: {
+                let cards = card_store::CardStore::open(data_dir);
+                core_open_reading!("core_open_cards");
+                cards
+            },
             data_dir: data_dir.to_path_buf(),
             started_at_ms: now,
             ports: server_stats::Ports::default(),
             persist: server_stats::PersistStats::default(),
             // Opened (not created) at boot: `open` seeds its change-detection key from the file's
             // last line, so a restart into an unchanged subscription state re-logs nothing.
-            account_timeline: account_state_timeline::AccountStateTimeline::open(
-                account_state_timeline::account_state_timeline_path(data_dir),
-            ),
+            account_timeline: {
+                let timeline = account_state_timeline::AccountStateTimeline::open(
+                    account_state_timeline::account_state_timeline_path(data_dir),
+                );
+                core_open_reading!("core_open_account_timeline");
+                timeline
+            },
             log_sink_warned: std::collections::HashSet::new(),
             hook_runtime: server_stats::hook_runtime_config(data_dir),
             log_scan: log_reader::LogScanStats::default(),
             sweeper: None,
             summary_cache: derived_cache::VersionedCache::default(),
-            stripped_cache: derived_cache::VersionedCache::default(),
+            burn_subset_memo: None,
+            summary_asked: false,
             summary_engine: Arc::new(summary_engine::SummaryEngine::default()),
             accounts: account_registry::AccountRegistry::default(),
             bodies: call_body_registry::CallBodyRegistry::default(),
             composition: context_composition_index::ContextCompositionIndex::default(),
             requests: request_log::RequestLog::new(Some(data_dir.join("requests.log"))),
             otel_attribution: IndexMap::new(),
-            lifecycle: collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now),
+            lifecycle: {
+                let lifecycle = collector_lifecycle::record_start(&collector_lifecycle::lifecycle_file(data_dir), now);
+                core_open_reading!("core_open_lifecycle");
+                lifecycle
+            },
             log_env: agentlens_logscan::discovery::Env::from_process(),
             latest_resident_blobs: Vec::new(),
             pressure_stage: 0,
+            demote_failing: false,
             // Not loaded here: `open` must not create a key file as a side effect of constructing
             // state (every test would mint one). The BINARY loads it at boot and refuses to start
             // if it is unusable — see bin/alcore.rs.
             embed_key: None,
             burn: {
                 let env = agentlens_logscan::discovery::Env::from_process();
-                burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect(), data_dir)
+                let burn = burn::runtime::BurnRuntime::new(env.home, std::env::vars().collect(), data_dir);
+                core_open_reading!("core_open_burn_runtime");
+                burn
             },
             // Boot-seed the ring from disk so a fresh server isn't blind to a stall/fan-out from
             // 5 minutes ago (server.ts:1029 — last hour, ≤500, reversed to oldest-first).
@@ -713,6 +880,7 @@ impl CoreState {
                     &hook_events::HookEventFilter { since_ms: Some(now - 3_600_000), limit: Some(500), ..Default::default() },
                 );
                 seed.reverse();
+                core_open_reading!("core_open_hook_seed");
                 seed
             },
             advisory_issued: std::collections::HashMap::new(),
@@ -722,6 +890,8 @@ impl CoreState {
             body_links: crate::delta_log::DeltaLog::new(data_dir, "body-links"),
             spool_tap: None,
             spool_tap_off_reason: "not configured: alcore serve was started without --ingest-manifest and --aldigest-bin".to_owned(),
+            no_collection: false,
+            started_by: None,
         }
     }
 
@@ -784,23 +954,23 @@ impl CoreState {
         // Memory pressure FIRST: narrowing the window is what makes the following prune evict.
         // Order is load-bearing — halving after the prune would defer every cut by a full tick,
         // and the tick is 5s while a flood can add ~11k spans/s.
-        // WHY the ladder keys on `primary_metric` against fractions of the HARD cap: the old valve
-        // measured RSS against a 4096 MB budget while the kill used phys_footprint at 2048 MB, so
-        // it never fired before the kill. Actions run on an UPWARD edge only (not every tick).
+        // WHY the ladder keys on `mi_commit_bytes` against fractions of the HARD cap: the ladder and the
+        // cap must read the SAME counter. A footprint-keyed ladder sits at stage 3 forever once DuckDB's
+        // memory pushes footprint past the cap, because its actions only free Rust heap and so can never
+        // lower footprint. Actions run on an UPWARD edge only (not every tick).
         let mut narrowed = false;
         if pressure_ladder_enabled(std::env::var("AGENTLENS_PRESSURE_LADDER").ok().as_deref()) {
             let cap = rss_guard::rss_hard_cap_bytes();
-            let metric = rss_guard::primary_metric(crate::server_stats::rss_bytes).1;
+            let metric = rss_guard::mi_commit_bytes();
             let thresholds = rss_guard::pressure_thresholds(&self.data_dir, cap);
             let prev = self.pressure_stage;
             let new = pressure_stage(metric, thresholds, prev, cap);
             self.pressure_stage = new;
             if new > prev {
-                if new >= 1 {
-                    self.stripped_cache.clear();
-                }
+                // stage 1 freed the stripped twin, removed by TRDD-091Z1FU0; its new action is TRDD-VLJFJ9ZC
                 if new >= 2 {
                     self.summary_cache.clear();
+                    self.burn_subset_memo = None;
                     self.latest_resident_blobs.clear();
                     // u64::MAX over a budget of 1 forces the time window to halve (floored at 5 min).
                     narrowed = self.window.apply_memory_pressure(u64::MAX, 1);
@@ -825,14 +995,13 @@ impl CoreState {
                 }
             }
         }
-        // Hard ceiling, separate from and higher-severity than the soft valve above: if RSS is
-        // still over AGENTLENS_RSS_HARD_CAP_MB (default 2048) after the soft valve had its
-        // chance, the leak isn't in the summarization window this tick narrows — exit now with a
+        // Hard ceiling, separate from and higher-severity than the soft valve above: if mimalloc
+        // committed bytes are still over AGENTLENS_RSS_HARD_CAP_MB (default 2048) after the soft valve
+        // had its chance, the leak isn't in the summarization window this tick narrows — exit now with a
         // diagnostic rather than let the process grow toward an OOM kill with no evidence left.
-        // A CLOSURE, not `rss_now`. `rss_now` was sampled ABOVE, before the valve ran — the valve
-        // needs it, but the hard cap must not be keyed on a pre-valve reading, or on the RSS path
-        // it cannot see the only thing that makes the breach meaningful: still over AFTER the cut.
-        // On macOS this closure is never called; the footprint syscall answers first.
+        // `check_and_enforce` reads `mi_commit_bytes` at breach-check time, after the valve has run. Its
+        // fallback closure is evidence only, read on breach; on macOS the footprint syscall answers first,
+        // so it is never called there.
         // Snapshot fields are read into owned locals BEFORE the flush closure below, so the
         // closure's `&mut self.writer` capture (Rust 2021 disjoint field capture) never overlaps
         // an outstanding `&self.writer`/`&self.window`/`&self.cards` borrow from building the
@@ -915,9 +1084,9 @@ impl CoreState {
         let ts = rec.get("ts").and_then(Value::as_i64).unwrap_or_else(now_ms);
         let line = Value::Object(rec.clone()).to_string();
         match hook_events::append_bucket_line(&self.data_dir.join("log-events"), ts, &line) {
-            Ok(bytes) => {
+            Ok(pos) => {
                 self.persist.log_event_writes += 1;
-                self.persist.log_event_bytes += bytes;
+                self.persist.log_event_bytes += pos.length;
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -1058,16 +1227,39 @@ fn record_ingest_profile(parse_ns: u64, wait_ns: u64, held_ns: u64) {
 /// NO device_id, NO account_uuid — they ARE on the wire (metadata.user_id) but the no-identities
 /// doctrine forbids persisting them anywhere.
 fn body_link_row(p: &agentlens_ingest::BodyPointer) -> (String, Value) {
+    use sha2::Digest;
+    let (span_id, stem, request_id, request_body_id, message_id) = (
+        p.span_id.as_deref().unwrap_or(""),
+        p.body_ref.as_deref().unwrap_or(""),
+        p.request_id.as_deref().unwrap_or(""),
+        p.request_body_id.as_deref().unwrap_or(""),
+        p.message_id.as_deref().unwrap_or(""),
+    );
+    // WHY (TRDD-N6A8VX3G D4): the key derives from EVERY field the row stores. The old key
+    // "{span_id}:{kind}:{ts}" collided for two different same-kind pointers without a span_id in
+    // one OTLP payload (ts is the payload ingest time, shared by all its pointers), and DeltaLog
+    // replay keeps the last row per key, so a link row was silently lost. The fields come from
+    // untrusted OTLP input, so no separator character is safe to join them with; a JSON array
+    // encodes each field with quoting and escaping, so distinct field tuples give distinct
+    // strings. The key is that string HASHED, not the string itself: keying by the full row
+    // content roughly doubled the snapshot and the boot rewrite cost (~19M rows a year).
+    // SHA-256 truncated to 128 bits (32 hex chars): a collision needs ~2^64 rows, far beyond 19M/yr,
+    // and a crafted collision would only drop one telemetry link row. Identical content still
+    // collapses to one row (harmless).
+    let encoded = serde_json::to_string(&[p.session_id.as_str(), span_id, p.kind, stem, request_id, request_body_id, message_id, &p.ts.to_string()])
+        .expect("a string array always serializes");
+    let digest = sha2::Sha256::digest(encoded.as_bytes());
+    let key: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
     (
-        format!("{}:{}:{}", p.span_id.as_deref().unwrap_or(""), p.kind, p.ts),
+        key,
         serde_json::json!({
             "session_id": p.session_id,
-            "span_id": p.span_id.as_deref().unwrap_or(""),
+            "span_id": span_id,
             "kind": p.kind,
-            "stem": p.body_ref.as_deref().unwrap_or(""),
-            "request_id": p.request_id.as_deref().unwrap_or(""),
-            "request_body_id": p.request_body_id.as_deref().unwrap_or(""),
-            "message_id": p.message_id.as_deref().unwrap_or(""),
+            "stem": stem,
+            "request_id": request_id,
+            "request_body_id": request_body_id,
+            "message_id": message_id,
             "ts_ms": p.ts,
         }),
     )
@@ -1160,6 +1352,7 @@ async fn handle(
     req: Request<Incoming>,
     state: Arc<Mutex<CoreState>>,
     tap: Option<Arc<spool_tap::SpoolTap>>,
+    no_collection: bool,
 ) -> Result<Response<Full<Bytes>>, String> {
     // The discovery probe matches the RAW url (path+query, no strip) — server.ts:4414 compares
     // req.url exactly, so a query string must NOT match.
@@ -1188,6 +1381,12 @@ async fn handle(
         }
     }
 
+    // TRDD-RBBEX59R no-collection mode: the body is read (so the exporter gets a normal response)
+    // and then DROPPED before the parse, the spool tap and the ingest. The port stays bound (D1):
+    // exporters keep their keys under the switch, and a closed port would error in every session.
+    if no_collection {
+        return Ok(Response::new(Full::new(Bytes::new())));
+    }
     // Parse on THIS worker thread, before the lock: N connections parse on N cores.
     //
     // THE COMMENT HERE USED TO SAY the lock "covers only the buffer append + window insert". That
@@ -1210,7 +1409,7 @@ async fn handle(
     }
     let t_wait = profile.then(std::time::Instant::now);
     {
-        let mut st = state.lock_timed().map_err(|_| "state poisoned".to_owned())?;
+        let mut st = state.lock_timed();
         let wait_ns = t_wait.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
         let t_held = profile.then(std::time::Instant::now);
         match parsed {
@@ -1238,14 +1437,18 @@ pub async fn serve_otlp(
     // state lock, and taking the lock just to look at a field that never changes after boot would
     // add a lock wait to every POST of a server that has the tap off. `CoreState.spool_tap` stays
     // the single owner; this is a clone of its `Arc`.
-    let tap = state.lock_timed().unwrap_or_else(|e| e.into_inner()).spool_tap.clone();
+    // no_collection is read here for the same reason: it is set once at boot and never changes.
+    let (tap, no_collection) = {
+        let st = state.lock_timed();
+        (st.spool_tap.clone(), st.no_collection)
+    };
     loop {
         let (stream, _) = listener.accept().await?;
         let io = hyper_util::rt::TokioIo::new(stream);
         let state = state.clone();
         let tap = tap.clone();
         tokio::spawn(async move {
-            let svc = service_fn(move |req| handle(req, state.clone(), tap.clone()));
+            let svc = service_fn(move |req| handle(req, state.clone(), tap.clone(), no_collection));
             // An Err from the service aborts this connection — exactly the overflow contract.
             let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await;
         });
@@ -1274,9 +1477,11 @@ use std::panic::Location;
 /// method form called `build_session_summary` under the state lock, and on a cache miss that is
 /// the whole O(window) rebuild while every ingest and read path queues — measured on the live
 /// server at 12.6 s and 30.1 s per call with the other two statements under that guard at 0 ms.
-/// Callers get the summary from `ui::summary_now` (off-lock; warm, stale, or the one cold-boot
-/// build) and take the lock only for what actually needs it.
+/// Callers: `ui::composition_projects` (the resident-blob scan and `compositions_in_scope`) gets the projects from
+/// the cards table and the burn subset, with no summary built. `/api/composition-index` still takes the full summary
+/// from `ui::summary_now` (off-lock; warm, stale, or the one cold-boot build) and then calls this.
 pub fn composition_project_map(summary: &Value) -> std::collections::HashMap<String, String> {
+    COMPOSITION_PROJECT_MAP_BUILDS.with(|c| c.set(c.get() + 1));
     let mut map = std::collections::HashMap::new();
     for s in summary.get("sessions").and_then(Value::as_array).unwrap_or(&Vec::new()) {
         let Some(id) = s.get("sessionId").and_then(Value::as_str) else { continue };
@@ -1290,8 +1495,31 @@ pub fn composition_project_map(summary: &Value) -> std::collections::HashMap<Str
     }
     map
 }
+
+thread_local! {
+    /// How many times `composition_project_map` has been called on THIS thread. The map is
+    /// O(sessions) to build, and the scope pass used to rebuild it once PER SESSION
+    /// (O(sessions²) probes per pass) — the live profile put 14,071 of 14,071 samples in
+    /// exactly that shape. The counter is the regression's proof: a scope pass over N
+    /// sessions must build the map ONCE.
+    ///
+    /// THREAD-LOCAL, not global: cargo runs the unit tests on parallel threads, and a global
+    /// counter would count OTHER tests' builds and make the assertion a race. `composition_projects` builds
+    /// the map on the task that awaits it, after its `spawn_blocking` read, so a build is counted on that
+    /// task's thread. The regression test runs on a current-thread runtime (`#[tokio::test]`), where that task
+    /// never changes thread: the delta of two reads on the test thread is exactly this pass's count. On a
+    /// multi-threaded runtime an await can resume on another worker, and the count is then per thread, not per
+    /// pass. Nothing in production reads the counter.
+    static COMPOSITION_PROJECT_MAP_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The number of `composition_project_map` builds on the CALLING thread — the regression
+/// counter for the O(sessions²) scope pass.
+pub fn composition_project_map_builds() -> u64 {
+    COMPOSITION_PROJECT_MAP_BUILDS.with(|c| c.get())
+}
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-use std::sync::{LockResult, MutexGuard, PoisonError};
+use std::sync::MutexGuard;
 
 static HOLDER_SITE: AtomicPtr<Location<'static>> = AtomicPtr::new(std::ptr::null_mut());
 static HOLDER_SINCE_NS: AtomicU64 = AtomicU64::new(0);
@@ -1330,9 +1558,8 @@ impl<'a> std::ops::DerefMut for StateGuard<'a> {
 impl<'a> Drop for StateGuard<'a> {
     fn drop(&mut self) {
         let held = self.since.elapsed();
-        // Clear the holder record ONLY if it's still us — a poisoned-then-recovered guard built
-        // via `into_inner()` (see LockTimed::lock_timed below) never set the record, and clearing
-        // it unconditionally there would erase whoever's actually still holding it.
+        // Clear the holder record ONLY if it is still ours: another CoreState mutex in the same process
+        // (test binaries run several) could have set the record after us, and a plain store would erase it.
         let ptr = self.site as *const Location<'static> as *mut Location<'static>;
         let _ = HOLDER_SITE.compare_exchange(ptr, std::ptr::null_mut(), Ordering::AcqRel, Ordering::Relaxed);
         if held >= std::time::Duration::from_millis(lock_trace_threshold_ms()) {
@@ -1342,14 +1569,17 @@ impl<'a> Drop for StateGuard<'a> {
 }
 
 /// `state.lock()` that attributes a long WAIT to whoever is currently holding it, and records
-/// itself as the new holder for the next waiter. Drop-in replacement for `Mutex::lock()`.
+/// itself as the new holder for the next waiter. Drop-in replacement for `Mutex::lock()`, minus
+/// the `Result`: the alcore panic hook (TRDD-3RVTC1HY) exits the process before unwinding, so a
+/// poisoned CoreState lock is never observed in production. In a test binary without that hook,
+/// a poisoned lock panics inside `lock_timed` by design.
 pub trait LockTimed {
-    fn lock_timed(&self) -> LockResult<StateGuard<'_>>;
+    fn lock_timed(&self) -> StateGuard<'_>;
 }
 
 impl LockTimed for Mutex<CoreState> {
     #[track_caller]
-    fn lock_timed(&self) -> LockResult<StateGuard<'_>> {
+    fn lock_timed(&self) -> StateGuard<'_> {
         let site = Location::caller();
         // Snapshot the holder BEFORE blocking. By the time `lock()` returns, the holder that
         // made us wait has released and CLEARED the slot, so a read after acquisition can only
@@ -1377,21 +1607,16 @@ impl LockTimed for Mutex<CoreState> {
             };
             eprintln!("{} alcore: state lock waited {} ms at {}:{}; holder {holder}", crate::log_ts(), waited.as_millis(), site.file(), site.line());
         }
-        match result {
-            Ok(guard) => {
-                HOLDER_SITE.store(site as *const _ as *mut _, Ordering::Release);
-                HOLDER_SINCE_NS.store(now_ns(), Ordering::Release);
-                Ok(StateGuard { guard, site, since: std::time::Instant::now() })
-            }
-            Err(poisoned) => {
-                // Poisoned: still hand back a usable guard (matches every existing call site's
-                // recovery pattern — `unwrap_or_else(|e| e.into_inner())` etc.) but do NOT claim
-                // the holder record, since this guard never went through the "we're now holding
-                // it" path above.
-                let guard = poisoned.into_inner();
-                Err(PoisonError::new(StateGuard { guard, site, since: std::time::Instant::now() }))
-            }
-        }
+        // A poisoned lock means a thread panicked while holding CoreState. alcore's panic hook
+        // (TRDD-3RVTC1HY) exits the process before unwinding, so production never reaches this
+        // panic; a test binary without the hook panics here by design.
+        let guard = match result {
+            Ok(guard) => guard,
+            Err(_) => panic!("CoreState lock poisoned"),
+        };
+        HOLDER_SITE.store(site as *const _ as *mut _, Ordering::Release);
+        HOLDER_SINCE_NS.store(now_ns(), Ordering::Release);
+        StateGuard { guard, site, since: std::time::Instant::now() }
     }
 }
 
@@ -1466,8 +1691,8 @@ mod body_links_tests {
         let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
         let map = reloaded.load().expect("load");
         assert_eq!(map.len(), 2);
-        let req_row = map.get("span-42:request:1000").expect("request row key");
-        let resp_row = map.get("span-42:response:1500").expect("response row key");
+        let req_row = map.get(&body_link_row(&req).0).expect("request row key");
+        let resp_row = map.get(&body_link_row(&resp).0).expect("response row key");
         assert_eq!(req_row["session_id"], "sess-test-1");
         assert_eq!(req_row["stem"], "req-body-file");
         assert_eq!(req_row["request_body_id"], "rbid-7");
@@ -1480,6 +1705,108 @@ mod body_links_tests {
             assert!(obj.get("account_uuid").is_none(), "no account_uuid (no-identities doctrine)");
             assert_eq!(obj.len(), 8, "exactly the spec'd row shape");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn spanless_pointer(body_ref: &str) -> agentlens_ingest::BodyPointer {
+        agentlens_ingest::BodyPointer {
+            session_id: "sess-test-2".to_owned(),
+            kind: "response",
+            body_ref: Some(body_ref.to_owned()),
+            inline_body: None,
+            request_id: None,
+            span_id: None,
+            model: None,
+            query_source: None,
+            request_body_id: None,
+            message_id: None,
+            message_uuid: None,
+            ts: 2_000,
+        }
+    }
+
+    #[test]
+    fn body_link_distinct_spanless_pointers_with_shared_ts_keep_both_rows() {
+        // TRDD-N6A8VX3G D4: same kind, no span_id, same ingest ts, different body_ref — the old
+        // "{span_id}:{kind}:{ts}" key collided and DeltaLog replay kept only the last row.
+        let dir = std::env::temp_dir().join(format!("agentlens-body-links-collide-test-{}", now_ns()));
+        let mut log = delta_log::DeltaLog::new(&dir, "body-links");
+        let mut records = IndexMap::new();
+        for p in [spanless_pointer("body-a"), spanless_pointer("body-b")] {
+            let (k, v) = body_link_row(&p);
+            records.insert(k, v);
+        }
+        log.append_changed(&records).expect("append");
+        let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
+        let map = reloaded.load().expect("load");
+        assert_eq!(map.len(), 2, "two different pointers must be two rows");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn body_link_same_pointer_appended_twice_is_one_row() {
+        // TRDD-N6A8VX3G D4: identical row content still collapses to a single row.
+        let dir = std::env::temp_dir().join(format!("agentlens-body-links-same-test-{}", now_ns()));
+        let mut log = delta_log::DeltaLog::new(&dir, "body-links");
+        for _ in 0..2 {
+            let (k, v) = body_link_row(&spanless_pointer("body-a"));
+            let mut rec = IndexMap::new();
+            rec.insert(k, v);
+            log.append_changed(&rec).expect("append");
+        }
+        let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
+        let map = reloaded.load().expect("load");
+        assert_eq!(map.len(), 1, "the same pointer is one row");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
+    #[test]
+    fn body_link_unit_separator_shifted_across_fields_keeps_both_rows() {
+        // TRDD-N6A8VX3G D4: ids are untrusted OTLP input, so a U+001F inside one field must not
+        // make two different field tuples share a key (a separator join gives "a\u{1f}b\u{1f}c" for both).
+        let mut one = spanless_pointer("a\u{1f}b");
+        one.request_id = Some("c".to_owned());
+        let mut two = spanless_pointer("a");
+        two.request_id = Some("b\u{1f}c".to_owned());
+        let (k1, _) = body_link_row(&one);
+        let (k2, _) = body_link_row(&two);
+        assert_ne!(k1, k2, "shifting U+001F across adjacent fields must stay two rows");
+    }
+
+
+    #[test]
+    fn ingest_parsed_logs_payload_with_two_spanless_same_kind_pointers_keeps_both_link_rows() {
+        // TRDD-N6A8VX3G D4 at the real entry point: an OTLP /v1/logs payload with two
+        // api_response_body events (same session, no span id, different body refs) goes through
+        // process_logs and ingest_parsed; both link rows must reach the body-links DeltaLog.
+        // The old "{span_id}:{kind}:{ts}" key collided here (ts is the shared ingest time).
+        let dir = std::env::temp_dir().join(format!("agentlens-body-links-wire-test-{}", now_ns()));
+        let mut state = CoreState::open(&dir);
+        let event = |body_ref: &str| {
+            serde_json::json!({
+                "eventName": "api_response_body",
+                "attributes": [
+                    { "key": "session.id", "value": { "stringValue": "sess-wire-1" } },
+                    { "key": "body_ref", "value": { "stringValue": body_ref } },
+                ],
+            })
+        };
+        let payload = serde_json::json!({
+            "resourceLogs": [{ "scopeLogs": [{ "logRecords": [event("/tmp/bodies/resp_a.json"), event("/tmp/bodies/resp_b.json")] }] }],
+        });
+        ingest_parsed(&mut state, "logs", payload, "/v1/logs");
+        let mut reloaded = delta_log::DeltaLog::new(&dir, "body-links");
+        let map = reloaded.load().expect("load");
+        assert_eq!(map.len(), 2, "two spanless same-kind pointers in one payload must be two rows");
+        let mut stems: Vec<String> = Vec::new();
+        for row in map.values() {
+            assert_eq!(row["session_id"], "sess-wire-1");
+            assert_eq!(row["span_id"], "");
+            stems.push(row["stem"].as_str().expect("stem is a string").to_owned());
+        }
+        stems.sort();
+        assert_eq!(stems, ["/tmp/bodies/resp_a.json", "/tmp/bodies/resp_b.json"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1523,23 +1850,19 @@ mod lock_timed_tests {
     }
 
     #[test]
-    fn records_and_clears_the_holder() {
+    fn lock_timed_guard_locks_and_releases() {
+        // The holder-slot checks (HOLDER_SITE) live in tests/lock_holder_site.rs, which runs alone in its own process: this unit-test binary is parallel, so a guard on another mutex can store or clear the process-wide slot while this guard lives (TRDD-7EZE3AIZ).
         let m: Mutex<CoreState> = Mutex::new(fresh_state());
-        let line_of_lock;
-        {
-            let _g = m.lock_timed().unwrap();
-            line_of_lock = line!() - 1;
-            let ptr = HOLDER_SITE.load(Ordering::Acquire);
-            assert!(!ptr.is_null(), "holder should be recorded while the guard is alive");
-            let loc: &'static Location<'static> = unsafe { &*ptr };
-            assert!(loc.file().ends_with("lib.rs"));
-            assert_eq!(loc.line(), line_of_lock);
-        }
-        assert!(HOLDER_SITE.load(Ordering::Acquire).is_null(), "holder should clear on drop");
+        let g = m.lock_timed();
+        let _ = &*g;
+        drop(g);
+        // try_lock, not lock_timed: if the guard failed to release, a blocking relock on this thread would hang instead of failing.
+        assert!(m.try_lock().is_ok(), "the guard should release the mutex on drop");
     }
 
     #[test]
-    fn poisoned_mutex_still_yields_a_usable_guard() {
+    #[should_panic(expected = "CoreState lock poisoned")]
+    fn poisoned_mutex_panics_in_lock_timed() {
         let m: Mutex<CoreState> = Mutex::new(fresh_state());
         {
             let wrapped = std::panic::AssertUnwindSafe(&m);
@@ -1548,13 +1871,7 @@ mod lock_timed_tests {
                 panic!("poison it");
             });
         }
-        match m.lock_timed() {
-            Ok(_) => panic!("expected poisoned"),
-            Err(poisoned) => {
-                let guard = poisoned.into_inner();
-                // Just needs to deref to a CoreState without panicking.
-                let _ = guard.data_version;
-            }
-        };
+        // alcore's panic hook makes poisoning unobservable in production; here it must panic, not return a guard.
+        let _ = m.lock_timed();
     }
 }

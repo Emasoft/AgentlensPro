@@ -422,13 +422,14 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
 
     // Row 25: the reader counters + dataVersion (no sweeper in this harness → zeros) and the
     // derived-cache counters: two /api/summary reads with nothing changed = ONE rebuild + one
-    // hit; a data change + a read = a second rebuild (server.ts strippedCache by dataVersion).
+    // hit; a data change + a read = a second rebuild (server.ts summaryCache by dataVersion).
     get(ui, "/api/summary", "");
     get(ui, "/api/summary", "");
     let r = get(ui, "/api/debug/log-scan-stats", "");
     let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
     assert_eq!(v["incrementalReads"], 0);
-    assert_eq!(v["derivedCaches"]["stripped"], serde_json::json!({ "hits": 1, "misses": 1 }));
+    let (hits_before, misses_before) = (v["derivedCaches"]["summary"]["hits"].as_u64().unwrap(), v["derivedCaches"]["summary"]["misses"].as_u64().unwrap());
+    assert_eq!(misses_before, 1, "two reads with no change: one rebuild: {v}");
     assert_eq!(v["derivedCaches"]["sidebar"], serde_json::json!({ "hits": 0, "misses": 0 }));
     assert!(v["dataVersion"].is_u64());
     assert!(v["summaryEngine"]["sharedCopies"].is_u64(), "the shared-copy counter is served: {v}");
@@ -436,10 +437,11 @@ fn small_routes_embed_status_hook_config_clear_action_and_log_scan_stats() {
     get(ui, "/api/summary", "");
     let r = get(ui, "/api/debug/log-scan-stats", "");
     let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
-    // Phase C part 2: with log cards the summary engine stores the stripped twin EAGERLY with the
-    // summary (one miss), and the read that follows is then a HIT — so a data change + read is
-    // (hits +1, misses +1), not the lazy miss-only of the cold/no-card path above.
-    assert_eq!(v["derivedCaches"]["stripped"], serde_json::json!({ "hits": 2, "misses": 2 }));
+    // A data change + a read is exactly ONE more rebuild (one more miss) plus at least one more hit.
+    let (hits_after, misses_after) = (v["derivedCaches"]["summary"]["hits"].as_u64().unwrap(), v["derivedCaches"]["summary"]["misses"].as_u64().unwrap());
+    assert_eq!(misses_after, misses_before + 1, "a data change costs exactly one summary rebuild: {v}");
+    // hit counts depend on how many warm-up GETs the test makes; misses are the invariant
+    assert!(hits_after > hits_before, "the read after the rebuild is a hit: {v}");
     {
         let mut st = state.lock().unwrap();
         st.cards.clear();
@@ -575,10 +577,16 @@ fn hook_events_ingest_read_and_lifecycle_mapping() {
     post(ui, "/api/hook-events", &ev("StopFailure", r#","error_type":"rate_limit"#).replace("rate_limit", r#"rate_limit""#));
     post(ui, "/api/hook-events", &ev("PreCompact", r#","trigger":"manual""#));
     post(ui, "/api/hook-events", r#"{"hook_event_name":"Notification"}"#);
-    // captureEnabled=false: accepted and DROPPED (a non-2xx would look like an outage).
+    // captureEnabled=false: accepted, NOT written to disk, but pushed to the in-memory ring the gate
+    // reads and counted as received (TRDD-RBBEX59R ring-only path; a non-2xx would look like an outage).
     post(ui, "/api/hook-config", r#"{"captureEnabled":false}"#);
     let r = post(ui, "/api/hook-events", &ev("SessionEnd", r#","reason":"exit""#));
     assert_eq!(body_of(&r), r#"{"ok":true,"dropped":"captureEnabled=false"}"#);
+    {
+        let st = state.lock().unwrap();
+        let last = st.recent_hook_events.last().expect("the ring holds the capture-off event");
+        assert_eq!(last["ev"], "SessionEnd", "capture off still feeds the ring");
+    }
     post(ui, "/api/hook-config", r#"{"captureEnabled":true}"#);
 
     // The persisted records: verbatim payload, `session` lifted, one daily bucket.
@@ -586,7 +594,7 @@ fn hook_events_ingest_read_and_lifecycle_mapping() {
     assert_eq!(buckets.len(), 1, "one UTC day bucket");
     let stats = get(ui, "/api/server-stats", "");
     let v: serde_json::Value = serde_json::from_str(body_of(&stats)).unwrap();
-    assert_eq!(v["hookEvents"]["receivedSinceBoot"], 5, "the statusline route, the 400s and the drop never counted");
+    assert_eq!(v["hookEvents"]["receivedSinceBoot"], 6, "the capture-off event counts as received; the statusline route and the 400s never counted");
     assert_eq!(v["hookEvents"]["files"], 1);
     assert_eq!(v["persistence"]["hookEventWrites"], 5);
     assert!(v["persistence"]["hookEventBytes"].as_u64().unwrap() > 0);
@@ -635,13 +643,39 @@ fn hook_events_ingest_read_and_lifecycle_mapping() {
 fn write_prompts_file_and_branch_dump() {
     let (_otlp, ui, _state) = start_servers();
 
+    // Removes the file it guards on drop, so an assertion failure cannot leave it behind.
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            // A panic while already unwinding aborts the whole test binary, so only report then.
+            match std::fs::remove_file(&self.0) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) if std::thread::panicking() => eprintln!("remove the test's prompts file {}: {e} (not panicking again: already unwinding)", self.0.display()),
+                Err(e) => panic!("remove the test's prompts file {}: {e}", self.0.display()),
+            }
+        }
+    }
+
     // write-prompts-file: first entry creates the header; a second appends; a malformed body is
     // logged and STILL 200 empty. The file lands in the server's cwd.
+    // WHY the guard: the test writes into the real cwd, which is in the repo tree. The old cross-volume
+    // rename into temp_dir failed silently, so the file accumulated a pair per run and from the second
+    // run on header creation was never exercised (TRDD-KBPB3UMH). The leftover removal below and the
+    // drop guard keep every run on the header path, and the guard also covers a failed assertion.
+    let file = std::env::current_dir().unwrap().join("agentlens-prompts-claude.md");
+    match std::fs::remove_file(&file) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("remove the leftover prompts file {}: {e}", file.display()),
+    }
+    let _guard = RemoveOnDrop(file.clone());
     let r = post(ui, "/api/write-prompts-file", r#"{"agent":"claude_code","label":"test label","prompt":"the prompt body"}"#);
     assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "{r}");
-    let file = std::env::current_dir().unwrap().join("agentlens-prompts-claude.md");
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.starts_with("# AgentLens Prompts — Claude\n\n## "), "{text}");
+    // A fresh file holds exactly one entry after the first post; an accumulated file (TRDD-KBPB3UMH) holds more.
+    assert_eq!(text.matches("\n## ").count(), 1, "a fresh file holds exactly one entry after the first post: {text}");
     assert!(text.contains(" — test label\n\nthe prompt body\n\n---\n\n"), "{text}");
     let r = post(ui, "/api/write-prompts-file", r#"{"agent":"claude_code","label":"second","prompt":"p2"}"#);
     assert!(r.starts_with("HTTP/1.1 200"), "{r}");
@@ -650,8 +684,8 @@ fn write_prompts_file_and_branch_dump() {
     assert_eq!(text2.matches("# AgentLens Prompts").count(), 1, "header once");
     let r = post(ui, "/api/write-prompts-file", "not json");
     assert!(r.starts_with("HTTP/1.1 200") && body_of(&r).is_empty(), "fire-and-forget: {r}");
-    // The test wrote into the real cwd — stage it out of the tree, never leave repo litter.
-    let _ = std::fs::rename(&file, std::env::temp_dir().join("agentlens-prompts-claude.md"));
+    drop(_guard);
+    assert!(!file.exists(), "the drop guard removed the prompts file");
 
     // branch-dump: a fixture HOME with one project dir; CLAUDE_CONFIG_DIR steers discovery.
     let home = std::env::temp_dir().join(format!("al-branchdump-{}", std::process::id()));
@@ -1108,6 +1142,31 @@ fn bodies_export_and_purge_routes() {
     agentlens_store::ingest_body(&mut store, "dddd4444.request.json", "{\"store\":\"only\",\"note\":\"never archived\"}", july_ts).unwrap();
     agentlens_store::flush_detailed(&mut store).unwrap();
     drop(store);
+
+    // TRDD-2HRA270Y F1: export opens the shared store itself, so an idle server (no bodies pass has run)
+    // still exports the store half. Purge is not called before the pass: it would open the store and
+    // then delete the July volume, which the rest of this test needs to see.
+    // Removed first: a leftover dest from an earlier run would already hold the store file, and the
+    // store half would then skip it (fromStore 0) for a reason unrelated to the store being opened.
+    let unopened = std::env::temp_dir().join("al-bodies-export-unopened");
+    let _ = std::fs::remove_dir_all(&unopened);
+    let req0 = serde_json::json!({ "destDir": unopened.to_string_lossy() }).to_string();
+    let r = post(ui, "/api/bodies/export", &req0);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert!(body_of(&r).contains("\"fromStore\":1"), "{r}");
+    // A bodies pass over a non-empty bodies dir. The file is fresh (under the 10s age cutoff), so the
+    // pass ingests nothing; the store is already open (the export opened it), so the pass only syncs it.
+    // Retried because the pass skips its tick when another test holds the HEAVY slot.
+    let bodies_dir = data_dir.join("otel-bodies");
+    std::fs::create_dir_all(&bodies_dir).unwrap();
+    std::fs::write(bodies_dir.join("eeee5555.request.json"), "{\"fresh\":true}").unwrap();
+    for _ in 0..20 {
+        agentlens_core::chores::bodies_pass(&state, agentlens_core::now_ms() as f64);
+        if agentlens_core::chores::bodies_store_reader(&data_dir.join("store")).is_some() {
+            break;
+        }
+    }
+    assert!(agentlens_core::chores::bodies_store_reader(&data_dir.join("store")).is_some(), "the bodies pass must open the shared store");
 
     // Export guards: missing / relative destDir, and a destDir inside the archive.
     let r = post(ui, "/api/bodies/export", r#"{"sinceMs":0}"#);
@@ -2288,4 +2347,54 @@ fn strip_session_detail_pins_key_order_and_dropped_fields_byte_for_byte() {
     let non_object_summary = serde_json::json!([1, 2]);
     let out3 = agentlens_core::ui::strip_session_detail(&non_object_summary);
     assert_eq!(serde_json::to_string(&out3).unwrap(), r#"[1,2]"#);
+}
+
+/// `StrippedView` must serialize to exactly the bytes of `strip_session_detail(..).to_string()` over
+/// every shape the stripping branches distinguish: the key position of `timeline`, a missing
+/// `timeline`, all three dropped keys, non-object elements, a non-array `sessions`, strings that
+/// need escaping or neutralizing, number forms, nested values and empty containers. A drift in any
+/// branch would break the byte parity of `/api/summary`.
+#[test]
+fn stripped_view_matches_strip_session_detail_byte_for_byte() {
+    let inputs = [
+        serde_json::json!({
+            "outer1": "a",
+            "sessions": [
+                {
+                    "id": "s1",
+                    "timeline": [{"t": 1}],
+                    "fileOps": [{"op": "write"}],
+                    "cost": 1.5,
+                    "generatedFiles": ["f1"],
+                    "generatedFilesTruncated": false,
+                    "model": "opus"
+                },
+                {
+                    "id": "s2",
+                    "fileOps": [{"op": "read"}]
+                },
+                42
+            ],
+            "outer2": "b"
+        }),
+        serde_json::Value::Null,
+        serde_json::json!([1, {"sessions": []}]),
+        serde_json::json!({"sessions": 5}),
+        serde_json::json!({"sessions": [1, "x", null]}),
+        serde_json::json!({"sessions": [{"a": 1, "timeline": [{"t": 1}], "b": 2}]}),
+        serde_json::json!({"sessions": [{"a": 1}]}),
+        serde_json::json!({"sessions": [{"id": "s", "fileOps": [1], "generatedFiles": ["f"], "generatedFilesTruncated": true, "timeline": [{"t": 2}]}]}),
+        serde_json::json!({"sessions": [{"id": "</script><!-- ${x} \u{2028}\u{2029} \u{0001} 🚀 \"q\" \\"}]}),
+        serde_json::json!({"sessions": [{"n": [u64::MAX, i64::MIN, -0.0, 1e308, 5e-324, 0.1]}]}),
+        serde_json::json!({"sessions": [{"id": "n", "nested": {"a": [{"b": null}], "c": {}}}]}),
+        serde_json::json!({"sessions": []}),
+        serde_json::json!({}),
+    ];
+    for input in &inputs {
+        assert_eq!(
+            serde_json::to_string(&agentlens_core::ui::StrippedView(input)).unwrap(),
+            agentlens_core::ui::strip_session_detail(input).to_string(),
+            "input {input}"
+        );
+    }
 }

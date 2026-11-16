@@ -224,7 +224,7 @@ fn load_store_facts(store_dir: &Path, since_ms: Option<f64>) -> std::collections
         return out; // no parts yet — every id falls back to the body file
     };
     let Ok(con) = Connection::open_in_memory() else { return out };
-    if con.execute_batch("SET memory_limit='256MiB'; SET threads=2;").is_err() {
+    if con.execute_batch(&format!("SET memory_limit='256MiB'; SET threads={};", crate::cores::duckdb_threads())).is_err() {
         return out;
     }
     // Review round 1 finding: the scan is windowed to the ledger's window — the parts corpus
@@ -730,7 +730,7 @@ fn enrich_prefers_the_durable_store_row_when_bodies_are_gone() {
     std::fs::create_dir_all(data.join("bodies")).unwrap();
     // Seed the store through the REAL writer: one response body ingested, then the body file
     // removed (the bodies pass's delete gate is what does this in production).
-    let mut store = agentlens_store::open_store(&data.join("store"), agentlens_store::DEFAULT_MEMORY_LIMIT, 4).unwrap();
+    let mut store = agentlens_store::open_store(&data.join("store"), agentlens_store::DEFAULT_MEMORY_LIMIT, crate::cores::duckdb_threads()).unwrap();
     let raw = r#"{"id":"msg_x","model":"claude-opus-5","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":5,"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}},"diagnostics":{"cache_miss_reason":{"type":"below_min_cacheable","cache_missed_input_tokens":99}}}"#;
     agentlens_store::ingest_body(&mut store, "req_x.response.json", raw, 1_700_000_000_000).unwrap();
     agentlens_store::flush_detailed(&mut store).unwrap();

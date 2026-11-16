@@ -115,12 +115,12 @@ impl SessionSummarySql {
     /// `tmp_dir` is the DuckDB spill directory (`<data_dir>/tmp/session-summary`), created here.
     pub fn new(tmp_dir: &Path) -> SessionSummarySql {
         let conn = Connection::open_in_memory().expect("open the session-summary database");
-        // `threads=2` and a memory limit, for the same reasons transcript_sql gives: this is a
+        // `crate::cores::duckdb_threads()` (TRDD-YH822LDI) and a memory limit, for the same reasons transcript_sql gives: this is a
         // streaming scan of at most two segment files on a machine that is also serving, not the
         // only workload on the box. An over-limit query spills to `tmp_dir` (latency + disk)
         // instead of ballooning the process past its cap (TRDD-9VX3WTGU Phase B).
         let spill = agentlens_store::spill_sql(tmp_dir).expect("create the session-summary spill dir");
-        conn.execute_batch(&format!("SET threads=2; SET memory_limit='{}'; {spill}", agentlens_store::SERVER_MEMORY_LIMIT))
+        conn.execute_batch(&format!("SET threads={}; SET memory_limit='{}'; {spill}", crate::cores::duckdb_threads(), agentlens_store::SERVER_MEMORY_LIMIT))
             .expect("configure the session-summary database");
         conn.execute_batch(&format!("CREATE TABLE session_summary ({SCHEMA_COLUMNS});"))
             .expect("create the empty session_summary table");

@@ -2,7 +2,7 @@
 name: ssd-write-economics
 description: "is SSD life spent by write operations or by bytes / does batching writes reduce SSD wear / why is the span store 6GB when the body store is compressed / should I delay writes to save the disk / what does write amplification mean for us / file got smaller but disk writes went up / is it safe to gzip a span segment / why did a compressed segment disappear from the reader / where do raw captured bodies land now / is the spoolDir key or spool verb still valid (spool gone) / what happened to the RAM disk / what is the SSD write budget without the spool / how fast do raw bodies fill the SSD now / is the 15GB per day budget still met after the spool removal / what is the measured daily body volume"
 ocd: 2026-08-11
-lmd: 2026-09-26
+lmd: 2026-09-29
 metadata:
   node_type: memory
   type: project
@@ -12,9 +12,6 @@ publish-globally: false
 
 # ssd-write-economics
 
-
-^ATOM-Y2TV-18OF [desc: "Post-removal SSD inflow: one 240s ACTIVE window gross ~13.5 MB/min (~19 GB/day 24/7 — PEAK not daily); 24h average UNMEASURED, measurement owed; net ~1.35 MB/min", keywords: is_ssd_life_spent_by_operations_or_bytes does_batching_writes_reduce_ssd_wear write_amplification_factor sub-page_write_programs_a_whole_page how_many_GB_per_day_can_an_ssd_sustain delaying_writes_to_save_the_disk, type: reference, ocd: 2026-08-11, lmd: 2026-09-26, status: superseded, superseded-by: ATOM-NSSD-71W1]
-DO NOT quote the pre-removal under-3-percent-of-budget figure, and do NOT quote '18.7 GB/day steady' as a daily verdict either, BECAUSE both outrun their evidence: the spool removal is certain (TRDD-Z53IJFE9), but the post-removal number comes from ONE 240 s sampled window (4 drain ticks, 2026-09-26, during ACTIVE work — this session's own API calls generate bodies) and possibly straddled a crash-loop restart. What the window shows: gross outflow ~13.5 MB/min (drain emptied ~48.8 MB in 240 s), net accumulation only ~1.35 MB/min (dir held just ~41 MB — a backlog catchup would be GB, so steady-STATE is plausible but unproven); extrapolated 24/7 that is ~19 GB/day, but a real day includes idle hours — the 24 h AVERAGE IS UNMEASURED and nothing has scheduled it. Direction is certain: even the defensible net floor (~1.35 MB/min x 24 h ~ 2 GB/day) is a 5-17x jump over the superseded 120-400 MB/day figure, and the 24/7 gross extrapolation (~19.4 GB/day) would be 48-162x over it — the budget-pressure flag stands, labeled peak-rate not daily-budget. DO schedule a 24 h inflow measurement before re-asserting any daily-budget verdict; the lever if pressure is confirmed stays compression (fewer host bytes), not batching. [^3] [^4] [^5] [^6]
 
 
 ^ATOM-UNJH-PDX2 [desc:"Bodies are ZSTD-Parquet at 59x while spans/log-events/hooks are plain NDJSON; gzip -9 measures 19.5x on a real segment — but the reader's filename regex makes a .gz segment SILENTLY INVISIBLE", keywords: why_is_the_span_store_6GB_when_the_body_store_is_compressed are_span_segments_compressed is_it_safe_to_gzip_a_span_segment compressed_segment_disappeared_from_the_reader spans_vanished_from_queries_after_compression, type: project, ocd: 2026-08-11, lmd: 2026-08-11]
@@ -38,6 +35,11 @@ edit; shipping the writer first is data loss by omission, and it would look like
 rather than a format bug.
 
 Judge this work as a DISK-SPACE win — the atom above is why it is not a longevity one.
+
+## Superseded
+
+^ATOM-Y2TV-18OF [desc: "Post-removal SSD inflow: one 240s ACTIVE window gross ~13.5 MB/min (~19 GB/day 24/7 — PEAK not daily); 24h average UNMEASURED, measurement owed; net ~1.35 MB/min", keywords: is_ssd_life_spent_by_operations_or_bytes does_batching_writes_reduce_ssd_wear write_amplification_factor sub-page_write_programs_a_whole_page how_many_GB_per_day_can_an_ssd_sustain delaying_writes_to_save_the_disk, type: reference, ocd: 2026-08-11, lmd: 2026-09-26, status: superseded, superseded-by: ATOM-NSSD-71W1]
+DO NOT quote the pre-removal under-3-percent-of-budget figure, and do NOT quote '18.7 GB/day steady' as a daily verdict either, BECAUSE both outrun their evidence: the spool removal is certain (TRDD-Z53IJFE9), but the post-removal number comes from ONE 240 s sampled window (4 drain ticks, 2026-09-26, during ACTIVE work — this session's own API calls generate bodies) and possibly straddled a crash-loop restart. What the window shows: gross outflow ~13.5 MB/min (drain emptied ~48.8 MB in 240 s), net accumulation only ~1.35 MB/min (dir held just ~41 MB — a backlog catchup would be GB, so steady-STATE is plausible but unproven); extrapolated 24/7 that is ~19 GB/day, but a real day includes idle hours — the 24 h AVERAGE IS UNMEASURED and nothing has scheduled it. Direction is certain: even the defensible net floor (~1.35 MB/min x 24 h ~ 2 GB/day) is a 5-17x jump over the superseded 120-400 MB/day figure, and the 24/7 gross extrapolation (~19.4 GB/day) would be 48-162x over it — the budget-pressure flag stands, labeled peak-rate not daily-budget. DO schedule a 24 h inflow measurement before re-asserting any daily-budget verdict; the lever if pressure is confirmed stays compression (fewer host bytes), not batching. [^3] [^4] [^5] [^6]
 
 ## See also
 

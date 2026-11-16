@@ -4,8 +4,8 @@
 //! deep-cloned every log card into the merged `sessions` array and `strip_session_detail` then
 //! cloned every card AGAIN: a `Value` clone allocates the same node graph a parse does, so the
 //! per-pass churn survived (37k cards, 25 ms cadence under ingest). Here the published summary
-//! (and its stripped twin) are PATCHED IN PLACE: only the entries whose inputs changed since the
-//! last build are recomputed, everything else is moved, not copied.
+//! is PATCHED IN PLACE (its stripped twin was removed by TRDD-091Z1FU0): only the entries whose
+//! inputs changed since the last build are recomputed, everything else is moved, not copied.
 //!
 //! HOW. The engine takes its previous output back out of the caches (`take_arc`). When no reader
 //! still holds it, `Arc::try_unwrap` yields the `Value` for free; otherwise the sessions array is
@@ -47,7 +47,7 @@ use crate::{feed_merge, summarize, CoreState};
 const OTEL_BASE: u64 = 1 << 40;
 
 
-/// `Arc::try_unwrap` failures: a reader still held the previous summary (or its stripped twin), so
+/// `Arc::try_unwrap` failures: a reader still held the previous summary, so
 /// `take_sessions` deep-copied the sessions array instead of moving it — one full-corpus copy each.
 /// Process-wide, like the rebuild gate in `ui.rs`: one server (one engine) per process, and a
 /// field on `SummaryEngine` cannot be added through `fastedit` (the struct and its impl share a
@@ -58,19 +58,16 @@ pub fn shared_copies() -> u64 {
     SHARED_COPIES.load(AtomicOrdering::Relaxed)
 }
 
-/// What a rebuild produces. `stripped` is `None` on the full/legacy fallback (the request path
-/// derives it lazily, as before).
+/// What a rebuild produces.
 pub struct SummaryBuild {
     pub summary: Arc<Value>,
     pub attribution: IndexMap<String, Vec<Value>>,
-    pub stripped: Option<Arc<Value>>,
 }
 
 /// The caches' previous values, taken under the state lock by `CoreState::summary_snapshot`.
 #[derive(Default)]
 pub struct Prev {
     pub summary: Option<(u64, Arc<Value>)>,
-    pub stripped: Option<(u64, Arc<Value>)>,
 }
 
 #[derive(Clone, Copy)]
@@ -91,8 +88,12 @@ struct EngineState {
     /// OTEL sessionId → "displaced by its log twin", for ids that have a log card.
     twin_status: HashMap<String, bool>,
     version: u64,
-    summary_ptr: usize,
-    stripped_ptr: usize,
+    /// The Arc this engine published last pass, held WEAKLY: a `Weak` keeps the allocation (not the
+    /// value) reserved, so a freed summary's address cannot be recycled by a foreign `Arc` and then
+    /// pass the pointer-equality test. A bare `usize` address did not: the freed slot is reused
+    /// immediately for a same-size `Arc`, and with the stripped twin gone this is the ONLY proof that
+    /// "the previous output is ours". A `Weak` does not block `Arc::try_unwrap` in `take_sessions`.
+    summary_ref: std::sync::Weak<Value>,
 }
 
 #[derive(Default)]
@@ -137,21 +138,6 @@ fn take_sessions(a: Arc<Value>) -> Vec<Value> {
     }
 }
 
-/// The stripped twin of a finished summary: `strip_session_detail`'s shape (every non-`sessions`
-/// key cloned in place) with the already-built stripped entries slotted under `sessions`.
-fn stripped_value(summary: &Value, stripped_sessions: Vec<Value>) -> Value {
-    let mut out = serde_json::Map::with_capacity(summary.as_object().map_or(0, |o| o.len()));
-    let mut sessions = Some(Value::Array(stripped_sessions));
-    for (k, v) in summary.as_object().expect("summary object") {
-        if k == "sessions" {
-            out.insert(k.clone(), sessions.take().expect("one sessions key"));
-        } else {
-            out.insert(k.clone(), v.clone());
-        }
-    }
-    Value::Object(out)
-}
-
 impl SummaryEngine {
     /// One rebuild pass. `version` is the data version the inputs belong to.
     pub fn build(
@@ -169,7 +155,7 @@ impl SummaryEngine {
             *guard = None;
             self.full_passes.fetch_add(1, AtomicOrdering::Relaxed);
             let (summary, attribution) = CoreState::summary_over(spans, cards, accounts, 0.0);
-            SummaryBuild { summary: Arc::new(summary), attribution, stripped: None }
+            SummaryBuild { summary: Arc::new(summary), attribution }
         };
         if cards.is_empty() {
             return legacy(&mut guard);
@@ -178,20 +164,20 @@ impl SummaryEngine {
         // Is the previous output ours, current, and unmodified? Anything else → start from scratch.
         let mut state = guard.take();
         let mut old_sessions: Vec<Value> = Vec::new();
-        let mut old_stripped: Vec<Value> = Vec::new();
         if let Some(st) = &state {
+            // The previous output is ours only if the engine itself published exactly this Arc:
+            // version AND pointer equality on the summary. The pointer check is the sole guard
+            // against a foreign value in `summary_cache` (the stripped twin used to double it),
+            // so it must never be weakened to a version-only or shape check.
             let ok = !force
                 && st.epoch == epoch
                 && cards.len() >= st.cards.len()
-                && prev.summary.as_ref().is_some_and(|(v, a)| *v == st.version && Arc::as_ptr(a) as usize == st.summary_ptr)
-                && prev.stripped.as_ref().is_some_and(|(v, a)| *v == st.version && Arc::as_ptr(a) as usize == st.stripped_ptr);
+                && prev.summary.as_ref().is_some_and(|(v, a)| *v == st.version && std::ptr::eq(Arc::as_ptr(a), st.summary_ref.as_ptr()));
             if ok {
                 old_sessions = take_sessions(prev.summary.expect("checked").1);
-                old_stripped = take_sessions(prev.stripped.expect("checked").1);
-                if old_sessions.len() != st.metas.len() || old_stripped.len() != st.metas.len() {
+                if old_sessions.len() != st.metas.len() {
                     state = None;
                     old_sessions.clear();
-                    old_stripped.clear();
                 }
             } else {
                 state = None;
@@ -204,8 +190,7 @@ impl SummaryEngine {
             metas: Vec::new(),
             twin_status: HashMap::new(),
             version,
-            summary_ptr: 0,
-            stripped_ptr: 0,
+            summary_ref: std::sync::Weak::new(),
         });
         let old_n = st.cards.len();
         let counter = if old_n > 0 { &self.incremental_passes } else { &self.full_passes };
@@ -341,44 +326,39 @@ impl SummaryEngine {
             *guard = None;
             self.full_passes.fetch_add(1, AtomicOrdering::Relaxed);
             let (summary, attribution) = CoreState::summary_over(spans, cards, accounts, 0.0);
-            return SummaryBuild { summary: Arc::new(summary), attribution, stripped: None };
+            return SummaryBuild { summary: Arc::new(summary), attribution };
         }
         ins.sort_by(|a, b| order((a.0, a.1), (b.0, b.1)));
 
         // 6. Merge the retained entries with the recomputed ones.
         let cap = old_sessions.len() + ins.len();
         let mut new_sessions: Vec<Value> = Vec::with_capacity(cap);
-        let mut new_stripped: Vec<Value> = Vec::with_capacity(cap);
         let mut new_metas: Vec<Meta> = Vec::with_capacity(cap);
         let mut ins_it = ins.into_iter().peekable();
-        let push_ins = |x: (f64, u64, Value), ns: &mut Vec<Value>, nst: &mut Vec<Value>, nm: &mut Vec<Meta>| {
-            nst.push(crate::ui::strip_one_session(&x.2));
+        let push_ins = |x: (f64, u64, Value), ns: &mut Vec<Value>, nm: &mut Vec<Meta>| {
             nm.push(Meta { key: x.0, rank: x.1 });
             ns.push(x.2);
         };
         let old_metas = std::mem::take(&mut st.metas);
-        for ((v, sv), m) in old_sessions.into_iter().zip(old_stripped).zip(old_metas) {
+        for (v, m) in old_sessions.into_iter().zip(old_metas) {
             let retained = m.rank < OTEL_BASE && !dirty[m.rank as usize];
             if !retained {
                 continue;
             }
             while ins_it.peek().is_some_and(|x| order((x.0, x.1), (m.key, m.rank)) == Ordering::Less) {
                 let x = ins_it.next().expect("peeked");
-                push_ins(x, &mut new_sessions, &mut new_stripped, &mut new_metas);
+                push_ins(x, &mut new_sessions, &mut new_metas);
             }
             new_sessions.push(v);
-            new_stripped.push(sv);
             new_metas.push(m);
         }
         for x in ins_it {
-            push_ins(x, &mut new_sessions, &mut new_stripped, &mut new_metas);
+            push_ins(x, &mut new_sessions, &mut new_metas);
         }
 
         // 7. Publish.
         summary.as_object_mut().expect("summary object").insert("sessions".into(), Value::Array(new_sessions));
-        let stripped = stripped_value(&summary, new_stripped);
         let summary = Arc::new(summary);
-        let stripped = Arc::new(stripped);
         for i in 0..n {
             if i >= old_n {
                 st.cards.push(cards[i].clone());
@@ -390,9 +370,8 @@ impl SummaryEngine {
         st.twin_status = twin_status;
         st.epoch = epoch;
         st.version = version;
-        st.summary_ptr = Arc::as_ptr(&summary) as usize;
-        st.stripped_ptr = Arc::as_ptr(&stripped) as usize;
+        st.summary_ref = Arc::downgrade(&summary);
         *guard = Some(st);
-        SummaryBuild { summary, attribution, stripped: Some(stripped) }
+        SummaryBuild { summary, attribution }
     }
 }

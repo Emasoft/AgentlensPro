@@ -408,6 +408,8 @@ fn open_spilling(tmp_dir: &Path) -> Result<(HeavyGuard, duckdb::Connection), Str
     let heavy = acquire_heavy()?;
     let con = duckdb::Connection::open_in_memory().map_err(|e| e.to_string())?;
     let spill = crate::spill_sql(tmp_dir).map_err(|e| format!("spill dir {}: {e}", tmp_dir.display()))?;
+    // TRDD-YH822LDI: exempt from the core cap on purpose. 1 is already at or under any cap of 1 or
+    // more, and the value is a memory bound (threads = 2 at 1 GB fails the parity tests).
     con.execute_batch(&format!("SET memory_limit = '{TRANSCRIPT_MEMORY_LIMIT}'; SET threads = 1; {spill}"))
         .map_err(|e| e.to_string())?;
     Ok((heavy, con))

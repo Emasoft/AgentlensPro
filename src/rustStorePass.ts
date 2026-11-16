@@ -44,6 +44,10 @@ export function alstoreBin(env: NodeJS.ProcessEnv = process.env, installed = dat
   return npmPlatformBin('alstore')
 }
 
+/** The pass report plus, when the binary exited 3, the stderr text saying `.pass-state.json` could
+ *  not be saved (TRDD-ZR3OGSAV). Absent = state saved normally. */
+export type RustPassResult = IngestPassResult & { stateNotSaved?: string }
+
 /** One throttled ingest pass through the Rust binary — same option meanings and the same result
  *  shape as the TS `ingestPass` (PassResult serializes camelCase field-for-field). Throws on any
  *  exec or parse failure — the caller opted into this engine, so a broken binary must be LOUD.
@@ -57,22 +61,31 @@ export async function rustIngestPass(bin: string, opts: {
   maxBytesPerPass: number
   durableSource: boolean
   relocateStrandedTo?: string
-}): Promise<IngestPassResult | null> {
+}): Promise<RustPassResult | null> {
   const args = ['pass', opts.storeDir, opts.bodiesDir,
     '--max-age-ms', String(opts.maxAgeMs),
     '--max-bytes', String(opts.maxBytesPerPass)]
   if (opts.durableSource) args.push('--durable-source')
   if (opts.relocateStrandedTo) args.push('--relocate-to', opts.relocateStrandedTo)
+  let stateNotSaved: string | undefined
   const stdout = await new Promise<string | null>((resolve, reject) => {
     // maxBuffer sized for a pathological pass (thousands of failed/stranded names in the report).
     execFile(bin, args, { maxBuffer: 1 << 26 }, (err, out, stderr) => {
-      if (err && (err as { code?: unknown }).code === 75) resolve(null)
+      const code = err ? (err as { code?: unknown }).code : undefined
+      if (code === 75) resolve(null)
+      // WHY exit 3 with stdout RESOLVES (TRDD-ZR3OGSAV): `alstore pass` prints its result JSON
+      // BEFORE exiting 3, so the ingest/verify/delete already happened and the report is true;
+      // only .pass-state.json (skip/stranded bookkeeping) was not saved. Rejecting would make
+      // setup report a completed drain as failed. The callers see the flag and surface it.
+      else if (code === 3 && out.trim() !== '') { stateNotSaved = stderr.trim() || 'pass state not saved'; resolve(out) }
       else if (err) reject(new Error(`alstore pass failed (${bin}): ${err.message}${stderr ? ` — ${stderr.trim()}` : ''}`))
       else resolve(out)
     })
   })
   if (stdout === null) return null
-  return JSON.parse(stdout) as IngestPassResult
+  const result = JSON.parse(stdout) as RustPassResult
+  if (stateNotSaved !== undefined) result.stateNotSaved = stateNotSaved
+  return result
 }
 
 /** TRDD-8TM7I49X: remove names from the persisted stranded set through the binary that OWNS the
@@ -83,7 +96,11 @@ export async function rustUnpark(bin: string, storeDir: string, namesFile: strin
   Promise<{ requested: number; removed: number; strandedRemaining: number } | null> {
   const stdout = await new Promise<string | null>((resolve, reject) => {
     execFile(bin, ['unpark', storeDir, '--names-file', namesFile], { maxBuffer: 1 << 22 }, (err, out, stderr) => {
-      if (err && (err as { code?: unknown }).code === 75) resolve(null)
+      const code = err ? (err as { code?: unknown }).code : undefined
+      if (code === 75) resolve(null)
+      // WHY exit 3 stays a rejection (TRDD-ZR3OGSAV): unpark prints nothing on exit 3 because
+      // NOTHING was unparked — the state file could not be saved. Say so explicitly.
+      else if (code === 3) reject(new Error(`alstore unpark failed (${bin}): the pass state could not be saved, nothing was unparked${stderr ? ` — ${stderr.trim()}` : ''}`))
       else if (err) reject(new Error(`alstore unpark failed (${bin}): ${err.message}${stderr ? ` — ${stderr.trim()}` : ''}`))
       else resolve(out)
     })

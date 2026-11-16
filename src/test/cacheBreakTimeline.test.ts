@@ -603,6 +603,14 @@ function freshDir(): string {
 // turned each of these tests into a minutes-long real-store scan and 11 of them blew every
 // timeout (2026-08-13 — diagnosed as environmental until the absent-bodies test, which has no
 // data at all, also "timed out"). Same isolation discipline as forensicsIndex.test.ts's noStoreDir.
+// 2026-09-01 (TRDD-B7DSTJLS, aef94208): the timeouts that remained came from hookEventsDir, which
+// defaults to dataPath('hook-events') — the live hook store (229 MB then) that
+// loadCompactionHookInfo reads synchronously. All 12 scratch sites now pass hookEventsDir: noStore too.
+// Since 2026-09-23 (091799ee) src/test/setup.js points HOME and DATA_DIR at a scratch dir for every
+// mocha run, so these defaults land in an empty scratch dir even when a site omits the parameter; the
+// per-site parameters stay as defense in depth (dropping one redirects the read to the scratch
+// hook-events, shown by an fs trace on 2026-10-17). Side effect: the REAL-corpus cases below now
+// always skip under mocha (TRDD-2R0AXCKL).
 const noStore = path.join(tmpBase, 'no-store-never-created')
 function writeAt(dir: string, name: string, body: unknown, mtimeMs: number): void {
   const p = path.join(dir, name)

@@ -10,7 +10,7 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { alstoreBin, rustIngestPass } from '../rustStorePass'
+import { alstoreBin, rustIngestPass, rustUnpark } from '../rustStorePass'
 import { ingestPass } from '../store/ingestPass'
 import { openStore, allOf } from '../store/db'
 import { reconstructBody, bodyIdOf } from '../store/bodyStore'
@@ -57,6 +57,26 @@ suite('rustStorePass — P4b engine bridge', () => {
       /alstore pass failed/)
   })
 
+  xTest('🐌 exit 3 from pass (state not saved) RESOLVES with the report + stateNotSaved; unpark exit 3 rejects', async function () {
+    this.timeout(60_000)
+    // WHY (TRDD-ZR3OGSAV): a non-empty DIRECTORY at the temp path makes the state save fail with
+    // EISDIR after the pass already ran, which is exactly the exit-3 case. The pass must stay
+    // visible to callers (its drain happened); unpark did nothing, so it must reject.
+    const storeDir = path.join(tmpDir, 'store-nosave')
+    const tmpState = path.join(storeDir, '.pass-state.json.tmp')
+    fs.mkdirSync(tmpState, { recursive: true })
+    fs.writeFileSync(path.join(tmpState, 'occupant'), 'x')
+    const bodies = makeBodiesDir('bodies-nosave')
+    const r = await rustIngestPass(BIN, {
+      storeDir, bodiesDir: bodies, maxAgeMs: 60_000, maxBytesPerPass: 1 << 24, durableSource: true,
+    })
+    assert.ok(r, 'no other pass holds this store')
+    assert.strictEqual(r.ingested, 1, 'the pass itself ran')
+    assert.match(r.stateNotSaved ?? '', /cannot save/)
+    const names = path.join(tmpDir, 'nosave-names.txt')
+    fs.writeFileSync(names, 'old-turn.request.json\n')
+    await assert.rejects(() => rustUnpark(BIN, storeDir, names), /state could not be saved, nothing was unparked/)
+  })
   xTest('🐌 cross-engine pass parity: same drain decisions, same result fields, TS-readable store', async function () {
     this.timeout(60_000)
     const MAX_AGE = 60_000

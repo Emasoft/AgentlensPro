@@ -24,9 +24,10 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::{flush_detailed, ingest_body_with, Store, VerifyItem, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
+use crate::{flush_detailed, ingest_body_with, Store, VerifyItemRef, API_CALLS_DIR, BLOBS_DIR, BODIES_DIR, PARTS_DIR};
 
 pub const DEFAULT_MAX_BYTES_PER_PASS: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_BATCH: usize = 200;
@@ -77,37 +78,83 @@ pub fn acquire_pass_lock(store_dir: &Path) -> Result<fs::File, PassLockErr> {
 /// A dropped skip name means a body is re-examined forever; a dropped stranded name means a body
 /// that could NOT be reconstructed is forgotten, which is the one that loses data.
 ///
-/// A missing or unparseable file is EMPTY, not an error: the state is an optimization plus a
-/// quarantine list, and refusing to run because it is corrupt would stop the drain entirely. The
-/// cost of starting empty is one slow pass.
-pub fn load_pass_state(p: &Path) -> (HashSet<String>, HashSet<String>) {
-    let Ok(raw) = fs::read_to_string(p) else { return (Default::default(), Default::default()) };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return (Default::default(), Default::default());
+/// A missing file is EMPTY, not an error: it is the true first-run state. A file that is present but cannot
+/// be read, or whose bytes are not valid JSON, is an Err (TRDD-FINMFYDE). Loading that file as empty made
+/// `unpark_names` save empty sets over it and destroy every persisted skip and stranded name. So "corrupt"
+/// means exactly those two things. Valid JSON with a missing key, a non-array value or non-string entries is
+/// NOT corrupt and still reads as empty, as it always did; a top-level value that is not an object (`[]`, `42`)
+/// is valid JSON and reads the same way. Callers must not write over an Err. The alstore CLI exits 4 and
+/// leaves the file in place, because a person runs it and decides; alcore's bodies pass moves the file aside
+/// to `<name>.corrupt-<unix_ms>` and rebuilds the state from empty sets (chores.rs).
+pub fn load_pass_state(p: &Path) -> std::io::Result<(HashSet<String>, HashSet<String>)> {
+    let raw = match fs::read_to_string(p) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Default::default(), Default::default())),
+        Err(e) => return Err(std::io::Error::new(e.kind(), format!("{}: {e}", p.display()))),
     };
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: not valid JSON: {e}", p.display()))
+    })?;
     let set = |k: &str| {
         v.get(k)
             .and_then(|a| a.as_array())
             .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
             .unwrap_or_default()
     };
-    (set("skipNames"), set("strandedNames"))
+    Ok((set("skipNames"), set("strandedNames")))
 }
 
 /// Write the pass state. Sorted so the file is diffable and its content is a function of the SET,
 /// not of HashSet iteration order — otherwise every pass rewrites a byte-different file. Temp +
-/// rename so a crash mid-write cannot leave a truncated state that reads back as "nothing is
-/// stranded".
-pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<String>) {
+/// rename so a crash mid-write cannot leave a truncated state under the real name.
+pub fn save_pass_state(p: &Path, skip: &HashSet<String>, stranded: &HashSet<String>) -> std::io::Result<()> {
     let mut skip_v: Vec<&String> = skip.iter().collect();
     let mut str_v: Vec<&String> = stranded.iter().collect();
     skip_v.sort();
     str_v.sort();
     let json = serde_json::json!({ "skipNames": skip_v, "strandedNames": str_v });
     let tmp = p.with_extension("json.tmp");
-    if fs::write(&tmp, json.to_string()).is_ok() {
-        let _ = fs::rename(&tmp, p);
+    // WHY a Result (TRDD-ZR3OGSAV): the old `if write.is_ok() { let _ = rename }` swallowed a full
+    // disk / permission error, so a lost stranded or skip name vanished without a trace. Every
+    // failure is now returned for the caller to surface; the temp+rename atomicity is kept.
+    // WHY sync_all (TRDD-FINMFYDE): without it the rename can reach the disk before the data does, so a
+    // power cut leaves a zero-byte state under the real name. A zero-byte file is an Err for the CLI (exit 4)
+    // and a move-aside for alcore, so a save must not produce one. The directory sync after the rename makes
+    // the rename itself durable; its failure is returned like any other. The one exception is a volume that
+    // cannot sync a directory: it may fail with ENOTSUP (errno 45 on macOS), which Rust does not map to
+    // Unsupported (only EOPNOTSUPP, errno 102, is), so the check compares errno values; there the rename
+    // already happened, so the sync is skipped.
+    {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(json.to_string().as_bytes())?;
+        file.sync_all()?;
     }
+    if let Err(e) = fs::rename(&tmp, p) {
+        // A rename that failed leaves the temp file behind; remove it so it does not linger. Its own
+        // removal error is irrelevant: the rename error is the one to report.
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    match fs::File::open(dir)?.sync_all() {
+        Ok(()) => Ok(()),
+        Err(e) if dir_sync_unsupported(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Classifies a failed directory sync as "this volume cannot sync a directory". Classification ONLY:
+/// nothing here performs or tests the sync itself.
+#[cfg(unix)]
+fn dir_sync_unsupported(e: &std::io::Error) -> bool {
+    let Some(code) = e.raw_os_error() else { return false };
+    code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+}
+
+/// Non-unix targets have no errno to compare, so the portable ErrorKind is the signal.
+#[cfg(not(unix))]
+fn dir_sync_unsupported(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::Unsupported | std::io::ErrorKind::InvalidInput)
 }
 
 /// The state file's name inside a store dir. ONE definition — the CLI and alcore must not each
@@ -151,6 +198,12 @@ pub struct PassResult {
     /// the reclaim comment below). Counted separately from `reclaimed_durable` so a pass report
     /// can say "N re-emitted bodies reclaimed" instead of collapsing it into the ordinary path.
     pub reclaimed_reemitted: u64,
+    /// A delete ABORTED because the file on disk was not the bytes this pass verified — a
+    /// re-emission landed between the verify and the delete. Counted SEPARATELY from `failed`,
+    /// because a caught re-emission is the guard WORKING, while a `failed` entry is a genuine
+    /// problem (a store error, an fsync failure, an unreadable file). Collapsing the two would
+    /// make a pass that correctly refused to lose data indistinguishable from a broken pass.
+    pub delete_aborted_reemission: u64,
     pub bytes_freed: u64,
     pub failed: Vec<String>,
     pub stranded_ts: Vec<String>,
@@ -165,17 +218,48 @@ struct BodyFile {
     size: u64,
 }
 
-fn body_files(dir: &Path) -> Vec<BodyFile> {
+/// One listing of a bodies dir. `files` are the body files readable this pass. `names` are EVERY body name
+/// present as a directory entry, including the ones that cannot be statted: a name that exists stays
+/// present for the prune even when it cannot be ingested. `unstatable` holds those names with their stat
+/// error. `unreadable_entries` are directory entries that could not be read at all (no name), so a file
+/// may be missing from the listing entirely.
+struct Listing {
+    files: Vec<BodyFile>,
+    names: Vec<String>,
+    unstatable: Vec<(String, String)>,
+    unreadable_entries: Vec<String>,
+}
+
+/// List the body files in `dir`. Err only when the directory itself cannot be read.
+fn body_files(dir: &Path) -> std::io::Result<Listing> {
     let mut out = Vec::new();
-    let Ok(rd) = fs::read_dir(dir) else { return out };
-    for entry in rd.flatten() {
+    let mut names = Vec::new();
+    let mut unstatable = Vec::new();
+    let mut unreadable_entries = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                unreadable_entries.push(e.to_string());
+                continue;
+            }
+        };
         let name = entry.file_name();
         let Some(name) = name.to_str().map(str::to_owned) else { continue };
         if !name.ends_with(".request.json") && !name.ends_with(".response.json") {
             continue;
         }
+        names.push(name.clone());
         let p = entry.path();
-        let Ok(st) = fs::metadata(&p) else { continue }; // raced with a writer — next pass
+        let st = match fs::metadata(&p) {
+            Ok(st) => st,
+            // Gone between the listing and the stat: not on the spool any more, nothing to ingest.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                unstatable.push((name, e.to_string()));
+                continue;
+            }
+        };
         let mtime_ms = st
             .modified()
             .ok()
@@ -185,9 +269,94 @@ fn body_files(dir: &Path) -> Vec<BodyFile> {
         out.push(BodyFile { p, name, mtime_ms, size: st.len() });
     }
     out.sort_by_key(|f| f.mtime_ms); // OLDEST FIRST — the true turn order, which is what dedups
-    out
+    Ok(Listing { files: out, names, unstatable, unreadable_entries })
 }
 
+/// The outcome of the content gate on one file.
+enum ContentGate {
+    /// The file still holds exactly the bytes this pass verified — the delete may proceed.
+    Unchanged,
+    /// The file holds DIFFERENT bytes: a re-emission landed between the verify and the delete.
+    /// The delete must be aborted and the new bytes must stay on disk.
+    Reemitted(String),
+    /// The file could not be read. The delete must be aborted too — a file we cannot read is
+    /// not a file we can prove — but this is a DIFFERENT event from a re-emission and must not
+    /// be counted as one.
+    Unreadable(String),
+}
+
+/// Compare a body file's CURRENT bytes against the bytes this pass VERIFIED.
+///
+/// WHY content and not metadata: the corpus is live and a body can be re-emitted under the same
+/// path with new bytes between the verify and the delete. That re-emission can preserve BOTH the
+/// size and the mtime (a `mv` back, a `cp -p`), so a size/mtime comparison CANNOT see the change
+/// — the metadata guard was bypassable exactly that way.
+///
+/// WHY a BYTE COMPARISON and not a digest comparison: the pass already HOLDS the verified bytes
+/// in memory — `verified` is the exact `String` the verify was performed on, and it is the exact
+/// bytes the store ingested. Comparing the file against it needs no digest of the expected side,
+/// so it cannot drift from what was verified (a hex-rendering change, a truncation, a different
+/// hashing of the stored form — none of them apply to a plain byte equality), and it needs no
+/// second implementation of "lowercase hex" that could disagree with the store's own.
+///
+/// The file is read in 1 MiB chunks and compared against the in-memory bytes as it goes: the file
+/// is never held in memory a second time (the corpus is tens of GB and the pass already holds the
+/// verified `raw` in full). A read failure is an ABORT, never a delete — a file we cannot read is
+/// not a file we can prove.
+///
+/// WHY `verified.as_bytes()` IS THE FILE'S BYTES: `verified` came from `fs::read_to_string`, which
+/// VALIDATES UTF-8 and copies every byte — it does not strip a BOM and does not normalise
+/// newlines. So for every body that reaches this gate the in-memory string IS the file's byte
+/// sequence, and the comparison is byte-for-byte. A body that is NOT valid UTF-8 never reaches
+/// this gate at all: `read_to_string` fails on it, and the pass skips it (it is never ingested and
+/// never deleted), so the gate's guarantee covers exactly the bodies the store can hold.
+///
+/// WHY THE EXPECTED SIDE IS THE PASS'S OWN MEMORY AND NOT THE STORE'S KEY: both are the same
+/// value. The store indexes bodies by `body_id_of(raw)` = `sha256_hex(raw)` (lib.rs:335), and the
+/// VERIFY that runs immediately before this gate already proves the store's copy against that
+/// same `raw` — it reconstructs the body from the store's parts and compares
+/// `sha256_hex(rebuilt) != sha256_hex(&it.raw)` (lib.rs:800), and it JOINS the store's rows on
+/// `body_id_of(raw)`. So by the time a delete is considered, the chain is already proven:
+/// the store reconstructs to this `raw`, and this gate proves the file still IS this `raw`. The
+/// gate does not need to re-derive a digest of the expected side to close that chain — it needs
+/// to answer one question the chain has not answered: has the FILE changed since the `raw` was
+/// read? Only the file's current bytes can answer that.
+fn content_unchanged_since_read(p: &Path, verified: &str) -> ContentGate {
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| p.to_string_lossy().into_owned());
+    let expected = verified.as_bytes();
+    let mut f = match fs::File::open(p) {
+        Ok(f) => f,
+        Err(e) => return ContentGate::Unreadable(format!("{name}: re-read before delete failed — kept ({e})")),
+    };
+    let mut buf = vec![0u8; 1024 * 1024];
+    let mut offset = 0usize;
+    loop {
+        let n = match f.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => return ContentGate::Unreadable(format!("{name}: re-read before delete failed — kept ({e})")),
+        };
+        if n == 0 {
+            break;
+        }
+        let end = offset + n;
+        if end > expected.len() || buf[..n] != expected[offset..end] {
+            return ContentGate::Reemitted(format!(
+                "{name}: delete ABORTED — content changed since the verify (the file on disk is not the bytes the store proved it can reproduce); the store holds the older bytes, the new bytes stay on disk"
+            ));
+        }
+        offset = end;
+    }
+    if offset != expected.len() {
+        return ContentGate::Reemitted(format!(
+            "{name}: delete ABORTED — content changed since the verify (the file on disk is {offset} bytes, the verified bytes are {}); the store holds the older bytes, the new bytes stay on disk",
+            expected.len()
+        ));
+    }
+    ContentGate::Unchanged
+}
 fn fsync_path(p: &Path) -> std::io::Result<()> {
     let f = fs::File::open(p)?;
     match f.sync_all() {
@@ -317,9 +486,18 @@ pub fn ingest_pass_observed_with(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     let cutoff = if opts.max_age_ms > 0 { now_ms - opts.max_age_ms } else { i64::MAX };
+    // A listing problem is reported once per tick by prune_pass_names, never here: ingestion reads every
+    // file it can, and only a directory that cannot be read at all stops the pass.
+    let listing = match body_files(&opts.bodies_dir) {
+        Ok(listing) => listing,
+        Err(e) => {
+            res.failed.push(format!("bodies dir unreadable — pass skipped, state kept ({e})"));
+            return res;
+        }
+    };
     // The AGE gate is the ONLY list-level filter: a skip-named file must still reach the
     // verify+delete gate (excluding it here is what stranded 3,615 bodies on a full spool).
-    let all: Vec<BodyFile> = body_files(&opts.bodies_dir).into_iter().filter(|f| f.mtime_ms < cutoff).collect();
+    let all: Vec<BodyFile> = listing.files.into_iter().filter(|f| f.mtime_ms < cutoff).collect();
     if all.is_empty() {
         return res;
     }
@@ -409,11 +587,17 @@ pub fn ingest_pass_observed_with(
                                 if items.is_empty() {
                                     continue;
                                 }
-                                let verify_items: Vec<VerifyItem> = items
+
+                                // BORROW the content, never clone it: `items` already owns every body in this
+                                // settle group, so cloning it here held the group's bytes TWICE in the Rust
+                                // heap (the third copy was DuckDB staging it). The gate takes references —
+                                // the SAME bytes, the SAME proof, the SAME outcomes — and the delete path
+                                // still re-reads `items` content below.
+                                let verify_items: Vec<VerifyItemRef<'_>> = items
                                     .iter()
-                                    .map(|(b, raw)| VerifyItem { src_name: b.name.clone(), raw: raw.clone(), ts_ms: Some(b.mtime_ms) })
+                                    .map(|(b, raw)| VerifyItemRef { src_name: b.name.as_str(), raw: raw.as_str(), ts_ms: Some(b.mtime_ms) })
                                     .collect();
-                                let results = match crate::verify_bodies_in_store_cached(store, &verify_items, &mut span_cache) {
+                                let results = match crate::verify_bodies_in_store_cached_ref(store, &verify_items, &mut span_cache) {
                                     Ok(r) => r,
                                     Err(e) => {
                                         // Per-chunk isolation: a store error costs THIS chunk its
@@ -424,50 +608,76 @@ pub fn ingest_pass_observed_with(
                                         continue;
                                     }
                                 };
-                                for (b, _) in &items {
+
+                                for (b, raw) in &items {
                                     let v = results.get(&b.name);
                                     match v {
+                                        // Gated on the CONTENT: the corpus is live and a re-emission must
+                                        // not be deleted against the store's older bytes. A re-emission can
+                                        // preserve the size AND the mtime (a `mv` back, a `cp -p`), so the
+                                        // guard compares the file's CURRENT BYTES against the bytes this
+                                        // pass VERIFIED — content, never metadata. The three outcomes are
+                                        // kept apart: a re-emission is the guard WORKING (its own counter),
+                                        // an unreadable file is a genuine failure, and only the unchanged
+                                        // case deletes.
                                         Some(v) if v.ok => {
                                             if opts.delete_after {
-                                                match fs::remove_file(&b.p) {
-                                                    Ok(()) => {
-                                                        res.deleted += 1;
-                                                        res.bytes_freed += b.size;
-                                                        if b.durable {
-                                                            res.reclaimed_durable += 1;
+                                                match content_unchanged_since_read(&b.p, raw) {
+                                                    ContentGate::Unchanged => match fs::remove_file(&b.p) {
+                                                        Ok(()) => {
+                                                            res.deleted += 1;
+                                                            res.bytes_freed += b.size;
+                                                            if b.durable {
+                                                                res.reclaimed_durable += 1;
+                                                            }
                                                         }
+                                                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                                        Err(e) => res.failed.push(format!("{}: {e}", b.name)),
+                                                    },
+                                                    ContentGate::Reemitted(msg) => {
+                                                        res.delete_aborted_reemission += 1;
+                                                        res.failed.push(msg);
                                                     }
-                                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                                                    Err(e) => res.failed.push(format!("{}: {e}", b.name)),
+                                                    ContentGate::Unreadable(msg) => res.failed.push(msg),
                                                 }
                                             }
                                         }
                                         Some(v) => {
                                             let reason = v.reason.clone().unwrap_or_else(|| b.name.clone());
-                                            // TRDD-6SPXOV0P option A: a ts-only failure on a durable
-                                            // body is BENIGN, not a park case. `verify_bodies_in_store_cached`
-                                            // runs the sha256-reconstruction check and the row-existence
-                                            // check strictly BEFORE the ts check (each with its own
-                                            // `continue` on failure — lib.rs), so reaching "stored ts !=
-                                            // capture time" mathematically implies the store already
-                                            // reproduces this file bit-exact. The row is the truer value
-                                            // (it holds the ORIGINAL capture time); the file's mtime is the
-                                            // impostor — Claude Code re-emitted the same name+bytes at a
-                                            // new mtime. So: reclaim like an ok verify, leave the row
-                                            // alone, and do NOT park (parking here is what looped: the
-                                            // "repair rows from mtimes" remedy would overwrite the true
-                                            // capture time with the re-emit's mtime, then next pass parks
-                                            // it again forever).
-                                            if b.durable && reason.contains("stored ts ") && reason.contains("!= capture time") {
-                                                if opts.delete_after {
-                                                    match fs::remove_file(&b.p) {
-                                                        Ok(()) => {
-                                                            res.deleted += 1;
-                                                            res.bytes_freed += b.size;
-                                                            res.reclaimed_reemitted += 1;
+                                            // TRDD-6SPXOV0P option A: a ts-only failure is BENIGN whether the body is durable or not, and is reclaimed
+                                            // like an ok verify. Why it is safe: verify_bodies_in_store_cached (its row lookup is keyed on body_id
+                                            // AND src_name, and its ts check comes after it) runs the sha256-reconstruction check and the row-existence check
+                                            // strictly BEFORE the ts check, each with its own continue on failure. So reaching "stored ts != capture time"
+                                            // implies the store reproduces this file bit-exact AND already holds a row for this same src_name: the
+                                            // failure is a re-emission of this name. A fresh ingest writes ts = mtime, so only a pre-existing row can
+                                            // mismatch. The row is the truer value (it holds the ORIGINAL capture time); the file mtime is the
+                                            // impostor (Claude Code re-emits the same name and bytes at a new mtime). So reclaim, leave the row alone,
+                                            // and do NOT park: parking here looped, because the "repair rows from mtimes" remedy would overwrite the
+                                            // true capture time with the re-emit mtime, and the next pass would park it again forever.
+                                            if reason.contains("stored ts ") && reason.contains("!= capture time") {
+
+                                                // Gated on the CONTENT, exactly like the verified arm above: the
+                                                // re-emission can preserve the size AND the mtime (a `mv` back, a
+                                                // `cp -p`), so only a comparison of the file's CURRENT BYTES
+                                                // against the bytes this pass VERIFIED can see it.
+                                                match content_unchanged_since_read(&b.p, raw) {
+                                                    ContentGate::Reemitted(msg) => {
+                                                        res.delete_aborted_reemission += 1;
+                                                        res.failed.push(msg);
+                                                    }
+                                                    ContentGate::Unreadable(msg) => res.failed.push(msg),
+                                                    ContentGate::Unchanged => {
+                                                        if opts.delete_after {
+                                                            match fs::remove_file(&b.p) {
+                                                                Ok(()) => {
+                                                                    res.deleted += 1;
+                                                                    res.bytes_freed += b.size;
+                                                                    res.reclaimed_reemitted += 1;
+                                                                }
+                                                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                                                                Err(e) => res.failed.push(format!("{}: {e}", b.name)),
+                                                            }
                                                         }
-                                                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                                                        Err(e) => res.failed.push(format!("{}: {e}", b.name)),
                                                     }
                                                 }
                                                 continue;
@@ -598,15 +808,350 @@ pub fn ingest_pass_observed_with(
 /// silently resurrecting or dropping names in either set. Returns (requested, removed,
 /// stranded_remaining). skipNames is preserved untouched — an unparked name stays skip-listed,
 /// which is exactly what routes it to the delete gate instead of a re-ingest.
-pub fn unpark_names(state_file: &Path, names: &[String]) -> (usize, usize, usize) {
-    let (skip, mut stranded) = load_pass_state(state_file);
+pub fn unpark_names(state_file: &Path, names: &[String]) -> std::io::Result<(usize, usize, usize)> {
+    // WHY the `?` (TRDD-FINMFYDE): a state file that cannot be read must stop the unpark before the save below.
+    // Saving the empty sets a failed load would return writes over the real file and destroy every persisted name.
+    let (skip, mut stranded) = load_pass_state(state_file)?;
     let before = stranded.len();
     for n in names {
         stranded.remove(n);
     }
     let removed = before - stranded.len();
-    save_pass_state(state_file, &skip, &stranded);
-    (names.len(), removed, stranded.len())
+    // TRDD-ZR3OGSAV: a failed save means the unpark did NOT happen; reporting success would lie.
+    save_pass_state(state_file, &skip, &stranded)?;
+    Ok((names.len(), removed, stranded.len()))
+}
+
+/// Prune the persisted name sets against EVERY bodies dir of a tick (TRDD-2HRA270Y). Call it ONCE per tick,
+/// inside the pass lock and after the state is loaded: the sets are shared by all the dirs, so a prune
+/// against one dir listing would drop the names of the other dirs. A name is dropped only when it is absent
+/// from the union of all the listings. Nothing is pruned unless every listing is complete: an unreadable
+/// dir (NotFound included: no dir in the list is optional) or an unreadable directory entry could hide a
+/// live name. A name that exists but cannot be statted is still present. Returns one summary line when any
+/// listing problem was met, None when the listings were clean.
+pub fn prune_pass_names(
+    dirs: &[PathBuf],
+    skip_names: &mut HashSet<String>,
+    stranded_names: &mut HashSet<String>,
+) -> Option<String> {
+    if dirs.is_empty() {
+        return Some(NO_DIRS_LINE.to_owned());
+    }
+    let present = present_names(dirs);
+    if present.complete {
+        skip_names.retain(|n| present.names.contains(n));
+        stranded_names.retain(|n| present.names.contains(n));
+    }
+    listing_summary(&present)
+}
+
+const NO_DIRS_LINE: &str = "no bodies dir given; prune skipped";
+
+/// The union of the body names present as directory entries across the bodies dirs of a tick (TRDD-2HRA270Y).
+/// `complete` is false when a dir (NotFound included: no dir in the list is optional) or a directory entry
+/// could not be read: such a listing could hide a live name, so nothing may be pruned against it. A name that
+/// exists but cannot be statted is still in `names`. `problems` counts every listing problem met; `sample` is
+/// the first one. An empty `dirs` yields an empty, complete listing: the caller decides what that means.
+pub struct PresentNames {
+    pub names: HashSet<String>,
+    pub complete: bool,
+    pub problems: usize,
+    pub sample: Option<String>,
+}
+
+/// List every dir in `dirs` and collect the names present (see [`PresentNames`]).
+pub fn present_names(dirs: &[PathBuf]) -> PresentNames {
+    let mut present = PresentNames {
+        names: HashSet::new(),
+        complete: true,
+        problems: 0,
+        sample: None,
+    };
+    for dir in dirs {
+        match body_files(dir) {
+            Ok(listing) => {
+                present.names.extend(listing.names);
+                for (name, err) in listing.unstatable {
+                    present.problems += 1;
+                    present
+                        .sample
+                        .get_or_insert_with(|| format!("{name}: {err}"));
+                }
+                for err in listing.unreadable_entries {
+                    present.complete = false;
+                    present.problems += 1;
+                    present
+                        .sample
+                        .get_or_insert_with(|| format!("an entry of {}: {err}", dir.display()));
+                }
+            }
+            Err(e) => {
+                present.complete = false;
+                present.problems += 1;
+                present
+                    .sample
+                    .get_or_insert_with(|| format!("{}: {e}", dir.display()));
+            }
+        }
+    }
+    present
+}
+
+/// One summary line when any listing problem was met, None when the listings were clean.
+fn listing_summary(present: &PresentNames) -> Option<String> {
+    if present.problems == 0 {
+        return None;
+    }
+    let outcome = if present.complete {
+        "prune ran"
+    } else {
+        "prune skipped"
+    };
+    Some(format!(
+        "listing problems: {} (e.g. {}); {outcome}",
+        present.problems,
+        present.sample.as_deref().unwrap_or_default()
+    ))
+}
+
+/// What [`load_pass_state_pruned`] returns. `total_*` count the string entries READ from the file; the names
+/// kept are the sets themselves (`skip.len()`, `stranded.len()`). `listing_complete` is false when the
+/// state was NOT filtered (an incomplete listing, or no dirs given).
+pub struct PrunedLoad {
+    pub skip: HashSet<String>,
+    pub stranded: HashSet<String>,
+    pub summary: Option<String>,
+    pub total_skip: usize,
+    pub total_stranded: usize,
+    pub listing_complete: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Which {
+    Skip,
+    Stranded,
+}
+
+#[derive(Clone, Copy)]
+enum Node {
+    Top,
+    List(Which),
+    Name(Which),
+}
+
+/// The streaming accumulator: `present` is the filter (None keeps every name).
+struct Acc<'a> {
+    present: Option<&'a HashSet<String>>,
+    skip: HashSet<String>,
+    stranded: HashSet<String>,
+    total_skip: usize,
+    total_stranded: usize,
+}
+
+impl Acc<'_> {
+    /// A repeated key replaces the earlier value, as it does in a parsed `Value` tree.
+    fn reset(&mut self, w: Which) {
+        match w {
+            Which::Skip => {
+                self.skip.clear();
+                self.total_skip = 0;
+            }
+            Which::Stranded => {
+                self.stranded.clear();
+                self.total_stranded = 0;
+            }
+        }
+    }
+
+    fn take(&mut self, w: Which, name: &str) {
+        let (set, total) = match w {
+            Which::Skip => (&mut self.skip, &mut self.total_skip),
+            Which::Stranded => (&mut self.stranded, &mut self.total_stranded),
+        };
+        *total += 1;
+        let keep = match self.present {
+            Some(present) => present.contains(name),
+            None => true,
+        };
+        if keep {
+            set.insert(name.to_owned());
+        }
+    }
+}
+
+/// One seed and visitor for the whole document, by role: the top-level object picks out the two name
+/// arrays, an array under one of those keys feeds its string entries to the accumulator, and every other
+/// value is read and dropped. Everything is consumed even when ignored, so malformed JSON anywhere is an
+/// Err, exactly as a full parse would be.
+struct NodeSeed<'a, 'b> {
+    acc: &'b mut Acc<'a>,
+    node: Node,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for NodeSeed<'_, '_> {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for NodeSeed<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("any JSON value")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        use serde::de::IgnoredAny;
+        if let Node::Top = self.node {
+            while let Some(key) = map.next_key::<String>()? {
+                let which = match key.as_str() {
+                    "skipNames" => Some(Which::Skip),
+                    "strandedNames" => Some(Which::Stranded),
+                    _ => None,
+                };
+                match which {
+                    Some(w) => {
+                        self.acc.reset(w);
+                        map.next_value_seed(NodeSeed {
+                            acc: &mut *self.acc,
+                            node: Node::List(w),
+                        })?;
+                    }
+                    None => {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+            }
+        } else {
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        }
+        Ok(())
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        if let Node::List(w) = self.node {
+            while seq
+                .next_element_seed(NodeSeed {
+                    acc: &mut *self.acc,
+                    node: Node::Name(w),
+                })?
+                .is_some()
+            {}
+        } else {
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+        }
+        Ok(())
+    }
+
+    fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<(), E> {
+        if let Node::Name(w) = self.node {
+            self.acc.take(w, s);
+        }
+        Ok(())
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        Ok(())
+    }
+}
+
+/// The same errors `load_pass_state` returns, from a streaming parse: an I/O failure keeps its kind, anything
+/// the parser rejects (syntax, a truncated file, bad UTF-8, trailing characters) is InvalidData.
+fn pass_state_read_err(p: &Path, e: serde_json::Error) -> std::io::Error {
+    if e.is_io() {
+        std::io::Error::new(
+            e.io_error_kind().unwrap_or(std::io::ErrorKind::Other),
+            format!("{}: {e}", p.display()),
+        )
+    } else {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: not valid JSON: {e}", p.display()),
+        )
+    }
+}
+
+/// [`load_pass_state`] and [`prune_pass_names`] in one step, without ever holding the unpruned state
+/// (TRDD-2HRA270Y). WHY: the live `.pass-state.json` is ~75 MB (~1.49M names) and is never pruned in
+/// practice because no pass completes, so `load_pass_state` (whole file as a String, then a `Value` tree, then
+/// two full sets) raised the process net commit by ~465 MB at boot and the allocator never returned it. This
+/// streams the file through a deserializer that keeps a name only when it is in the bodies-dir listing, so the
+/// full file, the tree and the full sets never exist.
+///
+/// The listing is taken FIRST. When `dirs` is empty or the listing is not complete (an unreadable dir or
+/// directory entry) nothing is filtered and every name is kept, exactly as `load_pass_state` would return it:
+/// an incomplete listing could hide a live name, and a dropped stranded name loses data. `summary` is the
+/// line `prune_pass_names` would return for the same dirs. The error contract is `load_pass_state`'s: a
+/// missing file is empty and Ok; a file that cannot be read or is not valid JSON is an Err; valid JSON with a
+/// missing key, a non-array value, non-string entries or a top level that is not an object reads as empty.
+/// Callers that must keep every name (alstore, `unpark_names`) keep using `load_pass_state`.
+pub fn load_pass_state_pruned(p: &Path, dirs: &[PathBuf]) -> std::io::Result<PrunedLoad> {
+    let present = if dirs.is_empty() {
+        None
+    } else {
+        Some(present_names(dirs))
+    };
+    let (filter, summary, listing_complete) = match &present {
+        None => (None, Some(NO_DIRS_LINE.to_owned()), false),
+        Some(pn) => (
+            pn.complete.then_some(&pn.names),
+            listing_summary(pn),
+            pn.complete,
+        ),
+    };
+    let mut acc = Acc {
+        present: filter,
+        skip: HashSet::new(),
+        stranded: HashSet::new(),
+        total_skip: 0,
+        total_stranded: 0,
+    };
+    match fs::File::open(p) {
+        Ok(file) => {
+            let mut de = serde_json::Deserializer::from_reader(std::io::BufReader::with_capacity(
+                1 << 20,
+                file,
+            ));
+            serde::de::DeserializeSeed::deserialize(
+                NodeSeed {
+                    acc: &mut acc,
+                    node: Node::Top,
+                },
+                &mut de,
+            )
+            .map_err(|e| pass_state_read_err(p, e))?;
+            de.end().map_err(|e| pass_state_read_err(p, e))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("{}: {e}", p.display()),
+            ))
+        }
+    }
+    Ok(PrunedLoad {
+        skip: acc.skip,
+        stranded: acc.stranded,
+        summary,
+        total_skip: acc.total_skip,
+        total_stranded: acc.total_stranded,
+        listing_complete,
+    })
 }
 
 #[cfg(test)]
@@ -616,20 +1161,373 @@ mod tests {
     #[test]
     fn unpark_removes_only_named_stranded_and_preserves_skip() {
         let dir = std::env::temp_dir().join(format!("al-unpark-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
         fs::create_dir_all(&dir).unwrap();
         let state = dir.join(PASS_STATE_FILE);
         let skip: HashSet<String> = ["a.request.json", "b.request.json"].iter().map(|s| s.to_string()).collect();
         let stranded: HashSet<String> = ["a.request.json", "c.response.json"].iter().map(|s| s.to_string()).collect();
-        save_pass_state(&state, &skip, &stranded);
+        save_pass_state(&state, &skip, &stranded).unwrap();
 
         // Remove one present name, one absent name — removed counts only what was actually there.
         let (req, removed, remaining) =
-            unpark_names(&state, &["a.request.json".to_string(), "zzz.request.json".to_string()]);
+            unpark_names(&state, &["a.request.json".to_string(), "zzz.request.json".to_string()]).unwrap();
         assert_eq!((req, removed, remaining), (2, 1, 1));
 
-        let (skip2, stranded2) = load_pass_state(&state);
+        let (skip2, stranded2) = load_pass_state(&state).unwrap();
         assert_eq!(skip2, skip, "skipNames must survive an unpark byte-for-byte");
         assert!(stranded2.contains("c.response.json") && !stranded2.contains("a.request.json"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-ZR3OGSAV: a write failure must surface. The TEMP path is an existing directory, so the
+    /// temp write fails with EISDIR (21 on macOS and Linux). WHY this shape: if the write error were
+    /// swallowed, the rename of that directory onto the free state path would SUCCEED, so the test
+    /// goes red; a write failure under a missing/non-directory parent would not (the rename fails too).
+    #[test]
+    fn save_pass_state_reports_a_write_failure() {
+        let dir = std::env::temp_dir().join(format!("al-save-write-fail-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        let state = dir.join(PASS_STATE_FILE);
+        fs::create_dir_all(state.with_extension("json.tmp")).unwrap();
+        let none: HashSet<String> = HashSet::new();
+        let err = save_pass_state(&state, &none, &none).expect_err("a failed temp write must be an Err");
+        assert_eq!(err.raw_os_error(), Some(21), "expected EISDIR from the temp write, got {err:?}");
+        assert!(!state.exists(), "a failed write must not produce a state file");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-ZR3OGSAV: a rename failure must surface AND leave no stale `.json.tmp`. The state path
+    /// is an existing non-empty directory, so the temp write succeeds and the rename onto it fails.
+    #[test]
+    fn save_pass_state_reports_a_rename_failure_and_removes_the_temp_file() {
+        let dir = std::env::temp_dir().join(format!("al-save-rename-fail-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        let state = dir.join(PASS_STATE_FILE);
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("occupant"), b"x").unwrap();
+        let none: HashSet<String> = HashSet::new();
+        assert!(save_pass_state(&state, &none, &none).is_err(), "a failed rename must be an Err");
+        assert!(!state.with_extension("json.tmp").exists(), "the failed rename must not leave its temp file");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Classification ONLY: dir_sync_unsupported on real errno values; the directory sync itself is not
+    /// exercised here, because it cannot be made to fail without a mock.
+    #[cfg(unix)]
+    #[test]
+    fn dir_sync_unsupported_classifies_the_errnos_a_directory_sync_refuses_with() {
+        use std::io::Error;
+        assert!(dir_sync_unsupported(&Error::from_raw_os_error(libc::ENOTSUP)));
+        assert!(dir_sync_unsupported(&Error::from_raw_os_error(libc::EOPNOTSUPP)));
+        assert!(dir_sync_unsupported(&Error::from_raw_os_error(libc::EINVAL)));
+        assert!(!dir_sync_unsupported(&Error::from_raw_os_error(libc::EIO)));
+    }
+
+    #[test]
+    fn the_content_gate_sees_a_reemission_that_preserves_the_size_and_the_mtime() {
+        // THE `cp -p` CASE, tested on the gate itself. A re-emission can land between the verify
+        // and the delete carrying DIFFERENT bytes while preserving BOTH the size and the mtime
+        // (a `mv` back, a `cp -p`), so a size/mtime comparison cannot see it — the metadata guard
+        // this replaced was bypassable exactly that way. The gate compares the file's CURRENT
+        // BYTES against the bytes that were verified, and must report a re-emission.
+        let dir = std::env::temp_dir().join(format!("al-cgate-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("body.json");
+
+        let verified = "the bytes the store ingested and proved it can reproduce";
+        fs::write(&p, verified).unwrap();
+        // Capture the mtime, then re-emit DIFFERENT bytes of the SAME LENGTH with it restored.
+        let mtime = fs::metadata(&p).unwrap().modified().unwrap();
+        let reemitted = "the bytes that LANDED after the verify, the same length!";
+        assert_eq!(reemitted.len(), verified.len(), "the re-emission must preserve the LENGTH");
+        fs::write(&p, reemitted).unwrap();
+        let f = fs::OpenOptions::new().write(true).open(&p).unwrap();
+        f.set_times(fs::FileTimes::new().set_modified(mtime)).unwrap();
+        // The size AND the mtime are now identical to the verified file's — a metadata guard sees
+        // nothing; only the content differs.
+        let st = fs::metadata(&p).unwrap();
+        assert_eq!(st.len(), verified.len() as u64, "the size is preserved");
+        assert_eq!(st.modified().unwrap(), mtime, "the mtime is preserved");
+
+        match content_unchanged_since_read(&p, verified) {
+            ContentGate::Reemitted(msg) => {
+                assert!(msg.contains("body.json"), "the message names the file: {msg}");
+                assert!(msg.contains("content changed"), "the message says WHY: {msg}");
+            }
+            ContentGate::Unchanged => panic!("the gate must SEE a content change it must not delete"),
+            ContentGate::Unreadable(msg) => panic!("the file is readable: {msg}"),
+        }
+
+        // And the file is still there: the gate never deletes.
+        assert!(p.exists(), "the gate does not delete — the caller does, and only on Unchanged");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_content_gate_passes_unchanged_bytes_and_reports_an_unreadable_file_separately() {
+        let dir = std::env::temp_dir().join(format!("al-cgate2-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("body.json");
+        let verified = "unchanged bytes";
+        fs::write(&p, verified).unwrap();
+
+        assert!(
+            matches!(content_unchanged_since_read(&p, verified), ContentGate::Unchanged),
+            "identical bytes must pass the gate — a guard that aborts every delete would wedge the drain"
+        );
+
+        // A file that cannot be read is NOT a re-emission, and the two are counted apart: one is
+        // the guard working, the other is a genuine problem.
+        let missing = dir.join("gone.json");
+        match content_unchanged_since_read(&missing, verified) {
+            ContentGate::Unreadable(msg) => assert!(msg.contains("re-read before delete failed"), "{msg}"),
+            _ => panic!("a missing file must be Unreadable, not Unchanged and not Reemitted"),
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-FINMFYDE: an absent state file is the first-run state and loads as empty sets, not an error.
+    #[test]
+    fn load_pass_state_absent_file_is_empty() {
+        let dir = std::env::temp_dir().join(format!("al-load-absent-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        fs::create_dir_all(&dir).unwrap();
+        let (skip, stranded) = load_pass_state(&dir.join(PASS_STATE_FILE)).expect("an absent file is not an error");
+        assert!(skip.is_empty() && stranded.is_empty());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-FINMFYDE: a present file that is not valid JSON is an Err, never empty sets: empty sets are what
+    /// unpark would save over the file.
+    #[test]
+    fn load_pass_state_corrupt_file_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("al-load-corrupt-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        fs::create_dir_all(&dir).unwrap();
+        let state = dir.join(PASS_STATE_FILE);
+        fs::write(&state, b"{not json").unwrap();
+        let err = load_pass_state(&state).expect_err("a corrupt file must be an Err");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+        assert!(err.to_string().contains(&state.display().to_string()), "the error must name the path: {err}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-FINMFYDE: unpark over a corrupt state file is refused, and the file bytes are left as they were.
+    #[test]
+    fn unpark_names_refuses_a_corrupt_state_file_and_leaves_it_byte_identical() {
+        let dir = std::env::temp_dir().join(format!("al-unpark-corrupt-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        fs::create_dir_all(&dir).unwrap();
+        let state = dir.join(PASS_STATE_FILE);
+        let original = b"{not json";
+        fs::write(&state, original).unwrap();
+        assert!(unpark_names(&state, &["a.request.json".to_string()]).is_err(), "unpark over a corrupt file must be an Err");
+        assert_eq!(fs::read(&state).unwrap(), original, "the corrupt state file must not be overwritten");
+        assert!(!state.with_extension("json.tmp").exists(), "a refused unpark must not leave a temp file");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A fresh scratch dir with a bodies dir holding the named body files and the state file written from
+    /// `state` (None writes no state file).
+    fn pruned_fixture(
+        tag: &str,
+        bodies: &[&str],
+        state: Option<&str>,
+    ) -> (PathBuf, PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("al-pruned-{tag}-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        let bodies_dir = dir.join("bodies");
+        fs::create_dir_all(&bodies_dir).unwrap();
+        for b in bodies {
+            fs::write(bodies_dir.join(b), b"x").unwrap();
+        }
+        let state_file = dir.join(PASS_STATE_FILE);
+        if let Some(s) = state {
+            fs::write(&state_file, s).unwrap();
+        }
+        (dir, bodies_dir, state_file)
+    }
+
+    /// The two-step path the streaming load replaces.
+    fn load_then_prune(
+        state: &Path,
+        dirs: &[PathBuf],
+    ) -> (HashSet<String>, HashSet<String>, Option<String>) {
+        let (mut skip, mut stranded) = load_pass_state(state).unwrap();
+        let line = prune_pass_names(dirs, &mut skip, &mut stranded);
+        (skip, stranded, line)
+    }
+
+    const PRUNED_STATE: &str = r#"{"skipNames":["a.request.json","gone1.request.json","b.response.json"],"strandedNames":["b.response.json","gone2.response.json","c.request.json"]}"#;
+
+    /// TRDD-2HRA270Y: with a complete listing the streaming load keeps exactly what load + prune keeps, the
+    /// same summary line, and counts what it read.
+    #[test]
+    fn load_pass_state_pruned_equals_load_then_prune_on_a_complete_listing() {
+        let (dir, bodies, state) = pruned_fixture(
+            "equal",
+            &["a.request.json", "b.response.json", "c.request.json"],
+            Some(PRUNED_STATE),
+        );
+        let dirs = [bodies];
+        let (skip, stranded, line) = load_then_prune(&state, &dirs);
+        let got = load_pass_state_pruned(&state, &dirs).unwrap();
+        assert_eq!(
+            (&got.skip, &got.stranded, &got.summary),
+            (&skip, &stranded, &line)
+        );
+        assert!(got.listing_complete);
+        assert_eq!((got.total_skip, got.total_stranded), (3, 3));
+        assert_eq!(
+            (got.skip.len(), got.stranded.len()),
+            (2, 2),
+            "the two absent names are dropped from each set"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-2HRA270Y: an incomplete listing (one dir cannot be read) filters nothing: a dropped stranded name
+    /// loses data. The result equals `load_pass_state` and the summary equals prune_pass_names's.
+    #[test]
+    fn load_pass_state_pruned_keeps_everything_on_an_incomplete_listing() {
+        let (dir, bodies, state) =
+            pruned_fixture("incomplete", &["a.request.json"], Some(PRUNED_STATE));
+        let dirs = [bodies, dir.join("no-such-bodies-dir")];
+        let (skip, stranded) = load_pass_state(&state).unwrap();
+        let (_, _, line) = load_then_prune(&state, &dirs);
+        let got = load_pass_state_pruned(&state, &dirs).unwrap();
+        assert_eq!((&got.skip, &got.stranded), (&skip, &stranded));
+        assert_eq!(got.summary, line);
+        assert!(
+            got.summary
+                .as_deref()
+                .is_some_and(|l| l.contains("prune skipped")),
+            "{:?}",
+            got.summary
+        );
+        assert!(!got.listing_complete);
+        assert_eq!((got.skip.len(), got.stranded.len()), (3, 3));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-2HRA270Y: no dirs given filters nothing and reports it, as prune_pass_names does.
+    #[test]
+    fn load_pass_state_pruned_with_no_dirs_keeps_everything() {
+        let (dir, _bodies, state) = pruned_fixture("nodirs", &[], Some(PRUNED_STATE));
+        let (skip, stranded) = load_pass_state(&state).unwrap();
+        let got = load_pass_state_pruned(&state, &[]).unwrap();
+        assert_eq!((&got.skip, &got.stranded), (&skip, &stranded));
+        assert_eq!(
+            got.summary.as_deref(),
+            Some("no bodies dir given; prune skipped")
+        );
+        assert!(!got.listing_complete);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-2HRA270Y: every shape `load_pass_state` accepts reads the same through the streaming load (after the
+    /// same prune), and every shape it rejects is an Err naming the path.
+    #[test]
+    fn load_pass_state_pruned_follows_the_load_pass_state_error_contract() {
+        let ok_cases: [(&str, Option<&str>); 13] = [
+            ("absent", None),
+            (
+                "missing-key",
+                Some(r#"{"strandedNames":["a.request.json"]}"#),
+            ),
+            (
+                "non-array",
+                Some(r#"{"skipNames":5,"strandedNames":"a.request.json"}"#),
+            ),
+            (
+                "null-and-object",
+                Some(r#"{"skipNames":null,"strandedNames":{"a.request.json":[1,2]}}"#),
+            ),
+            (
+                "non-string-entries",
+                Some(
+                    r#"{"skipNames":[1,null,["a.request.json"],{"k":1},true,2.5,"a.request.json"]}"#,
+                ),
+            ),
+            (
+                "extra-keys",
+                Some(r#"{"x":{"deep":[1,{"y":null}]},"skipNames":["a.request.json"],"z":"s"}"#),
+            ),
+            (
+                "duplicate-key-last-wins",
+                Some(r#"{"skipNames":["a.request.json"],"skipNames":["b.response.json"]}"#),
+            ),
+            ("top-array", Some("[]")),
+            ("top-array-with-items", Some(r#"[1,{"a":[]},"s"]"#)),
+            ("top-number", Some("42")),
+            ("top-string", Some(r#""s""#)),
+            ("top-null", Some("null")),
+            (
+                "whitespace-around",
+                Some(" \n{\"skipNames\":[\"a.request.json\"]}\n "),
+            ),
+        ];
+        for (tag, state_text) in ok_cases {
+            let (dir, bodies, state) =
+                pruned_fixture(tag, &["a.request.json", "b.response.json"], state_text);
+            let dirs = [bodies];
+            let (skip, stranded, line) = load_then_prune(&state, &dirs);
+            let got =
+                load_pass_state_pruned(&state, &dirs).unwrap_or_else(|e| panic!("{tag}: {e}"));
+            assert_eq!(
+                (&got.skip, &got.stranded, &got.summary),
+                (&skip, &stranded, &line),
+                "{tag}"
+            );
+            fs::remove_dir_all(&dir).ok();
+        }
+        let err_cases: [(&str, &str); 6] = [
+            ("not-json", "{not json"),
+            ("empty-file", ""),
+            ("truncated", r#"{"skipNames":["a.request.json""#),
+            ("trailing-garbage", r#"{"skipNames":[]} x"#),
+            (
+                "bad-inside-ignored-value",
+                r#"{"other":[1,,2],"skipNames":[]}"#,
+            ),
+            ("control-char-in-string", "{\"skipNames\":[\"\u{1}\"]}"),
+        ];
+        for (tag, state_text) in err_cases {
+            let (dir, bodies, state) = pruned_fixture(tag, &["a.request.json"], Some(state_text));
+            assert!(
+                load_pass_state(&state).is_err(),
+                "{tag}: load_pass_state must reject it too"
+            );
+            let err = load_pass_state_pruned(&state, &[bodies])
+                .err()
+                .unwrap_or_else(|| panic!("{tag}: must be an Err"));
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{tag}: {err}");
+            assert!(
+                err.to_string().contains(&state.display().to_string()),
+                "{tag}: the error must name the path: {err}"
+            );
+            fs::remove_dir_all(&dir).ok();
+        }
+        // Invalid UTF-8 bytes: an Err in both loads.
+        let (dir, bodies, state) = pruned_fixture("raw-bad-utf8", &["a.request.json"], None);
+        fs::write(&state, b"{\"skipNames\":[\"\xff\xfe\"]}").unwrap();
+        assert!(load_pass_state(&state).is_err());
+        assert!(
+            load_pass_state_pruned(&state, &[bodies]).is_err(),
+            "invalid UTF-8 must be an Err"
+        );
+        fs::remove_dir_all(&dir).ok();
+        // A state path that cannot be read (a directory) is an Err naming the path.
+        let (dir, bodies, state) = pruned_fixture("unreadable", &["a.request.json"], None);
+        fs::create_dir_all(&state).unwrap();
+        assert!(load_pass_state(&state).is_err());
+        let err = load_pass_state_pruned(&state, &[bodies])
+            .err()
+            .expect("an unreadable state file must be an Err");
+        assert!(
+            err.to_string().contains(&state.display().to_string()),
+            "{err}"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }

@@ -67,4 +67,25 @@ suite('forensicsIndex — cost_usd is priced at the CALL\'s timestamp, and survi
   test('an unknown model still prices at 0 without consulting the timestamp', () => {
     assert.strictEqual(apiCallParams({ ...ev(NaN), model: undefined }, SPAWN, Date.now())[':cost_usd'], 0)
   })
+
+  // TRDD-K4XQ7M2B: cost_usd must price the measured 5m/1h split, same as billable_weight. Hard-coding
+  // the 1h argument to 0 priced 1h writes at the 5m rate (37.5% low).
+  test('a 1h-tier cache write is priced at the 1h rate, above the all-5m price', () => {
+    const ts = Date.parse('2026-09-01T00:00:00Z')
+    const e = { ...ev(ts, 'claude-opus-5'), inputTokens: 0, cacheCreationTokens: 1_000_000, tier1hTokens: 1_000_000 }
+    const got = apiCallParams(e, SPAWN, Date.now())[':cost_usd'] as number
+    const iso = new Date(ts).toISOString()
+    assert.strictEqual(got, calcTokenCostUsd(0, 0, 1_000_000, 0, 'claude-opus-5', 1_000_000, iso))
+    assert.ok(Math.abs(got - 10.0) < 1e-9, `expected $10.00, got $${got}`)
+    assert.ok(got > calcTokenCostUsd(0, 0, 1_000_000, 0, 'claude-opus-5', 0, iso), '1h price must exceed all-5m price')
+  })
+
+  // Regression guard for TRDD-K4XQ7M2B acceptance item 2 (flat-total rows keep today's number); NOT mutation
+  // evidence for the fix — it passes with or without the 1h argument.
+  test('a flat cache_creation total with both tiers 0 is unchanged (priced all-5m)', () => {
+    const ts = Date.parse('2026-09-01T00:00:00Z')
+    const e = { ...ev(ts, 'claude-opus-5'), inputTokens: 0, cacheCreationTokens: 1_000_000 }
+    const got = apiCallParams(e, SPAWN, Date.now())[':cost_usd'] as number
+    assert.ok(Math.abs(got - 6.25) < 1e-9, `expected $6.25, got $${got}`)
+  })
 })
