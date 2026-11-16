@@ -5,7 +5,7 @@ column: todo
 pre-block-column: 
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-10-17T20:40:39+0200
+updated: 2026-11-17T00:31:54+0100
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -396,3 +396,4 @@ is not a criterion, so it now names the sample size and the statistic.
 ## Review 2026-10-05 (in the owner's stead)
 
 - Moved to ai_review earlier today by the main agent only because its blocker TRDD-UTFVMVT8 completed; the card was NOT read then. ai_review claims a review nobody is doing, so it is moved to todo until it is read. The directive card lists it as needing boxes 2, 3 and 5 re-measured on the live collector.
+- 2026-11-17 00:31 (main agent, in the owner's stead): this card cannot be closed from the current evidence. Acceptance boxes 2, 3 and 5 need a measurement under fleet ingest. DECISION: measure on an ISOLATED rig (own DATA_DIR and HOME, own ports, sample data of at most 4 GB), never on the live collector, which the owner keeps stopped (~/.agentlens/DISABLED is the owner's). The rig is not built yet; the card stays in its column until the three boxes are measured there.

@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: human_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-11-16T23:00:29+0100
+updated: 2026-11-17T00:31:54+0100
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -426,3 +426,4 @@ AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): acceptance still holds
 ## Owner-stead review
 
 2026-11-16 23:00 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): NOT CLOSED, stays in human_review. All 7 boxes are ticked, but its effects card TRDD-7NHUU6GK is in backburner, and a parent cannot reach complete before its effects cards are terminal. This is an act the main agent does not take: none is needed from the owner; the card waits on TRDD-7NHUU6GK. Read from the card's own state and acceptance list on 2026-11-16; no test was run for this note.
+- 2026-11-17 00:31 (main agent): corrected reading of the blocker. This card waits on TRDD-7NHUU6GK (the delete gate for a ts-only verify failure), and that card is agent-workable: its Rust change is written and uncommitted, held for the owner's word because it relaxes the owner directive of 2026-07-15 (TRDD-K3WDPR7M: delete only when the bytes AND the capture-ts row are verified). So the wait is on one owner decision, not on missing work.
