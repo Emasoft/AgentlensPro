@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-11-16T14:50:09+0100
+updated: 2026-11-16T18:48:15+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -319,6 +319,7 @@ no-climb non-regression is verified here. Report:
 2026-11-16T14:50:09+0100 main agent: NEXT ACTION for step 2: build a <=4 GB sample data dir from the base (size-checked with du -sk <= 4194304 KB before any copy), then rerun the S-req/S-noreq pair and the 1800 s SSE run on alcore-105681c1 and the 4f922a57 build on that sample.
 
 ## Notes and lessons learned
+- 2026-11-16 — Do NOT rerun any measurement until its data copy goes through scripts/capped-copy.sh (refuses a source over 4 GB). Owner orders verbatim: "add a permanent cap to tests to limit to 4 GB any generated fake data for tests!" and "no, the cap is 4GB. i don't care about testing full data size." The 2026-11-16 disk incident was 29 APFS clones of a 43 GB data folder made by this card's measurement steps.
 
 ## Note 2026-10-05
 
