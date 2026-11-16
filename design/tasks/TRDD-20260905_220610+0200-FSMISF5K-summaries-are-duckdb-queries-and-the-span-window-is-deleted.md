@@ -3,7 +3,7 @@ trdd-id: FSMISF5K
 title: Per-session summaries are DuckDB queries over the segments and the resident span window is deleted
 column: human_review
 created: 2026-09-05T22:06:10+0200
-updated: 2026-10-16T11:16:42+0200
+updated: 2026-11-16T22:51:23+0100
 current-owner: kraken-worker-fix/fsmisf5k
 implementation-commits: [dfeef735, 7d552913, 7d1fbd76]
 task-type: refactor
@@ -73,6 +73,7 @@ only memory … why things kept in memory and not written down in parquet"). Tod
 view is `summarize_spans` over `SpanWindow.spans: Vec<Arc<Value>>` — 24 h of spans replayed into
 RAM at boot (`boot_load`) plus every live span — and the summary is a Rust-side rebuild of the
 whole window (TRDD-7RM5YW2T).
+**2026-11-16 22:54 REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): NOT ACCEPTED AS COMPLETE; the card stays open.** Two of three boxes are unticked. Box 1: SpanWindow still exists (the card itself says deleting it is not byte-identical). Box 3: boot time and 24 h RSS need the live collector, which the owner has disabled (~/.agentlens/DISABLED), so it cannot be measured now. What IS verified today: dfeef735, 7d552913, 7d1fbd76 are ancestors of HEAD and of main. The card waits on the owner turning the collector back on; nothing else can move it.
 
 ## Shape
 
