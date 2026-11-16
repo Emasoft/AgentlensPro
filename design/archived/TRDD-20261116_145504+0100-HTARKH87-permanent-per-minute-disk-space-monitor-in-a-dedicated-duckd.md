@@ -1,10 +1,10 @@
 ---
 trdd-id: HTARKH87
 title: Permanent per-minute disk-space monitor in a dedicated DuckDB table with CLI queries
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-11-16T14:55:04+0100
-updated: 2026-11-16T20:06:02+0100
+updated: 2026-11-16T20:29:09+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -31,6 +31,8 @@ Owner order 2026-11-16 (verbatim): "you must add a permanent monitor of the disk
 - 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Merge the whole branch (Recommended)" — merge fix/setup-agent-preflight into main with --no-ff after a full compile, nothing pushed. Trip-test and self-heal questions in the same prompt were left unanswered.
 - 2026-11-16T20:03:04+0100 — column → human_review by main-agent@agentlenspro. delivered, merged to main 16010e8b, live; owner questions open
 - 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "All trashes (Recommended)" — trash scope stays ~/.Trash, ~/Code/**/.trashcan, /Volumes/*/.Trashes/<uid>. The self-heal-skip and 4.5 GB trip-test questions in the same prompt were left unanswered; the trip test was NOT run.
+- 2026-11-16 — Owner decision (AskUserQuestion, verbatim answer): "Keep the skip (Recommended)" — disk-monitor install/uninstall keep skipping the launch self-heal. The synthetic-load question in the same prompt was left unanswered (TRDD-T16ZQH9F waits for natural load). The 4 GB cap trip is now covered by a test with only CAP_KB lowered (b353467f, 178f6662); the 4.5 GB real-threshold trip was not run.
+- 2026-11-16T20:29:09+0100 — COMPLETE by main-agent@agentlenspro. delivered, merged, live; owner questions answered.
 
 ## Owner decisions
 
@@ -52,3 +54,12 @@ Build 2026-11-16 on branch feat/disk-monitor (worktree AgentlensPro-worktrees/di
 Default watch-list no longer seeds ~ (the spec listed it): its walk did not finish in about 27 runs of 40 s and its follow totals roughly doubled the plain ones; ~/Code finished in about 26 runs. Owner can opt in with disk-watch add ~. Not committed by the worker; check-duckdb-only non-test cap raised 26 to 27 is an orchestrator/owner decision (revertible hunk).
 - 2026-11-16 — Merged (e1548cf6 on fix/setup-agent-preflight; merge into main pending), CLI rebuilt, launchd job installed by the owner's decision (0eb1a2ee made the whole disk-monitor verb DISABLED-exempt). SUPERSEDES Plan step 4's 'install and uninstall stay GATED (exit 69)'. Verified live: launchd run exit 0, new rows at 18:58:44. Trash scope as built = all trashes (~/.Trash, ~/Code/**/.trashcan, /Volumes/*/.Trashes/<uid>). OPEN owner decision: disk-monitor install/uninstall now also skip the launch self-heal (READ_ONLY_VERBS), which the owner's answer did not explicitly cover. Derived: TRDD-L9F3I0TC (purgeable_b / important_avail_b still NULL — likely the 'virtual' half of the order).
 - 2026-11-16 20:05 — Merged into main with --no-ff as 16010e8b (in a temporary worktree, since removed; nothing pushed). Full compile on the branch tip passed first (0 errors). Cadence fix landed as 4fdee385 + c05b537a (TRDD-RU9A8H7A, closed); purgeable/important columns verified live (TRDD-L9F3I0TC, closed). Unexplained 7-minute launchd skip tracked as TRDD-T16ZQH9F. Moving to human_review: three owner questions remain unanswered and their recommended defaults are in effect — trash scope = all trashes; disk-monitor install/uninstall skip the launch self-heal; the 4.5 GB cap trip test was NOT run.
+
+## Acceptance
+
+- [x] disk_volume rows every 60 s per volume in <dataDir>/disk.duckdb, written by its own launchd job even when DISABLED (live since 2026-11-16 18:58; cadence TRDD-RU9A8H7A)
+- [x] used/free real and virtual: statfs used/free/avail plus important-usage and derived purgeable (TRDD-L9F3I0TC)
+- [x] with and without symlinks: disk_tree apparent/allocated and *_follow totals from resumable watch-list walks every 300 s
+- [x] with and without trash: trash_b and used_minus_trash_b, scope all trashes (owner confirmed)
+- [x] CLI queries: agentlenspro disk now|history|changes|top-change|trees|sql (read-only single SELECT)
+- [x] merged into main with --no-ff (16010e8b), nothing pushed
