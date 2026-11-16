@@ -19,6 +19,7 @@ suite("disk-monitor launchd jobs", () => {
     assert.match(xml, /<key>AGENTLENS_DATA_DIR<\/key>\s*<string>\/data\/&lt;x&gt;<\/string>/)
     assert.ok(xml.includes("/opt/a&amp;b/cli.js"))
     assert.ok(xml.includes("/data/&lt;x&gt;/logs/disk-sample.log"))
+    assert.match(xml, /<key>ProcessType<\/key>\s*<string>Standard<\/string>/)
     assert.ok(!xml.includes("KeepAlive"), "no KeepAlive: a failing sampler must not respawn in a tight loop")
     const w = diskPlist({ node: "/n", cli: "/c.js", dataDir: "/d", job: walk })
     assert.strictEqual(walk.label, DISK_WALK_LABEL)
@@ -26,6 +27,7 @@ suite("disk-monitor launchd jobs", () => {
     assert.match(w, /<key>StartInterval<\/key>\s*<integer>300<\/integer>/)
     assert.match(w, /<string>disk-sample<\/string>\s*<string>--walks-only<\/string>\s*<string>--quiet<\/string>/)
     assert.ok(w.includes("/d/logs/disk-walk.log"))
+    assert.match(w, /<key>ProcessType<\/key>\s*<string>Background<\/string>/)
   })
 
   test("install (load: false) writes both plists plutil accepts, twice in a row replaces them, uninstall removes both", function (this: Mocha.Context) {

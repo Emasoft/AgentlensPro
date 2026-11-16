@@ -25,11 +25,14 @@ export interface DiskJob {
   flag: "--volumes-only" | "--walks-only"
   intervalS: number
   logFile: string
+  /** launchd's ProcessType for this job. */
+  processType: "Standard" | "Background"
 }
 
 export const DISK_JOBS: readonly DiskJob[] = [
-  { label: DISK_LABEL, flag: "--volumes-only", intervalS: 60, logFile: "disk-sample.log" },
-  { label: DISK_WALK_LABEL, flag: "--walks-only", intervalS: 300, logFile: "disk-walk.log" },
+  // SUSPECTED, not established: Background lets launchd throttle and coalesce the timer under heavy load. On 2026-11-16 at load 128-169 the minute job ran 3 times in 8 minutes, one gap exactly 7 x 60 s with no sleep (TRDD-RU9A8H7A). The minute job is a cheap statfs read, so it runs Standard; the 5-minute folder walk stays Background.
+  { label: DISK_LABEL, flag: "--volumes-only", intervalS: 60, logFile: "disk-sample.log", processType: "Standard" },
+  { label: DISK_WALK_LABEL, flag: "--walks-only", intervalS: 300, logFile: "disk-walk.log", processType: "Background" },
 ]
 
 const xml = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -59,7 +62,7 @@ export function diskPlist(p: { node: string; cli: string; dataDir: string; job: 
   <key>RunAtLoad</key>
   <true/>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>${p.job.processType}</string>
   <key>LowPriorityIO</key>
   <true/>
   <key>Nice</key>
