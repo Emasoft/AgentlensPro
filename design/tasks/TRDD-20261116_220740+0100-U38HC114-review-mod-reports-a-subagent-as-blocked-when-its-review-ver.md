@@ -23,7 +23,7 @@ approval-datetime: 2026-11-16T22:07:40+0100
 The harness header for a reviewed subagent reads "the subagent was blocked once with these findings" and the status line reads "review: <agent> blocked once (round N/2)" while the report under it says VERDICT: PASS. The owner asked why subagent reviews are blocked.
 
 ## Cause (code read in agentlenspro-review-mod/hooks/register.js, version 0.7.10)
-By design (comment at lines 54-58): a subagent whose review carries ANY finding line is stopped once so it can answer the findings. Line 1206: `const findings = res.block || hasFindings(res.text)`; hasFindings (lines 1034-1036) matches BLOCKER, SHOULD-FIX and NIT alike. Only a PASS with no finding lines lets the subagent stop. Each agent turn gets at most MAX_ROUNDS = 2 reviews (line 72); a third stop is not reviewed and the parent is told to check the handback itself.
+By design (comment at lines 54-58): a subagent whose review carries ANY finding line is stopped so it can answer the findings: once per review round, and a turn gets at most two rounds, so one subagent turn can be stopped twice (code read in full, lines 1150-1230; measured 2026-11-16: one worker was stopped in both rounds, then its third stop went unreviewed). Line 1206: `const findings = res.block || hasFindings(res.text)`; hasFindings (lines 1034-1036) matches BLOCKER, SHOULD-FIX and NIT alike. Only a PASS with no finding lines lets the subagent stop. Each agent turn gets at most MAX_ROUNDS = 2 reviews (line 72); a third stop is not reviewed and the parent is told to check the handback itself.
 
 ## Issue
 1. The word "blocked" reads as a failed review although the verdict is PASS.
