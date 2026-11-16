@@ -3,7 +3,7 @@ trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
 column: human_review
 created: 2026-08-26T20:13:05+0200
-updated: 2026-11-17T00:31:54+0100
+updated: 2026-11-17T00:37:34+0100
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -181,6 +181,7 @@ expected to drain on a server restart with no verb, because the server holds `st
 memory while only the CLI persists `.pass-state.json`. Confirm that against the code before
 telling an operator so.
 2026-09-24 — related to TRDD-Z53IJFE9, which removes the RAM-disk body spool completely per the owner's 2026-09-24 directive; see that card for the removal plan.
+**2026-11-17 00:37 — WHAT THIS CARD WAITS ON NOW.** TRDD-7NHUU6GK (the delete gate for a ts-only verify failure). Its Rust change is written and UNCOMMITTED (body_archive.rs, agentlens-store lib.rs and pass.rs, tests/purge_ts_only.rs); it relaxes the owner directive of 2026-07-15 (TRDD-K3WDPR7M: delete only when the bytes AND the capture-ts row are verified), so it is held for the owner's word. One owner decision, not missing work.
 
 ## CORRECTION — this card's first version blamed the wrong cause
 
