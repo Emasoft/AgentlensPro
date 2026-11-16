@@ -1,6 +1,6 @@
 // src/cli/diskStore.ts — the dedicated DuckDB file of the disk-space monitor (TRDD-HTARKH87).
 //
-// `<dataDir>/disk.duckdb` is its OWN file, never cards.duckdb: the sampler runs every minute from
+// `<dataDir>/disk.duckdb` is its OWN file, never cards.duckdb: the sampler runs every 5 minutes from
 // launchd, and a writer that shared the cards store would contend with the collector for the one
 // DuckDB writer lock. DuckDB allows ONE read-write process OR several read-only ones, never both, so
 // every opener here holds the file only for the milliseconds it needs: the sampler opens, inserts and
@@ -93,7 +93,7 @@ export async function openWritable(waitMs = 5000): Promise<DiskDb & { created: b
 /** Read-only open for the query verbs. A missing file is its own answer, not a lock to wait on. */
 export async function openReadOnly(waitMs = 5000): Promise<DiskDb> {
   if (!fs.existsSync(diskDbPath())) {
-    throw new DiskDbMissingError(`no disk monitor data yet (${diskDbPath()} does not exist) — run: agentlenspro disk-sample, or install the minute job: agentlenspro disk-monitor install`)
+    throw new DiskDbMissingError(`no disk monitor data yet (${diskDbPath()} does not exist) — run: agentlenspro disk-sample, or install the monitor jobs: agentlenspro disk-monitor install`)
   }
   return openWithRetry("READ_ONLY", waitMs)
 }

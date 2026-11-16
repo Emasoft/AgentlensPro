@@ -146,7 +146,7 @@ export const LATENCY_EXEMPT: Readonly<Record<string, string>> = {
   'hook-context-cost': 'an analysis verb that streams the day buckets of the log-event sink (~170 MB/day); asked deliberately, never per turn',
   // The four disk-monitor verbs (TRDD-HTARKH87) — disk-sample, disk, disk-watch and disk-monitor install/uninstall/status — are all
   // DISABLED-exempt by owner decision 2026-11-16 (foreignTelemetry.ts READ_ONLY_VERBS). None is on a harness hot path.
-  'disk-sample': 'run by its own launchd jobs (--volumes-only --resident, a minute loop kept alive by launchd; --walks-only every 5 minutes), never by Claude Code; each sample is bounded by its own budget (statfs/diskutil/osascript 5 s each, folder walks 40 s in total) and a one-shot run exits via exitNow',
+  'disk-sample': 'run by its own launchd jobs (--volumes-only --resident, a 5-minute loop kept alive by launchd; --walks-only every 5 minutes), never by Claude Code; each sample is bounded by its own budget (statfs/diskutil/osascript 5 s each, folder walks 40 s in total) and a one-shot run exits via exitNow',
   disk: 'an investigation verb a human or agent invokes deliberately; read-only DuckDB queries over the monitor history, retrying briefly on the sampler writer lock',
   'disk-watch': 'edits the watch list in the monitor DuckDB file; an operator action, not on any per-turn path',
   'disk-monitor': 'installs/removes the launchd job and reads launchctl; one-shot operator action a human waits for',
@@ -435,7 +435,7 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
       // which is what decides whether the agent is cheap to keep running or only cheap to start.
       return runCtxvisCli(argv.slice(1))
     case 'disk-sample':
-      // ONE sample of every volume into disk.duckdb, then exit (TRDD-HTARKH87). Run each minute by the launchd job
+      // ONE sample of every volume into disk.duckdb, then exit (TRDD-HTARKH87). Run every 5 minutes by the resident launchd job
       // `disk-monitor install` writes. Exits via exitNow: a statfs stuck on a dead mount cannot be cancelled, and it
       // must not hold the process (or the next minute) open.
       return exitNow(await runDiskSampleCli(argv.slice(1)))

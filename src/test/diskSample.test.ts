@@ -12,7 +12,7 @@ import * as os from "os"
 import * as path from "path"
 import { spawn, spawnSync, type ChildProcess } from "child_process"
 import { disabledNotice } from "../cli/foreignTelemetry"
-import { nextMinuteBoundary, planWalks, recordVolumeBatch, recordVolumes, runDiskSample, runDiskSampleCli, runResident, storeOutcomes } from "../cli/diskSample"
+import { nextSampleBoundary, planWalks, recordVolumeBatch, recordVolumes, runDiskSample, runDiskSampleCli, runResident, storeOutcomes } from "../cli/diskSample"
 import { openReadOnly, openWritable } from "../cli/diskStore"
 import { derivePurgeable, parseMount, parsePlistScalars, realMounts, sampleVolumes, usableImportant, type VolumeSample } from "../cli/diskVolumes"
 import { runSegment, startWalk, type WalkState } from "../cli/diskWalk"
@@ -266,13 +266,22 @@ suite("diskSample — the resident minute loop", () => {
     return { now: () => t, sleep: async (ms: number) => { t += ms + lateMs } }
   }
   // A watchdog that never fires and an exit that must never be called.
-  const calm = { deadline: () => ({ expired: new Promise<void>(() => {}), cancel: () => {} }), exit: (): void => { throw new Error("unexpected exit") } }
+  const calm = { periodMs: 60_000, deadline: () => ({ expired: new Promise<void>(() => {}), cancel: () => {} }), exit: (): void => { throw new Error("unexpected exit") } }
   const sampled = async (): Promise<number> => 1
 
-  test("nextMinuteBoundary is the first minute boundary strictly after the given time", () => {
-    assert.strictEqual(nextMinuteBoundary(T0), at(1))
-    assert.strictEqual(nextMinuteBoundary(at(1)), at(2), "exactly on a boundary: the next one")
-    assert.strictEqual(nextMinuteBoundary(Date.UTC(2026, 10, 16, 12, 0, 59, 999)), at(1))
+  test("nextSampleBoundary is the first period boundary strictly after the given time", () => {
+    assert.strictEqual(nextSampleBoundary(T0, 60_000), at(1))
+    assert.strictEqual(nextSampleBoundary(at(1), 60_000), at(2), "exactly on a boundary: the next one")
+    assert.strictEqual(nextSampleBoundary(Date.UTC(2026, 10, 16, 12, 0, 59, 999), 60_000), at(1))
+    assert.strictEqual(nextSampleBoundary(Date.UTC(2026, 10, 16, 12, 3, 10)), Date.UTC(2026, 10, 16, 12, 5, 0), "the default period is 5 minutes")
+    assert.strictEqual(nextSampleBoundary(Date.UTC(2026, 10, 16, 12, 5, 0)), Date.UTC(2026, 10, 16, 12, 10, 0), "strictly after: a boundary gives the next one")
+  })
+
+  test("with no periodMs the loop samples at the start and then on every 5-minute wall-clock boundary", async () => {
+    const clock = fakeClock(T0)
+    const slots: number[] = []
+    await runResident({ ...clock, deadline: calm.deadline, exit: calm.exit, sample: sampled, record: async batch => { slots.push(...batch.map(b => b.slotMs)) }, log: () => { throw new Error("nothing to log") }, maxTicks: 3 })
+    assert.deepStrictEqual(slots, [T0, Date.UTC(2026, 10, 16, 12, 5, 0), Date.UTC(2026, 10, 16, 12, 10, 0)])
   })
 
   test("the first tick runs immediately at the start time, then one tick per minute boundary, and maxTicks stops the loop", async () => {
@@ -358,6 +367,7 @@ suite("diskSample — the resident minute loop", () => {
     await runResident({
       now: () => t,
       sleep: async ms => { t += ms },
+      periodMs: 60_000,
       deadline: calm.deadline,
       exit: code => { exits.push(code) },
       sample: async () => { t += 23_000; return 1 }, // a probe starved by load

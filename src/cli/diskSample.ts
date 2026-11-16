@@ -1,6 +1,6 @@
-// src/cli/diskSample.ts — `agentlenspro disk-sample`: one sample then exit, or with `--volumes-only --resident` a minute loop (TRDD-HTARKH87, TRDD-RU9A8H7A, TRDD-T16ZQH9F).
+// src/cli/diskSample.ts — `agentlenspro disk-sample`: one sample then exit, or with `--volumes-only --resident` a 5-minute loop (TRDD-HTARKH87, TRDD-RU9A8H7A, TRDD-T16ZQH9F).
 //
-// Run by TWO launchd jobs that `disk-monitor install` writes: `--volumes-only --resident` (kept alive, one sample per wall-clock minute) and `--walks-only` every 300 s. They are
+// Run by TWO launchd jobs that `disk-monitor install` writes: `--volumes-only --resident` (kept alive, one sample per wall-clock 5-minute boundary) and `--walks-only` every 300 s. They are
 // separate because a run that also walked folders took up to ~41 s, and launchd counts StartInterval from the previous run's exit
 // (measured: a steady ~101.5 s gap between volume rows). No flag = both, in one run. The minute job
 // itself is now the resident loop (`--volumes-only --resident`): see runResident for why it is no longer a fresh process per minute.
@@ -28,6 +28,9 @@ import * as fs from "fs"
 export const WALK_BUDGET_MS = 40_000
 /** A folder is walked again this long after its last walk ended. */
 export const WALK_INTERVAL_MS = 15 * 60_000
+/** How often the resident sampler takes a volume sample: every 5 minutes, on wall-clock boundaries (:00, :05, ...). Owner, 2026-11-16: "the disk monitoring
+ *  frequency should be 5 minutes, otherwise it would become too heavy for the system" (TRDD-T16ZQH9F). */
+export const SAMPLE_PERIOD_MS = 5 * 60_000
 /** A folder is walked again no sooner than this many times its last walk cost: measured 2026-11-16, ~ and ~/Code take minutes of walking
  *  each, so a flat 15 min would keep the sampler walking nearly all the time (~19k files/s, mostly system time). 4x caps that at 25% duty. */
 export const WALK_COOLDOWN_FACTOR = 4
@@ -276,7 +279,7 @@ export async function storeOutcomes(outcomes: readonly Outcome[]): Promise<void>
   }
 }
 
-/** `all` = today's single run; `volumes` = the minute job (volume rows only, never delayed by a walk); `walks` = the slow job (folder walks only). */
+/** `all` = today's single run; `volumes` = the 5-minute sampler job (volume rows only, never delayed by a walk); `walks` = the slow job (folder walks only). */
 export type SampleMode = "all" | "volumes" | "walks"
 
 export async function runDiskSample(opts: { budgetMs?: number; mode?: SampleMode } = {}): Promise<SampleSummary> {
@@ -298,12 +301,12 @@ export async function runDiskSample(opts: { budgetMs?: number; mode?: SampleMode
   return { volumes: volumeCount, due: plans.length, finished: outcomes.filter(o => o.finished).length, elapsedMs: Date.now() - t0 }
 }
 
-/** The first wall-clock minute boundary strictly after `nowMs`. */
-export function nextMinuteBoundary(nowMs: number): number {
-  return Math.floor(nowMs / 60_000) * 60_000 + 60_000
+/** The first wall-clock boundary of `periodMs` strictly after `nowMs` (12:03:10 with the default 5 minutes gives 12:05:00). */
+export function nextSampleBoundary(nowMs: number, periodMs: number = SAMPLE_PERIOD_MS): number {
+  return Math.floor(nowMs / periodMs) * periodMs + periodMs
 }
 
-/** One finished sample whose row is not yet written: `slotMs` is the minute slot it was taken for, `tsMs` the clock read before probing (the row's ts). */
+/** One finished sample whose row is not yet written: `slotMs` is the period slot it was taken for, `tsMs` the clock read before probing (the row's ts). */
 export interface PendingSample<S> {
   slotMs: number
   tsMs: number
@@ -328,14 +331,16 @@ export interface ResidentDeps<S> {
   lockWaitMs?: number
   /** A tick still running after this long is stuck; default TICK_WATCHDOG_MS. */
   watchdogMs?: number
+  /** Time between two samples; default SAMPLE_PERIOD_MS. */
+  periodMs?: number
   /** Registers the callback that runs when the process is told to stop (SIGTERM); the callback logs the buffered slots that will be lost. */
   onTerminate?(cb: () => void): void
 }
 
-/** The minute loop: one sample immediately at start (so a restart leaves no blind spot), then one per wall-clock minute boundary. A sample whose write
+/** The sample loop: one sample immediately at start (so a restart leaves no blind spot), then one per wall-clock period boundary (SAMPLE_PERIOD_MS, 5 minutes). A sample whose write
  *  is refused by the writer lock (another job holds disk.duckdb) is kept in memory (at most MAX_PENDING, oldest dropped and logged) and written with the
  *  next tick, each with its own timestamp; a sample() failure or any other write failure is logged as one line and the loop goes on. The next
- *  slot is always computed from now() (never slot += 60000), so after a system sleep or clock jump the loop skips to the next boundary: a gap, no backlog of ticks.
+ *  slot is always computed from now() (never slot += period), so after a system sleep or clock jump the loop skips to the next boundary: a gap, no backlog of ticks.
  *  A tick that outlives the watchdog is stuck: log one line and exit non-zero so launchd KeepAlive restarts the job — a live process that no longer samples would never be restarted.
  *  The lock wait of a tick shrinks as its sample took longer, so sample + write always ends 10 s before the watchdog.
  *  WHY resident and not a fresh process per minute: measured 2026-11-16 (TRDD-T16ZQH9F) under load 194-258, a fresh node process
@@ -345,6 +350,7 @@ export interface ResidentDeps<S> {
 export async function runResident<S>(deps: ResidentDeps<S>): Promise<void> {
   const watchdogMs = deps.watchdogMs ?? TICK_WATCHDOG_MS
   const lockWaitMs = deps.lockWaitMs ?? RESIDENT_LOCK_WAIT_MS
+  const periodMs = deps.periodMs ?? SAMPLE_PERIOD_MS
   /** Samples whose write the writer lock refused, oldest first. */
   let pending: PendingSample<S>[] = []
   const slotList = (list: readonly { slotMs: number }[]): string => list.map(p => new Date(p.slotMs).toISOString()).join(", ")
@@ -372,7 +378,7 @@ export async function runResident<S>(deps: ResidentDeps<S>): Promise<void> {
         }
         deps.log(`disk-sample resident: write deferred, ${pending.length} sample(s) buffered: ${msg}`)
       } else {
-        // Not a lock: retrying the same batch would fail the same way and block every later minute, so it is dropped (and said).
+        // Not a lock: retrying the same batch would fail the same way and block every later sample, so it is dropped (and said).
         pending = []
         deps.log(`disk-sample resident: write failed, ${batch.length} sample(s) dropped, slots ${slotList(batch)}: ${msg}`)
       }
@@ -405,7 +411,7 @@ export async function runResident<S>(deps: ResidentDeps<S>): Promise<void> {
   if (!(await runTick(lastSlot))) return
   for (let ticks = 1; deps.maxTicks === undefined || ticks < deps.maxTicks; ticks++) {
     // max(now, lastSlot): a timer that fires a few ms before its boundary must not make the next boundary the same slot again.
-    const slot = nextMinuteBoundary(Math.max(deps.now(), lastSlot))
+    const slot = nextSampleBoundary(Math.max(deps.now(), lastSlot), periodMs)
     // A real setTimeout can fire a few ms early: sleep again until the boundary is reached, so a tick never runs (or stamps its row) before its slot.
     while (deps.now() < slot) await deps.sleep(slot - deps.now())
     lastSlot = slot
@@ -433,7 +439,7 @@ export async function runDiskSampleCli(argv: string[]): Promise<number> {
   if (volumesOnly && walksOnly) throw new UsageError("disk-sample: --volumes-only and --walks-only are mutually exclusive")
   if (argv.includes("--resident")) {
     if (!volumesOnly) throw new UsageError("disk-sample: --resident is only valid with --volumes-only")
-    // Never returns: launchd (KeepAlive) owns its lifetime. recordVolumeBatch opens disk.duckdb and closes it per tick, so the writer lock is free between minutes.
+    // Never returns: launchd (KeepAlive) owns its lifetime. recordVolumeBatch opens disk.duckdb and closes it per tick, so the writer lock is free between samples.
     await runResident({
       now: Date.now,
       sleep: ms => new Promise<void>(resolve => setTimeout(resolve, ms)),

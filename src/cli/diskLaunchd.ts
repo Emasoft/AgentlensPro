@@ -1,8 +1,8 @@
 // src/cli/diskLaunchd.ts — `agentlenspro disk-monitor install|uninstall|status`: the two disk-monitor jobs (TRDD-HTARKH87, TRDD-RU9A8H7A).
 //
 // Their OWN launchd agents, not threads of the collector: the monitor must keep recording while the
-// collector is stopped, crashed or DISABLED — that is when a disk quietly fills. `disk-sample --volumes-only --resident` is a resident minute loop and
-// `disk-sample --walks-only` runs every 300 s. The minute job has KeepAlive because a fresh node process per minute missed its 60 s slot under
+// collector is stopped, crashed or DISABLED — that is when a disk quietly fills. `disk-sample --volumes-only --resident` is a resident 5-minute loop and
+// `disk-sample --walks-only` runs every 300 s. The sampler job has KeepAlive because a fresh node process per minute missed its 60 s slot under
 // load (runs of 24-47 s at load 194-258) while a resident loop woke 0-5 ms late (TRDD-T16ZQH9F). ThrottleInterval 60 means a crashing sampler restarts at most once a minute.
 
 import * as fs from "fs"
@@ -17,7 +17,7 @@ import { cliJsPath } from "./serverControl"
 export const DISK_LABEL = "com.agentlens.disk-sample"
 export const DISK_WALK_LABEL = "com.agentlens.disk-walk"
 
-/** One launchd job. Two exist so the minute job never waits on a folder walk: an interval job counts from the previous run's exit, so a run
+/** One launchd job. Two exist so the sampler job never waits on a folder walk: an interval job counts from the previous run's exit, so a run
  *  that also walked folders (up to ~41 s) made the volume rows land every ~101 s instead of 60 s (TRDD-RU9A8H7A). The fields below are exactly what differs between them. */
 export interface DiskJob {
   label: string
@@ -28,7 +28,7 @@ export interface DiskJob {
   logFile: string
   /** launchd's ProcessType for this job. */
   processType: "Standard" | "Background"
-  /** Nice 10 + LowPriorityIO. The resident minute sampler runs at default priority: that is how the measured winner ran (TRDD-T16ZQH9F). */
+  /** Nice 10 + LowPriorityIO. The resident sampler runs at default priority: that is how the measured winner ran (TRDD-T16ZQH9F). */
   lowPriority: boolean
 }
 
@@ -130,7 +130,7 @@ const ctl = opts.launchctl ?? launchctl // injectable so the rollback path is te
       bootstrapped.push(job.label)
       loaded = true
     }
-    const cadence = job.schedule.kind === "interval" ? `folder walks every ${job.schedule.seconds} s` : "volume rows every minute (resident sampler)"
+    const cadence = job.schedule.kind === "interval" ? `folder walks every ${job.schedule.seconds} s` : "volume rows every 5 minutes (resident sampler)"
     console.log(`disk-monitor install: ${file} (${opts.load === false ? "written, not loaded" : "loaded"}); ${cadence} into ${path.join(dataDir(), "disk.duckdb")}`)
     return { label: job.label, path: file, loaded }
   })
@@ -181,7 +181,7 @@ async function status(): Promise<number> {
 }
 
 export const DISK_MONITOR_USAGE = `usage: agentlenspro disk-monitor install | uninstall | status
-  install    write ~/Library/LaunchAgents/${DISK_LABEL}.plist (resident sampler, volume rows every minute) and ${DISK_WALK_LABEL}.plist (folder walks
+  install    write ~/Library/LaunchAgents/${DISK_LABEL}.plist (resident sampler, volume rows every 5 minutes) and ${DISK_WALK_LABEL}.plist (folder walks
              every 300 s) and load both, even with no Claude session and even while agentlenspro is DISABLED (macOS only)
   uninstall  unload and delete both plists; the recorded history is kept
   status     both plists, their launchd state, and the time of the newest recorded row (exit 0 = both installed and loaded)`
