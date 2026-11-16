@@ -1,10 +1,10 @@
 ---
 trdd-id: UIQS9RXZ
 title: search across all sessions of the project - increment 1 scope filters and output
-column: todo
+column: dev
 status: tasked
 created: 2026-11-16T23:48:04+0100
-updated: 2026-11-16T23:49:28+0100
+updated: 2026-11-16T23:51:54+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -64,7 +64,9 @@ Files: src/cli/searchCli.ts, src/test/searchCli.test.ts (and the one-line verb s
 ## Approval log
 
 - 2026-11-16T23:48:04+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T23:51:54+0100 — column → dev by main-agent@agentlenspro. owner request of 2026-11-16; plan on the card
 
 ## Notes
 
 - 2026-11-16 23:49 — The .tmp folder in the repo root is dated 2026-10-03 and empty, so the probes did not create it. The probe's peak memory figure is unreliable (unit not confirmed); the acceptance box asks for a real measurement.
+- 2026-11-16 23:51 — Checked before dispatch: src/projectSlug.ts exports projectSlugOf and resolveProjectSlugs (use the second: slugs over 200 chars are resolved from disk); claudeProjectsDirs() in src/logReader.ts gives the projects dirs and honours CLAUDE_CONFIG_DIR; 'search' is already in the verb lists of src/cli/main.ts (lines 120, 173); no test line in src/test/searchCli.test.ts mentions that --session is required (grep found none, the worker confirms by reading).
