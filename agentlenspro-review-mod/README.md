@@ -55,8 +55,8 @@ that tool (the usual end of an interactive background agent).
 2. It runs the same REVIEW (and, when the agent's last message carries the proposal line, the MEASUREMENT) with
    `$.model.complete` on `claude-sonnet-5-5`, over those messages (the first prompt plus the newest, about 60,000
    characters) and the git context. Not `$.model.fork`: a fork repeats the main thread's request.
-3. A report with any finding stops the agent once so it can correct itself. An agent that ends with text is
-   blocked once and reads the report as `Stop hook feedback`. An agent that reports with `SubagentHandback` has
+3. A report with a BLOCKER or SHOULD-FIX holds the agent once so it can correct itself; a report with NITs only goes to the parent and does not hold it. An agent that ends with text is
+   held once and reads the report as `Stop hook feedback`. An agent that reports with `SubagentHandback` has
    that call refused once: it reads the report as the tool's error, fixes or rejects each finding, and calls
    `SubagentHandback` again, which goes through (a SubagentStop block would come too late for it: Claude Code
    discards a block after a turn that ended on a tool result, measured on 2.1.325). Its SubagentStop is reviewed

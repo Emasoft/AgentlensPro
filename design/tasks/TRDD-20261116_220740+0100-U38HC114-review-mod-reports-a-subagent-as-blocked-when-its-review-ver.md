@@ -4,7 +4,7 @@ title: review mod reports a subagent as blocked when its review verdict is PASS 
 column: todo
 status: tasked
 created: 2026-11-16T22:07:40+0100
-updated: 2026-11-16T22:07:40+0100
+updated: 2026-11-16T22:53:45+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -41,3 +41,8 @@ By design (comment at lines 54-58): a subagent whose review carries ANY finding 
 ## Approval log
 
 - 2026-11-16T22:07:40+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## STATE
+
+2026-11-16 22:53 — DECIDED SCOPE: a NIT-only review no longer holds the subagent at EITHER gate: its SubagentStop is not held and its SubagentHandback is not refused (before, a NIT-only review refused the handback once). This handback case is a behaviour change the three acceptance boxes did not name; it is intended. Edits are in the tree (register.js, README.md, plugin.json 0.7.11), not yet verified by the main agent, not committed. The runtime path is NOT tested: the mod has no test suite; the only check so far covers the two regexes.
+2026-11-16 22:53 — OBSERVED, not acted on: agentlenspro-review-mod/tsconfig.json is untracked (56 bytes, dated 2026-11-14 23:00, content: extends ./.claude-plugin/types/tsconfig.json). Its origin is not known. It is neither committed nor removed.
