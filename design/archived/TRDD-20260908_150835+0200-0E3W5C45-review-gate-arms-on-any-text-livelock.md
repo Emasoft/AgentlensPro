@@ -1,9 +1,9 @@
 ---
 trdd-id: 0E3W5C45
 title: The review gate arms on any text block so idle and heartbeat turns livelock it
-column: human_review
+column: complete
 created: 2026-09-08T15:08:35+0200
-updated: 2026-10-05T10:08:18+0200
+updated: 2026-11-16T23:02:48+0100
 current-owner: main-session
 task-type: bugfix
 min-approval-requirement: none
@@ -11,7 +11,10 @@ priority: high
 labels: [review-gate, token-burn, hooks]
 implementation-commits: [b7a99cab, 3eb7683f, 9ee081c5, 31912fc4]
 release-via: none
-status: tasked
+status: archived
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-16T23:02:48+0100
 ---
 
 # The review gate arms on any text block so idle and heartbeat turns livelock it
@@ -159,7 +162,7 @@ must not arm it.
       this repo, so `standalone/cli.js` IS the running bundle (`grep -c commandWriteReason` = 4).
 - [x] SubagentStop parity: the same classifier decides `didWork` (prose false, marked true, Bash write
       true, Write into /tmp false).
-- [ ] Owner applies the rule amendment: in `~/.claude/rules/propose-then-review-then-implement.md`
+- [x] Owner applies the rule amendment: in `~/.claude/rules/propose-then-review-then-implement.md`
       under "The shape → 1. Propose": *Begin the proposal with a line `PROPOSAL: <one-sentence
       rationale>`, literally, even under /distill (the marker line is exempt from compression). The
       gate arms on that line and on nothing else in prose; an unmarked proposal is unreviewed by omission.*
@@ -184,8 +187,10 @@ Judging fork QUALITY (the gate counts spawns, not reviews — separate defect, u
 - CORRECTION 2026-10-05, after adversarial review of the entries above. (1) "Not in effect on this machine until the bundle is rebuilt" is unverified and probably wrong. Read by the main agent: the `agentlenspro` command resolves to this repo's standalone/cli.js, built 2026-10-01 18:31; the four fix commits naming this card (b7a99cab, 3eb7683f, 9ee081c5, 31912fc4) are dated 2026-09-08; the bundle contains the string `PROPOSAL FOR ACTION - PLEASE REVIEW` once. From those dates it is an INFERENCE, not a measurement, that this card's change is in the running bundle; the check this card's own Deployed box names (`grep -c commandWriteReason`) was not re-run. If the inference holds, nothing on this card waits for a deploy and `deploy` is not its true column. That column question is OPEN and is not decided in this entry. (2) The sweep box is ticked while its text still reads NOT RUN, and the entry above reports that one of 14 mutations stayed green. Whether the box is met depends on whether that green mutation is one of the triggers the box names; the sweep report was not re-read after the session was cleared. OPEN, same follow-up. (3) "the new card minted in step 1" in the entry above means TRDD-GI1LC8FX. (4) `implementation-commits` is still empty on this card.
 - COLUMN SETTLED 2026-10-05: back in `human_review`; the earlier `deploy` and its "column → deploy" Approval-log line are withdrawn. Read by the main agent: (a) the sweep report docs_dev/20261005_025411+0200-sweep-0E3W5C45.md - 14 mutations; the 12 that mutate a trigger (m1 to m8, m11 to m14) all went red, m7 only in reviewSupervisor; m9 red; m10 green, and m10 is message text with a detail, not a trigger. So the sweep box is met as written, with the m7 weakness, and the cause box has a test gap in its detail branch; both gaps are carried by TRDD-GI1LC8FX. (b) `grep -c commandWriteReason standalone/cli.js` gives 5 today (the Deployed box recorded 4) on the bundle built 2026-10-01 18:31, and the `agentlenspro` command resolves to that file, so by this card's own Deployed check the change is in the running bundle and nothing here waits for a deploy. (c) The heartbeat box's "live observation under the new bundle pending": in this session three heartbeat turns ended with no Stop block. What keeps this card out of `complete`: the last box, "Owner applies the rule amendment", is the owner's act. The owner's rule file ~/.claude/rules/turn-protocol-and-review.md does say a proposal "must begin with a line that is exactly `PROPOSAL FOR ACTION - PLEASE REVIEW`", but the box names a different file and an older marker, so whether that satisfies the box is for the owner to confirm or reword. Also for whoever closes it: decide whether TRDD-GI1LC8FX is this card's EHT (it carries gaps on two of its ticked boxes); it is not registered as one now. `implementation-commits` is filled with the four fix commits of 2026-09-08; the docs-only commits naming this card are left out. The STATE head of this card was not rewritten.
 - Status 2026-10-05: the STATE head (2026-09-08) still gives the right column. Its line "Not done and stated so: the per-trigger mutation sweep" is superseded: the sweep was run on 2026-10-05 (see the entry above). Correction to that entry: "three heartbeat turns" - the session's own summary counts four plain ones.
+- 2026-11-16 23:02 REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): ACCEPTED; the last box is ticked as MET IN ANOTHER FORM, not as written. Facts read today: the file the box names, ~/.claude/rules/propose-then-review-then-implement.md, does not exist; its successor ~/.claude/rules/turn-protocol-and-review.md says a proposal must begin with the exact line PROPOSAL FOR ACTION - PLEASE REVIEW and that the gate fires only on that marker (3 occurrences, line 28). So the owner did apply a marker rule, with a different marker text than the box's PROPOSAL: wording. The four fix commits are ancestors of HEAD; unit test files today: reviewGateTriggers 78, reviewGate 201, reviewSupervisor 38 passing. The two test gaps stay on TRDD-GI1LC8FX. TRDD-P46MEOXA (identity hits) is complete.
 
 ## Approval log
 
 - 2026-10-05T02:55:42+0200 — column → deploy by main-agent@agentlenspro. reviewed in the owner's stead 2026-10-05: mutation sweep run, 13 of 14 rules protected; the rule question is answered by the owner's rule file; takes effect on a bundle rebuild
 - 2026-10-05T03:21:47+0200 — column → human_review. returned by the main agent - nothing on this card waits for a deploy; the last box is the owner's act.
+- 2026-11-16T23:02:48+0100 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead per the 2026-11-16 order; last box met in another form (the owner's rule file carries a marker rule); three test files re-run today.
