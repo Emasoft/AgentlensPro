@@ -3,7 +3,7 @@ trdd-id: SA99VCPZ
 title: delegate-gate has six accepted review fixes that were never applied
 column: todo
 created: 2026-09-13T20:27:29+0200
-updated: 2026-09-13T20:34:06+0200
+updated: 2026-11-16T22:59:38+0100
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -25,6 +25,7 @@ approval-datetime: 2026-09-13T20:27:29+0200
 ## STATE
 
 The delegate-gate module and its test file are UNTRACKED on disk; the CLI entrypoint and the hook-install module carry uncommitted changes wiring the verb in. Work reached round-3-complete/41-tests-clean and received a pre-commit adversarial verdict of ACCEPT-WITH-FIXES with SIX fixes accepted. Session was cleared before any fix was applied and before anything was committed. The six fixes are described in that session's transcript, summarised in the post-clear handoff, and NOT recorded anywhere a future session reads.
+2026-11-16 22:59 — REQUIREMENT added from TRDD-8D26QVBC (decided by the main agent under the owner order of 2026-11-16 "review in my stead. decide yourself."; the owner can overrule it): before the delegate gate is registered again it must check the kill-switch and allow every call while the switch is set, with a test for both halves of the switch.
 
 ## Symptoms previously suspected (UNVERIFIED -- review hints only, NOT a checklist)
 

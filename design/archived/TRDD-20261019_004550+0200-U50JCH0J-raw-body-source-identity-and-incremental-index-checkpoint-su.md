@@ -1,10 +1,10 @@
 ---
 trdd-id: U50JCH0J
 title: Raw-body source identity and incremental index checkpoint substrate
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-10-19T00:45:50+0200
-updated: 2026-10-20T04:12:06+0200
+updated: 2026-11-16T22:58:58+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -108,3 +108,8 @@ This is a depth-one atomic implementation card: `npt` and `eht` are empty and it
 ## Approval log
 
 - 2026-10-19T00:45:50+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T22:58:58+0100 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead per the 2026-11-16 order; named test file re-run today, 58 passing.
+
+## Owner-stead review
+
+2026-11-16 22:58 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): ACCEPTED. Re-checked today: c46d0a6b and 1a8760ba are ancestors of HEAD; the four delivered files exist; the unit test file rawBodySourceIndex ran with 58 passing, 0 failing; the round-11 report exists under reports/U50JCH0J/ (that folder is ignored by git, see TRDD-G4DDKLZ9). NOT re-checked: the 120-file corpus-slice run. Accepted limits stay as written above: an unflushed last record after a power loss, and the runner contract that TRDD-IFOQAQYV must follow.

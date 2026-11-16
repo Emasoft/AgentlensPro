@@ -3,7 +3,7 @@ trdd-id: TOIM26HP
 title: The session-card DuckDB store is a file under the data dir, not an in-memory database
 column: human_review
 created: 2026-09-06T05:37:50+0200
-updated: 2026-10-16T11:16:42+0200
+updated: 2026-11-16T23:00:28+0100
 current-owner: kraken-agent-acb4ac9d59a86a1c5
 task-type: refactor
 parent-trdd: 7YPQWKPG
@@ -134,3 +134,7 @@ card's parent's actual target), it is a follow-up that must wire the `LOG_INGEST
 - 2026-09-06T05:37:50+0200 — Tier 0 (`min-approval-requirement: none`): a derived refactor of one
   module inside the parent card's approved scope, authored directly in `design/tasks/`.
 - 2026-10-16T11:16:42+0200 — column → human_review by main-agent@agentlenspro. only box 4 is open: a deploy plus a live RSS measurement; a deploy needs the owner (row 17)
+
+## Owner-stead review
+
+2026-11-16 23:00 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): NOT CLOSED, stays in human_review. 3 of 4 boxes are ticked; box 4 is the live RSS delta after a deploy. This is an act the main agent does not take: deploying to the live collector, which the owner disabled. Read from the card's own state and acceptance list on 2026-11-16; no test was run for this note.

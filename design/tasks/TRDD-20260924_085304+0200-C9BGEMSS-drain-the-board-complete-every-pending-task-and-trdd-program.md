@@ -1,9 +1,9 @@
 ---
 trdd-id: C9BGEMSS
 title: Drain the board, complete every pending task and TRDD (program 2026-09-24)
-column: human_review
+column: todo
 created: 2026-09-24T08:53:04+0200
-updated: 2026-10-16T11:13:22+0200
+updated: 2026-11-16T23:07:34+0100
 current-owner: Emasoft
 created-by: Emasoft
 task-type: infra
@@ -24,6 +24,7 @@ status: tasked
 
 - 2026-09-24T08:53:04+0200 — MANDATE issued by Emasoft (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-16T11:13:22+0200 — column → human_review by main-agent@agentlenspro. owner decisions in its STATE are pending; row 15
+- 2026-11-16T23:07:34+0100 — column → todo by main-agent@agentlenspro. program card: decision (1) is answered by the 2026-11-16 order; it cannot close while the board is not drained
 
 ## STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24T11:16:57+0200
 
@@ -42,6 +43,9 @@ Owner decisions PENDING (this numbering supersedes the one in the chat summary) 
 
 Operating facts for whoever resumes this card: never run the full mocha suite (`.mocharc.cjs`'s `spec: ['out/test/test/**/*.test.js']` glob is additive — CLI `--spec`/positional args do NOT replace it, only `--no-config` does; scope every mocha invocation with `--no-config --require src/test/setup.js --ui tdd <file>`). The hourly RSS-cap restart of the server is expected, not a defect. Forks bypass the burn gate by design. `trddgrep move` performs a real `git mv` and stamps the OS account's username into the card's approval log — so board-column commits happen only when no other worker is mid-move on the same corpus, and the staged diff is grepped for identities before committing. Run `trddgrep validate` before every board commit. Every worker's claim in a report is second-hand until this orchestrating session reads the evidence itself. A shell redirect into a variable path such as `> $S/x` arms the review gate even under the scratchpad: write literal paths.
 4BZPAQWM merged to main at 8002f1f6, next step its box 4; follow-up cards M3TWPLZO, 2CV1KNHS, CUCLHFBA (backburner, agent-created, their auto-stamped mandates corrected).
+2026-11-16 23:07 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."). This is a program card and it cannot close while the board is not drained, so it leaves human_review for todo. Status of its nine pending decisions, as far as checked today:
+(1) ANSWERED by the owner on 2026-11-16: the main agent reviews in the owner's stead, so AI-approved cards no longer wait for a human. On 2026-11-16 that review went through the 22 cards then in human_review: 10 closed, 4 returned to todo (3 with decisions, plus this card), 8 stay in human_review (7 as below and TRDD-10NGH2BR, decided and due to close) because each needs a push, the disabled collector, or another card. (4) Push: still the owner's act; EJDNNDY3 and QJPUG1WP still wait on it. (5) 0E3W5C45: option A stands, the card is closed (c30f2b4c). (9) 7FA3NIXU: archived as superseded by TRDD-QQ2XIIZ6 on 2026-11-01, per that card's own note.
+NOT re-checked today, so still open as written above: (2) the eight early terminal moves, (3) the bundle deploy prerequisites, the rest of (5), (6), (7) VNKPUAY4, (8) disk space (the owner's act), GG0WOHEV in (9). The phase-3 queue above is from 2026-09-24 and has not been compared with today's board.
 
 
 

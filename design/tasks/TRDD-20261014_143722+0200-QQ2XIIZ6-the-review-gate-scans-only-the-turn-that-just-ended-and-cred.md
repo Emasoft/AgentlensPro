@@ -1,10 +1,10 @@
 ---
 trdd-id: QQ2XIIZ6
 title: The review gate scans only the turn that just ended and credits only non-isolated forks for REVIEW and MEASURE
-column: human_review
+column: todo
 status: tasked
 created: 2026-10-14T14:37:22+0200
-updated: 2026-11-01T11:23:09+0100
+updated: 2026-11-16T23:07:14+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -26,6 +26,7 @@ project-id: agentlenspro
 - 2026-10-14 — authority is the owner's direct request in the session (quotes Q1-Q3), not a self-issued mandate.
 - 2026-10-14 — quotes Q1-Q4 (Q4 added after the first approval line).
 - 2026-10-16T11:13:21+0200 — column → human_review by main-agent@agentlenspro. owner decision on the review-display mod and the NO REVIEW POSSIBLE escape; row 14
+- 2026-11-16T23:07:14+0100 — column → todo by main-agent@agentlenspro. reviewed in the owner's stead: 4 boxes ticked on tests, 4 open (2 need work, 1 is in doubt, 1 is the owner's rule file)
 
 ## User directives (verbatim, 2026-10-14)
 
@@ -43,12 +44,12 @@ Pointer (2026-10-14): the out-of-scope item above now lives in TRDD-LR4SI79M (ha
 
 ## Acceptance
 
-- [ ] An Agent spawn with any isolation value earns no REVIEW or MEASURE credit (main and subagent gates).
-- [ ] MEASURE credit requires subagent_type fork.
-- [ ] Stop-hook feedback (isMeta user entry) does not start a new turn.
+- [x] An Agent spawn with any isolation value earns no REVIEW or MEASURE credit (main and subagent gates).
+- [x] MEASURE credit requires subagent_type fork.
+- [x] Stop-hook feedback (isMeta user entry) does not start a new turn.
 - [ ] A write in an earlier turn is not demanded in the next turn.
 - [ ] A heartbeat-fired turn (attachment entry) is a turn start; its own writes are demanded, earlier ones are not.
-- [ ] The scan reads backward to the turn start; no fixed 4 MB tail.
+- [x] The scan reads backward to the turn start; no fixed 4 MB tail.
 - [ ] When deployed, rewrite the pending sentence in ~/.claude/rules/turn-protocol-and-review.md in present tense.
 - [ ] At deploy, supersede the hook-events-pipeline memory atoms that describe the pre-change gate in the present tense (RJ09 4 MB tail, BDF5 credit predicate without isolation) and refresh their reviewGate.ts / reviewSupervisor.ts line citations.
 
@@ -93,3 +94,11 @@ STATE 2026-10-14 16:25 (supersedes the RESUME 15:40 IN FLIGHT/OPEN lines above w
 2026-10-15: false positive. The Stop gate reported "ran a write-shaped command: trddgrep append" for a turn whose only occurrence of that text was inside the --content argument of a fastedit create into docs_dev (INFERRED: the same turn also ran an earlier fastedit create that failed on unbalanced quoting, where the text may have stood at command position; which of the two the gate classified is untested). Same family as the open shellWords residuals.
 2026-10-15: second firing, by design (an unresolved variable target counts as a write; the target was /tmp scratch): a roled MEASURE fork wrote only a /tmp clone it then removed (cp to $D/cards.duckdb, rm $D), and the parent gate demanded a review for a worker write; the targets go through a variable the gate could not resolve, the same family as the unresolved-variable residual above.
 A third firing, in the next turn: the main agent ran its own cp into a mktemp dir under /tmp ($T) armed the gate the same way.
+
+## Owner-stead review
+
+2026-11-16 23:07 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): NOT CLOSED; four boxes are ticked on test evidence and four stay open. The owner can overrule the two decisions below.
+Boxes 1, 2, 3 and 6 TICKED on tests in src/test/reviewGate.test.ts (file ran today, 201 passing): box 1 lines 1526 and 1549 (isolation earns no credit); box 2 line 1541 (MEASURE credits only a fork with no isolation); box 3 line 1487 (isMeta Stop-hook feedback does not start a turn); box 6 line 1596 (a turn longer than 4 MB still shows its first write).
+Box 4 OPEN: no test title was found that says a write in an earlier turn is not demanded in the next turn (line 1533 covers the opposite direction). Box 5 OPEN and IN DOUBT: it says a heartbeat-fired turn (attachment entry) is a turn start, while the tests at lines 1477 and 1518 say a heartbeat attachment does NOT start a turn. One of the two is out of date; this was found by reading test titles, the code was not read.
+DECISION on OPEN (2): KEEP the NO REVIEW POSSIBLE text escape. Reason: it is the gate's only exit when a demanded spawn cannot be made, and the owner's rule file documents it; removing it risks the livelock TRDD-0E3W5C45 fixed. DECISION on OPEN (4): done. 36cf1d16, 9105ecde, cd369160 and b4e0e3c7 are ancestors of main.
+Box 7 stays with the owner: ~/.claude/rules/turn-protocol-and-review.md line 37 still says this card is not yet deployed, though the per-turn scan is live since 9105ecde; that file is the owner's. Box 8 (two memory atoms) is open work.

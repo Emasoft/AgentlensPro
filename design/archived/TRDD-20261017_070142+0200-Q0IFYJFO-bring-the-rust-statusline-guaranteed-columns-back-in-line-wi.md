@@ -1,10 +1,10 @@
 ---
 trdd-id: Q0IFYJFO
 title: Bring the Rust statusline GUARANTEED_COLUMNS back in line with the TypeScript column list
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-10-17T07:01:42+0200
-updated: 2026-10-17T09:26:57+0200
+updated: 2026-11-16T23:00:09+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,11 +28,13 @@ implementation-commits: [0bdad550, c7a43535]
 - NEXT ACTION: the owner decides how to close the card (column human_review).
 
 Found 2026-10-17 in the TRDD-GVA8TTJF round-2 review (item m2). rust-core/crates/agentlens-core/src/statusline_store.rs GUARANTEED_COLUMNS (24 entries) decides the layout of every statusline data file written from then on, and it is reported to be 19 columns behind the TypeScript list it was copied from (src/statuslineStore.ts GUARANTEED_COLUMNS). Verified 2026-10-17: prompt_cache_ttl is in the TypeScript list (src/statuslineStore.ts:220) and absent from the Rust file. The reported consequence, a DuckDB Binder error in the cache_turns query when a sample lacks that key, is not verified here. prompt_id is not in the TypeScript GUARANTEED_COLUMNS list (its only mention there is a comment at line 28) and is absent from the Rust file too. The cache_turns query does read sl.prompt_id (PARTITION BY, the MIN/MAX windows and turn_key in cache_turns_relation, commit 56d960e1). What is unverified is whether statusline_store::relation_for projects a column that is missing from older files as NULL or fails to bind; the tests pass only because seed_statusline_usage always writes prompt_id. Changing the list changes the on-disk schema of new files, so this needs its own design and review, not a drive-by edit. First step: establish which list governs (the Rust writer is live; the TypeScript list survives as reference), then diff the two and record the exact missing columns here.
+- 2026-11-16 23:00 REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): ACCEPTED, and the close question is decided: close on a checklist that restates the two Fixed bullets. Re-checked today: 0bdad550 and c7a43535 are ancestors of HEAD; cargo test (agentlens-core lib) ran window_without_prompt_id_or_prompt_cache_ttl_still_binds and mixed_window_with_and_without_prompt_keys_binds_in_wal_and_sealed_forms, 2 passed, 0 failed. NOT re-run: the cast-removed mutation. The scope cut stands: the other 15 TypeScript-only columns have no Rust reader and are not aligned.
 
 ## Approval log
 
 - 2026-10-17T07:01:42+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-17T09:24:14+0200 — column → human_review by main-agent@agentlenspro. fix done and verified (0bdad550, c7a43535); no acceptance checklist, so closing is the owner's call
+- 2026-11-16T23:00:09+0100 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead per the 2026-11-16 order; both named Rust tests re-run today, 2 passed.
 
 ## Column diff (2026-10-17)
 
@@ -52,3 +54,9 @@ Found 2026-10-17 in the TRDD-GVA8TTJF round-2 review (item m2). rust-core/crates
 - Scope cut, stated: 'back in line with the TypeScript list' was reduced to 'the columns a Rust reader needs'. The other 15 TS-only columns have no Rust reader. Full alignment for the TS statusline-history CLI would be its own card if ever wanted.
 - Layout 3 (legacy UUID-typed part) mutation, run alone with the cast removed: FAIL, 'Binder Error: Cannot mix values of type UUID and VARCHAR in COALESCE operator' (reports_dev/q0if4-mut.txt); files restored, cmp clean. Layouts 0 and 3 were each shown to fail without the c7a43535 cast; layouts 1 and 2 were not run on their own without it.
 - Not closed: trddgrep refuses `complete` on a card with no acceptance checklist, and project practice is not to write acceptance at close time. Left for the owner: tick a checklist matching the Fixed bullets, or close as is. The owner's 2026-10-05 review delegation was considered and not used for this close.
+
+## Acceptance
+
+- [x] prompt_id and prompt_cache_ttl are guaranteed columns in the Rust list, so a window whose samples lack both still binds (0bdad550; Rust test window_without_prompt_id_or_prompt_cache_ttl_still_binds passed 2026-11-16)
+- [x] prompt_id is cast to VARCHAR at the relation, so a window mixing UUID-typed and text ids binds (c7a43535; Rust test mixed_window_with_and_without_prompt_keys_binds_in_wal_and_sealed_forms passed 2026-11-16)
+(Written at closing time by the reviewer from the Fixed section; the card had no checklist.)

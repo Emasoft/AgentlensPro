@@ -3,7 +3,7 @@ trdd-id: WKLD508O
 title: alcore exits with a culprit log rather than exceed a 2 GB memory cap
 column: human_review
 created: 2026-09-07T19:36:46+0200
-updated: 2026-10-22T04:19:23+0200
+updated: 2026-11-16T23:00:29+0100
 current-owner: main
 task-type: feature
 parent-trdd: 7YPQWKPG
@@ -780,3 +780,7 @@ Isolated full-size runs (own DATA_DIR, real read-only HOME, distinct ports; repo
 
 2026-10-21 — USER chose, verbatim option: "Deploy it (Recommended)" — rebuild alcore from HEAD with the ad-hoc codesign, restart, and watch the culprit log. Main agent's plan note (not part of the user's decision): the deploy is bundled with the core-cap change.
 2026-10-22 04:14 — executed: commit 44bc67e1 (which carries the guard) deployed to bin-native with codesign (see TRDD-YH822LDI Deploy log). The guard was already live before this deploy: the observed canonical exits (8.9-17.9 s uptime, footprints 2.35-2.61 GB, culprit blocks in ~/.agentlens/rss-hard-cap.log) came from the Oct 21 03:21 bin-native build. 44bc67e1 had not yet run on canonical data when this line was written; its first canonical boot is the next revive. Making the collector stay under 2 GB is TRDD-2JOIAH2G.
+
+## Owner-stead review
+
+2026-11-16 23:00 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): NOT CLOSED, stays in human_review. The acceptance is a numbered list about the armed 2 GB guard on the live server. This is an act the main agent does not take: arming the guard on the live collector, which the owner disabled. Read from the card's own state and acceptance list on 2026-11-16; no test was run for this note.

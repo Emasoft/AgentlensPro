@@ -3,7 +3,7 @@ trdd-id: Z53IJFE9
 title: Remove the RAM-disk body spool completely so capture writes straight to the SSD bodies dir
 column: human_review
 created: 2026-09-24T13:34:34+0200
-updated: 2026-10-16T11:16:43+0200
+updated: 2026-11-16T23:00:28+0100
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: refactor
@@ -75,3 +75,7 @@ This machine's LaunchAgent: unload + move the plist out only after the owner say
 - [ ] say "by default" for the 72 h / 8 GB limits in the printed text
 - [ ] update the printed drain description when step B ships
 - [ ] a test for the refusal message
+
+## Owner-stead review
+
+2026-11-16 23:00 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): NOT CLOSED, stays in human_review. 0 of 11 boxes are ticked; the card says they need live verification with the owner's go, and a version-shape choice before the tag. This is an act the main agent does not take: live verification on the collector the owner disabled, and cutting a release tag. Read from the card's own state and acceptance list on 2026-11-16; no test was run for this note.
