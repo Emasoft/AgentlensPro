@@ -1,9 +1,9 @@
 ---
 trdd-id: PQ40PZ9D
 title: The flood bench cannot grow a transcript so no arm drives log-sweeper rebuilds
-column: human_review
+column: complete
 created: 2026-09-23T20:20:27+0200
-updated: 2026-10-17T14:37:17+0200
+updated: 2026-11-16T22:50:33+0100
 current-owner: main-session
 created-by: main-session
 task-type: infra
@@ -14,7 +14,7 @@ mandated-by: none
 approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T20:20:27+0200
-status: tasked
+status: archived
 implementation-commits: [df44e8de, 0f3b2ed7, 3f583f6d, 7339f295, ec496a73, 8173625f]
 ---
 
@@ -32,6 +32,7 @@ EQCGAVGV's arms need a log-growth driver: put_log_session (rust-core/crates/agen
 Add a mode to scripts/bench/alcore-ingest-flood.mjs that appends synthetic Claude Code JSONL (assistant turns carrying usage) to <isolated HOME>/.claude/projects/<slug>/<session>.jsonl at a configurable lines/s, refusing the passwd user's real ~/.claude (os.userInfo().homedir).
 
 Acceptance: [x] the isolated instance's summary misses and session-card count rise with the appended lines (live run 2026-10-08: summaryMissesDelta=8, logSessionsDelta=15, dataVersionDelta=128, exit 0, append rate 24.999/s vs target 25); [x] refuses the real home (subtree guard: real home, its .claude, any descendant, '/', plus a post-mkdir symlink re-resolve; verified 2026-10-17 by scripts/test-flood-transcripts-guard.js, 17/17 on darwin, 16 plus 1 SKIP on Linux where case e is skipped: 14 refusals on darwin (a, b, d, e, g, q, i, j, k, l, m, n, o, p), 13 on Linux, and 3 accepted (c, f, h). The evidence is the scratch-proxy cases: a and b are refused with nothing written and go red under the mutations (per the worker's mutation run; the orchestrator re-ran only the green suite), c proves the guard does not over-refuse, d and q are refusals the old code did not make. Real-home refusal is shown by exit codes and messages through the same protectedHit over the same roots list; write ordering for the real home rests on reasoning plus the proxy cases and was NOT measured on the real home; commits 3f583f6d, 7339f295); [x] the line shape is parsed by agentlens-logscan's Claude parser (cited in source: agentlens-logscan/src/lib.rs:842 assistant branch, :851 usage dedup per message.id, :762 cwd, :1279 file-stem session id, disjoint_anthropic :147, spanstore parse_iso_ms :165). related: [EQCGAVGV, C19SUVPH].
+- 2026-11-16 23:0x REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): ACCEPTED. Re-checked today: all six implementation commits are ancestors of HEAD; node scripts/test-flood-transcripts-guard.js exit 0, 17/17 on darwin; the test is named in package.json and ci.yml. Not re-checked: the mutation runs, the Linux leg, CI (nothing pushed). The two open follow-ups (exact refusal text in the test, freePorts hang) stay recorded as non-blockers.
 
 ## Approval log
 
@@ -44,6 +45,7 @@ Acceptance: [x] the isolated instance's summary misses and session-card count ri
 - 2026-10-17 — box 2 re-ticked by main-agent@agentlenspro on test 17/17 + mutations M1/M2 red (commits 3f583f6d, 7339f295); round-1 guard design rejected in review, round-2 accepted.
 - 2026-10-17T14:27:31+0200 — column → testing by main-agent@agentlenspro. guard fix 3f583f6d+7339f295, test 17/17, mutations M1/M2 red
 - 2026-10-17T14:27:35+0200 — column → human_review by main-agent@agentlenspro. check-guards green incl. new test (wiring commit); CI not yet observed
+- 2026-11-16T22:50:33+0100 — COMPLETE by main-agent@agentlenspro. reviewed in the owner's stead per the 2026-11-16 order; guard test 17/17 re-run today, commits are ancestors of HEAD.
 
 ## Implemented (2026-10-08)
 
@@ -73,3 +75,10 @@ Test: scripts/test-flood-transcripts-guard.js, 17 cases: 17/17 on darwin, 16 plu
 Commits: 0f3b2ed7 (WIP helper checkpoint), 3f583f6d (the fix plus the new scripts/test-flood-transcripts-guard.js), 7339f295 (review follow-ups: protected root pinned by name, freePorts race, empty extra root refused, darwin comment). Wiring: ec496a73 (check-guards + ci.yml), 8173625f (case n platform-aware).
 
 
+
+## Acceptance
+
+- [x] the isolated instance's summary misses and session-card count rise with the appended lines (live run 2026-10-08: summaryMissesDelta=8, logSessionsDelta=15, dataVersionDelta=128)
+- [x] refuses the real home (scripts/test-flood-transcripts-guard.js, 17/17 on darwin, re-run 2026-11-16; commits 3f583f6d, 7339f295)
+- [x] the line shape is parsed by agentlens-logscan's Claude parser (cited in source in the body paragraph above the Approval log)
+(This bulleted list restates the three inline boxes of the body paragraph, added 2026-11-16 only so the archive gate can count them; no criterion was added or dropped.)
