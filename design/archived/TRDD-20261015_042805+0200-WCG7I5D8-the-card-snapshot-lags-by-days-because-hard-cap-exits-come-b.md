@@ -1,10 +1,10 @@
 ---
 trdd-id: WCG7I5D8
 title: The card snapshot lags by days because hard-cap exits come before the first card save
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-10-15T04:28:05+0200
-updated: 2026-11-17T19:03:53+0100
+updated: 2026-11-17T19:04:06+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,6 +34,7 @@ Save the card snapshot early after boot and in the hard-cap exit path (bounded, 
 ## Approval log
 
 - 2026-10-15T04:28:05+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T19:04:06+0100 — COMPLETE by main-agent@agentlenspro. Box met as reworded (code reads, card_reuse 24 passing on the HEAD Rust tree, kill runs of gate 4c and 4d); residuals on TRDD-AXJH3WTU, TRDD-PGMMB2QG, TRDD-QXODI7TR, TRDD-5Q5E8I7W; closed under the owner's order to review and decide in his stead.
 
 ## STATE
 
