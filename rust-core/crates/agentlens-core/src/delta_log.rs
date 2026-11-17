@@ -481,6 +481,42 @@ impl DeltaLog {
         }).collect();
     }
 
+    /// TRDD-WCG7I5D8 — seed `written` from the FILES, exactly as `load()` does, WITHOUT keeping the record
+    /// map: pass 1 (`index_files`) fixes the live keys in replay order, pass 2 (`visit_winners`) hashes
+    /// each winning record's `to_string(v)` into a slot by replay position, so the result is `load()`'s
+    /// `written` (same keys, same order, same hashes) for one `u64` per key instead of one record per key.
+    /// Returns how many keys it seeded and `differs`: whether the file-derived hashes differ from the ones that
+    /// were in force (a different key count, a key that is new, or a key whose hash changed). WHY the order is
+    /// NOT compared: the caller only asks whether the files hold the same keys with the same hashes as the
+    /// set in force, that is whether a catch-up save is needed; a different order alone is not such a need.
+    ///
+    /// WHY it exists: a reused start seeds from the card STORE (`seed_written`), so a card the store has
+    /// and the files lack is marked already written and never appended, and a key the files hold but the
+    /// store dropped is never tombstoned. Reseeded from the files, the next full save appends what the
+    /// files lack and tombstones what the store no longer has. TRDD-YR6WX7VQ: the caller runs this at the
+    /// first timed tick of the sweeper thread, off the state lock, not inside the restore.
+    ///
+    /// Failure semantics: any Err (a mid-file corrupt line, an unreadable file, a line that changed
+    /// between the passes) leaves `written` exactly as it was; it is assigned only after pass 2 finished.
+    pub fn seed_written_from_disk(&mut self) -> Result<(usize, bool), String> {
+        let ix = Self::index_files(&[&self.snapshot_path, &self.delta_path])?;
+        let winners = ix.winners();
+        let ReplayIndex { files, live } = ix;
+        let mut hashes = vec![0u64; live.len()];
+        Self::visit_winners(&files, &winners, |pos, k, v| {
+            if live.get_index(pos).map(|(key, _)| key.as_str()) != Some(k.as_str()) {
+                return Err(format!("replay position {pos} does not hold {k:?}"));
+            }
+            let Some(slot) = hashes.get_mut(pos) else { return Err(format!("replay position {pos} out of range")) };
+            *slot = hash_json(&serde_json::to_string(&v).unwrap_or_default());
+            Ok(())
+        })?;
+        let from_files: IndexMap<String, u64> = live.into_keys().zip(hashes).collect();
+        let differs = from_files.len() != self.written.len() || from_files.iter().any(|(k, h)| self.written.get(k) != Some(h));
+        self.written = from_files;
+        Ok((self.written.len(), differs))
+    }
+
     /// Rewrite the snapshot from `records`, VERIFY it from disk, then drop the delta.
     ///
     /// TRDD-1RJBOEI1: streams. Each record is serialized and written on its own (TmpSnapshot), and
@@ -1076,6 +1112,51 @@ mod tests {
             ("b".to_string(), hash_json(&serde_json::to_string(&json!([1, 2])).unwrap())),
         ];
         assert_eq!(got, want, "first position, last value, to_string hashes");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The ndjson of a hand-made log with an overwritten key, a tombstone, a key re-added after its
+    /// tombstone (it moves to the end) and a torn trailing line: the files `load()` and
+    /// `seed_written_from_disk()` must read to the same `written`.
+    fn seed_fixture(dir: &Path) {
+        fs::write(dir.join("s.snapshot.ndjson"), "{\"k\":\"a\",\"v\":{\"n\":1}}\n{\"k\":\"b\",\"v\":[1,2]}\n{\"k\":\"c\",\"v\":\"\u{e9}\u{2028}x\"}\n{\"k\":\"d\",\"v\":null}\n").unwrap();
+        fs::write(dir.join("s.delta.ndjson"), "{\"k\":\"a\",\"v\":{\"n\":2}}\n{\"k\":\"b\",\"d\":1}\n{\"k\":\"e\",\"v\":0.5}\n{\"k\":\"b\",\"v\":{\"back\":true}}\n{\"k\":\"z\",\"v\":").unwrap();
+    }
+
+    /// TRDD-WCG7I5D8 — `seed_written_from_disk` leaves `written` identical to `load()` (keys, ORDER,
+    /// hashes) on files with an overwritten key, a tombstone, a re-added key and a torn tail, and
+    /// reports the key count and `differs`: true on a fresh log, false on a second call over the same files.
+    /// The order assert is the one that fails if the slots are filled in file
+    /// order instead of replay order.
+    #[test]
+    fn seed_written_from_disk_leaves_written_equal_to_load_on_overwrite_tombstone_and_torn_tail() {
+        let dir = unit_dir("seed-disk");
+        seed_fixture(&dir);
+        let mut loaded = DeltaLog::new(&dir, "s");
+        let map = loaded.load().unwrap();
+        let mut streamed = DeltaLog::new(&dir, "s");
+        assert_eq!(streamed.seed_written_from_disk().unwrap(), (map.len(), true), "a fresh log (empty written) differs from the files");
+        let pairs = |l: &DeltaLog| l.written.iter().map(|(k, h)| (k.clone(), *h)).collect::<Vec<_>>();
+        assert_eq!(pairs(&streamed), pairs(&loaded), "same keys, same order, same hashes");
+        assert_eq!(streamed.written.keys().collect::<Vec<_>>(), ["a", "c", "d", "e", "b"], "b was re-added after its tombstone, so it is last");
+        assert_eq!(streamed.seed_written_from_disk().unwrap(), (map.len(), false), "a second call on the same files finds them level: same count, no difference");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// TRDD-WCG7I5D8 — a corrupt line in the MIDDLE of a file is an Err naming the damage and leaves
+    /// `written` as it was (here pre-seeded with one other key). The control is the same files read whole.
+    #[test]
+    fn seed_written_from_disk_on_a_mid_file_corrupt_line_is_an_err_and_leaves_written_as_it_was() {
+        let dir = unit_dir("seed-disk-corrupt");
+        fs::write(dir.join("s.snapshot.ndjson"), "{\"k\":\"a\",\"v\":1}\nnot json at all\n{\"k\":\"b\",\"v\":2}\n").unwrap();
+        let mut log = DeltaLog::new(&dir, "s");
+        log.seed_written(vec![("old".to_string(), json!(9))]);
+        let before: Vec<(String, u64)> = log.written.iter().map(|(k, h)| (k.clone(), *h)).collect();
+        let err = log.seed_written_from_disk().unwrap_err();
+        assert!(err.contains("corrupt line 2"), "{err}");
+        let after: Vec<(String, u64)> = log.written.iter().map(|(k, h)| (k.clone(), *h)).collect();
+        assert_eq!(after, before, "written is untouched by a failed seed");
+        assert!(DeltaLog::new(&dir, "s").load().is_err(), "control: load() refuses the same files");
         let _ = fs::remove_dir_all(&dir);
     }
 
