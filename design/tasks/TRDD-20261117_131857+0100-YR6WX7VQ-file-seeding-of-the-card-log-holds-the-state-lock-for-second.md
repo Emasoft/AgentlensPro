@@ -1,10 +1,10 @@
 ---
 trdd-id: YR6WX7VQ
 title: File seeding of the card log holds the state lock for seconds to minutes at a reused start
-column: todo
+column: dev
 status: tasked
 created: 2026-11-17T13:18:57+0100
-updated: 2026-11-17T13:24:54+0100
+updated: 2026-11-17T15:14:39+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,3 +34,4 @@ Take the file pass off the state lock and off the path that delays the listeners
 ## Approval log
 
 - 2026-11-17T13:18:57+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T15:14:39+0100 — column → dev by main-agent@agentlenspro. plan on the card, proposal under review
