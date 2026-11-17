@@ -22,7 +22,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import type { DuckDBConnection } from '@duckdb/node-api'
+import type { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api'
 import { claudeProjectsDirs } from '../logReader'
 import { MAX_OBJECT_SIZE } from '../ndjsonDuck'
 import { resolveProjectSlugs } from '../projectSlug'
@@ -59,6 +59,21 @@ filters:
 match:
   --regex              <pattern> is a regular expression matched against the RAW JSON line (a quote
                        is \\" and a newline is \\n there). Default: literal, case-insensitive
+elements (any of --kind, --tool, --file or --commit searches ELEMENTS instead of raw JSON lines):
+  --kind K[,K]         prompt response thinking tool-call tool-output diff subagent hook command compact error cron system
+                       attachment model-change. A diff, subagent or error element is ALSO a tool-call / tool-output element;
+                       it is counted once and printed under its most specific kind. Without --kind: every kind except
+                       attachment (opt-in) and model-change
+  --tool NAME[,NAME]   tool calls of that tool and the outputs that answer them (exact name, or a mask: mcp__*)
+  --file TEXT          tool calls whose input holds TEXT, the outputs that answer them, and outputs naming a file that
+                       holds TEXT (not --files, which lists transcripts)
+  --commit SHA         tool calls and outputs that hold SHA (7 to 40 hex characters) and outputs whose git operation holds it
+  --kind model-change  needs no pattern: one row per place where the model of an assistant entry differs from the previous
+                       one of the same transcript, printed as: from -> to
+  Element mode matches the UNESCAPED text of an element (a quote is a quote, a newline a newline), line mode the RAW JSON
+  line (a quote is \\" there): the same pattern, and above all the same --regex, can give different hits with and without
+  --kind. In element mode total, --count and --files count ELEMENTS, not lines (one line can hold several). The excerpt
+  is readable text, not JSON. It is slower than line mode: every kept line is parsed into its blocks.
 output:
   --limit N            max matches to print (default 20, max 500)
   --width N            excerpt length in characters (default 300, max 2000)
@@ -66,9 +81,10 @@ output:
   --count              per transcript: <count> <session8>[:<agent8>], largest first
   --files              only the paths of the transcripts that match (not with --count)
   --json               machine output: {line, ts, type, role, excerpt, session, agent, file} per
-                       match + total
+                       match + total; element mode adds kind and tool to every match
 
 text line: <session8>[:<agent8>] <TAB> #<line> <TAB> <ts> <TAB> [role|type] <TAB> <excerpt>
+       in element mode the bracket is [<kind>] or [<kind> <tool>], e.g. [tool-output Bash]
 stderr: transcripts and MB searched, matches, shown, total ms (scan = all-file scan, lines = line numbers of
        the shown hits). A line that is not valid JSON (e.g. the half-written last line of a live transcript) is not searched;
        the count of such lines is printed on stderr and is "skipped" in --json. A blank line is not counted by the reader,
@@ -83,7 +99,7 @@ exit:
 
 const VALUED = new Set([
   '--project', '--session', '--agent', '--since', '--until', '--branch', '--cwd', '--worktree', '--model',
-  '--role', '--type', '--limit', '--width', '--order',
+  '--role', '--type', '--limit', '--width', '--order', '--kind', '--tool', '--file', '--commit',
 ])
 const KNOWN = new Set([
   ...VALUED, '--regex', '--json', '--count', '--files', '--main-only', '--subagents-only', '--worktrees',
@@ -107,6 +123,12 @@ const ATTACHMENT_TYPES = [
 const SMALL_FILE_BYTES = 32 * 1048576
 const SMALL_OBJECT_SIZE = 64 * 1048576
 const SMALL_SCAN_THREADS = 4
+// Element mode copies the blocks of every kept line several times, so its scan groups run on one thread. Measured 2026-11-17 on this project
+// (frozen set of 3,246 files, 2,972 MB, whole command, AGENTLENS_DUCKDB_MEMORY_LIMIT=1.5GB, 10 runs per case, 6 cases, reports_dev/OIMXULDJ/measure-B*.txt):
+// with 2 threads --tool Bash "git" and --commit failed 10 of 10 runs with out-of-memory (peak RSS 1.43 and 1.52 GB) while the other four cases
+// passed 10 of 10 (peaks 1.11 to 1.36 GB); with 1 thread all six passed 60 of 60 (peaks 0.89 to 1.22 GB). The root cause of the memory growth
+// was not found (see TRDD-OIMXULDJ); the limit and the thread count are measured values, not derived ones.
+const ELEMENT_SCAN_THREADS = 1
 
 /** SQL single-quoted literal — the codebase queries by interpolation, so quoting is load-bearing. */
 function sq(s: string): string {
@@ -253,6 +275,14 @@ export interface SearchOptions {
   order?: 'new' | 'old'
   /** 'count' fills `counts` (per transcript) and no hits; it needs no line numbers. */
   mode?: 'hits' | 'count'
+  /** Element mode (TRDD-OIMXULDJ): any of kinds, tools, file or commit switches the engine from raw lines to elements. */
+  kinds?: string[]
+  /** Tool names, exact or with a * mask. */
+  tools?: string[]
+  /** Keep tool calls whose input holds this text and the outputs that answer them or name a file holding it. */
+  file?: string
+  /** A commit SHA (7 to 40 hex characters). */
+  commit?: string
 }
 
 export interface SearchHit {
@@ -265,6 +295,9 @@ export interface SearchHit {
   file: string
   session: string
   agent: string | null
+  /** Element mode only: the element kind (a tool output is "tool-output", a model switch "model-change") and, for a tool call or its output, the tool name. */
+  kind?: string
+  tool?: string | null
 }
 
 export interface FileCount {
@@ -322,12 +355,568 @@ async function assignLines(con: DuckDBConnection, shown: Array<{ hit: SearchHit;
   }
 }
 
+/** One DuckDB instance for a search. Imported lazily, same reason as store/db.ts: --version/hook/gate must not pay for the binding. */
+async function openDuck(): Promise<{ inst: DuckDBInstance; con: DuckDBConnection }> {
+  const { DuckDBInstance } = await import("@duckdb/node-api")
+  const inst = await DuckDBInstance.create(":memory:", {
+    memory_limit: process.env["AGENTLENS_DUCKDB_MEMORY_LIMIT"]?.trim() || "2GB",
+    // Starts at ONE thread; each stage-1 scan group sets its own count (SET threads). The JSON reader holds
+    // ~2 x maximum_object_size of buffer per thread: on this project (3 GB), scanning ALL files at once with
+    // the 256 MB cap hit the 2GB no-spill limit in 4 of 10 runs with 2 threads and in 0 of 10 with 1 (whole
+    // command, measured 2026-11-17). Hence the split in scanGroups: files under 32 MB (cap 64 MB) on 4 threads,
+    // the rest (cap 256 MB) on 1. Measured on the same project, 3,027 MB, literal pattern, limit 20: scan only
+    // 6.0-7.3 s / whole command 6.4-7.8 s with 1 thread everywhere (3 runs); scan only 2.0-2.2 s / whole command
+    // 2.4-2.5 s with the split, 0 of 10 runs failed, peak RSS ~0.9 GB. A smaller cap for the big files would
+    // make a huge line fail the scan.
+    threads: "1",
+  })
+  try {
+    const con = await inst.connect()
+    // No spill: an over-limit query must FAIL with a clear error, never write gigabytes to the SSD
+    // or to a .tmp folder in the cwd (src/store/db.ts:3-21).
+    await con.run(`SET temp_directory = ${sq("")}`)
+    return { inst, con }
+  } catch (e) {
+    inst.closeSync()
+    throw e
+  }
+}
+
+/** The stage-1 scan groups: small files on several threads with a small JSON buffer, the rest on one thread with the full one. */
+function scanGroups(files: TranscriptFile[]): Array<{ group: TranscriptFile[]; maxObjectSize: number; threads: number }> {
+  const bySize = [...files].sort((a, b) => a.size - b.size)
+  return [
+    { group: bySize.filter(f => f.size < SMALL_FILE_BYTES), maxObjectSize: SMALL_OBJECT_SIZE, threads: SMALL_SCAN_THREADS },
+    { group: bySize.filter(f => f.size >= SMALL_FILE_BYTES), maxObjectSize: MAX_OBJECT_SIZE, threads: 1 },
+  ].filter(g => g.group.length > 0)
+}
+
+// ── element mode (TRDD-OIMXULDJ) ─────────────────────────────────────────────────────────────────
+//
+// Line mode matches the raw JSON line, so it cannot tell a thinking block from a tool call or a prompt from a
+// tool output. With --kind, --tool, --file or --commit the engine runs in ELEMENT mode: every kept line is split
+// into elements (one per content block, or one per system / attachment / queue entry) and the pattern is matched
+// against the element own UNESCAPED text, so an excerpt is readable text, not JSON. Two stages again: stage 1
+// inserts one small row per matching element (never its text), stage 2 re-derives line number, excerpt and tool
+// name for the SHOWN hits only. The top-level toolUseResult of an entry is NOT an element: it repeats the output
+// that the tool_result block carries, so it only supplies fields (patch, file path, git operation). It occurs only
+// in entries with exactly ONE tool_result block (measured, reports_dev/OIMXULDJ/probe-tur.txt: every entry with
+// 2 or more tool_result blocks has none), so a field never belongs to the wrong block.
+
+/** The element kinds, as printed and as accepted by --kind. */
+export const ELEMENT_KINDS = [
+  "prompt", "response", "thinking", "tool-call", "tool-output", "diff", "subagent", "hook", "command",
+  "compact", "error", "cron", "system", "attachment", "model-change",
+]
+// Without --kind: everything a conversation holds. attachment is opt-in (most attachments are repeated reminders);
+// model-change is a different statement and is always asked for by name.
+const DEFAULT_KINDS = ELEMENT_KINDS.filter(k => k !== "attachment" && k !== "model-change")
+const SUBAGENT_TOOLS = ["Agent", "SendMessage", "SubagentHandback"]
+const DIFF_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+const HOOK_ATTACHMENT_TYPES = [
+  "hook_success", "hook_additional_context", "hook_system_message", "hook_blocking_error", "hook_cancelled",
+  "hook_non_blocking_error", "async_hook_response",
+]
+const CALL_BLOCKS = ["tool_use", "server_tool_use"]
+const OUTPUT_BLOCKS = ["tool_result", "advisor_tool_result"]
+const JSON_LIST = `["JSON"]`
+const SUBAGENT_FILE = "/subagents/agent-"
+/** Marks the one pseudo element that a line which is not valid JSON becomes, so that stage 1 can count it. */
+const BAD_KIND = "(bad)"
+
+const inList = (xs: string[]): string => xs.map(sq).join(",")
+const jstr = (e: string, p: string): string => `json_extract_string(${e}, ${sq(p)})`
+const jraw = (e: string, p: string): string => `json_extract(${e}, ${sq(p)})`
+const kindList = (...ks: string[]): string => `[${inList(ks)}]::VARCHAR[]`
+const NO_KINDS = "[]::VARCHAR[]"
+
+/** The unescaped text of the JSON value `e`: a string as itself, an array of strings or text blocks joined by newlines, anything else as its JSON text. */
+function textOf(e: string): string {
+  // Arrays are read with the wildcard path, never with a lambda over from_json: a lambda evaluates all the elements of a chunk at once,
+  // and with MB-sized tool results that exhausted the 2GB limit (measured 2026-11-17, reports_dev/OIMXULDJ). A wildcard skips elements
+  // without the key, so an image block adds nothing.
+  return `(CASE json_type(${e}) WHEN ${sq("VARCHAR")} THEN ${jstr(e, "$")} ` +
+    `WHEN ${sq("ARRAY")} THEN (CASE json_type(${e}, ${sq("$[0]")}) WHEN ${sq("VARCHAR")} THEN array_to_string(${jstr(e, "$[*]")}, chr(10)) ` +
+    `ELSE array_to_string(${jstr(e, "$[*].text")}, chr(10)) END) ` +
+    `WHEN ${sq("NULL")} THEN NULL ELSE CAST(${e} AS VARCHAR) END)`
+}
+
+/** The columns every element query derives from a line (`obj` is the parsed line, `raw` its text). */
+const ENTRY_COLUMNS = [
+  `${jstr("obj", "$.timestamp")} AS ts`,
+  `${jstr("obj", "$.type")} AS type`,
+  `${jstr("obj", "$.message.role")} AS role`,
+  `${jstr("obj", "$.subtype")} AS sub`,
+  `${jstr("obj", "$.attachment.type")} AS atype`,
+  `coalesce(${jstr("obj", "$.isMeta")} = ${sq("true")}, false) AS ismeta`,
+  `${jraw("obj", "$.message.content")} AS content`,
+  `${jraw("obj", "$.toolUseResult")} AS tur`,
+].join(", ")
+
+interface ElementNeeds { plain: boolean; sys: boolean; att: boolean; text: boolean; thinking: boolean; call: boolean; output: boolean }
+interface ElementFields { file?: string; commit?: string; needs: ElementNeeds; keep?: string }
+
+/** SQL for the elements of the lines of `input`: a table expression with the columns obj (the parsed line, NULL when invalid), raw (its text),
+ *  the ENTRY_COLUMNS and the pass-through columns `pass`. Out columns: pass, h (md5 of the line), ts, type, role, kinds, tool, tuid, idx, txt, fdir, cdir.
+ *  `kinds` lists the element kinds most specific first: a diff, subagent or error element is ALSO a tool-call / tool-output element, so
+ *  --kind tool-output never silently misses the errors and diffs, and an element is still one row.
+ *  `needs` limits the work to the element sources that the selected kinds can use: the text of an attachment or of a plain message is
+ *  never built for a search of tool outputs (computing every text of every line exhausted the 2GB limit even on one thread, measured
+ *  2026-11-17, reports_dev/OIMXULDJ).
+ *  THREE LEVELS: level 1 computes what belongs to the whole line, level 2 UNNESTs the blocks to one ROW each, level 3 computes the block
+ *  expressions in ordinary 2048-row vectors (a lambda over the blocks of a line evaluates its whole child vector at once). A line that holds
+ *  no block (a string content, a system entry, ...) unnests a single NULL placeholder and carries its one element in ekinds / etxt. */
+function elementRows(input: string, pass: string, f: ElementFields): string {
+  const { needs } = f
+  const bt = jstr("b", "$.type")
+  const callBlock = `${bt} IN (${inList(CALL_BLOCKS)})`
+  const outputBlock = `${bt} IN (${inList(OUTPUT_BLOCKS)})`
+  const name = jstr("b", "$.name")
+  const input_ = `coalesce(CAST(${jraw("b", "$.input")} AS VARCHAR), ${sq("")})`
+  const nullText = "NULL::VARCHAR"
+  // The tool-call text is the name, a NEWLINE, then the input JSON: a pattern that spans the joint contains a newline,
+  // and a pattern with a control character never uses the raw-line prefilter (rawPrefilter), so no match is lost by it.
+  const textBranches = [
+    needs.text ? `WHEN ${bt} = ${sq("text")} THEN ${jstr("b", "$.text")}` : "",
+    needs.thinking ? `WHEN ${bt} = ${sq("thinking")} THEN ${jstr("b", "$.thinking")}` : "",
+    needs.call ? `WHEN ${callBlock} THEN ${name} || chr(10) || ${input_}` : "",
+    needs.output ? `WHEN ${outputBlock} THEN ${textOf(jraw("b", "$.content"))}` : "",
+  ].filter(Boolean)
+  const blockText = textBranches.length > 0 ? `(CASE ${textBranches.join(" ")} END)` : nullText
+  const fdir = f.file === undefined ? "false"
+    : `(CASE WHEN ${callBlock} THEN strpos(${input_}, ${sq(f.file)}) > 0 WHEN ${outputBlock} THEN strpos(coalesce(tfile, ${sq("")}), ${sq(f.file)}) > 0 ELSE false END)`
+  const sha = f.commit === undefined ? "" : sq(f.commit.toLowerCase())
+  const cdir = f.commit === undefined ? "false"
+    : `coalesce(CASE WHEN ${callBlock} OR ${outputBlock} THEN strpos(lower(${blockText}), ${sha}) > 0 OR strpos(lower(coalesce(tgit, ${sq("")})), ${sha}) > 0 ELSE false END, false)`
+  const kindBranches = [
+    needs.text ? `WHEN ${bt} = ${sq("text")} THEN (CASE WHEN type = ${sq("assistant")} THEN ${kindList("response")} ` +
+      `WHEN type = ${sq("user")} AND NOT ismeta THEN (CASE WHEN starts_with(${jstr("b", "$.text")}, ${sq("<command-name>")}) THEN ${kindList("command")} ELSE ${kindList("prompt")} END) ` +
+      `ELSE ${NO_KINDS} END)` : "",
+    needs.thinking ? `WHEN ${bt} = ${sq("thinking")} THEN ${kindList("thinking")}` : "",
+    needs.call ? `WHEN ${callBlock} THEN (CASE WHEN ${name} IN (${inList(SUBAGENT_TOOLS)}) THEN ${kindList("subagent", "tool-call")} ` +
+      `WHEN ${name} IN (${inList(DIFF_TOOLS)}) THEN ${kindList("diff", "tool-call")} ELSE ${kindList("tool-call")} END)` : "",
+    needs.output ? `WHEN ${outputBlock} THEN list_concat(list_concat(CASE WHEN ${jstr("b", "$.is_error")} = ${sq("true")} THEN ${kindList("error")} ELSE ${NO_KINDS} END, ` +
+      `CASE WHEN patch THEN ${kindList("diff")} ELSE ${NO_KINDS} END), ${kindList("tool-output")})` : "",
+  ].filter(Boolean)
+  const blockKinds = kindBranches.length > 0 ? `(CASE ${kindBranches.join(" ")} ELSE ${NO_KINDS} END)` : NO_KINDS
+
+  // Level 1, per line: the element of a line without blocks, and the toolUseResult fields.
+  const plain = jstr("content", "$")
+  const plainKinds = `(CASE WHEN type = ${sq("assistant")} THEN ${kindList("response")} ` +
+    `WHEN type = ${sq("user")} AND NOT ismeta THEN (CASE WHEN starts_with(${plain}, ${sq("<command-name>")}) THEN ${kindList("command")} ELSE ${kindList("prompt")} END) ` +
+    `ELSE ${NO_KINDS} END)`
+  const att = jraw("obj", "$.attachment")
+  const attText = (p: string): string => textOf(jraw(att, `$.${p}`))
+  const attJson = `CAST(${att} AS VARCHAR)`
+  const hook = `atype IN (${inList(HOOK_ATTACHMENT_TYPES)})`
+  const sysKinds = `WHEN ${sq("system")} THEN (CASE sub WHEN ${sq("stop_hook_summary")} THEN ${kindList("hook")} ` +
+    `WHEN ${sq("local_command")} THEN ${kindList("command")} WHEN ${sq("api_error")} THEN ${kindList("error")} ` +
+    `WHEN ${sq("scheduled_task_fire")} THEN ${kindList("cron")} WHEN ${sq("compact_boundary")} THEN ${kindList("compact")} ELSE ${kindList("system")} END) ` +
+    `WHEN ${sq("summary")} THEN ${kindList("compact")} WHEN ${sq("queue-operation")} THEN ${kindList("command")} `
+  const attKinds = `WHEN ${sq("attachment")} THEN (CASE WHEN ${hook} THEN ${kindList("hook")} WHEN atype = ${sq("queued_command")} THEN ${kindList("command")} ELSE ${kindList("attachment")} END) `
+  const entryKinds = `(CASE type ${needs.sys ? sysKinds : ""}${needs.att ? attKinds : ""}ELSE ${NO_KINDS} END)`
+  const sysText = `WHEN ${sq("system")} THEN coalesce(${textOf(jraw("obj", "$.content"))}, raw) ` +
+    `WHEN ${sq("summary")} THEN ${jstr("obj", "$.summary")} WHEN ${sq("queue-operation")} THEN ${textOf(jraw("obj", "$.content"))} `
+  const attBranch = `WHEN ${sq("attachment")} THEN (CASE WHEN ${hook} THEN coalesce(nullif(concat_ws(chr(10), ${attText("content")}, ${attText("stdout")}, ${attText("stderr")}, ${attText("blockingError")}), ${sq("")}), ${attJson}) ` +
+    `WHEN atype = ${sq("queued_command")} THEN coalesce(${attText("prompt")}, ${attJson}) ELSE coalesce(${attText("content")}, ${attJson}) END) `
+  const entryText = `(CASE type ${needs.sys ? sysText : ""}${needs.att ? attBranch : ""}END)`
+  // toolUseResult.file is an OBJECT holding the file content for a Read: only its filePath is compared, never the content.
+  const tfile = `coalesce(${jstr("tur", "$.filePath")}, CASE json_type(tur, ${sq("$.file")}) WHEN ${sq("VARCHAR")} THEN ${jstr("tur", "$.file")} ` +
+    `WHEN ${sq("OBJECT")} THEN ${jstr("tur", "$.file.filePath")} END)`
+  // `keep` (the raw prefilter and the scope filters) EMPTIES the block list of a line that fails it, instead of being a WHERE in front of the
+  // UNNEST: with a row filter there the pipeline exhausted the 2GB limit (measured 2026-11-17: every run with a prefilter failed, on one thread
+  // too; the same query without it passed on one thread). Level 1 also computes nothing else for a line that is not kept.
+  const hasBlocks = needs.text || needs.thinking || needs.call || needs.output
+  const anySource = needs.plain || needs.sys || needs.att
+  const ekinds = anySource
+    ? `(CASE WHEN obj IS NULL THEN ${kindList(BAD_KIND)} WHEN NOT keep THEN ${NO_KINDS} WHEN json_type(content) = ${sq("ARRAY")} THEN ${NO_KINDS} ` +
+      `${needs.plain ? `WHEN json_type(content) = ${sq("VARCHAR")} THEN ${plainKinds} ` : ""}${needs.sys || needs.att ? `ELSE ${entryKinds} ` : `ELSE ${NO_KINDS} `}END)`
+    : `(CASE WHEN obj IS NULL THEN ${kindList(BAD_KIND)} ELSE ${NO_KINDS} END)`
+  const etxt = anySource
+    ? `(CASE WHEN obj IS NULL OR NOT keep OR json_type(content) = ${sq("ARRAY")} THEN NULL ` +
+      `${needs.plain ? `WHEN json_type(content) = ${sq("VARCHAR")} THEN ${plain} ` : ""}${needs.sys || needs.att ? `ELSE ${entryText} ` : ""}END)`
+    : nullText
+  // A line gets the one placeholder row that carries its element only when one of the needed sources can be the source of that line.
+  const sourceLine = [
+    needs.plain ? `json_type(content) = ${sq("VARCHAR")}` : "",
+    needs.sys ? `type IN (${["system", "summary", "queue-operation"].map(sq).join(",")})` : "",
+    needs.att ? `type = ${sq("attachment")}` : "",
+  ].filter(Boolean).join(" OR ")
+  const placeholder = sourceLine === "" ? "[]::JSON[]" : `(CASE WHEN ${sourceLine} THEN [NULL::JSON] ELSE []::JSON[] END)`
+  const blocks = `(CASE WHEN obj IS NULL THEN [NULL::JSON] WHEN NOT keep THEN []::JSON[] ` +
+    `${hasBlocks ? `WHEN json_type(content) = ${sq("ARRAY")} THEN from_json(content, ${sq(JSON_LIST)}) ` : ""}ELSE ${placeholder} END)`
+  const level1 = `SELECT ${pass}, CASE WHEN keep THEN md5(raw) END AS h, ts, type, role, ismeta, ${ekinds} AS ekinds, ${etxt} AS etxt,
+      ${needs.output ? `coalesce(json_exists(tur, ${sq("$.structuredPatch")}) OR json_exists(tur, ${sq("$.bashEditDiff")}), false)` : "false"} AS patch,
+      ${needs.output ? tfile : nullText} AS tfile, ${needs.output ? `CAST(${jraw("tur", "$.gitOperation")} AS VARCHAR)` : nullText} AS tgit,
+      ${blocks} AS bl
+    FROM (SELECT *, ${f.keep !== undefined ? `coalesce(${f.keep}, false)` : "true"} AS keep FROM ${input})`
+  const level2 = `SELECT ${pass}, h, ts, type, role, ismeta, ekinds, etxt, patch, tfile, tgit, UNNEST(bl) AS b, UNNEST(range(1, len(bl) + 1)) AS i FROM (${level1})`
+  return `SELECT ${pass}, h, ts, type, role,
+      (CASE WHEN b IS NULL THEN ekinds ELSE ${blockKinds} END) AS kinds,
+      (CASE WHEN ${callBlock} THEN ${name} END) AS tool,
+      (CASE WHEN ${callBlock} THEN ${jstr("b", "$.id")} WHEN ${outputBlock} THEN ${jstr("b", "$.tool_use_id")} END) AS tuid,
+      (CASE WHEN b IS NULL THEN 0 ELSE i END)::BIGINT AS idx,
+      (CASE WHEN b IS NULL THEN etxt ELSE ${blockText} END) AS txt,
+      ${fdir} AS fdir, ${cdir} AS cdir
+    FROM (${level2})`
+}
+
+/** Which element sources the selected kinds can use. A tool, file or commit filter only ever keeps tool calls and tool outputs. */
+function elementNeeds(kinds: string[], toolScoped: boolean, subOnly: boolean): ElementNeeds {
+  const any = (...ks: string[]): boolean => ks.some(k => kinds.includes(k))
+  return {
+    // The three sources of an element that is not a content block, split so that a search never builds the text of a source it cannot use
+    // (the text of every kept attachment and system line was built for --kind prompt,response,thinking, which failed 10 of 10 runs at 1.5GB):
+    // plain = a string message.content, sys = system / summary / queue-operation lines, att = attachment lines.
+    plain: subOnly || (!toolScoped && any("prompt", "response", "command")),
+    sys: subOnly || (!toolScoped && any("command", "hook", "compact", "error", "cron", "system")),
+    att: subOnly || (!toolScoped && any("command", "hook", "attachment")),
+    text: subOnly || (!toolScoped && any("prompt", "response", "command")),
+    thinking: subOnly || (!toolScoped && any("thinking")),
+    call: subOnly || toolScoped || any("tool-call", "diff", "subagent"),
+    output: subOnly || toolScoped || any("tool-output", "diff", "subagent", "error"),
+  }
+}
+
+/** A raw-line condition that every line holding a match must satisfy, or null when none is sound. Sound only for a literal
+ *  pattern made of printable ASCII without a quote or a backslash: JSON then stores it verbatim, so an element text that
+ *  holds it lies inside the raw line. A regex, a quote, a backslash, a control character or a non-ASCII character can be
+ *  written differently in the raw line (or match across what the escaping hides): no prefilter, every line in scope is split. */
+function rawPrefilter(pattern: string, regex: boolean): string | null {
+  if (regex || pattern === "") return null
+  for (const c of pattern) {
+    const n = c.codePointAt(0) ?? 0
+    if (n < 0x20 || n > 0x7e || c === "\"" || c === "\\") return null
+  }
+  return `strpos(lower(raw), lower(${sq(pattern)})) > 0`
+}
+
+const textMatch = (col: string, pattern: string, regex: boolean): string =>
+  regex ? `regexp_matches(${col}, ${sq(pattern)})` : `strpos(lower(${col}), lower(${sq(pattern)})) > 0`
+const textExcerpt = (col: string, pattern: string, regex: boolean, width: number): string =>
+  regex ? `substr(regexp_extract(${col}, ${sq(pattern)}), 1, ${width})`
+    : `substr(${col}, greatest(1, strpos(lower(${col}), lower(${sq(pattern)})) - 100), ${width})`
+/** --tool names: exact, or a mask where * stands for any run of characters. */
+const toolMatch = (col: string, tools: string[]): string =>
+  `(${tools.map(m => `${col} LIKE ${sq(m.replace(/[\\%_]/g, "\\$&").replace(/\*/g, "%"))} ESCAPE ${sq("\\")}`).join(" OR ")})`
+
+interface ElementQuery extends ElementFields {
+  pattern: string
+  regex: boolean
+  kinds: string[]
+  tools?: string[]
+  filters: string[]
+  prefilter: string | null
+  /** One transcript in scope and file order wanted: stage 1 numbers the lines itself. */
+  withLine: boolean
+  /** Some filter needs to know which call an output answers: a first scan builds a small table of the calls. */
+  needCalls: boolean
+  /** --kind subagent alone: every element of a sub-agent transcript counts, not only the Agent calls and their outputs. */
+  subOnly: boolean
+}
+
+const readNdjson = (group: TranscriptFile[], maxObjectSize: number): string =>
+  `read_ndjson_objects([${group.map(f => sq(f.path)).join(",")}], filename=true, maximum_object_size=${maxObjectSize}, ignore_errors=true)`
+
+/** First scan (only when needed): (filename, tool_use id, name, flags) of the calls that a filter or --kind subagent refers to. */
+function callsStage(group: TranscriptFile[], maxObjectSize: number, create: boolean, q: ElementQuery): string {
+  const name = jstr("b", "$.name")
+  const input = `coalesce(CAST(${jraw("b", "$.input")} AS VARCHAR), ${sq("")})`
+  const inTool = q.tools ? toolMatch(name, q.tools) : "false"
+  const inFile = q.file !== undefined ? `strpos(${input}, ${sq(q.file)}) > 0` : "false"
+  const isSub = `${name} IN (${inList(SUBAGENT_TOOLS)})`
+  const wanted = [q.tools ? inTool : "", q.file !== undefined ? inFile : "", q.kinds.includes("subagent") ? isSub : ""].filter(Boolean).join(" OR ")
+  return `
+    ${create ? "CREATE TEMP TABLE calls AS" : "INSERT INTO calls"}
+    -- DISTINCT: the same tool_use id can appear on several lines of one transcript (measured 2026-11-17: 873 of 3246 files). Without it the
+    -- join on (filename, id) multiplies every call and output with that id: --tool Bash "git" counted 32569 elements where 22918 were right
+    -- (calls 14614 + outputs 8304, both confirmed by an independent count, 2026-11-17, before the request-entry default).
+    SELECT DISTINCT filename, ${jstr("b", "$.id")} AS id, ${name} AS name, ${inTool} AS in_tool, ${inFile} AS in_file, ${isSub} AS is_sub
+    FROM (
+      SELECT filename, UNNEST(from_json(${jraw("json", "$.message.content")}, ${sq(JSON_LIST)})) AS b
+      FROM ${readNdjson(group, maxObjectSize)}
+      WHERE ${jstr("json", "$.type")} = ${sq("assistant")} AND json_type(json, ${sq("$.message.content")}) = ${sq("ARRAY")})
+    WHERE ${jstr("b", "$.type")} IN (${inList(CALL_BLOCKS)}) AND (${wanted})`
+}
+
+/** Stage 1 of element mode: the lines pass the raw prefilter and the scope filters, are split into elements, and one small row per
+ *  matching element goes into ehits. A line that is not valid JSON becomes one row with bad = true (counted, then deleted). */
+function elementStage1(group: TranscriptFile[], maxObjectSize: number, create: boolean, q: ElementQuery): string {
+  const sel = inList(q.kinds)
+  const subFile = `contains(x.filename, ${sq(SUBAGENT_FILE)})`
+  const kindsAll = q.needCalls
+    ? `list_concat(list_concat(CASE WHEN coalesce(c.is_sub, false) AND list_contains(x.kinds, ${sq("tool-output")}) THEN ${kindList("subagent")} ELSE ${NO_KINDS} END, ` +
+      `CASE WHEN ${q.subOnly} AND ${subFile} THEN ${kindList("subagent")} ELSE ${NO_KINDS} END), x.kinds)`
+    : "x.kinds"
+  const conds = [`list_has_any(${kindsAll}, [${sel}])`]
+  if (q.tools) conds.push(`((x.tool IS NOT NULL AND ${toolMatch("x.tool", q.tools)}) OR coalesce(c.in_tool, false))`)
+  if (q.file !== undefined) conds.push("(x.fdir OR coalesce(c.in_file, false))")
+  if (q.commit !== undefined) conds.push("x.cdir")
+  conds.push(textMatch("x.txt", q.pattern, q.regex))
+  const isBad = `list_contains(x.kinds, ${sq(BAD_KIND)})`
+  const keepParts = [q.prefilter, ...q.filters].filter((p): p is string => p !== null)
+  const keep = keepParts.length > 0 ? keepParts.join(" AND ") : undefined
+  return `
+    ${create ? "CREATE TEMP TABLE ehits AS" : "INSERT INTO ehits"}
+    WITH src AS (
+      SELECT filename, ${q.withLine ? "row_number() OVER ()" : "NULL::BIGINT"} AS line, json AS obj, CAST(json AS VARCHAR) AS raw
+      FROM ${readNdjson(group, maxObjectSize)}
+    ), b AS (
+      SELECT filename, line, obj, raw, ${ENTRY_COLUMNS} FROM src
+    ), x AS (${elementRows("b", "filename, line", { ...q, keep })})
+    SELECT x.filename, x.line, x.ts, x.type, x.role,
+           list_filter(${kindsAll}, k -> k IN (${sel}))[1] AS kind,
+           ${q.needCalls ? "coalesce(x.tool, c.name)" : "x.tool"} AS tool,
+           x.tuid AS tuid, x.idx AS idx, x.h AS h, ${isBad} AS bad, NULL::VARCHAR AS note
+    FROM x ${q.needCalls ? "LEFT JOIN calls c ON c.filename = x.filename AND c.id = x.tuid" : ""}
+    WHERE ${isBad} OR (${conds.join(" AND ")})`
+}
+
+/** --kind model-change, first step: one small row per assistant entry that names a model (and per invalid line). */
+function changeStage1(group: TranscriptFile[], maxObjectSize: number, create: boolean): string {
+  return `
+    ${create ? "CREATE TEMP TABLE msrc AS" : "INSERT INTO msrc"}
+    SELECT filename, md5(raw) AS h, ts, model, branch, cwd, (obj IS NULL) AS bad FROM (
+      SELECT filename, obj, raw, ${jstr("obj", "$.timestamp")} AS ts, ${jstr("obj", "$.message.model")} AS model,
+             ${jstr("obj", "$.gitBranch")} AS branch, ${jstr("obj", "$.cwd")} AS cwd, ${jstr("obj", "$.type")} AS type
+      FROM (SELECT filename, json AS obj, CAST(json AS VARCHAR) AS raw FROM ${readNdjson(group, maxObjectSize)}))
+    WHERE obj IS NULL OR (type = ${sq("assistant")} AND model IS NOT NULL AND model <> ${sq("<synthetic>")})`
+}
+
+/** --kind model-change, second step: the previous model comes from a window over the small rows only (ordered by timestamp
+ *  inside each file), and each change is one row: `from -> to` in note. The scope filters apply AFTER the window, so that a
+ *  filtered-out entry still counts as the previous model of the next one. */
+function changeStage2(q: ElementQuery): string {
+  const filters = [...q.filters]
+  if (q.pattern !== "") filters.push(textMatch("note", q.pattern, q.regex))
+  return `
+    CREATE TEMP TABLE ehits AS
+    SELECT filename, NULL::BIGINT AS line, ts, ${sq("assistant")} AS type, ${sq("assistant")} AS role, ${sq("model-change")} AS kind,
+           NULL::VARCHAR AS tool, NULL::VARCHAR AS tuid, 0::BIGINT AS idx, h, false AS bad, prev || ${sq(" -> ")} || model AS note
+    FROM (SELECT *, lag(model) OVER (PARTITION BY filename ORDER BY ts NULLS FIRST, h) AS prev FROM msrc WHERE NOT bad)
+    WHERE prev IS NOT NULL AND prev <> model ${filters.length > 0 ? `AND ${filters.join(" AND ")}` : ""}
+    UNION ALL
+    SELECT filename, NULL::BIGINT, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::BIGINT, h, true, NULL::VARCHAR
+    FROM msrc WHERE bad`
+}
+
+interface ShownElement { hit: SearchHit; h: string; idx: number; tuid: string | null; note: string | null }
+
+/** Stage 2 of element mode: for the SHOWN hits, one pass per distinct file gives the physical line, the excerpt and (for an
+ *  output whose call was not in the first scan) the tool name. Hits are matched back by (md5 of the line, element index);
+ *  identical lines get their numbers ascending, one per hit; a vanished line gives line null, never a wrong number. */
+async function assignElementLines(con: DuckDBConnection, shown: ShownElement[], q: ElementQuery, width: number): Promise<void> {
+  const byFile = new Map<string, ShownElement[]>()
+  for (const s of shown) byFile.set(s.hit.file, [...(byFile.get(s.hit.file) ?? []), s])
+  for (const [file, items] of byFile) {
+    const source = `SELECT row_number() OVER () AS rn, json AS obj, CAST(json AS VARCHAR) AS raw FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`
+    const hashes = [...new Set(items.map(i => i.h))].map(sq).join(",")
+    const lines = new Map<string, number[]>()
+    const excerpts = new Map<string, { excerpt: string; tool: string | null }>()
+    const changes = items.filter(i => i.note !== null)
+    const elements = items.filter(i => i.note === null)
+    if (changes.length > 0) {
+      const rows = (await con.runAndReadAll(
+        `SELECT rn, h FROM (SELECT rn, md5(raw) AS h FROM (${source}) WHERE ${jstr("obj", "$.type")} = ${sq("assistant")}) WHERE h IN (${hashes}) ORDER BY rn`,
+      )).getRowObjects()
+      for (const r of rows) lines.set(`${String(r.h)}#0`, [...(lines.get(`${String(r.h)}#0`) ?? []), Number(r.rn)])
+    }
+    if (elements.length > 0) {
+      const idxs = [...new Set(elements.map(i => i.idx))].join(",")
+      // Only the lines of the shown hits are split; the prefilter and the md5 test come first, so the split runs on a handful of lines.
+      const wantedLines = `(SELECT rn, obj, raw, ${ENTRY_COLUMNS} FROM (SELECT rn, obj, raw FROM (${source}) WHERE ${q.prefilter ? `${q.prefilter} AND ` : ""}md5(raw) IN (${hashes})))`
+      const rows = (await con.runAndReadAll(
+        `SELECT rn, h, idx, tool, ${textExcerpt("txt", q.pattern, q.regex, width)} AS excerpt FROM (${elementRows(wantedLines, "rn", q)})
+         WHERE idx IN (${idxs}) AND ${textMatch("txt", q.pattern, q.regex)} ORDER BY rn`,
+      )).getRowObjects()
+      for (const r of rows) {
+        const key = `${String(r.h)}#${Number(r.idx)}`
+        lines.set(key, [...(lines.get(key) ?? []), Number(r.rn)])
+        if (!excerpts.has(key)) excerpts.set(key, { excerpt: String(r.excerpt ?? ""), tool: (r.tool as string | null) ?? null })
+      }
+    }
+    // An output whose call was not in the first scan: its name is the one of the tool_use block with that id, in the same transcript.
+    const unnamed = elements.filter(i => i.hit.tool === null && i.tuid !== null)
+    const names = new Map<string, string>()
+    if (unnamed.length > 0) {
+      const ids = [...new Set(unnamed.map(i => i.tuid as string))].map(sq).join(",")
+      const rows = (await con.runAndReadAll(
+        `SELECT ${jstr("b", "$.id")} AS id, ${jstr("b", "$.name")} AS name FROM (
+           SELECT UNNEST(from_json(${jraw("json", "$.message.content")}, ${sq(JSON_LIST)})) AS b
+           FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)
+           WHERE ${jstr("json", "$.type")} = ${sq("assistant")} AND json_type(json, ${sq("$.message.content")}) = ${sq("ARRAY")})
+         WHERE ${jstr("b", "$.id")} IN (${ids})`,
+      )).getRowObjects()
+      for (const r of rows) names.set(String(r.id), String(r.name))
+    }
+    for (const { hit, h, idx, tuid, note } of items) {
+      const key = `${h}#${note !== null ? 0 : idx}`
+      hit.line = lines.get(key)?.shift() ?? null
+      if (note !== null) continue
+      const found = excerpts.get(key)
+      hit.excerpt = (found?.excerpt ?? "").replace(/\s+/g, " ").trim()
+      hit.tool = hit.tool ?? found?.tool ?? (tuid !== null ? names.get(tuid) ?? null : null)
+    }
+  }
+}
+
+/** Element mode entry point; see the section header. Same result shape as the line-mode engine. */
+async function searchElements(files: TranscriptFile[], pattern: string, opts: SearchOptions): Promise<SearchResult> {
+  checkElementOptions(pattern, opts)
+  const kinds = opts.kinds && opts.kinds.length > 0 ? opts.kinds : DEFAULT_KINDS
+  const changeMode = kinds.includes("model-change")
+  const limit = Math.min(Math.max(1, opts.limit ?? 20), 500)
+  const width = Math.min(Math.max(1, opts.width ?? 300), 2000)
+  const countMode = opts.mode === "count"
+  const withLine = files.length === 1 && !countMode
+  const byFile = withLine && !opts.order
+  const regex = opts.regex === true
+  const toolScoped = Boolean(opts.tools) || opts.file !== undefined || opts.commit !== undefined
+  const subOnly = kinds.length === 1 && kinds[0] === "subagent" && !toolScoped
+  const q: ElementQuery = {
+    pattern, regex, kinds, tools: opts.tools, file: opts.file, commit: opts.commit,
+    filters: scopeFilters(opts, changeMode ? "change" : "element"),
+    prefilter: rawPrefilter(pattern, regex),
+    withLine,
+    needCalls: Boolean(opts.tools) || opts.file !== undefined || kinds.includes("subagent"),
+    subOnly,
+    needs: elementNeeds(kinds, toolScoped, subOnly),
+  }
+  const meta = new Map(files.map(f => [f.path, f]))
+
+  const { inst, con } = await openDuck()
+  try {
+    // Same reasons as line mode: no row order for the scan, unless one transcript is numbered by row_number().
+    if (!withLine) await con.run("SET preserve_insertion_order = false")
+    const scanStart = Date.now()
+    const groups = scanGroups(files).map(g => ({ ...g, threads: Math.min(g.threads, ELEMENT_SCAN_THREADS) }))
+    if (changeMode) {
+      for (const [i, g] of groups.entries()) {
+        await con.run(`SET threads = ${g.threads}`)
+        await con.run(changeStage1(g.group, g.maxObjectSize, i === 0))
+      }
+      await con.run(changeStage2(q))
+    } else {
+      if (q.needCalls) {
+        for (const [i, g] of groups.entries()) {
+          await con.run(`SET threads = ${g.threads}`)
+          await con.run(callsStage(g.group, g.maxObjectSize, i === 0, q))
+        }
+      }
+      for (const [i, g] of groups.entries()) {
+        await con.run(`SET threads = ${g.threads}`)
+        await con.run(elementStage1(g.group, g.maxObjectSize, i === 0, q))
+      }
+    }
+    const bad = (await con.runAndReadAll("SELECT count(*) AS n, count(DISTINCT filename) AS f FROM ehits WHERE bad")).getRowObjects()[0]
+    const skipped = { lines: Number(bad.n), files: Number(bad.f) }
+    if (skipped.lines > 0) await con.run("DELETE FROM ehits WHERE bad")
+    const scanMs = Date.now() - scanStart
+    const fileMeta = (p: unknown): TranscriptFile => {
+      const f = meta.get(String(p))
+      if (!f) throw new Error(`search returned a transcript that was not in the scan list: ${String(p)}`)
+      return f
+    }
+
+    if (countMode) {
+      const rows = (await con.runAndReadAll("SELECT filename, count(*) AS c FROM ehits GROUP BY filename ORDER BY c DESC, filename")).getRowObjects()
+      const counts = rows.map(r => {
+        const f = fileMeta(r.filename)
+        return { file: f.path, session: f.session, agent: f.agent, count: Number(r.c) }
+      })
+      return { hits: [], total: counts.reduce((n, c) => n + c.count, 0), counts, timing: { scanMs, linesMs: 0 }, skipped }
+    }
+
+    const total = Number((await con.runAndReadAll("SELECT count(*) AS n FROM ehits")).getRowObjects()[0].n)
+    const orderBy = byFile ? "line, idx" : `(ts IS NULL), ts ${opts.order === "old" ? "ASC" : "DESC"}, filename, idx, h`
+    const rows = (await con.runAndReadAll(`SELECT filename, line, ts, type, role, kind, tool, tuid, idx, h, note FROM ehits ORDER BY ${orderBy} LIMIT ${limit}`)).getRowObjects()
+    const pending: ShownElement[] = []
+    const hits = rows.map(r => {
+      const f = fileMeta(r.filename)
+      const note = (r.note as string | null) ?? null
+      const hit: SearchHit = {
+        line: r.line === null || r.line === undefined ? null : Number(r.line),
+        ts: (r.ts as string | null) ?? null,
+        type: (r.type as string | null) ?? null,
+        role: (r.role as string | null) ?? null,
+        excerpt: note !== null ? note.slice(0, width) : "",
+        file: f.path,
+        session: f.session,
+        agent: f.agent,
+        kind: String(r.kind),
+        tool: (r.tool as string | null) ?? null,
+      }
+      pending.push({ hit, h: String(r.h), idx: Number(r.idx), tuid: (r.tuid as string | null) ?? null, note })
+      return hit
+    })
+    let linesMs = 0
+    if (pending.length > 0) {
+      // Stage 2 numbers the scan order with row_number() OVER (), so the order must be preserved again, on one thread.
+      await con.run("SET preserve_insertion_order = true")
+      await con.run("SET threads = 1")
+      const linesStart = Date.now()
+      await assignElementLines(con, pending, q, width)
+      linesMs = Date.now() - linesStart
+    }
+    return { hits, total, counts: [], timing: { scanMs, linesMs }, skipped }
+  } finally {
+    con.closeSync()
+    inst.closeSync()
+  }
+}
+
+/** The --role/--type/time/branch/cwd/worktree/model filters as SQL conditions over the line columns (obj, ts, type, role).
+ *  "line": plus the default exclusions (request entries, noisy attachments). "element": the request-entry exclusion only (the kind selection
+ *  decides what else is searched). "change": the model-change rows, which carry branch, cwd and model as columns of their own. */
+function scopeFilters(opts: SearchOptions, mode: "line" | "element" | "change"): string[] {
+  const filters: string[] = []
+  const field = (column: string, jsonPath: string): string => (mode === "change" ? column : jstr("obj", jsonPath))
+  if (mode !== "change") {
+    if (opts.role) filters.push(`role = ${sq(opts.role)}`)
+    if (opts.type) filters.push(`type = ${sq(opts.type)}`)
+  }
+  // An explicit --type already says which entries are wanted, so the default exclusions only apply without it.
+  // Request entries are out of element mode too (owner ruling 2026-11-17): an api-request-blob holds a COPY of the whole conversation, so
+  // its tool_use / tool_result blocks would be counted a second time (measured on this project: 5573 of the 14614 Bash "git" call blocks sit in
+  // blobs, and 30963 of the 93635 Bash call blocks).
+  if (mode !== "change" && !opts.type && !opts.includeRequests) filters.push(`coalesce(type, ${sq("")}) NOT IN (${REQUEST_TYPES.map(sq).join(",")})`)
+  if (mode === "line" && !opts.type && !opts.includeAttachments) {
+    filters.push(`(coalesce(type, ${sq("")}) <> ${sq("attachment")} OR ${jstr("obj", "$.attachment.type")} IN (${ATTACHMENT_TYPES.map(sq).join(",")}))`)
+  }
+  if (opts.since) filters.push(`ts >= ${sq(opts.since)}`)
+  if (opts.until) filters.push(`ts <= ${sq(opts.until)}`)
+  if (opts.branch) filters.push(`${field("branch", "$.gitBranch")} = ${sq(opts.branch)}`)
+  if (opts.cwd) filters.push(`strpos(coalesce(${field("cwd", "$.cwd")}, ${sq("")}), ${sq(opts.cwd)}) > 0`)
+  if (opts.worktree) filters.push(`strpos(coalesce(${field("cwd", "$.cwd")}, ${sq("")}), ${sq(`/worktrees/${opts.worktree}`)}) > 0`)
+  if (opts.model) filters.push(`strpos(coalesce(${field("model", "$.message.model")}, ${sq("")}), ${sq(opts.model)}) > 0`)
+  return filters
+}
+
+/** The element-mode flag rules, checked before any transcript is searched (and by the engine itself). */
+export function checkElementOptions(pattern: string, opts: SearchOptions): void {
+  const kinds = opts.kinds && opts.kinds.length > 0 ? opts.kinds : DEFAULT_KINDS
+  for (const k of kinds) {
+    if (!ELEMENT_KINDS.includes(k)) throw new UsageError(`unknown --kind "${k}" — one of: ${ELEMENT_KINDS.join(", ")}`)
+  }
+  const changeMode = kinds.includes("model-change")
+  if (changeMode && (kinds.length > 1 || opts.tools || opts.file !== undefined || opts.commit !== undefined)) {
+    throw new UsageError("--kind model-change stands alone: it cannot be combined with another --kind, --tool, --file or --commit")
+  }
+  if (!changeMode && pattern === "") throw new UsageError("a search <pattern> is required — see: agentlenspro search --help")
+  if (opts.commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(opts.commit)) throw new UsageError(`--commit expects 7 to 40 hex characters, got "${opts.commit}"`)
+}
+
+/** Any of these switches the engine from raw lines to elements. */
+const isElementMode = (opts: SearchOptions): boolean =>
+  Boolean(opts.kinds?.length) || Boolean(opts.tools?.length) || opts.file !== undefined || opts.commit !== undefined
+
 /**
  * Search a set of transcripts. See the file header for the two-stage shape; every flag value goes
  * through sq(), and the transcript text never enters V8 beyond the shown excerpts.
  */
 export async function searchTranscripts(files: TranscriptFile[], pattern: string, opts: SearchOptions = {}): Promise<SearchResult> {
   if (files.length === 0) return { hits: [], total: 0, counts: [], timing: { scanMs: 0, linesMs: 0 }, skipped: { lines: 0, files: 0 } }
+  if (isElementMode(opts)) return searchElements(files, pattern, opts)
   const limit = Math.min(Math.max(1, opts.limit ?? 20), 500)
   const width = Math.min(Math.max(1, opts.width ?? 300), 2000)
   const countMode = opts.mode === 'count'
@@ -347,20 +936,7 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
     ? `substr(regexp_extract(raw, ${sq(needle)}), 1, ${width})`
     : `substr(raw, greatest(1, strpos(lower(raw), lower(${sq(needle)})) - 100), ${width})`
 
-  const filters: string[] = []
-  if (opts.role) filters.push(`role = ${sq(opts.role)}`)
-  if (opts.type) filters.push(`type = ${sq(opts.type)}`)
-  // An explicit --type already says which entries are wanted, so the default exclusions only apply without it.
-  if (!opts.type && !opts.includeRequests) filters.push(`coalesce(type, '') NOT IN (${REQUEST_TYPES.map(sq).join(',')})`)
-  if (!opts.type && !opts.includeAttachments) {
-    filters.push(`(coalesce(type, '') <> 'attachment' OR json_extract_string(obj, '$.attachment.type') IN (${ATTACHMENT_TYPES.map(sq).join(',')}))`)
-  }
-  if (opts.since) filters.push(`ts >= ${sq(opts.since)}`)
-  if (opts.until) filters.push(`ts <= ${sq(opts.until)}`)
-  if (opts.branch) filters.push(`json_extract_string(obj, '$.gitBranch') = ${sq(opts.branch)}`)
-  if (opts.cwd) filters.push(`strpos(coalesce(json_extract_string(obj, '$.cwd'), ''), ${sq(opts.cwd)}) > 0`)
-  if (opts.worktree) filters.push(`strpos(coalesce(json_extract_string(obj, '$.cwd'), ''), ${sq(`/worktrees/${opts.worktree}`)}) > 0`)
-  if (opts.model) filters.push(`strpos(coalesce(json_extract_string(obj, '$.message.model'), ''), ${sq(opts.model)}) > 0`)
+  const filters = scopeFilters(opts, "line")
   const where = filters.length > 0 ? `WHERE obj IS NULL OR (${filters.join(' AND ')})` : ''
 
   const columns = countMode
@@ -382,35 +958,14 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
     )
     SELECT ${columns}, (obj IS NULL) AS bad FROM m ${where}`
 
-  // Imported lazily, same reason as store/db.ts: --version/hook/gate must not pay for the binding.
-  const { DuckDBInstance } = await import('@duckdb/node-api')
-  const inst = await DuckDBInstance.create(':memory:', {
-    memory_limit: process.env['AGENTLENS_DUCKDB_MEMORY_LIMIT']?.trim() || '2GB',
-    // Starts at ONE thread; each stage-1 scan group sets its own count (SET threads). The JSON reader holds
-    // ~2 x maximum_object_size of buffer per thread: on this project's 3 GB, scanning ALL files at once with
-    // the 256 MB cap hit the 2GB no-spill limit in 4 of 10 runs with 2 threads and in 0 of 10 with 1 (whole
-    // command, measured 2026-11-17). Hence the split: files under 32 MB (cap 64 MB) on 4 threads, the rest
-    // (cap 256 MB) on 1. Measured on the same project, 3,027 MB, literal pattern, limit 20: scan only 6.0-7.3 s /
-    // whole command 6.4-7.8 s with 1 thread everywhere (3 runs); scan only 2.0-2.2 s / whole command 2.4-2.5 s
-    // with the split, 0 of 10 runs failed, peak RSS ~0.9 GB. A smaller cap for the big files would make a huge
-    // line fail the scan.
-    threads: '1',
-  })
-  const con = await inst.connect()
+  const { inst, con } = await openDuck()
   try {
-    // No spill: an over-limit query must FAIL with a clear error, never write gigabytes to the SSD
-    // or to a .tmp folder in the cwd (src/store/db.ts:3-21).
-    await con.run("SET temp_directory = ''")
     // Stage 1 needs no row order (hits are re-sorted below), and ordered inserts make DuckDB buffer
     // out-of-order batches: with the default (true) this scan hit the 2GB limit on this project's 3 GB
     // (measured). The one-transcript form must KEEP the order: its row_number() numbers the scan order.
     if (!single) await con.run('SET preserve_insertion_order = false')
     const scanStart = Date.now()
-    const bySize = [...files].sort((a, b) => a.size - b.size)
-    const groups = [
-      { group: bySize.filter(f => f.size < SMALL_FILE_BYTES), maxObjectSize: SMALL_OBJECT_SIZE, threads: SMALL_SCAN_THREADS },
-      { group: bySize.filter(f => f.size >= SMALL_FILE_BYTES), maxObjectSize: MAX_OBJECT_SIZE, threads: 1 },
-    ].filter(g => g.group.length > 0)
+    const groups = scanGroups(files)
     for (const [i, g] of groups.entries()) {
       await con.run(`SET threads = ${g.threads}`)
       await con.run(stage1(g.group, g.maxObjectSize, i === 0))
@@ -529,8 +1084,13 @@ export async function runSearchCli(argv: string[]): Promise<number> {
     if (VALUED.has(argv[i])) { i++; continue }
     if (!argv[i].startsWith('-')) positionals.push(argv[i])
   }
-  const pattern = positionals[0]
-  if (!pattern) throw new UsageError('a search <pattern> is required — see: agentlenspro search --help')
+  const elementOpts: SearchOptions = {
+    kinds: listArg(argv, '--kind'), tools: listArg(argv, '--tool'),
+    file: flagValue(argv, '--file', 'a text'), commit: flagValue(argv, '--commit', 'a commit SHA'),
+  }
+  const pattern = positionals[0] ?? ''
+  if (isElementMode(elementOpts)) checkElementOptions(pattern, elementOpts)
+  else if (pattern === '') throw new UsageError('a search <pattern> is required — see: agentlenspro search --help')
   if (positionals.length > 1) throw new UsageError(`one pattern only (got ${positionals.length}) — quote patterns containing spaces`)
 
   const has = (flag: string): boolean => argv.includes(flag)
@@ -588,6 +1148,7 @@ export async function runSearchCli(argv: string[]): Promise<number> {
     includeAttachments: has('--include-attachments'),
     order: orderRaw,
     mode: countMode || filesMode ? 'count' : 'hits',
+    ...elementOpts,
   })
   // WHAT was searched + coverage → stderr; matches alone → stdout (pipe-safe split).
   const mb = (files.reduce((n, f) => n + f.size, 0) / 1048576).toFixed(1)
@@ -606,7 +1167,8 @@ export async function runSearchCli(argv: string[]): Promise<number> {
     writeOut(JSON.stringify({ total, hits, skipped }))
   } else {
     for (const h of hits) {
-      writeOut(`${tag(h)}\t#${h.line ?? '?'}\t${h.ts ?? '-'}\t[${h.role ?? h.type ?? '?'}]\t${h.excerpt}`)
+      const label = h.kind !== undefined ? `${h.kind}${h.tool ? ` ${h.tool}` : ''}` : h.role ?? h.type ?? '?'
+      writeOut(`${tag(h)}\t#${h.line ?? '?'}\t${h.ts ?? '-'}\t[${label}]\t${h.excerpt}`)
     }
   }
   return EXIT.OK
