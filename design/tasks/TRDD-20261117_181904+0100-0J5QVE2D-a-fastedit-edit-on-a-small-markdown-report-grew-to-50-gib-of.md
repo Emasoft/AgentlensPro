@@ -4,7 +4,7 @@ title: A fastedit edit on a small Markdown report grew to 50 GiB of memory and f
 column: backburner
 status: tasked
 created: 2026-11-17T18:19:04+0100
-updated: 2026-11-17T18:25:22+0100
+updated: 2026-11-17T18:31:18+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -38,10 +38,11 @@ Evidence: `reports_dev/fastedit-runaway/20261117_181649+0100-pid42290-ps.txt` (t
 - The fastedit version.
 - The second largest process at that time was the local decision-model server (23.25 GiB), which belongs to the owner and was not touched.
 - 2026-11-17T18:25:21+0100 added from the worker's own handback and the harness review of its turn (not re-checked by the main agent): the tool is fastedit 0.5.0 with the default backend mlx and a model cached on this machine, no FASTEDIT variable set, so by that reading the report text did not leave the machine (no network trace was taken). Before it was put in the background the edit printed 'falling through to the validated model path' and 'Whole-file merge attempt 1/9 rejected: truncated (model hit the token cap)'. So the process that grew was a whole-file merge by the local model with up to 9 attempts; that the growth comes from those attempts is INFERRED. The worker had no way to stop the job. At 18:25 another session of the owner (a different project) had its own fastedit edit running at 3.26 GiB after 27 s; it is not this project's and was not touched.
+- 2026-11-17T18:31:17+0100 box 1: the rule is now a LOCAL memory note of this project (worker-prompts-time-limit-fastedit-edit, lint 0 findings, found by a recall on 'boot disk free space falling swap fastedit') and the two worker prompts sent at 18:29 carry it (timeout 120, reports written once with fastedit create, stop on the model-path message). It binds only sessions that recall the note; no hook enforces it. LEFTOVER for the owner, made by the main agent's first attempt at that note (a cd into the memory folder made the tool derive a wrong project name): a stray folder under the user's Claude projects folder whose name ends in 'AgentlensPro-memory', holding one copy of the page and an index file. Not deleted (outside the project, no git).
 
 ## To do
 
-- [ ] Worker prompts: run every `fastedit edit` under a time limit (`timeout 120 fastedit edit ...`) and report a timeout as a failed edit.
+- [x] Worker prompts: run every `fastedit edit` under a time limit (`timeout 120 fastedit edit ...`) and report a timeout as a failed edit.
 - [ ] Reproduce on a scratch copy of the report with the saved command line, under `timeout 60`, and watch the footprint. If it repeats, report it to the fastedit project (owner decides where).
 - [ ] Check the report file with `fastedit diff` before anyone relies on it.
 - [ ] The 5-minute disk monitor did not name the cause; a swap-size line next to the free-space line would have (swap total grew 41 GiB in 13 minutes).
