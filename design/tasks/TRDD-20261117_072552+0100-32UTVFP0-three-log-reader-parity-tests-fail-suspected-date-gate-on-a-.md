@@ -4,7 +4,7 @@ title: Three log_reader_parity tests fail, suspected date gate on a fixture
 column: backburner
 status: tasked
 created: 2026-11-17T07:25:52+0100
-updated: 2026-11-17T07:25:52+0100
+updated: 2026-11-17T07:34:44+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,6 +28,7 @@ Seen 2026-11-17 in the checks of TRDD-JDQR0HDT (reports_dev/JDQR0HDT/G-log_reade
 - [ ] The tests no longer depend on the calendar date (the fixture's time is set by the test, or the gate takes an injected clock), and pass.
 
 ## Notes and lessons learned
+2026-11-17T07:34+0100 main agent, CAUSE MEASURED (one variable changed): the three failures come from the AGE OF THE FIXTURE FILE, not from commit e9782faf and not from the other task's uncommitted Rust changes. Read: REPARSE_MAX_AGE (log_reader.rs:875, 30 days) is compared with the transcript's file mtime (log_reader.rs:1156-1160, std::fs::metadata(path).modified()); the tests copy the fixture with std::fs::copy (log_reader_parity.rs:318-327). In the main tree all 4 fixture transcripts carry mtime 2026-09-25 (53 days); in a worktree checked out today they carry today's time. Experiment on the worktree of the PARENT of e9782faf (5010c55a, clean, same test binary both times), output reports_dev/JDQR0HDT/main-mtime-experiment-parent.txt: with the Claude fixture's mtime set to 2026-09-25 the file ends 23 passed, 4 failed (these three, each next to the log line '1 skipped, older than 30 days', plus watcher_advances_a_card_on_growth_without_waiting_for_the_backstop, which TRDD-WBYDQH8K lists as failing about one run in five; a build was running beside it); with the mtime reset to now, 27 passed, 0 failed. One run each. I had written 'the date gate is refuted' in a reply after the parent passed in the fresh worktree: that was wrong, a fresh checkout changes file times as well as code. Not done: the fix. Candidates, not chosen: the tests set the copied transcript's mtime to now, or the gate takes its clock and age from the caller. Until then these three tests fail on any checkout older than 30 days, and pass on a fresh clone, CI included.
 
 ## Approval log
 
