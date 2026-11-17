@@ -1,10 +1,10 @@
 ---
 trdd-id: NYQRKAG7
 title: The 4 GB test data cap is shown to trip and two CLAUDE.md sentences about it are stale
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-17T23:33:28+0100
-updated: 2026-11-17T23:43:26+0100
+updated: 2026-11-17T23:52:58+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: docs
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-17T23:33:28+0100
+implementation-commits: [91838037, 8152baa5]
 ---
 
 # The 4 GB test data cap is shown to trip and two CLAUDE.md sentences about it are stale
@@ -41,12 +42,15 @@ Goal set by the owner on 2026-11-17: verify that the 4 GB cap on test data is al
 - [x] The trip test is run alone and passes (output above).
 - [x] The coverage guard passes.
 - [x] CLAUDE.md: the sentence "prove COVERAGE only, never that the cap trips" names the trip test and its limit, and the recipe for one mocha file includes `--ui tdd`.
-- [ ] The Rust proof test (agentlens-spool/tests/test_data_cap.rs) is run once after the reboot, under the cargo gate.
+- [x] The Rust proof test (agentlens-spool/tests/test_data_cap.rs) is run once after the reboot, under the cargo gate.
 
 ## Approval log
 
 - 2026-11-17T23:33:28+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T23:52:58+0100 — COMPLETE by main-agent@agentlenspro. all four boxes ticked on outputs read whole (trip test, guard, CLAUDE.md line, Rust proof test).
 
 ## Notes
 
 2026-11-17T23:43:23+0100 The CLAUDE.md recipe was verified with --timeout 10000 on the command line; --no-config drops the 10 s timeout of .mocharc.cjs too (mocha falls back to 2 s), and the recipe line does not say so. A test file that relies on the 10 s timeout needs --timeout 10000 added. Not put into CLAUDE.md yet.
+2026-11-17T23:52:20+0100 RESULTS AND CORRECTIONS (main agent, after the harness review of the turn that filed this card). (1) RUST PROOF TEST run once after the reboot through scripts_dev/pgm-gated3.sh (gate at 23:50:07: load 6.28, free 77 percent, no cargo or rustc, swap used 0 MB; cargo under nice): cargo test -v --release -p agentlens-spool --test test_data_cap, 1 passed, exit 0; the runner line 'sh -c exec bash $AGENTLENS_TEST_CAP_SCRIPT ... test-data-cap <test binary>' is in the output and AGENTLENS_TEST_CAP_DIR was unset before cargo (reports_dev/NYQRKAG7/build-raw/spoolcap-*.txt, read whole). This test was NOT run earlier in this session; the cargo evidence before it was the runner line of two other test binaries. It proves coverage only, as its own comment says. (2) COMPILED TEST FILE: the first trip run used out/test/test/testDataCap.test.js as found (judged current by its date and one grep). Checked now: pnpm run compile-tests exit 0, the compiled file has the same md5 before and after (ac12b48af020d259ee18defdb7659430), and the rerun gives 2 passing, mocha exit 0 (reports_dev/test-data-cap/20261117_235058+0100-compile-and-trip-run.txt). (3) The Limits section above is the list; my message to the owner counted 'five ways' and left out the kill_stragglers net and counted the Rust box as a limit: the section stands as written. (4) The new CLAUDE.md sentence cites this card id and not a report path under reports/, against the rule at the top of CLAUDE.md, because the project .gitignore ignores /reports/ (line 40), so no tracked report can exist: TRDD-5YYVANZQ.
+2026-11-17T23:52:46+0100 The timeout remark is now in the CLAUDE.md recipe line ('it drops the 10 s timeout of the config too, so add --timeout 10000 for a file that needs it'). Applied by the main agent with git apply from a patch built by one asserted substitution (reports_dev/NYQRKAG7/claude-md-timeout.patch); no worker, because the harness review counted 104,102 worker tokens for the previous one-line edit. Checked: the file equals the prepared text (cmp 0), 1 line changed, 540 lines, check-no-identities passes. All four boxes are ticked; closing.
