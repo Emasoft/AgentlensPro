@@ -1475,9 +1475,10 @@ impl DurableState {
                 Err(e) => eprintln!("{} alcore: card log unreadable ({e}); its hashes stay seeded from the card store, it is NOT brought level with the store", crate::log_ts()),
             }
         }
-        // WHY `!self.first_cards_saved`: last_cards_save starts at boot, so without it no card save
-        // can happen in a run's first 300 s, and runs killed by the RSS hard cap after 4 to 11
-        // minutes left a card snapshot days old (TRDD-WCG7I5D8). One early save, then the old cadence.
+        // WHY `!self.first_cards_saved`: last_cards_save starts at boot, so without it the timer
+        // path saves no cards in a run's first 300 s, and most runs killed by the RSS hard cap
+        // ended before that (counts on TRDD-WCG7I5D8), leaving a card snapshot days old. One early
+        // save, then the old cadence.
         if self.cards_dirty && (!self.first_cards_saved || now.duration_since(self.last_cards_save) >= self.cards_save) {
             self.cards_dirty = false;
             self.save_cards(state);
