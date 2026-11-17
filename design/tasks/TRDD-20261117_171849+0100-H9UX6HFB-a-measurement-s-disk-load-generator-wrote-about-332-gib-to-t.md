@@ -4,7 +4,7 @@ title: A measurement's disk-load generator wrote about 332 GiB to the boot disk 
 column: todo
 status: tasked
 created: 2026-11-17T17:18:49+0100
-updated: 2026-11-17T17:38:09+0100
+updated: 2026-11-17T17:42:41+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,7 +24,7 @@ The cause run of TRDD-YR6WX7VQ (scripts_dev/yr6-gate-cause.py, written and start
 
 ## Why it happened
 The plan checked the alive size against the cap and never estimated the write rate (measured afterwards from the counters: about 0.7 to 1.9 GiB per second for the two writers together). No dry run.
-CORRECTION 2026-11-17 17:36: the figure 'in 8 minutes' used on this card and in the guard line of scripts_dev/yr6-gate-cause.py is not supported by the log. Re-read of reports_dev/YR6WX7VQ/gate-cause/driver.out: the writers' own counter read 38,144 MiB at the start of cell DK, 139,264 at its end, 340,224 MiB (about 332 GiB) at the end of cell DN (logged 17:17:32); the cell record before DK is logged at 17:02:58, so the bound is 'less than 15 minutes'; the writers' start time is not in the log. Footprint: at most 2 x 256 MiB (script line 18). Evidence report (NOT tracked: /reports/ is ignored by .gitignore line 40 in this project, see TRDD-5YYVANZQ): reports/H9UX6HFB/20261117_173534+0100-disk-load-generator-cumulative-writes.md. Box 2 (CLAUDE.md sentence) is being written by a worker with the corrected figures and that report as its evidence path.
+CORRECTION 2026-11-17 17:36: the figure 'in 8 minutes' used on this card and in the guard line of scripts_dev/yr6-gate-cause.py is not supported by the log. Re-read of reports_dev/YR6WX7VQ/gate-cause/driver.out: the writers' own counter read 38,144 MiB at the start of cell DK, 139,264 at its end, 340,224 MiB (about 332 GiB) at the end of cell DN (logged 17:17:32); the cell record before DK is logged at 17:02:58, so the bound is 'less than 15 minutes'; the writers' start time is not in the log. Footprint: at most 2 x 256 MiB (script line 18). Evidence report (NOT tracked: /reports/ is ignored by .gitignore line 40 in this project, see TRDD-5YYVANZQ): reports/H9UX6HFB/20261117_173534+0100-disk-load-generator-cumulative-writes.md. Box 2 landed in commit 7d7d455d with the corrected figures and that report as its evidence path. The guard line of scripts_dev/yr6-gate-cause.py (gitignored) still says 'in 8 minutes' and stays as written; it stops a rerun either way.
 
 ## Acceptance
 - [ ] scripts_dev/yr6-gate-cause.py cannot be rerun with the writing load (guard at the top), and a disk load for a later measurement is read-only or has a cumulative byte budget under 4 GiB checked in its loop.

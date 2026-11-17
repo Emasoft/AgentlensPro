@@ -4,7 +4,7 @@ title: At live size under a loaded host the sweeper's forced save at stop overra
 column: backburner
 status: tasked
 created: 2026-11-17T17:30:40+0100
-updated: 2026-11-17T17:30:40+0100
+updated: 2026-11-17T17:42:41+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
