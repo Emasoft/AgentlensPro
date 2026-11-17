@@ -1,10 +1,10 @@
 ---
 trdd-id: M62ZBT7E
 title: The review mod row for a reviewed interrupted turn reads as a failed review
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-17T23:15:58+0100
-updated: 2026-11-17T23:25:31+0100
+updated: 2026-11-17T23:34:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,3 +37,7 @@ For the review of a turn that was cut short the review mod prints one user-only 
 ## Approval log
 
 - 2026-11-17T23:15:58+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-17T23:34:06+0100 CORRECTION after two harness reviews (main agent; local read of two transcripts, listings in reports_dev/M62ZBT7E/20261117_2333-llmext-window.txt and 20261117_2335-janitor-after-2307.txt, both read whole). (1) 'A review that ran to its end' holds for ONE row only: the 22:56 row has its report in the next Stop display (heading 'interrupted turn 22:56', VERDICT PASS). For the 23:07:27 row no such heading is in the transcript up to its last entry (23:31:58 local), across four later Stop displays and a compaction at 23:11:10; no REVIEW DEFERRED or REVIEW FAILED row either. That review made its model calls and its report was not shown: TRDD-ISEF8YO7. By the 0.7.11 source the row is printed from a finally block for any model call, also when no report came out; the installed copy (newest in the plugin cache: 0.7.10) was not compared. So the row means 'the review made its calls', and box 1 below must not promise a verdict the code does not have at that point without reading it there. (2) CAUSE: 2 of 3 rows follow a prompt taken from the input queue while a turn ran (both in one session). The third (another session, 22:26:25 local): the Stop hook ended at 22:24:53, a continuation request began at 22:24:56.806 after Stop-hook feedback, the queued prompt was dequeued at 22:24:56.937 and a new request began at .993; no entry marks an abort, so it fits only if the dequeue cut the continuation that had begun 131 ms before. An Esc press is not excluded for any row; the entries listed in the two files hold no '[Request interrupted' text. The rows of 15 and 16 November were not tested. (3) COST: the two costs read since the boot are 0.1826 and 0.1587 USD; 0.2338 and 0.1536 belong to rows of 15 and 16 November; the cost of the third row was not read. 'Every prompt typed while a turn runs buys one extra review' is conditional on the inferred cause.
