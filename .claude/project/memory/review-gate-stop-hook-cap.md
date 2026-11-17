@@ -17,11 +17,11 @@ publish-globally: false
 A turn whose reply carries the proposal marker can end with no harness review and no measurement reaching the model, for two different reasons, and neither is a lost delivery.
 
 1. The proposal was written inside a janitor turn (for example in the reply to a `[janitor-heartbeat]` fire). The review mod never reviews or measures a janitor turn, whatever it wrote (its Stop handler returns on the janitor test of the turn prompt). DO NOT answer a review with a revised proposal inside a heartbeat turn; note it and send the proposal in the next working turn. Measured once (2026-11-17).
-2. The Stop of the turn reached the cap of 2 blocking rounds of the review mod. The mod then defers the review: the user sees a yellow REVIEW DEFERRED note and the model sees nothing. Measured once (2026-11-17): the Stop lasted 2.6 s and printed that note. NOT traced: how the counter reached 2 in that turn (the turn had been continued by Stop-hook feedback three times, only one of them a review block). INFERRED from one injected report, not measured: that the debt is paid by the review of the next non-janitor turn, and that the deferred proposal is never measured (card TRDD-ASXUW08U).
+2. The Stop of the turn reached the cap of 2 blocking rounds of the review mod. The mod then defers the review: the user sees a yellow REVIEW DEFERRED note and the model sees nothing. Measured once (2026-11-17): the Stop lasted 2.6 s and printed that note. NOT traced and not counted: how the counter reached 2 in that turn. INFERRED from one injected report, not measured: that the debt is paid by the review of the next non-janitor turn, and that the deferred proposal is never measured (card TRDD-ASXUW08U).
 
-What does work: a finished PASS review is injected with the next prompt of ANY kind, a cron heartbeat prompt included (measured twice). So read the injected context of a heartbeat fire: the review of the previous working turn may be there and nowhere else.
+What does work: a finished PASS review is injected with the next prompt of ANY kind, a cron heartbeat prompt included (seen twice on 2026-11-17). So read the injected context of a heartbeat fire: the review of the previous working turn may be there and nowhere else.
 
-How to tell the cases apart in the session transcript file: the Stop of the proposal turn lasts seconds instead of about a minute and a half when no review ran; a `hook_system_message` of the Stop holds the DEFERRED note; a `hook_additional_context` entry of the `prompt.submit` hook right after the next prompt holds the delivered reports.
+How to tell the cases apart in the session transcript file: the Stop of the proposal turn lasts seconds when no review ran (a Stop that runs a review was not timed for this note); a `hook_system_message` of the Stop holds the DEFERRED note; a `hook_additional_context` entry of the `prompt.submit` hook right after the next prompt holds the delivered reports.
 
 ## Superseded
 

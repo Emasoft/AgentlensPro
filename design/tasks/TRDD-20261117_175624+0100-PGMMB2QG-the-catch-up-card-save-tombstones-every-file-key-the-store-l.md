@@ -4,7 +4,7 @@ title: The catch-up card save tombstones every file key the store lacks with no 
 column: todo
 status: tasked
 created: 2026-11-17T17:56:24+0100
-updated: 2026-11-17T20:47:01+0100
+updated: 2026-11-17T20:57:52+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -57,3 +57,8 @@ CORRECTION TO THE INCREMENT B SPEC (2026-11-17T20:47:00+0100, main agent). Point
 
 - 2026-11-17T17:56:24+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-17T18:32:17+0100 — column → todo by main-agent@agentlenspro. the missing ceiling is in practice a new deletion (live delta a tenth of the compaction size after 18 days); blocks the release
+
+## Notes
+
+- 2026-11-17T20:57:51+0100 BASELINE OF THE COMMITTED SOURCE (round 3, c21abccc), run by the main agent from a clean worktree whose rust-core equals the committed tree (git diff against 2b309def: exit 0 before and after the runs; the main checkout differs from that tree by the owner's uncommitted files body_archive.rs, agentlens-store lib.rs and pass.rs): lib log_reader 18 passed 0 failed exit 0; lib delta_log 15 passed 0 failed exit 0; test card_reuse 24 passed 0 failed exit 0. Raw: reports_dev/PGMMB2QG/build-raw-main/base-0N-*. LIMITS: the load gate is read only before each cargo start (readings 11.13; 14.58 then 13.11; 13.11); the card_reuse release build of alcore (4 m 57 s) was NOT held under the criterion, the host read 87.07 during it (other sessions were the larger part, not measured per process) with about 1 GB of swap free. These outputs do not show the 4 GB cap wrapper (no runner line); scripts_dev/pgm-gated.sh runs cargo with -v for the next run, expected to print it, to be confirmed from that output. Whole crate suite not run (pre-push run).
+- 2026-11-17T20:57:51+0100 OPEN ITEMS FROM THE HARNESS REVIEW OF 19:46 (not done, recorded here so they do not live only in chat): (a) the line numbers that the notes of this card and of TRDD-MUZ04JYU cite for log_reader.rs and bin/alcore.rs (:940-941, :948, :960-975, :1733-1736, :464-467) were approximate when written and predate c21abccc: read them as 'about', re-derive before relying on one; (b) the acceptance box about a failed rewrite was corrected by a later dated entry, not on the box line: check that the box line points to that entry; (c) TmpSnapshot::create and finish in delta_log.rs were not read by the main agent; the claim that a clear rewrite does not read the old files rests on the passing tests a_clear_next_to_a_corrupt_card_log_rewrites_it_from_the_store_and_resets_the_flag and rewrite_from_over_a_log_with_a_corrupt_middle_line_is_ok_and_leaves_exactly_the_records (baseline above); a corrupt SNAPSHOT file is not covered by a test.
