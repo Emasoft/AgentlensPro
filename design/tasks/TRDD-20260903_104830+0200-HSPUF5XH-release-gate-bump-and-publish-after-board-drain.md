@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-17T19:04:07+0100
+updated: 2026-11-17T19:06:04+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, QE114936, 768NEX6E, 7YPQWKPG, H3D5ZBO1, WCENKH6T, WBYDQH8K, ATXO2E1J, OLKITCS7, PGMMB2QG, QXODI7TR, JKVUBKLR, AXJH3WTU]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, QE114936, 768NEX6E, 7YPQWKPG, H3D5ZBO1, WCENKH6T, WBYDQH8K, ATXO2E1J, OLKITCS7, PGMMB2QG, QXODI7TR, JKVUBKLR, AXJH3WTU, 4BV8F9B9]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -168,6 +168,7 @@ unless the user says otherwise:
 - [ ] Upgrade boot from a v2.33.1 data dir on a full corpus with the release alcore: record peak RSS against the cap and confirm the boot finishes its cold rescan (B' crash-loop check from 6B7VV2Z7; see Notes 2026-10-16).
 - [ ] Two consecutive `pnpm run test:unit` runs, exit 0 and 0 failing, on the release tree as defined in the section "Release full-suite pair — gate rules" below, each following every rule there; record each run line under that section. Moved here from TRDD-CS2W7E77 on 2026-10-17.
 - NOTE 2026-11-17T19:04:05+0100 (from the closing entry of TRDD-WCG7I5D8): before the first start of the new build on the live folder, confirm that log-delta-version.json is present and current there. A start whose version stamp is missing or stale refuses the store and tombstones the card log (log_reader.rs:975-977), which drops every card that has no transcript. A gate copy without that file did exactly this (74,730 cards discarded and rescanned); a later copy with a reused store kept them.
+- BASIS of the note above (2026-11-17T19:06:03+0100): the copy lists of scripts_dev/wcg-gate4.py:30-31 and wcg-gate4b.py:38-39 hold six files and not log-delta-version.json; scripts_dev/yr6-gate-live.py:16 adds that file, and its run LV1 printed 'reusing cards.duckdb: 74730 cards'. The two copies were never compared in one controlled run, so 'the missing file caused the refusal' is INFERRED from those reads. Also: TRDD-WCG7I5D8 was moved to complete without a harness review of the close itself (two blocked rounds, then the advisor); corrections to it go to TRDD-PGMMB2QG.
 
 ## Release recipe (run only after every box above is checked)
 
