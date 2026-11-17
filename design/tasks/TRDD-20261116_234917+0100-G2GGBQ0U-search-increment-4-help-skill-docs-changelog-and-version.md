@@ -4,7 +4,7 @@ title: search - increment 4 help skill docs changelog and version
 column: backburner
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T01:14:52+0100
+updated: 2026-11-17T01:18:36+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -44,3 +44,4 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 
 - 2026-11-16 23:53 — Item 5 corrected: 'search' is in the verb lists of src/cli/main.ts (lines 120, 173) but NOT in READ_ONLY_VERBS of src/cli/foreignTelemetry.ts (measured by the harness). This increment must read what READ_ONLY_VERBS gates and DECIDE whether search belongs in it, with the reason recorded.
 - 2026-11-17 01:14 — DECIDED (main agent, in the owner's stead): search joins READ_ONLY_VERBS in src/cli/foreignTelemetry.ts (line 41). FACTS: search reads transcript files off disk, needs no server and writes nothing (src/cli/searchCli.ts, read whole); today it is refused while the kill switch is on (gate at foreignTelemetry.ts line 89), and the switch has been on since 2026-10-27, so no agent on this machine can use it. Owner directive of 2026-10-29 quoted in that file: a read must never be blocked by the off-switch brake. To do in this card: add the verb, a test that search passes the gate while DISABLED, then node esbuild.js and one end-to-end run of the bundle (never done so far). Also carried here from TRDD-UIQS9RXZ: a memory limit below 2GB with 4 threads is unmeasured.
+- 2026-11-17 01:18 — CORRECTION: the line above is a PROPOSAL FOR THE OWNER, not a decision. Every verb now in READ_ONLY_VERBS is there by a recorded owner decision, and the kill switch is the owner's. READ, all consumers (grep over src and standalone/cli.ts): foreignTelemetry.ts line 89 (the DISABLED gate) and autoSetup.ts line 55 (AUTOSETUP_EXCLUDED_VERBS, read by maybeAutoSetup at line 192), so adding search would do two things: let it run while disabled, and stop it from running the launch self-heal (it would never write settings, hooks or skills, nor start a server). main.ts lines 104 and 148 and the disk files only mention the set in comments (comments read through grep, the code around main.ts 104 and 148 not read). Nothing is built until the owner says yes.
