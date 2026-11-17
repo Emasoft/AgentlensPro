@@ -4,7 +4,7 @@ title: No bug scanner runs at commit in this repository
 column: todo
 status: tasked
 created: 2026-11-17T11:44:01+0100
-updated: 2026-11-17T12:35:30+0100
+updated: 2026-11-17T13:33:05+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -50,3 +50,4 @@ The hook is the owner's machine-wide file and its scope sentence says the limit 
 ## STATE
 
 - 2026-11-17 12:35+0100, main agent. One more commit made with no scanner at commit: 8590184d (src/cli/searchCli.ts usage text and the KNOWN export, src/test/searchCli.test.ts one test). The list of unscanned commits is now 37e538fc, 7fe63866, b626970a, e343ec69, 8590184d.
+- 2026-11-17 13:33+0100 (clock read), main agent. One more code commit without a scanner at commit: 2de80b5c (rust-core/crates/agentlens-core/src/delta_log.rs). Unscanned list: 37e538fc, 7fe63866, b626970a, e343ec69, 8590184d, 2de80b5c. Manual pass in progress on the two files of the first five as they stand at 8590184d (unchanged since): the FIRST attempt was void, it scanned the commit's patch text because the zsh form $C:src/… applied a variable modifier; caught only because both copies had 193 lines. PROCEDURE RULE from it: write the blob with git cat-file -p "${commit}:${path}" and compare its md5 with the scratch copy before scanning. Rerun on verified copies: searchCli.ts exit 0 in 346 s (206 s user CPU, 93 MB peak, load 17 to 19), 99 output lines, findings not yet read; the test file is still scanning.
