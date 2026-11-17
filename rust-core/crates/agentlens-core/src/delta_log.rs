@@ -959,9 +959,10 @@ impl DeltaLog {
     }
 
     /// TRDD-WCG7I5D8 — the most body TEXT the last `save_from` held in memory at once, in bytes. WHY
-    /// public and always compiled: the memory gate reads it from an integration test, which cannot
-    /// see `cfg(test)` items. A compacting save stops collecting text once compaction is certain, so
-    /// this stays near `max(COMPACT_MIN_BYTES, snapshot size)` however many records changed.
+    /// public and always compiled: it was added for a memory gate in an integration test, which cannot
+    /// see `cfg(test)` items; that test is not in the tree, so today only the unit tests of this file
+    /// read it. A compacting save stops collecting text once compaction is certain, so this stays near
+    /// `max(COMPACT_MIN_BYTES, snapshot size)` however many records changed.
     #[doc(hidden)]
     pub fn peak_body_bytes(&self) -> usize {
         self.peak_body
