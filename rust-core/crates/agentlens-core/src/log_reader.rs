@@ -1363,6 +1363,13 @@ impl DurableState {
         drop(snap);
         match saved {
             Ok(r) if r.bytes > 0 => {
+                // TRDD-YR6WX7VQ (review of eef01b1d): a card save that tombstones says so, with the counts. WHY: after
+                // the file pass the hashes in force are the FILE keys, so the catch-up save removes every key the card
+                // store lacks; the pass line prints only `keys` and `differs`, and without this line a mass removal
+                // would leave no trace in the log (TRDD-PGMMB2QG holds the open question of a ceiling).
+                if r.deleted > 0 {
+                    eprintln!("{} alcore: card save tombstoned {} key(s) the card store no longer holds (appended {}, compacted={})", crate::log_ts(), r.deleted, r.appended, r.compacted);
+                }
                 self.stamp_version();
                 {
                     let mut st = state.lock_timed();
