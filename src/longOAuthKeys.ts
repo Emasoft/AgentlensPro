@@ -448,7 +448,8 @@ async function settle(key: LongKey, match: Match, opts: RefreshOptions): Promise
 }
 
 /** Refresh every key in parallel. The archive and the roster are read once, first; each key then settles on its own.
- *  No lock: two runs that start together can each probe a key once. The TTL bounds that to one message per key. */
+ *  No lock: two runs that start together can each probe a key once (one extra message per key). A run that starts
+ *  after a stamp was written sends none inside the TTL. */
 export async function refreshLongKeys(keys: LongKey[], opts: RefreshOptions): Promise<KeyRow[]> {
   const archives = listObservedAccountUsage()
   const roster = listAccountRoster()
