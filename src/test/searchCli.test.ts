@@ -421,6 +421,8 @@ const bashStatus = call("Bash", "tb1", { command: "git status NEEDLE-b" })
 const editA = call("Edit", "te1", { file_path: "/x/a.ts", old_string: "NEEDLE-e" })
 const agentCall = call("Agent", "ta1", { prompt: "NEEDLE-a" })
 const bashCommit = call("Bash", "tb2", { command: "git commit -m x" })
+const editQuiet = call("Edit", "te2", { file_path: "/x/b.ts", old_string: "QUIETWORD-diff" })
+const agentQuiet = call("Agent", "ta2", { prompt: "QUIETWORD-agent" })
 const result = (id: string, content: unknown, extra: Record<string, unknown> = {}, isError = false): Record<string, unknown> =>
   ({ type: "user", timestamp: stamp(10), ...extra, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }] } })
 const sys = (subtype: string, extra: Record<string, unknown>): Record<string, unknown> => ({ type: "system", subtype, timestamp: stamp(20), ...extra })
@@ -473,6 +475,13 @@ const MAIN: Fx[] = [
   /* 35: every payload field of stop_hook_summary populated, hookInfos empty */ { obj: sys("stop_hook_summary", { hookInfos: [], hookErrors: ["PAYLOAD-he"], hookAdditionalContext: ["PAYLOAD-hc"], stopReason: "PAYLOAD-sr", uuid: "ENVWORD-u4" }), els: [{ kinds: ["hook"], text: "PAYLOAD-he\nPAYLOAD-hc\nPAYLOAD-sr" }] },
   /* 36: api_error with a source and no error object */ { obj: sys("api_error", { source: "PAYLOAD-src", uuid: "ENVWORD-u5" }), els: [{ kinds: ["error"], text: "PAYLOAD-src" }] },
   /* 37: api_error with an error object and no source */ { obj: sys("api_error", { error: { message: "PAYLOAD-only-error" }, uuid: "ENVWORD-u6" }), els: [{ kinds: ["error"], text: "PAYLOAD-only-error" }] },
+  // 38 to 43: the element of each kind below that holds no NEEDLE, beside the matching element of the same kind above (acceptance box 3). QUIETWORD-* is searched by no other test.
+  /* 38 */ { obj: { type: "assistant", timestamp: stamp(35), message: { role: "assistant", content: [{ type: "thinking", thinking: "think QUIETWORD-think" }] } }, els: [{ kinds: ["thinking"], text: "think QUIETWORD-think" }] },
+  /* 39 */ { obj: { type: "assistant", timestamp: stamp(36), message: { role: "assistant", content: [editQuiet.block] } }, els: [{ kinds: ["diff", "tool-call"], tool: "Edit", text: editQuiet.text }] },
+  /* 40 */ { obj: { type: "assistant", timestamp: stamp(37), message: { role: "assistant", content: [agentQuiet.block] } }, els: [{ kinds: ["subagent", "tool-call"], tool: "Agent", text: agentQuiet.text }] },
+  /* 41 */ { obj: sys("local_command", { content: "<command-name>/quiet</command-name> QUIETWORD-cmd" }), els: [{ kinds: ["command"], text: "QUIETWORD-cmd" }] },
+  /* 42 */ { obj: sys("compact_boundary", { content: "QUIETWORD-compact" }), els: [{ kinds: ["compact"], text: "QUIETWORD-compact" }] },
+  /* 43 */ { obj: sys("scheduled_task_fire", { content: "cron QUIETWORD-cron" }), els: [{ kinds: ["cron"], text: "cron QUIETWORD-cron" }] },
 ]
 const SUBF: Fx[] = [
   { obj: { type: "user", timestamp: stamp(30), message: { role: "user", content: "sub start NEEDLE-sp" } }, els: [{ kinds: ["prompt"], text: "sub start NEEDLE-sp" }] },
@@ -523,6 +532,12 @@ suite("searchCli — element mode (TRDD-OIMXULDJ)", () => {
       assert.deepStrictEqual(gotElements(r.hits), want, kind)
       assert.strictEqual(r.total, want.length, `${kind}: total counts elements`)
       assert.strictEqual((await runE("zzz-held-by-no-element", { kinds: [kind] })).total, 0, `${kind}: no match`)
+      // Box 3: the non-matching element of each of these kinds (entries 38 to 43, QUIETWORD-*) really is produced, as an element of that kind, by the same engine run.
+      if (["thinking", "diff", "subagent", "command", "compact", "cron"].includes(kind)) {
+        const quiet = await runE("QUIETWORD", { kinds: [kind] })
+        assert.strictEqual(quiet.total, 1, `${kind}: the QUIETWORD element exists`)
+        assert.deepStrictEqual(gotElements(quiet.hits), expectedElements("QUIETWORD", [kind], () => true, kind === "subagent"), `${kind}: QUIETWORD element`)
+      }
     }
     assert.strictEqual((await runE("NEEDLE-att", { kinds: DEFAULT_SELECTION })).total, 0, "attachment is opt-in")
     assert.strictEqual((await runE("NEEDLE-meta", { kinds: ["prompt"] })).total, 0, "isMeta user entries are not prompts")
@@ -964,7 +979,7 @@ suite("searchCli — --show and --context (TRDD-O3U0K4HY)", () => {
       assert.strictEqual(r.code, 2, argv.join(" "))
       assert.strictEqual(r.out, "", "nothing on stdout")
     }
-    assert.ok((await runCli(["--show", "eeeeeeee:999", "--project", PROJECT_E])).err.includes("has 37 line(s)"), "the error says how many lines there are")
+    assert.ok((await runCli(["--show", "eeeeeeee:999", "--project", PROJECT_E])).err.includes("has 43 line(s)"), "the error says how many lines there are")
     for (const bad of [
       ["--show", "eeeeeeee"], ["--show", "eeeeeeee:0"], ["--show", "eeeeeeee:x"], ["--show", "eeeeeeee:2", "NEEDLE"], ["--show", "eeeeeeee:2", "--count"],
       ["--show", "eeeeeeee:2", "--limit", "3"], ["--show", "eeeeeeee:2", "--max-chars", "100001"], ["--show"], ["NEEDLE", "--max-chars", "5"],
