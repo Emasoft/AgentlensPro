@@ -324,7 +324,16 @@ fn copy_tree(src: &Path, dst: &Path) {
     for e in std::fs::read_dir(src).unwrap().flatten() {
         let p = e.path();
         let to = dst.join(e.file_name());
-        if p.is_dir() { copy_tree(&p, &to) } else { std::fs::copy(&p, &to).unwrap(); }
+        if p.is_dir() {
+            copy_tree(&p, &to)
+        } else {
+            std::fs::copy(&p, &to).unwrap();
+            // TRDD-32UTVFP0: std::fs::copy keeps the fixture's mtime, and the 1h-tier backfill skips a
+            // transcript whose mtime is older than REPARSE_MAX_AGE (30 days). Without this line the backfill
+            // tests fail when the fixture mtime is older than REPARSE_MAX_AGE.
+            // A scratch copy stands for a session that is live now, so it gets the current time.
+            std::fs::File::options().write(true).open(&to).unwrap().set_modified(std::time::SystemTime::now()).unwrap();
+        }
     }
 }
 
