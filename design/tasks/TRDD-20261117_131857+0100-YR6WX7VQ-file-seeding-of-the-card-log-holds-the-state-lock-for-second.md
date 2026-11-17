@@ -29,7 +29,7 @@ Take the file pass off the state lock and off the path that delays the listeners
 ## Acceptance
 - [ ] The cause of the 55.6 s and of the unfinished restore is established by a run that separates CPU load, disk load and the post-kill state.
 - [x] A patched reused start holds the state lock under 1 s for the file seeding on an 82 MB card log, on a host under a real release compile, after a kill.
-- [x] Gates 4b, 4c and 4d of TRDD-WCG7I5D8 are rerun on the new code and pass; then change 2 may be applied.
+- [x] The gates run on the new code in place of gates 4b, 4c and 4d of TRDD-WCG7I5D8 pass: reports_dev/YR6WX7VQ/gate (quiet host: unchanged restart, kill then catch-up, stop before the first timed tick) and reports_dev/YR6WX7VQ/gate-load (kill, then control and patched under a release compile). Change 2 of TRDD-WCG7I5D8 is NOT applied; commit eef01b1d replaces it (reworded 2026-11-17 after the two gates; the first wording named gates written for change 2).
 - [x] Control arm added to the rerun of gate 4d: the UNPATCHED binary started after a kill under the same load as the patched one, so the patch's share of a slow start can be read (added 2026-11-17 13:24+0100 after reading D4.log and K4.log whole).
 
 ## Approval log
