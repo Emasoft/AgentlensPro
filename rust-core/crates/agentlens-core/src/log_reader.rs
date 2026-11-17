@@ -935,9 +935,21 @@ impl DurableState {
     fn restore_from_snapshot(&mut self, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
         let cards = self.cards.load()?;
         let offsets = self.offsets.load()?;
-        if !self.version_is_current() {
+        // TRDD-JDQR0HDT: an interrupted `/api/clear` takes the SAME branch as a stale ingest version. WHY: the
+        // clear emptied the card store and meant to drop every card, above all those of transcripts that no
+        // longer exist (the only cards a clear removes for good); it only tells the sweeper, so the card
+        // snapshot is still on disk. A death before the first card save after the rescan makes the next start
+        // refuse the store (`clear_in_progress`), and restoring the snapshot would bring all of those cards
+        // back. Tombstone both logs and restore nothing instead. A schema-version refusal does NOT come
+        // here: a layout change does not alter what a card means, so its snapshot cards are kept.
+        let clear_interrupted = state.cards.clear_was_interrupted();
+        if clear_interrupted || !self.version_is_current() {
             if !cards.is_empty() || !offsets.is_empty() {
-                eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale read positions and card entries tombstoned now", crate::log_ts());
+                if clear_interrupted {
+                    eprintln!("{} alcore: an /api/clear was interrupted — discarding the card snapshot and cold-rescanning; stale read positions and card entries tombstoned now", crate::log_ts());
+                } else {
+                    eprintln!("{} alcore: log-ingest semantics changed (v{LOG_INGEST_VERSION}) — cold-rescanning; stale read positions and card entries tombstoned now", crate::log_ts());
+                }
             }
             // TRDD-A2KNXCNH: tombstone the stale read positions and stamp the version NOW, before
             // the cold rescan. WHY: the rescan appends per-chunk positions with `append_changed`,
@@ -959,6 +971,12 @@ impl DurableState {
             self.offsets.save(&IndexMap::new())?;
             self.cards.save(&IndexMap::new())?;
             self.stamp_version();
+            // TRDD-JDQR0HDT: only now, with both tombstones on disk, may the rebuilt store stop saying "a clear is in
+            // progress". `CardStore::open` kept the flag at 1 so a death before this line (or a load error above)
+            // makes the next start take this branch again instead of restoring the snapshot the clear meant to drop.
+            if clear_interrupted {
+                state.cards.finish_clear();
+            }
             return Ok((0, 0, 0));
         }
         let restored = cards.len();

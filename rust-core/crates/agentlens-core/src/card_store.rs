@@ -195,13 +195,18 @@ pub struct CardPage {
 /// "Out of Memory Error" inside a scan, which is how DuckDB reports that condition.
 enum Refusal {
     NotEligible(String),
+    /// The previous run was killed between `/api/clear` and the end of its rescan (`clear_in_progress` is 1).
+    /// Its own variant, not a `NotEligible` text: `DurableState::restore` must tell a clear from a
+    /// schema or version refusal, because the snapshot cards mean the opposite in the two cases
+    /// (TRDD-JDQR0HDT).
+    ClearInProgress(String),
     OutOfMemory(String),
 }
 
 impl Refusal {
     fn text(&self) -> &str {
         match self {
-            Refusal::NotEligible(text) | Refusal::OutOfMemory(text) => text,
+            Refusal::NotEligible(text) | Refusal::OutOfMemory(text) | Refusal::ClearInProgress(text) => text,
         }
     }
 }
@@ -232,6 +237,9 @@ pub(crate) enum OpenOutcome {
     RewriteFailed(String),
     /// The reuse was refused; the file was rebuilt from the snapshot.
     Rebuilt(String),
+    /// The reuse was refused because an `/api/clear` was in progress; the file was rebuilt EMPTY from the
+    /// snapshot path. `CardStore::clear_was_interrupted` reads it (TRDD-JDQR0HDT).
+    ClearInterrupted(String),
 }
 
 /// The memory limits and the vacuum setting of `open_with_limits` (TRDD-0BDOV3WC, TRDD-USSG465Q). Production passes MEMORY_LIMIT
@@ -312,6 +320,10 @@ impl CardStore {
     /// exactly as before. NEVER a cold scan with the offsets kept: a store emptied behind valid
     /// offsets would never refill (the tailer cold-scans only when it holds no offsets).
     ///
+    /// TRDD-JDQR0HDT: the one refusal that does NOT refill from the snapshot is `clear_in_progress` = 1 (a killed
+    /// `/api/clear`): `DurableState::restore` discards the snapshot cards and tombstones both logs, because the
+    /// clear meant to drop them. The rebuilt file keeps the flag at 1 until those tombstones are durable.
+    ///
     /// TRDD-0BDOV3WC: a reuse that runs out of memory at [`MEMORY_LIMIT`] is not a refusal. The file
     /// is complete but too big for one scan, so it is compacted by a rewrite and reused instead; see
     /// `open_with_limits`.
@@ -343,6 +355,8 @@ impl CardStore {
     ///    rewrite is the corpus only after its rename, so they are never reused.
     /// b. The reuse attempt at `read`: a file reused as it stands gives `Reused`.
     /// c. Refused as NotEligible: the rebuild-from-snapshot path, `Rebuilt(reason)`.
+    ///    A clear in progress (`ClearInProgress`) takes the same path as `ClearInterrupted(reason)`, and
+    ///    `DurableState::restore` then also discards the snapshot cards instead of restoring them (TRDD-JDQR0HDT).
     /// d. Refused as OutOfMemory: the compacting rewrite (`rewrite_in_place`). A failure BEFORE the
     ///    rename removes the rebuild files and takes the rebuild-from-snapshot path,
     ///    `RewriteFailed(reason)`. A failure AFTER the rename never deletes `cards.duckdb` (see
@@ -372,6 +386,7 @@ impl CardStore {
                 return Self::assemble(conn, resident, next_seq, OpenOutcome::Reused);
             }
             Err(Refusal::NotEligible(reason)) => (reason.clone(), OpenOutcome::Rebuilt(reason)),
+            Err(Refusal::ClearInProgress(reason)) => (reason.clone(), OpenOutcome::ClearInterrupted(reason)),
             Err(Refusal::OutOfMemory(reason)) => {
                 eprintln!(
                     "{} alcore: card store — reusing {CARD_DB_FILE} ran out of memory at {} ({reason}); rewriting it compactly at {}",
@@ -403,12 +418,18 @@ impl CardStore {
         let conn = open_conn(&path, limits.vacuum_rebuild_indexes)
             .unwrap_or_else(|e| panic!("open the card store at {}: {e}", path.display()));
         Self::configure(&conn, limits.reopen).expect("configure the card store connection");
+        // TRDD-JDQR0HDT: a rebuild that follows an interrupted clear keeps `clear_in_progress` at 1. WHY: the
+        // card snapshot is still on disk and `DurableState::restore` has not yet tombstoned it. A death (or a load
+        // error) in that window would otherwise leave a store flagged 0 next to the full snapshot, and the next
+        // start would restore every snapshot card, which is the bug again. `finish_clear` runs only after the
+        // tombstones are durable.
+        let clear_flag = u8::from(matches!(outcome, OpenOutcome::ClearInterrupted(_)));
         // `restore_complete` starts at 0: only the end of a full restore (`mark_restore_complete`)
         // vouches for the corpus, so a boot killed half-way through the restore is rebuilt.
         conn.execute_batch(&format!(
             "DROP TABLE IF EXISTS cards; DROP TABLE IF EXISTS meta; {SCHEMA}; {META_SCHEMA};
              INSERT INTO meta VALUES ('ingest_version', '{}'), ('card_schema_version', '{CARD_SCHEMA_VERSION}'),
-                                     ('restore_complete', '0'), ('clear_in_progress', '0');",
+                                     ('restore_complete', '0'), ('clear_in_progress', '{clear_flag}');",
             crate::log_reader::LOG_INGEST_VERSION
         ))
         .expect("create the card store schema");
@@ -529,6 +550,16 @@ impl CardStore {
         let want_ingest = crate::log_reader::LOG_INGEST_VERSION.to_string();
         let want_schema = CARD_SCHEMA_VERSION.to_string();
         let get = |k: &str| meta.get(k).map(String::as_str);
+        // TRDD-JDQR0HDT: checked FIRST. A store rebuilt after an interrupted clear carries `clear_in_progress` = 1 AND
+        // `restore_complete` = 0 until the tombstones are written; if the restore-complete check ran first, a death in
+        // that window would be refused as a plain "restore never completed" and the snapshot would be restored.
+        // Only an explicit "1" is a clear; a missing or garbled value stays an ordinary refusal below. Because this runs
+        // before the version checks, a clear in progress next to a stale ingest or schema version is still a clear and
+        // discards the snapshot: a clear the user asked for wins over a layout change (intended; tested by
+        // `a_clear_in_progress_wins_over_a_schema_version_mismatch`).
+        if get("clear_in_progress") == Some("1") {
+            return Err(Refusal::ClearInProgress("an /api/clear was in progress".to_owned()));
+        }
         if get("ingest_version") != Some(want_ingest.as_str()) {
             return Err(Refusal::NotEligible(format!("ingest version {:?} != {want_ingest}", get("ingest_version"))));
         }
@@ -542,7 +573,7 @@ impl CardStore {
             return Err(Refusal::NotEligible("the previous restore never completed".to_owned()));
         }
         if get("clear_in_progress") != Some("0") {
-            return Err(Refusal::NotEligible("an /api/clear was in progress".to_owned()));
+            return Err(Refusal::NotEligible(format!("clear_in_progress {:?} is not 0", get("clear_in_progress"))));
         }
         // The table itself must be readable too: a header that opens but a card table that does not
         // is exactly the damage a reuse must not paper over.
@@ -645,7 +676,7 @@ impl CardStore {
                     let warning = format!("the fresh file does not load at the reopen limit {}: {reason}", limits.reopen);
                     (conn, resident, next_seq, Some(warning))
                 }
-                Err(Refusal::NotEligible(reason)) => panic!(
+                Err(Refusal::NotEligible(reason) | Refusal::ClearInProgress(reason)) => panic!(
                     "the rewritten {} does not load at the reopen limit {}: {reason}; the file is kept",
                     path.display(),
                     limits.reopen
@@ -671,6 +702,13 @@ impl CardStore {
     /// True when `open` kept the previous run's corpus: reused as it stood, or compacted and reused.
     pub fn reused(&self) -> bool {
         matches!(self.outcome, OpenOutcome::Reused | OpenOutcome::Rewritten { .. })
+    }
+
+    /// True when `open` refused the previous run's file because an `/api/clear` was in progress. The rebuilt file
+    /// is empty but keeps `clear_in_progress` at 1 until `DurableState::restore` has tombstoned the snapshot and
+    /// calls `finish_clear`; this accessor is how `restore` learns the reason (TRDD-JDQR0HDT).
+    pub fn clear_was_interrupted(&self) -> bool {
+        matches!(self.outcome, OpenOutcome::ClearInterrupted(_))
     }
 
     /// How `open` got this store (see [`OpenOutcome`]). Read by the tests only.
@@ -1791,7 +1829,7 @@ mod tests {
             Err(Refusal::OutOfMemory(text)) => {
                 assert!(text.contains("Out of Memory Error"), "precondition: unexpected text: {text}")
             }
-            Err(Refusal::NotEligible(text)) => panic!("precondition: the one-shot read must run out of memory: {text}"),
+            Err(Refusal::NotEligible(text) | Refusal::ClearInProgress(text)) => panic!("precondition: the one-shot read must run out of memory: {text}"),
             Ok(_) => panic!("precondition: the one-shot read at 4MiB must be refused"),
         }
         let store = CardStore::open_with_limits(
