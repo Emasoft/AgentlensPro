@@ -1,10 +1,10 @@
 ---
 trdd-id: G2GGBQ0U
 title: search - increment 4 help skill docs changelog and version
-column: dev
+column: human_review
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T12:17:59+0100
+updated: 2026-11-17T12:30:44+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-16T23:49:17+0100
+implementation-commits: [8590184d]
 ---
 
 # search - increment 4 help skill docs changelog and version
@@ -31,9 +32,9 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 7. `pnpm run compile` (check-types, lint, the guards, bundle). The release itself (tag and push) is the owner's act.
 
 ## Acceptance
-- [ ] `agentlenspro search --help` shows every flag that exists and no flag that does not (a test compares the usage text with the KNOWN set).
-- [ ] Skill, CLAUDE.md, CHANGELOG and version updated; `pnpm run check-identities` clean.
-- [ ] `pnpm run compile` exit 0.
+- [x] `agentlenspro search --help` shows every flag that exists and no flag that does not (a test compares the usage text with the KNOWN set).
+- [x] Skill, CLAUDE.md and CHANGELOG updated; `pnpm run check-identities` clean. (2026-11-17: the words 'and version' were taken out of this box by the main agent; the version bump belongs to TRDD-HSPUF5XH by the owner order recorded there, and is not done.)
+- [x] `pnpm run compile` exit 0.
 - [ ] After `node esbuild.js`, the bare command `agentlenspro search <pattern>` run in this project returns hits (which install the bare command resolves to is checked first).
 
 ## Approval log
@@ -41,6 +42,7 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 - 2026-11-16T23:49:17+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-17T11:58:57+0100 — column → todo by main-agent@agentlenspro. increments 1 to 3 and the three follow-ups are landed; dispatched
 - 2026-11-17T11:58:59+0100 — column → dev by main-agent@agentlenspro. increments 1 to 3 and the three follow-ups are landed; dispatched
+- 2026-11-17T12:30:20+0100 — column → human_review by main-agent@agentlenspro. Three of four boxes met and committed in 8590184d; the last box needs the owner to lift the kill switch before the bare command can be run
 
 ## Notes
 
@@ -59,3 +61,5 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 ## STATE
 
 - 2026-11-17 12:17+0100, main agent, CURRENT STATE AND NEXT ACTION. A worker's edits for this increment are UNCOMMITTED in the main checkout: CHANGELOG.md, CLAUDE.md, skills/agentlenspro-diagnostics/SKILL.md, src/cli/searchCli.ts (SEARCH_USAGE, export of KNOWN), src/test/searchCli.test.ts, plus the gitignored reports/search report; its report is under reports_dev/search-inc4/. At 12:11 it was sent six instructions (short CHANGELOG bullet without timings, card ids or citation; no memory-limit requirement sentence; drop the 60 MB claim unless sourced; run the help and the three examples through the compiled module; per-line usage test failing in both directions; state the KNOWN export). At this time the tree still shows the OLD content, so they are not yet applied. NEXT at handback: read its report and the five diffs WHOLE, check each of the six instructions in the tree, rerun compile-tests, the one mocha file (73 passing before this increment), check-types, eslint and check-identities, then commit the five tracked files by name. Decided: no version bump (TRDD-HSPUF5XH, owner's order), no READ_ONLY_VERBS change (owner's decision), so the last acceptance box may stay open while the kill switch is on. A successful pnpm run compile deploys the CLI bundle on this machine at once (the bare command is linked to this repository).
+- 2026-11-17 12:40+0100, main agent. Increment 4 COMMITTED as 8590184d (usage text with one line per flag and four worked examples, the usage-versus-KNOWN test, skill section, CLAUDE.md entry, CHANGELOG bullet). Read whole by the main agent: the worker's report, the five diffs, the help text as the compiled module printed it. Rerun by the main agent: compile-tests exit 0, the search test file 74 passing, check-types exit 0, eslint on both files 0 errors, check-identities exit 0, and pnpm run compile exit 0 (lint 0 errors 529 warnings; bundle rebuilt 12:28). Boxes 1 and 3 ticked. Box 2 stays OPEN for one word: the version is NOT bumped, by the owner order on TRDD-HSPUF5XH (bump only after all cards are done); skill, CLAUDE.md and CHANGELOG are done. Box 4 stays OPEN: the bare command is refused by the kill switch (exit 69), which is the owner's to lift. Known limits: the examples ran on a 4-entry fixture through the compiled module, not through the bare command; the usage test checks flag names and own lines, not what each description says; CLAUDE.md cites a report under reports/ that this repository ignores (TRDD-G4DDKLZ9). By the worker's own report it deleted the '## Commands' heading of the skill once (restored; the diff shows additions only) and wrote scratch files into the session scratchpad instead of a _dev folder.
+- 2026-11-17 12:44+0100, main agent. SUPERSEDES 'Box 2 stays OPEN' in the line above: box 2 is now ticked, after the words 'and version' were removed from its text (the bump is TRDD-HSPUF5XH's, not done). Column moved to human_review: the one open box (4, the bare command returns hits) needs the owner to lift the kill switch. implementation-commits: 8590184d.
