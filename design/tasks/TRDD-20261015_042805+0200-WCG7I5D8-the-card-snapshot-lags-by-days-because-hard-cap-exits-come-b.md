@@ -4,7 +4,7 @@ title: The card snapshot lags by days because hard-cap exits come before the fir
 column: todo
 status: tasked
 created: 2026-10-15T04:28:05+0200
-updated: 2026-11-17T09:36:50+0100
+updated: 2026-11-17T09:42:59+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -53,3 +53,4 @@ RISK that must be measured before this ships: save_cards persists the WHOLE stor
 
 2026-11-17T02:26+0100 main agent: the clear path is read (record on TRDD-JDQR0HDT). It adds one requirement to the file-based seeding proposed here: after a clear whose rescan finished, the snapshot can still hold keys the store no longer has (finish_clear runs before the card save, log_reader.rs:1820-1823); seeding the hashes from the files makes the first save tombstone them, seeding from the store never does. A test for that case belongs to this card.
 2026-11-17T09:40+0100 main agent: open point (1) of the 00:48 proposal (hash equality) is dispatched to a worker as a test only, no production change: answer which bytes are hashed at seed time and at save time, whether the hash can be recomputed from a snapshot or delta line alone, and prove it with a new test file tests/seed_hash_equality.rs that also holds a negative control and is shown to fail when its own recompute is broken. It works in the clean worktree builds_dev/wt-jdq-commit with target dir builds_dev/wt-jdq-target-commit. DISCLOSED: to reuse that worktree's warm build the main agent moved it from e9782faf to a1664052 (git checkout --detach inside the worktree, which was clean and detached; the git guard stopped the command once and it was re-issued with the guard's single-use password). The worktree is therefore no longer the e9782faf evidence tree named on TRDD-JDQR0HDT; the evidence of that card is in its report files. The main tree was not touched. The seeding change itself is still unbuilt and still needs a marked proposal after the worker's answer. SEEN ON THE WAY, not acted on: `git worktree list` shows 825 registered worktrees for this repository, most under /private/tmp; nothing was pruned or removed.
+2026-11-17T09:43+0100 main agent, CORRECTION of the note above (which was written at 09:36, not 09:40): "most under /private/tmp" was wrong, it came from the first screen of the listing. COUNTED from `git worktree list --porcelain`: 825 registered worktrees; 797 under .claude/worktrees, 16 under /private/tmp, 3 under builds_dev, 9 elsewhere (the main tree among them); 16 are marked prunable by git and exactly 16 name a folder that no longer exists. Nothing pruned or removed; whether the 797 hold unmerged work was not looked at.
