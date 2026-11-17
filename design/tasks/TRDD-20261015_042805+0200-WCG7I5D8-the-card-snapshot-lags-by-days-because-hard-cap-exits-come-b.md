@@ -4,7 +4,7 @@ title: The card snapshot lags by days because hard-cap exits come before the fir
 column: todo
 status: tasked
 created: 2026-10-15T04:28:05+0200
-updated: 2026-11-17T01:18:37+0100
+updated: 2026-11-17T02:27:00+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -48,3 +48,7 @@ RISK that must be measured before this ships: save_cards persists the WHOLE stor
 
 - 2026-11-16 23:17 — Evidence class, corrected after review. MEASURED: no card save is possible in a run's first 300 s (log_reader.rs DurableState::new + tick); one run died at uptime 245674 ms, under 300 s (reports_dev/0bdov3wc-facts.md line 133); the snapshot count repeats across refusals days apart (same file, line 173). INFERRED, not measured: that the days-long lag is caused by runs dying before the first card save (the facts file itself tags it INFERRED, line 176). LIMIT of the plan in work: the one-off early save covers the FIRST offsets save only; a run killed at minute 4 after four offsets saves still leaves cards about three minutes older than its offsets. The acceptance box is met only in that narrow reading. The change is NOT to be committed before the boot peak-RSS measurement on an isolated instance.
 - 2026-11-17 00:31 CORRECTION (main agent): the earlier note 'MEASURED no card save possible in the first 300 s' is too wide. It holds for the TIMER path only (tick -> save on the cards cadence). The backfill path saves chunk cards through save_cards_for, so cards CAN reach disk before 300 s on that path. Also: the 2,114 RSS hard-cap exits counted in server.log (about 2026-09-27 to 2026-10-27, dates approximate) span several alcore builds, so the lifetime buckets (492 under 60 s, 1,251 at 60-300 s, 209 at 300-660 s, 162 later) describe a mix of builds, not the current one.
+
+## Notes and lessons learned
+
+2026-11-17T02:26+0100 main agent: the clear path is read (record on TRDD-JDQR0HDT). It adds one requirement to the file-based seeding proposed here: after a clear whose rescan finished, the snapshot can still hold keys the store no longer has (finish_clear runs before the card save, log_reader.rs:1820-1823); seeding the hashes from the files makes the first save tombstone them, seeding from the store never does. A test for that case belongs to this card.
