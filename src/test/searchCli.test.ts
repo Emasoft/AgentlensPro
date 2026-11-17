@@ -7,7 +7,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
-  searchTranscript, searchTranscripts, discoverTranscripts, parseTimeArg, runSearchCli, TranscriptFile,
+  searchTranscript, searchTranscripts, discoverTranscripts, parseTimeArg, runSearchCli, openDuck, TranscriptFile,
   SearchScopeError, SearchHit, SearchOptions, ScopeOptions, ELEMENT_KINDS,
 } from '../cli/searchCli'
 import { UsageError } from '../cli/cliErrors'
@@ -789,6 +789,14 @@ const M1_TEXT = [
 ]
 writeJsonl(FILE_M1, M1_TEXT.map((t, i) => promptAt(i + 1, t)))
 writeJsonl(FILE_M2, ["Hello again", "the port of call"].map((t, i) => promptAt(i + 1, t)))
+// A transcript whose TEXT holds a literal backslash before n / r / t (a Windows path, a regex): the raw JSON line spells that as TWO backslashes and the letter (TRDD-RSV3UEJ9).
+const FILE_BS = path.join(tmpDir, "33333333-aaaa-bbbb-cccc-dddddddddddd.jsonl")
+writeJsonl(FILE_BS, [
+  /* 1 */ "C:\\new folder", /* 2 */ "regex \\nabc here", /* 3 */ "one\ntwo", /* 4 */ "x\\\nsecondw", /* 5 */ "plain new here", /* 6 */ "tab \\trail and \\rest",
+].map((t, i) => promptAt(i + 1, t)))
+// The first literal segment of a mask ("p") occurs 600 characters before the place where the whole mask ("p?rt") matches (TRDD-6DRB39PR).
+const FILE_EX = path.join(tmpDir, "44444444-aaaa-bbbb-cccc-dddddddddddd.jsonl")
+writeJsonl(FILE_EX, [`p${"z".repeat(600)} the port is open`, `s${"z".repeat(600)} he said "hi" ok`].map((t, i) => promptAt(i + 1, t)))
 const fileOf = (file: string, session: string): TranscriptFile => ({ path: file, session, agent: null, size: fs.statSync(file).size, mtimeMs: 0 })
 const numeric = (a: number, b: number): number => a - b
 
@@ -826,6 +834,25 @@ suite("searchCli — match modes (TRDD-O3U0K4HY)", () => {
     assert.ok(r.hits[0].excerpt.includes("report status"), r.hits[0].excerpt)
   })
 
+  test("--mask: the excerpt shows the match, not an earlier occurrence of the mask first literal segment", async function () {
+    this.timeout(120_000)
+    // p?rt: its first literal segment, "p", is the first character of the text, 600 characters before the match ("port"); the excerpt window is 100 before and 300 wide.
+    // *p?rt* is the same match with the wildcards the wrapping % implies anyway: a lazy leading wildcard must not pull the excerpt back to the start of the text.
+    for (const mask of ["p?rt", "*p?rt*"]) for (const extra of [{}, { kinds: ["prompt"] }] as Partial<SearchOptions>[]) {
+      const r = await searchTranscripts([fileOf(FILE_EX, "44444444-aaaa-bbbb-cccc-dddddddddddd")], mask, { mask: true, ...extra })
+      assert.deepStrictEqual(r.hits.map(h => h.line), [1], `${mask} ${JSON.stringify(extra)}`)
+      assert.ok(r.hits[0].excerpt.includes("the port is open"), `${mask} ${JSON.stringify(extra)}: ${r.hits[0].excerpt}`)
+    }
+    // --case (RE2 without i) and a quote (two characters, \" , in the raw line; ? counts raw characters there, so s?id still spans "said"): the excerpt holds the match too.
+    for (const [mask, caseSensitive, want, text] of [["p?rt", true, [1], "the port is open"], ["P?rt", true, [], ""], ["s?id \"hi\"", false, [2], "he said"]] as Array<[string, boolean, number[], string]>) {
+      for (const extra of [{}, { kinds: ["prompt"] }] as Partial<SearchOptions>[]) {
+        const r = await searchTranscripts([fileOf(FILE_EX, "44444444-aaaa-bbbb-cccc-dddddddddddd")], mask, { mask: true, caseSensitive, ...extra })
+        assert.deepStrictEqual(r.hits.map(h => h.line), want, `${mask} case=${caseSensitive} ${JSON.stringify(extra)}`)
+        if (want.length > 0) assert.ok(r.hits[0].excerpt.includes(text), `${mask} ${JSON.stringify(extra)}: ${r.hits[0].excerpt}`)
+      }
+    }
+  })
+
   test("--word does not match inside a longer word, and matches at the start, at the end and next to a newline", async function () {
     this.timeout(120_000)
     assert.deepStrictEqual(await linesM("port"), [1, 2, 3], "a plain search finds 'port' inside 'report' and 'Transport'")
@@ -839,6 +866,23 @@ suite("searchCli — match modes (TRDD-O3U0K4HY)", () => {
     assert.deepStrictEqual(await linesM("50%", { word: true }), [4], "a pattern ending in punctuation")
     const r = await searchTranscripts([fileOf(FILE_M1, SID_M1)], "port", { word: true })
     assert.ok(r.hits[0].excerpt.includes("the port is open"), r.hits[0].excerpt)
+  })
+
+  test("--word reads a literal backslash before n, r or t as part of the word, not as an escaped newline, tab or carriage return", async function () {
+    this.timeout(120_000)
+    const lines = async (pattern: string, extra: Partial<SearchOptions>): Promise<number[]> =>
+      (await searchTranscripts([fileOf(FILE_BS, "33333333-aaaa-bbbb-cccc-dddddddddddd")], pattern, { limit: 500, order: "old", word: true, ...extra })).hits.map(h => h.line as number)
+    // The line mode (raw JSON) and the prompt-element mode (decoded text) must agree: the first is the one that read the escape.
+    for (const extra of [{}, { kinds: ["prompt"] }] as Partial<SearchOptions>[]) {
+      const mode = JSON.stringify(extra)
+      assert.deepStrictEqual(await lines("ew", extra), [], `ew is inside new in C:\\new: not a word (${mode})`)
+      assert.deepStrictEqual(await lines("abc", extra), [], `abc follows a literal backslash and an n: not a word (${mode})`)
+      assert.deepStrictEqual(await lines("rail", extra), [], `rail follows a literal backslash and a t (${mode})`)
+      assert.deepStrictEqual(await lines("est", extra), [], `est follows a literal backslash and an r (${mode})`)
+      assert.deepStrictEqual(await lines("new", extra), [1, 5], `new is still a word after a literal backslash (${mode})`)
+      assert.deepStrictEqual(await lines("two", extra), [3], `a real newline is still an edge (${mode})`)
+      assert.deepStrictEqual(await lines("secondw", extra), [4], `a literal backslash then a real newline: the newline is still an edge (${mode})`)
+    }
   })
 
   test("--case makes literal, mask and word matching case-sensitive, and is refused with --fuzzy", async function () {
@@ -1064,18 +1108,17 @@ suite("searchCli — --show and --context (TRDD-O3U0K4HY)", () => {
     assert.strictEqual(r.total, 1)
   })
 
-  test("a search run from an empty working directory leaves that directory empty (no .tmp spill folder)", async function () {
+  test("the search connection has DuckDB spilling switched off: temp_directory reads back empty, so no .tmp folder can appear in the working directory", async function () {
     this.timeout(60_000)
-    const empty = fs.mkdtempSync(path.join(tmpDir, "empty-cwd-"))
-    const before = process.cwd()
-    process.chdir(empty)
+    const { inst, con } = await openDuck()
     try {
-      for (const argv of [["NEEDLE", "--project", PROJECT], ["NEEDLE", "--project", PROJECT, "--kind", "prompt,response"], ["NEEDLE", "--project", PROJECT, "--fuzzy", "--context", "1"]]) {
-        assert.strictEqual((await runCli(argv)).code, 0, argv.join(" "))
-      }
+      // Read back, not run: DuckDB creates its .tmp folder only when a query spills, and a fixture of a few kilobytes never does, so a run from an empty
+      // directory passed with the setting removed (TRDD-WC4VBIMX, mutation run). Without the SET the default reads back as ".tmp".
+      const rows = (await con.runAndReadAll("SELECT current_setting('temp_directory') AS t")).getRowObjects()
+      assert.deepStrictEqual(rows, [{ t: "" }])
     } finally {
-      process.chdir(before)
+      con.closeSync()
+      inst.closeSync()
     }
-    assert.deepStrictEqual(fs.readdirSync(empty), [], "DuckDB must not create .tmp in the cwd: temp_directory is set empty")
   })
 })

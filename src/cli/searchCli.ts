@@ -241,25 +241,30 @@ export function buildMatcher(pattern: string, opts: MatchOptions, rawLine: boole
   if (opts.mask) {
     // * is any run of characters, ? one character, anything else is itself; translated to LIKE with %, _ and the escape character escaped.
     // Matched ANYWHERE in the text (wrapped in %), like a literal. In the raw line a quote is two characters (\"), so ? counts raw characters there.
+    // The same mask is also spelled as a regular expression, used only to find WHERE the first match starts (LIKE gives no position).
     let like = ""
-    let run = ""
-    const segments: string[] = []
+    const reParts: string[] = []
     for (const c of Array.from(pattern)) {
       if (c === "*" || c === "?") {
-        if (run !== "") segments.push(run)
-        run = ""
         like += c === "*" ? "%" : "_"
+        reParts.push(c === "*" ? ".*?" : ".")
       } else {
-        run += c
         like += likeLiteral(spell(c))
+        reParts.push(reLiteral(Array.from(spell(c))))
       }
     }
-    if (run !== "") segments.push(run)
-    // LIKE gives no position: the excerpt is a window around the first literal segment (every match holds it).
-    const anchor = segments.length > 0 ? sq(spell(segments[0])) : null
+    // A leading or trailing * is already implied by the wrapping %, and a lazy leading .*? would start the match at the start of the text: drop them.
+    // Anchoring the excerpt on the first LITERAL segment instead (the earlier version) put it on an earlier occurrence of that segment whenever the whole
+    // mask matched further on (p?rt on "pzzz...the port"), so the excerpt did not hold the match (TRDD-6DRB39PR). RE2 leftmost-first, as for --word:
+    // a regexp_extract of the match, then strpos of that text, which is its first occurrence and so where the match starts (an earlier equal text would be a match too).
+    while (reParts[0] === ".*?") reParts.shift()
+    while (reParts[reParts.length - 1] === ".*?") reParts.pop()
+    const re = `(?s${cs ? "" : "i"})${reParts.join("")}`
     return {
       test: col => `${col} ${cs ? "LIKE" : "ILIKE"} ${sq(`%${like}%`)} ESCAPE ${sq("\\")}`,
-      excerpt: (col, width) => (anchor === null ? `substr(${col}, 1, ${width})` : around(col, width, `strpos(${fold(col)}, ${fold(anchor)})`)),
+      // No regex (the mask is only * wildcards): any text matches from its start. A regex that finds nothing (LIKE and RE2 may differ on case folding) falls back to the start too.
+      excerpt: (col, width) =>
+        reParts.length === 0 ? `substr(${col}, 1, ${width})` : around(col, width, `coalesce(nullif(strpos(${col}, nullif(regexp_extract(${col}, ${sq(re)}), ${sq("")})), 0), 1)`),
       score: () => null,
       prefilter: null,
     }
@@ -268,8 +273,12 @@ export function buildMatcher(pattern: string, opts: MatchOptions, rawLine: boole
   if (opts.word) {
     // A whole word: not preceded or followed by a letter, a digit or _ (RE2 \b is ASCII-only, this edge is not). In the raw line a newline or a tab
     // is the two characters \n / \t, which would read as a letter n / t glued to the word, so they count as an edge there.
+    // The backslash of that escape counts only when it is not itself escaped: a LITERAL backslash in the text is two backslashes in the raw line, so an escape is a
+    // backslash preceded by an even number of backslashes (and by a non-backslash or the start). Without that, the \n of a literal C:\new in the text read as a
+    // newline, and --word ew found the ew of new (TRDD-RSV3UEJ9). RE2 has no lookbehind, hence the explicit run of pairs.
     const edge = "[^\\p{L}\\p{N}_]"
-    const re = `${cs ? "" : "(?i)"}(^|${edge}${rawLine ? "|\\\\[nrt]" : ""})${reLiteral(Array.from(spell(pattern)))}($|${edge})`
+    const rawEscape = "(?:^|[^\\\\])(?:\\\\\\\\)*\\\\[nrt]"
+    const re = `${cs ? "" : "(?i)"}(^|${edge}${rawLine ? `|${rawEscape}` : ""})${reLiteral(Array.from(spell(pattern)))}($|${edge})`
     return {
       test: col => `regexp_matches(${col}, ${sq(re)})`,
       // The match includes its edge characters, which is what makes strpos find THIS occurrence and not the same letters inside a longer word.
@@ -551,7 +560,7 @@ async function assignLines(con: DuckDBConnection, shown: Array<{ hit: SearchHit;
 }
 
 /** One DuckDB instance for a search. Imported lazily, same reason as store/db.ts: --version/hook/gate must not pay for the binding. */
-async function openDuck(): Promise<{ inst: DuckDBInstance; con: DuckDBConnection }> {
+export async function openDuck(): Promise<{ inst: DuckDBInstance; con: DuckDBConnection }> {
   const { DuckDBInstance } = await import("@duckdb/node-api")
   const inst = await DuckDBInstance.create(":memory:", {
     memory_limit: process.env["AGENTLENS_DUCKDB_MEMORY_LIMIT"]?.trim() || "2GB",
