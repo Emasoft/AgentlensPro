@@ -909,6 +909,49 @@ impl DeltaLog {
         Ok(SaveResult { appended, deleted, bytes: body.len() as u64, compacted: false })
     }
 
+
+    /// TRDD-PGMMB2QG — rewrite the log from `records` WITHOUT reading the old files and without using
+    /// `written`: the snapshot becomes exactly `records` (streamed through `compact`, verified from disk) and
+    /// the delta is gone. `records()` yields the FULL record set, the same set in the same order every time
+    /// it is called (the contract of `save_from`). Returns the snapshot bytes written.
+    /// WHY it exists: `save_from` diffs `records` against `written`, and `written` can claim the files are
+    /// level with the store when they are not (a reused start seeds it from the card store; a failed save
+    /// marks its keys written before the write). A clear needs the files to equal the store, so it must not
+    /// depend on that map, and it must not read the old files either: a card log that cannot be read would
+    /// make the next start exit (restore_from_snapshot loads it first).
+    /// Pass 1 counts the records and builds a NEW hash map in a local; pass 2 is `compact`. WHY the delta
+    /// check after it: `compact` removes the delta with `let _ = fs::remove_file`, so a delta that could not
+    /// be removed would stay under the new snapshot and replay over it; here that is an Err. Only after all
+    /// of that does `self.written` become the new map. On any Err `self.written` is as it was (the files may
+    /// already hold the new snapshot, see the delta case).
+    pub fn rewrite_from<F, I, K, V>(&mut self, records: F) -> Result<u64, String>
+    where
+        F: Fn() -> I,
+        I: Iterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: Borrow<Value>,
+    {
+        if let Some(dir) = self.snapshot_path.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        let mut written: IndexMap<String, u64> = IndexMap::new();
+        let mut count = 0usize;
+        for (k, v) in records() {
+            let v: &Value = v.borrow();
+            written.insert(k.as_ref().to_owned(), hash_json(&serde_json::to_string(v).unwrap_or_default()));
+            count += 1;
+        }
+        let bytes = self.compact(records(), count)?;
+        if self.delta_path.exists() {
+            fs::remove_file(&self.delta_path).map_err(|e| format!("{}: the delta could not be removed after the rewrite: {e}", self.delta_path.display()))?;
+            if self.delta_path.exists() {
+                return Err(format!("{}: the delta is still there after the rewrite", self.delta_path.display()));
+            }
+        }
+        self.written = written;
+        Ok(bytes)
+    }
+
     /// TRDD-ORGJ0E3G follow-up — append-only persistence for a KNOWN SUBSET of records (e.g. one
     /// backfill chunk's patched cards), never the whole store. Unlike `save`, this NEVER
     /// deletion-diffs (`gone` needs the full key set — a caller passing only 200 of 30k cards
@@ -1312,4 +1355,106 @@ mod tests {
         assert_eq!(back.keys().collect::<Vec<_>>(), ["r0", "r1", "r2", "r3", "r4", "r6"]);
         let _ = fs::remove_dir_all(&dir);
     }
+
+
+    /// TRDD-PGMMB2QG R1 — a snapshot-only log (no delta file) that holds a key the records lack: after
+    /// `rewrite_from`, `load()` equals the records (the extra key is gone, order is the records order), the
+    /// delta file does not exist, and a following `save_from` of the same records writes 0 bytes (`written`
+    /// is the new map).
+    #[test]
+    fn rewrite_from_over_a_snapshot_only_log_leaves_exactly_the_records() {
+        let dir = unit_dir("rewrite-snap-only");
+        fs::write(dir.join("s.snapshot.ndjson"), "{\"k\":\"a\",\"v\":1}\n{\"k\":\"old\",\"v\":2}\n").unwrap();
+        assert!(!dir.join("s.delta.ndjson").exists(), "control: no delta file");
+        let mut log = DeltaLog::new(&dir, "s");
+        let recs = [("b", json!({"n": 2})), ("a", json!(1))];
+        let bytes = log.rewrite_from(|| recs.iter().map(|(k, v)| (*k, v))).unwrap();
+        assert_eq!(bytes, text(&dir.join("s.snapshot.ndjson")).len() as u64);
+        let back = DeltaLog::new(&dir, "s").load().unwrap();
+        assert_eq!(back.iter().map(|(k, v)| (k.as_str(), v.clone())).collect::<Vec<_>>(), [("b", json!({"n": 2})), ("a", json!(1))], "the log equals the records, in order");
+        assert!(!dir.join("s.delta.ndjson").exists());
+        assert_eq!(log.save_from(|| recs.iter().map(|(k, v)| (*k, v))).unwrap(), SaveResult::default(), "written is the new map: the same records write nothing");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// TRDD-PGMMB2QG R2 — a delta with a corrupt line in the MIDDLE (control: `load()` refuses it): the
+    /// rewrite does not read the old files, so it returns Ok, `load()` then equals the records and the delta is gone.
+    #[test]
+    fn rewrite_from_over_a_log_with_a_corrupt_middle_line_is_ok_and_leaves_exactly_the_records() {
+        let dir = unit_dir("rewrite-corrupt");
+        fs::write(dir.join("s.snapshot.ndjson"), "{\"k\":\"a\",\"v\":1}\n").unwrap();
+        fs::write(dir.join("s.delta.ndjson"), "{\"k\":\"a\",\"v\":5}\nnot json at all\n{\"k\":\"b\",\"v\":2}\n").unwrap();
+        assert!(DeltaLog::new(&dir, "s").load().is_err(), "control: load() refuses the files as written");
+        let mut log = DeltaLog::new(&dir, "s");
+        let recs = [("c", json!({"n": 3}))];
+        log.rewrite_from(|| recs.iter().map(|(k, v)| (*k, v))).unwrap();
+        let back = DeltaLog::new(&dir, "s").load().unwrap();
+        assert_eq!(back.iter().map(|(k, v)| (k.as_str(), v.clone())).collect::<Vec<_>>(), [("c", json!({"n": 3}))]);
+        assert!(!dir.join("s.delta.ndjson").exists(), "the damaged delta is gone");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// TRDD-PGMMB2QG R3 — empty records over a log holding keys: Ok, `load()` is empty and there is no delta file.
+    #[test]
+    fn rewrite_from_with_no_records_leaves_an_empty_log_and_no_delta() {
+        let dir = unit_dir("rewrite-empty");
+        fs::write(dir.join("s.snapshot.ndjson"), "{\"k\":\"a\",\"v\":1}\n").unwrap();
+        fs::write(dir.join("s.delta.ndjson"), "{\"k\":\"b\",\"v\":2}\n").unwrap();
+        let mut log = DeltaLog::new(&dir, "s");
+        log.rewrite_from(std::iter::empty::<(&str, &Value)>).unwrap();
+        assert!(DeltaLog::new(&dir, "s").load().unwrap().is_empty());
+        assert!(!dir.join("s.delta.ndjson").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// TRDD-PGMMB2QG R4 — a write failure (the folder made read-only, so the temp snapshot cannot be
+    /// created): Err, both files byte-identical, and `written` unchanged. The last is shown by a following
+    /// `save_from` of the OLD records, after the folder is writable again, that appends 0 bytes; had `written`
+    /// been replaced with the new records, that save would write the difference.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_rewrite_from_leaves_both_files_and_written_as_they_were() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = unit_dir("rewrite-fail");
+        let snap = dir.join("s.snapshot.ndjson");
+        let delta = dir.join("s.delta.ndjson");
+        let mut log = DeltaLog::new(&dir, "s");
+        let old = [("a", json!({"n": 1})), ("b", json!({"n": 2}))];
+        log.save_from(|| old.iter().map(|(k, v)| (*k, v))).unwrap();
+        let (snap_before, delta_before) = (text(&snap), text(&delta));
+        assert!(!delta_before.is_empty(), "control: the old records are in the delta");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let control_unwritable = fs::File::create(dir.join("probe")).is_err();
+        let new = [("z", json!({"n": 26}))];
+        let failed = log.rewrite_from(|| new.iter().map(|(k, v)| (*k, v)));
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(control_unwritable, "control: the folder really refuses a write (not running as root)");
+        assert!(failed.is_err(), "the rewrite fails");
+        assert!(text(&snap) == snap_before && text(&delta) == delta_before, "both files are byte-identical");
+        assert_eq!(log.save_from(|| old.iter().map(|(k, v)| (*k, v))).unwrap(), SaveResult::default(), "written is unchanged: the old records write 0 bytes");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// TRDD-PGMMB2QG R5 (added beyond the spec: the spec says a delta that cannot be removed is not
+    /// simulated unless a way is found) — the delta path is a DIRECTORY, so `compact`'s swallowed
+    /// `remove_file` fails and the delta stays. `rewrite_from` must return Err naming the delta (not Ok over a
+    /// delta that would replay under the new snapshot), and leave `written` as it was (a following `save_from`
+    /// of the old records writes 0 bytes). The new snapshot is already in place at that point.
+    #[test]
+    fn a_rewrite_from_whose_delta_cannot_be_removed_is_an_err_and_leaves_written_as_it_was() {
+        let dir = unit_dir("rewrite-delta-stuck");
+        let delta = dir.join("s.delta.ndjson");
+        let mut log = DeltaLog::new(&dir, "s");
+        let old = [("a", json!({"n": 1}))];
+        log.save_from(|| old.iter().map(|(k, v)| (*k, v))).unwrap();
+        fs::remove_file(&delta).unwrap();
+        fs::create_dir(&delta).unwrap();
+        let new = [("z", json!({"n": 26}))];
+        let err = log.rewrite_from(|| new.iter().map(|(k, v)| (*k, v))).unwrap_err();
+        assert!(err.contains("the delta could not be removed"), "{err}");
+        assert_eq!(text(&dir.join("s.snapshot.ndjson")), "{\"k\":\"z\",\"v\":{\"n\":26}}\n", "the new snapshot is already in place");
+        assert_eq!(log.save_from(|| old.iter().map(|(k, v)| (*k, v))).unwrap(), SaveResult::default(), "written is unchanged");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
 }

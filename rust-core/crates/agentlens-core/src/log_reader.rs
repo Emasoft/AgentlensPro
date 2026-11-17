@@ -859,9 +859,16 @@ pub struct DurableState {
     first_cards_saved: bool,
     offsets_dirty: bool,
     cards_dirty: bool,
-    /// TRDD-YR6WX7VQ: set by a successful `restore_reused`; the first non-forced timed `tick` clears it and
-    /// reseeds the card log's hashes from its files (see there for why not at restore).
+    /// TRDD-YR6WX7VQ: the card log file pass is owed. SET by a successful `restore_reused`; CLEARED by the first
+    /// non-forced timed `tick` (it runs the pass once, see there for why not at restore) and by
+    /// `finish_clear_after_save` (its rewrite of the card log makes the hashes the store ones, so the pass is
+    /// no longer owed). One-shot: after an Err in `tick` the pass is NOT retried in that run, the hashes stay
+    /// seeded from the card store until the next start or until a clear rewrites the card log
+    /// (TRDD-PGMMB2QG review NIT-1).
     seed_from_files_pending: bool,
+    /// TRDD-PGMMB2QG: how many keys the card saves of this run tombstoned (every `save_cards` adds its count).
+    /// In memory only; it is not serialized and is in no wire shape.
+    cards_tombstoned: u64,
     /// `(session_id, transcript path)` flagged this boot for the usage-only 1h-tier backfill
     /// (TRDD-ORGJ0E3G, replacing the full-card re-parse that caused TRDD-TWDGR75R): populated by
     /// `restore`, drained by `run_1h_backfill` once the boot report has been sent — a card is
@@ -880,6 +887,13 @@ const REPARSE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30 *
 fn env_ms(key: &str, default: u64, floor: u64) -> std::time::Duration {
     let v = std::env::var(key).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(default);
     std::time::Duration::from_millis(v.max(floor))
+}
+
+
+/// TRDD-PGMMB2QG: the text of the log line a card save prints when it tombstoned keys (the caller adds the
+/// timestamp). A pure function so a test can assert the exact wording and counts.
+fn card_save_tombstone_line(deleted: usize, appended: usize, compacted: bool) -> String {
+    format!("alcore: card save tombstoned {deleted} key(s) the card store no longer holds (appended {appended}, compacted={compacted})")
 }
 
 impl DurableState {
@@ -901,6 +915,7 @@ impl DurableState {
             offsets_dirty: false,
             cards_dirty: false,
             seed_from_files_pending: false,
+            cards_tombstoned: 0,
             pending_1h_backfill: Vec::new(),
         }
     }
@@ -1370,7 +1385,8 @@ impl DurableState {
                 // store lacks; the pass line prints only `keys` and `differs`, and without this line a mass removal
                 // would leave no trace in the log (TRDD-PGMMB2QG holds the open question of a ceiling).
                 if r.deleted > 0 {
-                    eprintln!("{} alcore: card save tombstoned {} key(s) the card store no longer holds (appended {}, compacted={})", crate::log_ts(), r.deleted, r.appended, r.compacted);
+                    eprintln!("{} {}", crate::log_ts(), card_save_tombstone_line(r.deleted, r.appended, r.compacted));
+                    self.cards_tombstoned += r.deleted as u64;
                 }
                 self.stamp_version();
                 {
@@ -1433,9 +1449,9 @@ impl DurableState {
 
     /// TRDD-YR6WX7VQ: the one-off file seeding of the card-log hashes, if `restore_reused` asked for it.
     /// Extracted from `tick` unchanged (its comment there says why it runs on the sweeper thread, at the
-    /// first timed tick, and never on the forced tick); `finish_clear_after_save` runs it too, so that
-    /// a clear's save compares the store with the files and not with the store's own keys. Returns false
-    /// only when a pass ran and failed (`tick` ignores it).
+    /// first timed tick, and never on the forced tick). `finish_clear_after_save` does NOT use it: it rewrites
+    /// the card log from the store and neither reads the old files nor needs the pass. Returns false only when
+    /// a pass ran and failed (`tick` ignores it).
     fn run_pending_file_pass(&mut self) -> bool {
         if !self.seed_from_files_pending {
             return true;
@@ -1457,35 +1473,45 @@ impl DurableState {
         }
     }
 
-    /// TRDD-PGMMB2QG: the card save that ends an `/api/clear`, then the reset of the store's
-    /// `clear_in_progress` flag, in that order. WHY the flag goes down only after the save: it used to be
-    /// reset as soon as the rescan ended, but the card log still held every card the clear dropped (the
-    /// save that tombstones them came at a later timed tick), so a process end in that window left a
-    /// reusable store next to a card log that restores cards of transcripts that no longer exist.
-    /// WHY the pending file pass runs first: on a reused start the hashes are still the store's keys, so
-    /// a key only the card-log files hold would not be tombstoned by this save. WHY `first_cards_saved`
-    /// is not touched: same reason as `save_cards_after_boot_sweep`. WHY no state lock may be held by the
-    /// caller: `save_cards` takes it itself (std Mutex is not reentrant).
-    /// Returns false and leaves the flag set when the pass or the save failed. WHY a failure re-arms the
-    /// file pass and the dirty mark: `DeltaLog::save_from` marks every key written BEFORE its write, so
-    /// after a failed write the hashes claim the card log is level with the store, and a plain retry would
-    /// find nothing to write, return Ok and reset the flag next to a card log that still holds the cleared
-    /// cards. The re-armed pass re-reads the files, so the retry (the next full sweep, or the next timed
-    /// tick) writes the real difference. WHY a failed pass also returns false: its hashes would still be
-    /// the store's, so the save after it could not tombstone what only the files hold; the flag stays
-    /// set (the next start discards the snapshot, the safe side) until the card log can be read.
+    /// TRDD-PGMMB2QG: the end of an `/api/clear`: REWRITE the card log from the store, then reset the store
+    /// `clear_in_progress` flag, in that order. WHY the flag goes down only after the rewrite: it used to be
+    /// reset as soon as the rescan ended, but the card log still held every card the clear dropped, so a
+    /// process end in that window left a reusable store next to a card log that restores cards of transcripts
+    /// that no longer exist.
+    /// INVARIANT: the card log is rewritten WITHOUT reading the old files and WITHOUT the written hashes
+    /// (`DeltaLog::rewrite_from`). WHY: those hashes can claim the files are level with the store when they are
+    /// not (a reused start seeds them from the card store; a failed save marks its keys written before the
+    /// write; a tick can consume the owed file pass), and reading the old files would make a damaged card log
+    /// stop the clear, while the next start loads that log first (restore_from_snapshot) and exits when it
+    /// cannot. So the reset depends on nothing but the rewrite returning Ok.
+    /// Returns false, flag untouched, when the rewrite failed (nothing is re-armed: every attempt is a full
+    /// rewrite, repeated at the next full sweep, and writes a temp snapshot each time). On Ok the hashes are the
+    /// store ones, so the owed file pass and the dirty mark are cleared, the card save timer restarts, the
+    /// version stamp and the persist counters are updated as `save_cards` does. WHY `first_cards_saved` is not
+    /// touched: same reason as `save_cards_after_boot_sweep`. WHY no state lock may be held by the caller: the
+    /// persist snapshot is taken under it here (std Mutex is not reentrant).
     pub fn finish_clear_after_save(&mut self, state: &std::sync::Mutex<crate::CoreState>) -> bool {
-        if !self.run_pending_file_pass() {
-            self.seed_from_files_pending = true;
-            return false;
-        }
+        let snap = {
+            let st = state.lock_timed();
+            st.cards.persist_snapshot()
+        };
+        let rewritten = self.cards.rewrite_from(|| snap.iter().map(persist_record));
+        drop(snap);
+        let bytes = match rewritten {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("{} alcore: could not rewrite the card log after a clear: {e}; the clear stays pending", crate::log_ts());
+                return false;
+            }
+        };
+        self.seed_from_files_pending = false;
         self.cards_dirty = false;
-        if !self.save_cards(state) {
-            self.seed_from_files_pending = true;
-            self.cards_dirty = true;
-            return false;
-        }
-        state.lock_timed().cards.finish_clear();
+        self.last_cards_save = Instant::now();
+        self.stamp_version();
+        let mut st = state.lock_timed();
+        st.persist.cards_writes += 1;
+        st.persist.cards_bytes += bytes;
+        st.cards.finish_clear();
         true
     }
 
@@ -1948,9 +1974,11 @@ pub fn start_sweeper(
                 // did not fail, inside `finish_clear_after_save`. WHY: resetting it here, before any card
                 // save, let a process end in the window before the next timed tick leave a reusable store
                 // next to a card log that still holds every cleared card (a restore would bring back the
-                // cards of transcripts that no longer exist). A failed save keeps the clear pending, so
-                // the next full sweep tries again. Called with no state lock held: the save locks the state
-                // itself (std Mutex is not reentrant).
+                // cards of transcripts that no longer exist). The card log is REWRITTEN from the store (it is not read
+                // and the written hashes are not used, so a damaged card log or a stale hash map cannot stop or
+                // fake it); a failed rewrite keeps the clear pending and the next full sweep tries again. Called
+                // with no state lock held: the rewrite takes the persist snapshot under the lock itself (std
+                // Mutex is not reentrant).
                 if clear_pending && full_sweep && durable.finish_clear_after_save(&state) {
                     clear_pending = false;
                 }
@@ -2432,29 +2460,30 @@ mod sweeper_backstop_tests {
         (data, state, durable)
     }
 
-    /// TRDD-PGMMB2QG: after a clear and a rescan, `finish_clear_after_save` runs the pending file pass, saves
+    /// TRDD-PGMMB2QG: after a clear and a rescan, `finish_clear_after_save` rewrites the card log from the store
     /// and only then resets the flag: the card log holds no cleared key (`b`, a store key the rescan did not
-    /// rebuild; `ghost`, a key only the card-log files held) and `clear_in_progress` is 0.
+    /// rebuild; `ghost`, a key only the card-log files held), the owed file pass is cleared, and `clear_in_progress` is 0.
     #[test]
     fn finish_clear_after_save_tombstones_every_cleared_key_then_resets_the_flag() {
         let root = seed_test_root("clear-save-ok");
         let (data, state, mut durable) = cleared_and_rescanned(&root);
-        assert!(durable.finish_clear_after_save(&state), "the save succeeded, so the clear is finished");
+        assert!(durable.finish_clear_after_save(&state), "the rewrite succeeded, so the clear is finished");
         let files = crate::delta_log::DeltaLog::new(&data, "log-sessions").load().unwrap();
         let keys: Vec<&str> = files.keys().map(String::as_str).collect();
         assert_eq!(keys, ["a"], "no cleared key is left in the card log (b and the files-only ghost are tombstoned)");
-        assert!(!durable.seed_from_files_pending, "the file pass ran in the method");
+        assert!(!durable.seed_from_files_pending, "the rewrite made the hashes the stores: the file pass is no longer owed");
         drop(state);
         assert_eq!(clear_flag(&data.join("a")), "0", "the flag is reset");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// TRDD-PGMMB2QG: a card save that fails (the card-log directory and files made read-only) makes
-    /// `finish_clear_after_save` return false and leaves `clear_in_progress` at 1. Mutation: call
-    /// `finish_clear` before the save in the method and this test fails at the flag assertion.
+    /// TRDD-PGMMB2QG C2 (first half): a card log rewrite that fails (the card-log directory and files made
+    /// read-only) makes `finish_clear_after_save` return false, leaves both card log files byte-identical and
+    /// leaves `clear_in_progress` at 1. Mutation: call `finish_clear` before the rewrite and this test fails
+    /// at the flag assertion.
     #[cfg(unix)]
     #[test]
-    fn finish_clear_after_save_returns_false_and_keeps_the_flag_when_the_save_fails() {
+    fn a_failed_clear_rewrite_returns_false_keeps_the_flag_and_leaves_the_card_log_files_untouched() {
         use std::os::unix::fs::PermissionsExt;
         let root = seed_test_root("clear-save-fail");
         let (data, state, mut durable) = cleared_and_rescanned(&root);
@@ -2466,26 +2495,27 @@ mod sweeper_backstop_tests {
             }
             std::fs::set_permissions(&data, std::fs::Permissions::from_mode(dir_mode)).unwrap();
         };
+        let card_log_bytes = || (std::fs::read(data.join("log-sessions.snapshot.ndjson")).ok(), std::fs::read(data.join("log-sessions.delta.ndjson")).ok());
+        let before = card_log_bytes();
         set_mode(0o555, 0o444);
         let control_unwritable = std::fs::File::create(data.join("probe")).is_err();
         let finished = durable.finish_clear_after_save(&state);
         set_mode(0o755, 0o644);
         assert!(control_unwritable, "control: the card-log directory really refuses a write (not running as root)");
-        assert!(!finished, "a failed card save does not finish the clear");
+        assert!(!finished, "a failed card log rewrite does not finish the clear");
+        assert!(card_log_bytes() == before, "and both card log files are byte-identical");
         drop(state);
-        assert_eq!(clear_flag(&data.join("a")), "1", "the flag stays set after a failed save");
+        assert_eq!(clear_flag(&data.join("a")), "1", "the flag stays set after a failed rewrite");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
 
-    /// TRDD-PGMMB2QG: the retry after a failed card save. `save_from` marks keys written before it writes, so
-    /// without the re-armed file pass the retry would write nothing, return true and reset the flag next to
-    /// a card log that still holds the cleared keys. Here the first call fails (card log read-only), the
-    /// retry after the card log is writable again returns true, the card log holds no cleared key and the
-    /// flag is 0.
+    /// TRDD-PGMMB2QG C2 (second half): the retry after a failed clear rewrite. The first call fails (card log
+    /// read-only), the call after the card log is writable again returns true, the card log holds no cleared
+    /// key and the flag is 0.
     #[cfg(unix)]
     #[test]
-    fn a_retry_after_a_failed_clear_save_tombstones_the_cleared_keys_before_the_flag_resets() {
+    fn a_retry_after_a_failed_clear_rewrite_leaves_only_the_store_keys_and_resets_the_flag() {
         use std::os::unix::fs::PermissionsExt;
         let root = seed_test_root("clear-save-retry");
         let (data, state, mut durable) = cleared_and_rescanned(&root);
@@ -2506,19 +2536,23 @@ mod sweeper_backstop_tests {
         assert!(durable.finish_clear_after_save(&state), "the retry on a writable card log succeeds");
         let files = crate::delta_log::DeltaLog::new(&data, "log-sessions").load().unwrap();
         let keys: Vec<&str> = files.keys().map(String::as_str).collect();
-        assert_eq!(keys, ["a"], "the retry tombstoned b and the files-only ghost, it did not return Ok over an unchanged log");
+        assert_eq!(keys, ["a"], "the retry rewrote the card log from the store: b and the files-only ghost are gone");
         drop(state);
         assert_eq!(clear_flag(&data.join("a")), "0", "the flag is reset after the successful retry");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// TRDD-PGMMB2QG: the process ends after the card save and before the flag reset (nothing but
-    /// `save_cards` ran, everything dropped): the next start refuses the store and sees an interrupted clear.
+    /// TRDD-PGMMB2QG C4: the process ends after the rewrite and before the flag reset (only the card log
+    /// rewrite ran, then everything is dropped): the next start refuses the store and sees an interrupted
+    /// clear. The rewrite is called on the durable state card log with the store persist snapshot, as
+    /// `finish_clear_after_save` does, without its flag reset (the method cannot be cut in two).
     #[test]
-    fn a_process_end_after_the_card_save_and_before_the_flag_reset_makes_the_next_start_refuse_the_store() {
-        let root = seed_test_root("clear-save-death");
+    fn a_process_end_after_the_card_log_rewrite_and_before_the_flag_reset_makes_the_next_start_refuse_the_store() {
+        let root = seed_test_root("clear-c4");
         let (data, state, mut durable) = cleared_and_rescanned(&root);
-        assert!(durable.save_cards(&state), "the card save succeeded");
+        let snap = state.lock().unwrap().cards.persist_snapshot();
+        durable.cards.rewrite_from(|| snap.iter().map(super::persist_record)).expect("the card log rewrite succeeded");
+        drop(snap);
         drop(state);
         drop(durable);
         let next = crate::card_store::CardStore::open(&data.join("a"));
@@ -2527,4 +2561,198 @@ mod sweeper_backstop_tests {
         drop(next);
         std::fs::remove_dir_all(&root).unwrap();
     }
+
+
+    /// TRDD-PGMMB2QG: the card log files made read-only (`dir_mode` on the data dir, `file_mode` on its two
+    /// card-log files), or writable again.
+    #[cfg(unix)]
+    fn set_card_log_mode(data: &std::path::Path, dir_mode: u32, file_mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        for name in ["log-sessions.snapshot.ndjson", "log-sessions.delta.ndjson"] {
+            if data.join(name).exists() {
+                std::fs::set_permissions(data.join(name), std::fs::Permissions::from_mode(file_mode)).unwrap();
+            }
+        }
+        std::fs::set_permissions(data, std::fs::Permissions::from_mode(dir_mode)).unwrap();
+    }
+
+    /// TRDD-PGMMB2QG: the keys the card log files hold, in replay order.
+    fn card_log_keys(data: &std::path::Path) -> Vec<String> {
+        crate::delta_log::DeltaLog::new(data, "log-sessions").load().unwrap().keys().cloned().collect()
+    }
+
+    /// TRDD-PGMMB2QG: a corrupt line in the MIDDLE of the card log delta (a valid line follows it), so the
+    /// card log is unreadable until that line is removed. Returns the corrupt line.
+    fn corrupt_card_log(data: &std::path::Path) -> &'static str {
+        use std::io::Write;
+        let mut delta = std::fs::OpenOptions::new().create(true).append(true).open(data.join("log-sessions.delta.ndjson")).unwrap();
+        delta.write_all(b"this line is not json\n{\"k\":\"after\",\"v\":1}\n").unwrap();
+        "this line is not json"
+    }
+
+    /// TRDD-PGMMB2QG C3: a failed attempt (the card log is read-only), then a timed tick that runs against the
+    /// still unwritable card log (its own save fails too and has already marked its keys written), then the
+    /// card log is writable and the later attempt returns true: the card log equals the store and the flag is 0.
+    /// The rewrite does not use the written hashes, so what the tick did cannot hide a cleared key.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_timed_tick_save_between_two_clear_attempts_leaves_the_log_equal_to_the_store() {
+        let root = seed_test_root("clear-c3");
+        let (data, state, mut durable) = cleared_and_rescanned(&root);
+        // Set explicitly: AGENTLENS_CARDS_SAVE_MS and AGENTLENS_OFFSETS_SAVE_MS in the environment must not change what this proves.
+        durable.cards_save = Duration::from_millis(300_000);
+        durable.offsets_save = Duration::from_millis(1);
+        set_card_log_mode(&data, 0o555, 0o444);
+        let control_unwritable = std::fs::File::create(data.join("probe")).is_err();
+        let first = durable.finish_clear_after_save(&state);
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&LogTailer::default(), &state, false);
+        let early_save_spent = durable.first_cards_saved;
+        set_card_log_mode(&data, 0o755, 0o644);
+        assert!(control_unwritable, "control: the card-log directory really refuses a write (not running as root)");
+        assert!(!first, "the first attempt fails on the save");
+        assert!(early_save_spent, "control: the timed tick ran its early card save between the two attempts");
+        assert!(durable.finish_clear_after_save(&state), "the second attempt, on a writable card log, succeeds");
+        let want: indexmap::IndexMap<String, serde_json::Value> = state.lock().unwrap().cards.parsed_cards().iter().map(super::persist_record).collect();
+        assert_eq!(crate::delta_log::DeltaLog::new(&data, "log-sessions").load().unwrap(), want, "the card log equals the store although a tick ran in between");
+        drop(state);
+        assert_eq!(clear_flag(&data.join("a")), "0", "the flag is reset");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-PGMMB2QG C1: a corrupt card log BEFORE the clear (a reused start next to a card log with a corrupt
+    /// middle line; the first timed tick runs the file pass, it fails and the request is spent), then a clear, a
+    /// rescan and the attempt: true, the card log loads and equals the store, flag 0. The attempt does not read
+    /// the old card log, so the corrupt line cannot stop it.
+    #[test]
+    fn a_clear_next_to_a_corrupt_card_log_rewrites_it_from_the_store_and_resets_the_flag() {
+        let root = seed_test_root("clear-c1");
+        let (data, env) = previous_run_with_cards(&root, &["a", "b"]);
+        corrupt_card_log(&data);
+        assert!(crate::delta_log::DeltaLog::new(&data, "log-sessions").load().is_err(), "control: the card log is unreadable as written");
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+        assert!(state.lock().unwrap().cards.reused());
+        let mut durable = DurableState::open(&data);
+        durable.cards_save = Duration::from_millis(300_000);
+        durable.offsets_save = Duration::from_millis(1);
+        let mut tailer = LogTailer::default();
+        durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+        durable.mark_dirty();
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&tailer, &state, false);
+        assert!(!durable.seed_from_files_pending, "control: the first timed tick ran the pass, it failed and the request is spent");
+        {
+            let mut st = state.lock().unwrap();
+            st.cards.clear();
+            st.cards.put(&seed_test_card("a"));
+        }
+        durable.mark_dirty();
+        assert!(durable.finish_clear_after_save(&state), "the rewrite does not read the damaged card log: the clear is finished");
+        let want: indexmap::IndexMap<String, serde_json::Value> = state.lock().unwrap().cards.parsed_cards().iter().map(super::persist_record).collect();
+        let got = crate::delta_log::DeltaLog::new(&data, "log-sessions").load().expect("the card log is readable again");
+        assert_eq!(got.keys().collect::<Vec<_>>(), ["a"], "only the card the rescan put back");
+        assert_eq!(got, want, "the card log equals the store");
+        drop(state);
+        assert_eq!(clear_flag(&data.join("a")), "0", "and the flag is reset");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-PGMMB2QG T5: a catch-up save that tombstones two keys adds 2 to `cards_tombstoned` (the boot-sweep
+    /// save before it, with store-derived hashes, adds nothing), and the line text is the pure function
+    /// `card_save_tombstone_line`. NOT shown: that `save_cards` prints through that function (stderr is not captured).
+    #[test]
+    fn a_catch_up_save_counts_the_keys_it_tombstones_and_the_line_names_them() {
+        let root = seed_test_root("clear-t5");
+        let (data, env) = previous_run_with_cards(&root, &["kept"]);
+        let mut ghosts = indexmap::IndexMap::new();
+        ghosts.insert("ghost-1".to_string(), seed_test_card("ghost-1"));
+        ghosts.insert("ghost-2".to_string(), seed_test_card("ghost-2"));
+        crate::delta_log::DeltaLog::new(&data, "log-sessions").append_changed(&ghosts).unwrap();
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+        assert!(state.lock().unwrap().cards.reused());
+        let mut durable = DurableState::open(&data);
+        durable.cards_save = Duration::from_millis(300_000);
+        let mut tailer = LogTailer::default();
+        durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+        durable.mark_dirty();
+        durable.save_cards_after_boot_sweep(&state);
+        assert_eq!(durable.cards_tombstoned, 0, "the boot-sweep save runs with store-derived hashes and tombstones nothing");
+        durable.offsets_save = Duration::from_millis(1);
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&tailer, &state, false);
+        assert_eq!(durable.cards_tombstoned, 2, "the first timed tick tombstoned ghost-1 and ghost-2");
+        assert_eq!(card_log_keys(&data), ["kept"]);
+        assert_eq!(super::card_save_tombstone_line(2, 0, false), "alcore: card save tombstoned 2 key(s) the card store no longer holds (appended 0, compacted=false)");
+        assert_eq!(super::card_save_tombstone_line(1, 3, true), "alcore: card save tombstoned 1 key(s) the card store no longer holds (appended 3, compacted=true)");
+        drop(state);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-PGMMB2QG T6: a tick inside the timer window (before `offsets_save` has elapsed since the state
+    /// was opened) runs no pass and writes nothing: the request stays set and the card log bytes are
+    /// unchanged; the first tick after the window runs the pass and tombstones the files-only key.
+    #[test]
+    fn a_tick_inside_the_timer_window_leaves_the_file_pass_owed_and_the_card_log_untouched() {
+        let root = seed_test_root("clear-t6");
+        let (data, env) = previous_run_with_cards(&root, &["kept"]);
+        let mut ghost = indexmap::IndexMap::new();
+        ghost.insert("ghost".to_string(), seed_test_card("ghost"));
+        crate::delta_log::DeltaLog::new(&data, "log-sessions").append_changed(&ghost).unwrap();
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+        assert!(state.lock().unwrap().cards.reused());
+        let mut durable = DurableState::open(&data);
+        durable.cards_save = Duration::from_millis(300_000);
+        durable.offsets_save = Duration::from_secs(300);
+        let mut tailer = LogTailer::default();
+        durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+        durable.mark_dirty();
+        let card_log_bytes = || (std::fs::read(data.join("log-sessions.snapshot.ndjson")).ok(), std::fs::read(data.join("log-sessions.delta.ndjson")).ok());
+        let before = card_log_bytes();
+        durable.tick(&tailer, &state, false);
+        assert!(durable.seed_from_files_pending, "a tick inside the timer window leaves the pass owed");
+        assert!(!durable.first_cards_saved, "and spends no early card save");
+        assert!(card_log_bytes() == before, "and the card log bytes are unchanged");
+        durable.offsets_save = Duration::from_millis(1);
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&tailer, &state, false);
+        assert!(!durable.seed_from_files_pending, "the first tick after the window runs the pass");
+        assert_eq!(card_log_keys(&data), ["kept"], "and its save tombstones the files-only key");
+        drop(state);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-PGMMB2QG T7: a reused store holding two cards next to a MISSING card log (both files removed, the
+    /// version stamp kept). The file pass returns Ok with 0 keys, differs, and the early timed save appends
+    /// every card of the store.
+    #[test]
+    fn a_missing_card_log_next_to_a_reused_store_gets_every_store_card_at_the_early_save() {
+        let root = seed_test_root("clear-t7");
+        let (data, env) = previous_run_with_cards(&root, &["x", "y"]);
+        for name in ["log-sessions.snapshot.ndjson", "log-sessions.delta.ndjson"] {
+            let file = data.join(name);
+            if file.exists() {
+                std::fs::remove_file(&file).unwrap();
+            }
+            assert!(!file.exists(), "control: {name} is gone");
+        }
+        assert!(card_log_keys(&data).is_empty(), "control: a missing card log reads as empty");
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+        assert!(state.lock().unwrap().cards.reused(), "the store is reused");
+        let mut durable = DurableState::open(&data);
+        durable.cards_save = Duration::from_millis(300_000);
+        let mut tailer = LogTailer::default();
+        let (restored, _, _) = durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+        assert_eq!(restored, 2, "the restore holds both store cards");
+        durable.mark_dirty();
+        durable.offsets_save = Duration::from_millis(1);
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&tailer, &state, false);
+        let mut keys = card_log_keys(&data);
+        keys.sort();
+        assert_eq!(keys, ["x", "y"], "the early save appended every card of the store");
+        assert!(durable.first_cards_saved, "and it was the early save");
+        drop(state);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
 }
