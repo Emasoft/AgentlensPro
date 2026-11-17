@@ -1,10 +1,10 @@
 ---
 trdd-id: 6DRB39PR
 title: search --mask excerpt is anchored on the first literal segment and can lie outside the match
-column: backburner
+column: dev
 status: tasked
 created: 2026-11-17T11:34:46+0100
-updated: 2026-11-17T11:34:46+0100
+updated: 2026-11-17T11:36:42+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -35,3 +35,5 @@ The excerpt is what an agent reads to decide whether to open the entry with --sh
 ## Approval log
 
 - 2026-11-17T11:34:46+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T11:36:42+0100 — column → todo by main-agent@agentlenspro. dispatched to one worker with the other two search follow-ups, same two files
+- 2026-11-17T11:36:42+0100 — column → dev by main-agent@agentlenspro. dispatched to one worker with the other two search follow-ups, same two files

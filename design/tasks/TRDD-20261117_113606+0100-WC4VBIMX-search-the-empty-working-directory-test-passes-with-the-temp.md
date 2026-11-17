@@ -1,10 +1,10 @@
 ---
 trdd-id: WC4VBIMX
 title: search - the empty working directory test passes with the temp_directory setting removed
-column: backburner
+column: dev
 status: tasked
 created: 2026-11-17T11:36:06+0100
-updated: 2026-11-17T11:36:06+0100
+updated: 2026-11-17T11:36:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -35,3 +35,5 @@ The fixture is a few kilobytes. DuckDB creates its temp folder only when it spil
 ## Approval log
 
 - 2026-11-17T11:36:06+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T11:36:40+0100 — column → todo by main-agent@agentlenspro. dispatched to one worker with the other two search follow-ups, same two files
+- 2026-11-17T11:36:40+0100 — column → dev by main-agent@agentlenspro. dispatched to one worker with the other two search follow-ups, same two files
