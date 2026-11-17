@@ -201,6 +201,14 @@ suite('searchCli — project-wide search (TRDD-UIQS9RXZ)', () => {
     assert.ok(until.hits.every(h => h.ts !== null && h.ts <= '2026-08-18T23:59:59.000Z'))
     assert.ok(!spot(until.hits).includes('aaaaaaaa#2'), 'the 08-19 entry is after --until')
     assert.strictEqual(parseTimeArg('2h', '--since', 1_000_000_000_000), new Date(1_000_000_000_000 - 7_200_000).toISOString())
+    // A relative span goes through the same search. NOW is fixed, so 3h and 1d fall between the entries of the fixture.
+    const NOW = Date.parse('2026-08-19T12:00:00.000Z')
+    const sinceRel = await run('NEEDLE', { since: parseTimeArg('3h', '--since', NOW) })
+    assert.deepStrictEqual(spot(sinceRel.hits), ['aaaaaaaa#2'], 'relative --since 3h: only the 08-19 10:00:05 entry is inside the window')
+    const untilRel = await run('NEEDLE', { until: parseTimeArg('1d', '--until', NOW) })
+    assert.ok(spot(untilRel.hits).includes('aaaaaaaa#1'), 'relative --until 1d: the 08-18 10:00:00 entry is before the bound')
+    assert.ok(!spot(untilRel.hits).includes('aaaaaaaa#2'), 'relative --until 1d: the 08-19 entry is after the bound')
+    assert.ok(untilRel.hits.every(h => h.ts !== null && h.ts <= '2026-08-18T12:00:00.000Z'))
     assert.ok(!names({ sinceMs: Date.parse('2026-08-01') }).includes(`${SID_B}.jsonl`), 'B has an old mtime: pruned without being opened')
   })
 
