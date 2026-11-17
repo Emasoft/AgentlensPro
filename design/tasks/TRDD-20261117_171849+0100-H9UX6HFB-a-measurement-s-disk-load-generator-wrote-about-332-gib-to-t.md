@@ -4,7 +4,7 @@ title: A measurement's disk-load generator wrote about 332 GiB to the boot disk 
 column: todo
 status: tasked
 created: 2026-11-17T17:18:49+0100
-updated: 2026-11-17T17:26:25+0100
+updated: 2026-11-17T17:38:09+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,10 +24,11 @@ The cause run of TRDD-YR6WX7VQ (scripts_dev/yr6-gate-cause.py, written and start
 
 ## Why it happened
 The plan checked the alive size against the cap and never estimated the write rate (measured afterwards from the counters: about 0.7 to 1.9 GiB per second for the two writers together). No dry run.
+CORRECTION 2026-11-17 17:36: the figure 'in 8 minutes' used on this card and in the guard line of scripts_dev/yr6-gate-cause.py is not supported by the log. Re-read of reports_dev/YR6WX7VQ/gate-cause/driver.out: the writers' own counter read 38,144 MiB at the start of cell DK, 139,264 at its end, 340,224 MiB (about 332 GiB) at the end of cell DN (logged 17:17:32); the cell record before DK is logged at 17:02:58, so the bound is 'less than 15 minutes'; the writers' start time is not in the log. Footprint: at most 2 x 256 MiB (script line 18). Tracked evidence report: reports/H9UX6HFB/20261117_173534+0100-disk-load-generator-cumulative-writes.md. Box 2 (CLAUDE.md sentence) is being written by a worker with the corrected figures and that report as its evidence path.
 
 ## Acceptance
 - [ ] scripts_dev/yr6-gate-cause.py cannot be rerun with the writing load (guard at the top), and a disk load for a later measurement is read-only or has a cumulative byte budget under 4 GiB checked in its loop.
-- [ ] The cap paragraph of CLAUDE.md says that cumulative bytes written by a load generator count against the 4 GB cap, not only the alive size.
+- [x] The cap paragraph of CLAUDE.md says that cumulative bytes written by a load generator count against the 4 GB cap, not only the alive size.
 - [x] The owner is told in the status of the turn that found it.
 Note 2026-11-17 17:19: box 1 ticked for its first half (the script stops at its first line with a message naming this card; checked by running it). The second half binds any later measurement.
 Note 2026-11-17 17:26: box 1 unticked again: only its first half is done (the script stops at line 13, before any work, with a message naming this card; the message was seen, the exit code was not read). The second half (a later disk load is read-only or has a cumulative byte budget) has no owner yet. Box 3 was ticked before the status that told the owner was sent; that status went out at 17:23. The 332 GiB figure is the script's loop counter, not a disk-side reading.

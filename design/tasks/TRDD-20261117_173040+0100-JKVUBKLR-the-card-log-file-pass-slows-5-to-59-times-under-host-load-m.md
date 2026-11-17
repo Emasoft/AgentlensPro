@@ -1,10 +1,10 @@
 ---
 trdd-id: JKVUBKLR
-title: The card-log file pass slows 5 to 97 times under host load, more than a fair CPU share explains
+title: The card-log file pass slows 5 to 59 times under host load, more than a fair CPU share explains
 column: backburner
 status: tasked
 created: 2026-11-17T17:30:40+0100
-updated: 2026-11-17T17:35:08+0100
+updated: 2026-11-17T17:38:09+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -17,10 +17,10 @@ approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-17T17:30:40+0100
 ---
 
-# The card-log file pass slows 5 to 97 times under host load, more than a fair CPU share explains
+# The card-log file pass slows 5 to 59 times under host load, more than a fair CPU share explains
 
 ## Problem
-Residue of box 1 of TRDD-YR6WX7VQ. The file pass (DeltaLog::seed_written_from_disk on the log-sweeper thread) took 1.9 s on a quiet host on the gate copies and 0.34 s on a copy of the live files, and under load: 10.8 s (28 busy processes, 1-minute load 23 to 100), 72.1 s (same processes, load 100 to 114), 113.4 s (two disk writers, load 215), 14.2 s (a release compile), 32.9 s (live copy doubled to 143 MB, load rising to 101). The host has 14 logical cores (sysctl hw.ncpu: 10 performance, 4 efficiency), so a fair share at load 100 to 215 predicts 7 to 15 times, not 37 to 59; the proxy is the 1-minute load average, which lags and was rising during the cells, so the prediction is rough. On the live copy the ratio is larger still: 32,947 ms against 338 ms is about 97 times, about 49 times after allowing for the card log having doubled between the two runs (44,324 keys read in the first, 75,106 in the second), one run each. Evidence: reports_dev/YR6WX7VQ/gate-cause, gate-load, gate-live.
+Residue of box 1 of TRDD-YR6WX7VQ. The file pass (DeltaLog::seed_written_from_disk on the log-sweeper thread) took 1.9 s on a quiet host on the gate copies and 0.34 s on a copy of the live files, and under load: 10.8 s (28 busy processes, 1-minute load 23 to 100), 72.1 s (same processes, load 100 to 114), 113.4 s (two disk writers, load 215), 14.2 s (a release compile), 32.9 s (live copy doubled to 143 MB, load rising to 101). The host has 14 logical cores (sysctl hw.ncpu: 10 performance, 4 efficiency), so a fair share at load 100 to 215 predicts 7 to 15 times, not 37 to 59; the proxy is the 1-minute load average, which lags and was rising during the cells, so the prediction is rough. On the live copy the ratio is larger still: 32,947 ms against 338 ms is about 97 times, about 58 times after dividing by the growth in keys read (44,324 in the first run, 75,106 in the second, 1.69 times), one run each; the title's range (5 to 59) covers the gate copies and this size-adjusted figure. Evidence: reports_dev/YR6WX7VQ/gate-cause, gate-load, gate-live.
 
 ## Seen (one run per cell, no cell repeated)
 One run each showed no difference between a start after a kill and a plain restart on a quiet host (1,897 against 1,939 ms). The pass was slower in every cell that ran under CPU load. The code does not put the sweeper thread at background priority (one caller of set_background_qos, the second runtime's thread-start hook); the thread's class at run time was not measured.
