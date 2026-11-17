@@ -328,6 +328,18 @@ suite('searchCli — usage contract', () => {
     assert.strictEqual((JSON.parse(r.out) as { total: number }).total, 7, 'every transcript of the project, no --session needed')
   })
 
+  test('a relative --since / --until typed on the command line becomes a bound', async function () {
+    this.timeout(60_000)
+    const total = async (extra: string[]): Promise<number> => {
+      const r = await runCli(['NEEDLE', '--project', PROJECT, '--json', ...extra])
+      assert.strictEqual(r.code, 0, extra.join(' '))
+      return (JSON.parse(r.out) as { total: number }).total
+    }
+    // Every fixture entry is dated 2026-08-18 or 2026-08-19, so one week before the real clock is after all of them.
+    assert.strictEqual(await total(['--since', '1w']), 0, 'relative --since: no entry is newer than a week')
+    assert.strictEqual(await total(['--until', '1w']), 6, 'relative --until: the six dated entries are older than a week, the undated line is left out')
+  })
+
   test('a non-numeric --limit is refused', async () => {
     await assert.rejects(() => runSearchCli(['needle', '--session', 'abc123', '--limit', 'lots']),
       (e: unknown) => e instanceof UsageError)
