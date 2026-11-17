@@ -4,7 +4,7 @@ title: Commits in this repository are not scanned by the bug scanner
 column: backburner
 status: tasked
 created: 2026-11-17T06:44:25+0100
-updated: 2026-11-17T06:44:25+0100
+updated: 2026-11-17T06:58:45+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -28,6 +28,7 @@ Found 2026-11-17 while checkpointing TRDD-OIMXULDJ. The owner's rule is that the
 - [ ] The files of commit 3b84e6b5 (or of the commit that replaces it after the memory fix) have a recorded ubs verdict.
 
 ## Notes and lessons learned
+2026-11-17T06:58+0100 main agent: the two backup copies of the hook were read (same directory, pre-commit.bak-20261110_015525 with 95 lines and pre-commit.bak-20261110_023254 with 117 lines). Both carry the same family test at lines 36 to 38: only a path containing mods-expert-developer is scanned, everything else exits 0. So no version of this hook since the first backup of 2026-11-10 scanned this repository; what ran before that date is not known. A manual scan is currently not possible for the search files either (TRDD-MA6H11NB: the scanner did not finish and held 5.7 GB).
 
 ## Approval log
 
