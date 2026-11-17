@@ -1250,6 +1250,63 @@ fn run_1h_backfill_step_persists_before_returning_so_a_hard_exit_loses_nothing()
     assert_eq!(card3b, card3, "nothing left to backfill -- the step's own durable write is what stopped it being re-queued, not a later graceful save");
 }
 
+/// TRDD-32UTVFP0: the backfill skips a transcript whose file mtime is older than REPARSE_MAX_AGE (30
+/// days, wall clock). `copy_tree` now stamps every scratch copy with the current time, which removed
+/// the accidental exercise of that skip branch; this test sets the age on purpose. Both sides of the
+/// limit are pinned (31 days skipped, 29 days filled) so it is designed to fail if the gate is removed (31 days
+/// would then be filled) or widened to skip everything (29 days would then stay empty).
+#[test]
+fn the_1h_backfill_skips_a_transcript_past_the_age_limit_and_fills_one_inside_it() {
+    // Returns (the 1h value a normal boot saved, the parent card's field after a backfill run when
+    // the transcript is `days` days old).
+    let backfill_with_transcript_aged = |name: &str, days: u64| -> (f64, Option<f64>) {
+        let home = scratch_home(name);
+        let env = Env { home: home.clone(), platform: Platform::Darwin, vars: HashMap::new() };
+        let data = std::env::temp_dir().join(format!("al-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        std::fs::create_dir_all(&data).unwrap();
+        let now = 1_785_578_400_000 + 600_000;
+
+        // Run 1: a normal boot + forced save so the parent card carries cacheCreate1hTokens.
+        let state = std::sync::Mutex::new(CoreState::open(&data.join("spans")));
+        let mut tailer = LogTailer::default();
+        let mut durable = DurableState::open(&data);
+        durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+        let (scanned, _) = tailer.sweep(&env, now, None);
+        state.lock().unwrap().ingest_scanned(scanned);
+        durable.mark_dirty();
+        durable.tick(&tailer, &state, true);
+
+        let parent_id = "cccccccc-1111-2222-3333-444444444444";
+        let mut cards = DeltaLog::new(&data, "log-sessions").load().unwrap();
+        let original_1h = cards[parent_id]["cacheCreate1hTokens"].as_f64().unwrap();
+        assert!(original_1h > 0.0, "fixture must actually exercise the 1h tier for this test to mean anything");
+        cards.get_mut(parent_id).unwrap().as_object_mut().unwrap().remove("cacheCreate1hTokens");
+        DeltaLog::new(&data, "log-sessions").save(&cards).unwrap();
+
+        // Age the transcript, then Run 2: restore() decides whether to queue it, the step fills it.
+        let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+        std::fs::File::options().write(true).open(home.join(CLAUDE_REL)).unwrap().set_modified(aged).unwrap();
+        let state2 = std::sync::Mutex::new(CoreState::open(&data.join("spans2")));
+        let mut tailer2 = LogTailer::default();
+        let mut durable2 = DurableState::open(&data);
+        durable2.restore(&mut tailer2, &mut state2.lock().unwrap(), &env).unwrap();
+        durable2.run_1h_backfill_step(&state2);
+        let field = state2.lock().unwrap().cards.get(parent_id).unwrap()["cacheCreate1hTokens"].as_f64();
+
+        drop(durable2);
+        drop(state2);
+        let _ = std::fs::remove_dir_all(&data);
+        let _ = std::fs::remove_dir_all(&home);
+        (original_1h, field)
+    };
+
+    let (_, past_limit) = backfill_with_transcript_aged("backfill-age-31d", 31);
+    assert_eq!(past_limit, None, "a transcript older than the limit is skipped, not re-read");
+    let (original_1h, inside_limit) = backfill_with_transcript_aged("backfill-age-29d", 29);
+    assert_eq!(inside_limit, Some(original_1h), "one inside the limit is backfilled");
+}
+
 /// TRDD-ORGJ0E3G follow-up: `run_1h_backfill_step` must NOT trigger `CardStore::persist_snapshot()`,
 /// the whole-store persist input. Since DA0GN1CS the whole-store save is an O(corpus) strip-and-hash
 /// with no DuckDB scan, and calling it once per 200-file chunk (~45x on the measured 8,846-file corpus)
