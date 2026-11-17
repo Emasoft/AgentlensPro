@@ -1,10 +1,10 @@
 ---
 trdd-id: O4LU9SYJ
 title: The first card save comes about 60 s after start whatever the boot sweep took
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-11-17T13:18:58+0100
-updated: 2026-11-17T14:51:32+0100
+updated: 2026-11-17T14:51:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,6 +34,7 @@ Run the first card save right after the boot sweep (one tick there), not at the 
 
 - 2026-11-17T13:18:58+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-17T13:30:12+0100 — column → dev by main-agent@agentlenspro. cause read, plan on the card, work starts
+- 2026-11-17T14:51:40+0100 — COMPLETE by main-agent@agentlenspro. both acceptance boxes met on a real server at sample scale; landed as 30af4548; mutation run, tests, clippy and hand scan recorded on the card; open limits live on TRDD-WCG7I5D8, TRDD-YR6WX7VQ, TRDD-TCVE8E4D.
 
 ## STATE
 
