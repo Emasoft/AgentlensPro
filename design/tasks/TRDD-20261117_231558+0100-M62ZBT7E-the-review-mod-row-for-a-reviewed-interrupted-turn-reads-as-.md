@@ -1,10 +1,10 @@
 ---
 trdd-id: M62ZBT7E
 title: The review mod row for a reviewed interrupted turn reads as a failed review
-column: todo
+column: dev
 status: tasked
 created: 2026-11-17T23:15:58+0100
-updated: 2026-11-18T00:00:51+0100
+updated: 2026-11-18T00:07:03+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,6 +37,7 @@ For the review of a turn that was cut short the review mod prints one user-only 
 ## Approval log
 
 - 2026-11-17T23:15:58+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T00:07:03+0100 — column → dev by main-agent@agentlenspro. the mods-expert-developer agent is working on it (owner directive 2026-11-18)
 
 ## Notes
 

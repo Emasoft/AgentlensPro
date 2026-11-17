@@ -1,10 +1,10 @@
 ---
 trdd-id: ISEF8YO7
 title: The report of a review of an interrupted turn was not shown in the four Stop displays that followed
-column: todo
+column: dev
 status: tasked
 created: 2026-11-17T23:34:06+0100
-updated: 2026-11-18T00:00:51+0100
+updated: 2026-11-18T00:07:03+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -40,6 +40,7 @@ Found while checking TRDD-M62ZBT7E against a harness review. In another session 
 ## Approval log
 
 - 2026-11-17T23:34:06+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T00:07:03+0100 — column → dev by main-agent@agentlenspro. the mods-expert-developer agent is working on it (owner directive 2026-11-18)
 
 ## Notes
 
