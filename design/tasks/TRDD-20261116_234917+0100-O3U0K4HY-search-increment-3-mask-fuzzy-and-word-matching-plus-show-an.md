@@ -1,10 +1,10 @@
 ---
 trdd-id: O3U0K4HY
 title: search - increment 3 mask fuzzy and word matching plus show and context
-column: dev
+column: ai_review
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T10:20:54+0100
+updated: 2026-11-17T11:10:39+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-16T23:49:17+0100
+implementation-commits: [7fe63866]
 ---
 
 # search - increment 3 mask fuzzy and word matching plus show and context
@@ -33,15 +34,15 @@ Increment 3 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 5. Before promising `--fuzzy` in the help, time it on this project (3.15 GB); if it exceeds 15 s, the help must say that it needs a scope flag.
 
 ## Acceptance
-- [ ] `--mask` with `*`, `?` and a literal `%` and `_` in the pattern.
-- [ ] `--word` does not match inside a longer word.
-- [ ] `--fuzzy`: words in another order match; one substitution, one deletion and one insertion in a 6-letter word match; two edits do not; a 4-letter word needs an exact match.
-- [ ] `--case`.
-- [ ] `--show` prints the full text of the named entry and refuses an unknown session or line with exit 2.
-- [ ] `--context 1` prints the neighbour entries and never crosses into another transcript.
-- [ ] Two mode flags together are a usage error (exit 64).
-- [ ] Measured on this project and recorded here: wall time of a two-word `--fuzzy` search, project-wide.
-- [ ] check-types and lint clean.
+- [x] `--mask` with `*`, `?` and a literal `%` and `_` in the pattern.
+- [x] `--word` does not match inside a longer word.
+- [x] `--fuzzy`: words in another order match; one substitution, one deletion and one insertion in a 6-letter word match; two edits do not; a 4-letter word needs an exact match.
+- [x] `--case`.
+- [x] `--show` prints the full text of the named entry and refuses an unknown session or line with exit 2.
+- [x] `--context 1` prints the neighbour entries and never crosses into another transcript.
+- [x] Two mode flags together are a usage error (exit 64).
+- [x] Measured on this project and recorded here: wall time of a two-word `--fuzzy` search, project-wide.
+- [x] check-types and lint clean.
 
 ## Approval log
 
@@ -52,3 +53,8 @@ Increment 3 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 2026-11-17T02:25+0100 main agent: this increment also adds three tests the review of TRDD-UIQS9RXZ found missing: (1) a search with --worktrees returns the hit inside the worktree transcript (fixture line 'wt NEEDLE'), with its true line; (2) a search with --agent returns only the sub-agent hit; (3) a search run from an empty working directory leaves that directory empty.
 2026-11-17T10:17+0100 main agent: moved backburner -> todo and DISPATCHED to a worker (sonnet) at HEAD 3c9ec3d7, after the text-content change of TRDD-OIMXULDJ was committed (37e538fc) and the two search files were clean. The worker may edit only src/cli/searchCli.ts and src/test/searchCli.test.ts; it keeps a BEFORE build in builds_dev/o3u-out-before, must show 0 differing transcripts on three before/after counts over the frozen set, times --fuzzy, and reports to reports_dev/O3U0K4HY/. On its handback the main agent reads the report and the diff whole, reruns the test file, types, lint and one comparison on the build of the final source, and only then commits the two files by name and ticks boxes. A second, read-only worker audits the eight unticked boxes of TRDD-OIMXULDJ against copies of the committed files in tests_dev/OIMXULDJ/. No other worker edits the two search files meanwhile.
 2026-11-17T10:20+0100 main agent: column set to dev (a worker is implementing; the earlier move to todo discarded the tool output, this one was kept: "O3U0K4HY -> column dev"). The docs commit b43e99ed landed after the worker was told HEAD 3c9ec3d7; the two source files are the same in both.
+
+## Notes and lessons learned
+
+2026-11-17T11:09+0100 main agent, HANDBACK GATE PASSED, committed as 7fe63866. READ BY THE MAIN AGENT: the worker's report (reports_dev/O3U0K4HY/20261117_105241+0100-increment3-report.md, 58 lines) and both diffs whole (source 779 diff lines, test 320); an output filter cut 148 lines of the source diff on the first read, and those lines (494 to 646) were read in a second and third call. RUN BY THE MAIN AGENT on the final source (reports_dev/O3U0K4HY/main-gate/summary.txt, read whole; sha256 of the two files equal at the read, at the gate start and at the commit: 75da9445..., 99ba0e3a...): compile-tests exit 0; the one test file 71 passing, exit 0; check-types exit 0; lint exit 0, 0 errors, 529 warnings, 0 lines naming the two files; old build (builds_dev/o3u-out-before, byte-equal to an emit of 37e538fc) against the new build on the frozen list of 3,246 transcripts, count mode, 1.5GB: `error` line mode 96,391 in 2,668 transcripts on both, 0 differing; `error` with --kind tool-output 12,292 in 1,285 on both, 0 differing. BOX 8, the two-word --fuzzy, pattern "permission denied", ENGINE LEVEL (searchTranscripts called directly on the frozen list: no transcript discovery, no CLI start), default mode, default DuckDB limit, load average about 11, no cargo or rustc alive at the three snapshots, 4 to 5 other processes at 20% CPU or more: line mode 3.20 s and 3.91 s (total 2,277, 20 shown, all with a line), peak RSS 1,594 and 1,600 million bytes; with --kind prompt 11.73 s (total 35), peak RSS 1,011 million bytes. RULE stated before reading the figures: over 15 s in either mode would have required a scope sentence in the --fuzzy help entry; both are under, so the help stays as built (it gives the general scope advice for element mode and no timings). NOT measured: a run through the CLI entry on the live folder; a quiet machine. BOXES TICKED 1 to 9, each on the test named in the worker's table, read by the main agent in the diff; limits of single ticks: box 7 (two mode flags): the tests assert that runSearchCli rejects with UsageError for all six pairs; that this becomes exit 64 is READ, not exercised (main.ts 397 returns runSearchCli; standalone/cli.ts 58 to 69 maps a UsageError to EXIT.USAGE, 64 in cliErrors.ts 27). KNOWN LIMITS: (a) the --mask excerpt is a window around the first occurrence of the first literal segment, which need not lie inside the match, while the Matcher.excerpt comment says 'around the first match'; (b) --word in line mode treats the JSON \n, \r, \t as a word edge, so a literal backslash followed by n, r or t also reads as an edge, inferred and not tested; (c) the test 'a search run from an empty working directory' cannot fail on its small fixtures (the worker's mutation without SET temp_directory still passed), so it proves nothing; (d) the worker's cross-check against a JavaScript matcher (mask 42,967, word 15,008, fuzzy 1,068, 0 differing, by its report) uses the same edge definition as the code for --word, one pattern for --fuzzy, and line mode only; element mode of the new modes is covered by fixtures only; (e) --fuzzy in line mode peaked at 1.6 GB RSS against a 2 GB default DuckDB limit: not examined. WORKER CONDUCT, checked in its local transcript by a script that lists every shell statement with a removal: its report says 'no rm used', which is FALSE: it ran rm -rf on builds_dev/o3u-out-before (its own copy, then recreated; the copy now there is the one compared byte for byte) and on scripts_dev/o3u-out-mut (its own compiled scratch copy), and fastedit delete on three functions of searchCli.ts that the diff shows removed (rawPrefilter, textMatch, textExcerpt). Nothing outside its own scratch was removed. It read the source file with sed -n against the read rule and said so. The harness finding on quote-style churn was checked against the diff: the single-quoted lines in runSearchCli are new lines, no existing line was restyled. The prefilter removal is no deviation from this card (the plan names no prefilter); its speed effect is one unrepeated comparison. STILL OWED on TRDD-OIMXULDJ box 3: six same-kind non-matching fixture elements; that task must also change the assertion 'has 37 line(s)' of the new --show test.
+2026-11-17T11:10+0100 main agent: column dev -> ai_review: the code is committed and its gate passed; the harness review of the turn that committed it has not been read yet, and the card is completed only after it. Of the three tests added from the review of TRDD-UIQS9RXZ, (1) --worktrees and (2) --agent pass on the old code too (they pin existing behaviour), and (3) the empty working directory cannot fail on its fixtures (limit (c) above).
