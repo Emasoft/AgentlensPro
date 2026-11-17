@@ -425,6 +425,8 @@ const result = (id: string, content: unknown, extra: Record<string, unknown> = {
   ({ type: "user", timestamp: stamp(10), ...extra, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }] } })
 const sys = (subtype: string, extra: Record<string, unknown>): Record<string, unknown> => ({ type: "system", subtype, timestamp: stamp(20), ...extra })
 const asLine = (obj: Record<string, unknown>): string => JSON.stringify(obj)
+const unknownSub = sys("brand_new_subtype", { uuid: "UNKNOWN-ENV-u" })
+const twin = { type: "user", timestamp: stamp(34), message: { role: "user", content: "twin TWINWORD" } }
 const MAIN: Fx[] = [
   /* 1 */ { obj: { type: "user", timestamp: stamp(0), message: { role: "user", content: "please fix the ENOENT crash" } }, els: [{ kinds: ["prompt"], text: "please fix the ENOENT crash" }] },
   /* 2 */ {
@@ -459,6 +461,18 @@ const MAIN: Fx[] = [
   // 26 and 27: request entries holding a copy of a call and its output. els is empty on purpose: they are out of element mode by default (own test).
   /* 26 */ { obj: { type: "api-request-blob", timestamp: stamp(31), message: { role: "assistant", content: [call("Bash", "tb9", { command: "git BLOBX" }).block] } }, els: [] },
   /* 27 */ { obj: { type: "api-request-blob", timestamp: stamp(32), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tb9", content: "result BLOBX" }] } }, els: [] },
+  // 28 to 34: text of system and attachment entries. ENVWORD and UNKNOWN-ENV sit only in the ENVELOPE (uuid, identity), PAYLOAD-* and TEXTONLY only in the payload fields.
+  /* 28 */ { obj: sys("stop_hook_summary", { hookInfos: [{ command: "PAYLOAD-hs" }], hookErrors: [], stopReason: "", uuid: "ENVWORD-u1" }), els: [{ kinds: ["hook"], text: "PAYLOAD-hs" }] },
+  /* 29 */ { obj: sys("api_error", { error: { message: "PAYLOAD-ae" }, source: "repl_main_thread", uuid: "ENVWORD-u2" }), els: [{ kinds: ["error"], text: "PAYLOAD-ae" }] },
+  /* 30: turn_duration has no payload text: it never matches, whatever the pattern */ { obj: sys("turn_duration", { durationMs: 1234, messageCount: 5, uuid: "ENVWORD-u3" }), els: [] },
+  /* 31: a subtype that is not named keeps the raw line as its text */ { obj: unknownSub, els: [{ kinds: ["system"], text: asLine(unknownSub) }] },
+  /* 32: an attachment with only a text field, and an identity object that must not be searched when the text exists */ { obj: { type: "attachment", timestamp: stamp(33), attachment: { type: "model", identity: { name: "ENVWORD-id" }, text: "TEXTONLY-att" } }, els: [{ kinds: ["attachment"], text: "TEXTONLY-att" }] },
+  // 33 and 34: two byte-identical lines
+  /* 33 */ { obj: twin, els: [{ kinds: ["prompt"], text: "twin TWINWORD" }] },
+  /* 34 */ { obj: twin, els: [{ kinds: ["prompt"], text: "twin TWINWORD" }] },
+  /* 35: every payload field of stop_hook_summary populated, hookInfos empty */ { obj: sys("stop_hook_summary", { hookInfos: [], hookErrors: ["PAYLOAD-he"], hookAdditionalContext: ["PAYLOAD-hc"], stopReason: "PAYLOAD-sr", uuid: "ENVWORD-u4" }), els: [{ kinds: ["hook"], text: "PAYLOAD-he\nPAYLOAD-hc\nPAYLOAD-sr" }] },
+  /* 36: api_error with a source and no error object */ { obj: sys("api_error", { source: "PAYLOAD-src", uuid: "ENVWORD-u5" }), els: [{ kinds: ["error"], text: "PAYLOAD-src" }] },
+  /* 37: api_error with an error object and no source */ { obj: sys("api_error", { error: { message: "PAYLOAD-only-error" }, uuid: "ENVWORD-u6" }), els: [{ kinds: ["error"], text: "PAYLOAD-only-error" }] },
 ]
 const SUBF: Fx[] = [
   { obj: { type: "user", timestamp: stamp(30), message: { role: "user", content: "sub start NEEDLE-sp" } }, els: [{ kinds: ["prompt"], text: "sub start NEEDLE-sp" }] },
@@ -656,5 +670,85 @@ suite("searchCli — element mode (TRDD-OIMXULDJ)", () => {
     assert.deepStrictEqual(Object.keys(json.hits[0]).sort(), ["agent", "excerpt", "file", "kind", "line", "role", "session", "tool", "ts", "type"])
     const lineMode = JSON.parse((await runCli(["NEEDLE-o", "--project", PROJECT_E, "--json"])).out) as { hits: Array<Record<string, unknown>> }
     assert.deepStrictEqual(Object.keys(lineMode.hits[0]).sort(), ["agent", "excerpt", "file", "line", "role", "session", "ts", "type"], "line mode is unchanged")
+  })
+
+  test("a system entry without content matches on its payload fields, not on its envelope; an unnamed subtype keeps the raw line", async function () {
+    this.timeout(60_000)
+    const kinds = ["hook", "error", "system", "attachment"]
+    assert.strictEqual((await runE("ENVWORD", { kinds })).total, 0, "ENVWORD is only in uuid / identity fields of stop_hook_summary, api_error, turn_duration and an attachment that has text")
+    assert.strictEqual((await runE("ENVWORD", { kinds, regex: true })).total, 0, "a regex sees the same text")
+    assert.deepStrictEqual(gotElements((await runE("PAYLOAD-hs", { kinds: ["hook"] })).hits), ["main#28:hook"])
+    assert.deepStrictEqual(gotElements((await runE("PAYLOAD-ae", { kinds: ["error"] })).hits), ["main#29:error"])
+    assert.deepStrictEqual(gotElements((await runE("repl_main_thread", { kinds: ["error"] })).hits), ["main#29:error"], "api_error: the source field is payload")
+    assert.deepStrictEqual(gotElements((await runE("UNKNOWN-ENV", { kinds: ["system"] })).hits), ["main#31:system"], "an unnamed subtype: the raw line, envelope included")
+    assert.strictEqual((await runE("hookInfos", { kinds: ["hook"] })).total, 0, "a field NAME is not text")
+    assert.deepStrictEqual(gotElements((await runE("PAYLOAD-he", { kinds: ["hook"] })).hits), ["main#35:hook"], "hookErrors alone")
+    assert.deepStrictEqual(gotElements((await runE("PAYLOAD-hc", { kinds: ["hook"] })).hits), ["main#35:hook"], "hookAdditionalContext alone")
+    assert.deepStrictEqual(gotElements((await runE("PAYLOAD-sr", { kinds: ["hook"] })).hits), ["main#35:hook"], "stopReason alone")
+    assert.deepStrictEqual(gotElements((await runE("PAYLOAD-src", { kinds: ["error"] })).hits), ["main#36:error"], "api_error with no error object")
+    assert.deepStrictEqual(gotElements((await runE("PAYLOAD-only-error", { kinds: ["error"] })).hits), ["main#37:error"], "api_error with no source")
+  })
+
+  test("turn_duration has no text: a pattern that matches the empty string hits every other element of the kind and never it", async function () {
+    this.timeout(60_000)
+    const r = await runE("a?", { kinds: ["system"], regex: true })
+    assert.deepStrictEqual(gotElements(r.hits), expectedElements("", ["system"]), "the informational entry and the unnamed subtype, nothing else")
+    assert.ok(!gotElements(r.hits).some(s => s.startsWith("main#30:")), "turn_duration (line 30)")
+    const hooks = await runE("a?", { kinds: ["hook"], regex: true })
+    assert.ok(gotElements(hooks.hits).some(s => s.startsWith("main#28:")), "line 28 holds hookInfos, so it has text")
+  })
+
+  test("an attachment with only a text field is found, and its envelope is not", async function () {
+    this.timeout(60_000)
+    assert.deepStrictEqual(gotElements((await runE("TEXTONLY", { kinds: ["attachment"] })).hits), ["main#32:attachment"])
+    assert.deepStrictEqual(gotElements((await runE("^TEXTONLY-att$", { kinds: ["attachment"], regex: true })).hits), ["main#32:attachment"], "the element text is the text field itself, not the attachment JSON")
+    assert.strictEqual((await runE("TEXTONLY", { kinds: ["hook", "command"] })).total, 0, "an attachment of another kind")
+  })
+
+  test("two byte-identical matching lines of one transcript get two different line numbers in element mode", async function () {
+    this.timeout(60_000)
+    const r = await runE("TWINWORD", { kinds: ["prompt"] })
+    assert.deepStrictEqual(r.hits.map(h => h.line as number).sort((a, b) => a - b), [33, 34])
+    const f: TranscriptFile = { path: FILE_E, session: "eeeeeeee", agent: null, size: fs.statSync(FILE_E).size, mtimeMs: 0 }
+    assert.deepStrictEqual((await searchTranscripts([f], "TWINWORD", { kinds: ["prompt"], limit: 1 })).hits.map(h => h.line), [33], "limit 1 on one transcript: the first of the two")
+  })
+})
+
+// ── scope filters in element mode and model-change mode (TRDD-OIMXULDJ) ─────────────────────────────
+const PROJECT_F = "/fake/scope"
+const DIR_F = path.join(CFG, "projects", projectSlugOf(PROJECT_F))
+const entryF = (n: number, role: "user" | "assistant", model: string | null, branch: string, text: string): Record<string, unknown> => ({
+  type: role, timestamp: `2026-08-${String(10 + n).padStart(2, "0")}T10:00:00.000Z`, gitBranch: branch,
+  message: role === "user" ? { role, content: text } : { role, model, content: [{ type: "text", text }] },
+})
+writeJsonl(path.join(DIR_F, "ffffffff-1111-2222-3333-444444444444.jsonl"), [
+  entryF(0, "user", null, "br-a", "SCOPEWORD one"), entryF(1, "assistant", "m-x", "br-b", "SCOPEWORD two"),
+  entryF(2, "assistant", "m-y", "br-a", "SCOPEWORD three"), entryF(3, "assistant", "m-z", "br-b", "SCOPEWORD four"),
+])
+
+suite("searchCli — scope filters in element and model-change mode (TRDD-OIMXULDJ)", () => {
+  suiteSetup(pointAtFixture)
+  suiteTeardown(restoreConfig)
+  const runF = (pattern: string, opts: SearchOptions) => searchTranscripts(discoverTranscripts(PROJECT_F, {}), pattern, { limit: 500, ...opts })
+  const lines = (hits: SearchHit[]): number[] => hits.map(h => h.line as number).sort((a, b) => a - b)
+  const changes = (hits: SearchHit[]): string[] => hits.map(h => `${h.line}:${h.excerpt}`).sort()
+  const TEXT_KINDS = ["prompt", "response"]
+
+  test("element mode: --since, --role and --branch each keep exactly the matching elements", async function () {
+    this.timeout(60_000)
+    assert.deepStrictEqual(lines((await runF("SCOPEWORD", { kinds: TEXT_KINDS })).hits), [1, 2, 3, 4], "no filter")
+    assert.deepStrictEqual(lines((await runF("SCOPEWORD", { kinds: TEXT_KINDS, since: "2026-08-12T00:00:00.000Z" })).hits), [3, 4])
+    assert.deepStrictEqual(lines((await runF("SCOPEWORD", { kinds: TEXT_KINDS, role: "user" })).hits), [1])
+    assert.deepStrictEqual(lines((await runF("SCOPEWORD", { kinds: TEXT_KINDS, role: "assistant" })).hits), [2, 3, 4])
+    assert.deepStrictEqual(lines((await runF("SCOPEWORD", { kinds: TEXT_KINDS, branch: "br-b" })).hits), [2, 4])
+    assert.deepStrictEqual(lines((await runF("SCOPEWORD", { kinds: TEXT_KINDS, branch: "br-a", role: "assistant", since: "2026-08-12T00:00:00.000Z" })).hits), [3], "the three filters together")
+  })
+
+  test("model-change mode: --since and --branch filter the changes, and a filtered-out entry still counts as the previous model (--role is not applied in this mode: known gap, not asserted)", async function () {
+    this.timeout(60_000)
+    assert.deepStrictEqual(changes((await runF("", { kinds: ["model-change"] })).hits), ["3:m-x -> m-y", "4:m-y -> m-z"], "no filter")
+    assert.deepStrictEqual(changes((await runF("", { kinds: ["model-change"], since: "2026-08-13T00:00:00.000Z" })).hits), ["4:m-y -> m-z"])
+    assert.deepStrictEqual(changes((await runF("", { kinds: ["model-change"], branch: "br-a" })).hits), ["3:m-x -> m-y"])
+    assert.deepStrictEqual(changes((await runF("", { kinds: ["model-change"], branch: "br-b" })).hits), ["4:m-y -> m-z"])
   })
 })

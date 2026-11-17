@@ -74,6 +74,10 @@ elements (any of --kind, --tool, --file or --commit searches ELEMENTS instead of
   line (a quote is \\" there): the same pattern, and above all the same --regex, can give different hits with and without
   --kind. In element mode total, --count and --files count ELEMENTS, not lines (one line can hold several). The excerpt
   is readable text, not JSON. It is slower than line mode: every kept line is parsed into its blocks.
+  The text of an element is plain text only for the content and text fields: a tool call's text is its name, a newline, then its input JSON.
+  A system entry with no content field is matched on its own fields: stop_hook_summary on hookInfos, hookErrors, hookAdditionalContext and
+  stopReason, api_error on error and source, turn_duration on nothing; any other such subtype on its whole raw line. An attachment is matched
+  on its content, then its text, then its whole JSON.
 output:
   --limit N            max matches to print (default 20, max 500)
   --width N            excerpt length in characters (default 300, max 2000)
@@ -513,7 +517,7 @@ function elementRows(input: string, pass: string, f: ElementFields): string {
   // nodes evaluated on a row once the 400-700 KB instructions / prompt_snapshot attachment lines are present (4 such nodes already ran out of memory at
   // 1.5GB); the old text ran ~14-24 nodes per attachment row, and one extract alone (without the per-kind gating) still failed. The fix is the one extract
   // PLUS the gating. INFERRED, not shown: why (a parse retained per node per 2048-row vector).
-  const ATT_PARTS = ["$.attachment", "$.attachment.content", "$.attachment.stdout", "$.attachment.stderr", "$.attachment.blockingError", "$.attachment.prompt"]
+  const ATT_PARTS = ["$.attachment", "$.attachment.content", "$.attachment.stdout", "$.attachment.stderr", "$.attachment.blockingError", "$.attachment.prompt", "$.attachment.text"]
   const attPart = (k: number): string => `aparts[${k + 1}]`
   const attText = (k: number): string => textOf(attPart(k))
   const attJson = `CAST(${attPart(0)} AS VARCHAR)`
@@ -531,11 +535,19 @@ function elementRows(input: string, pass: string, f: ElementFields): string {
     `WHEN ${sq("summary")} THEN ${kindList("compact")} WHEN ${sq("queue-operation")} THEN ${kindList("command")} `
   const attKinds = `WHEN ${sq("attachment")} THEN (CASE WHEN ${hook} THEN ${kindList("hook")} WHEN atype = ${sq("queued_command")} THEN ${kindList("command")} ELSE ${kindList("attachment")} END) `
   const entryKinds = `(CASE type ${needs.sys ? sysKinds : ""}${needs.att ? attKinds : ""}ELSE ${NO_KINDS} END)`
-  const sysText = `WHEN ${sq("system")} THEN coalesce(${textOf(jraw("obj", "$.content"))}, raw) ` +
+  // A system entry without a `content` field (stop_hook_summary, api_error, turn_duration: the three measured on the frozen set) carries its payload in other
+  // fields. Matching its whole raw line made the ENVELOPE (uuid, cwd, field names) match as well, so the text is the payload fields only; turn_duration has
+  // none, so no text. A subtype not named here keeps the raw line. nullif: in DuckDB concat_ws of only NULLs is the EMPTY STRING, and a pattern that matches the
+  // empty string would hit every such line; an empty array is '[]', also no payload.
+  const sysField = (p: string): string => `nullif(CASE json_type(${jraw("obj", p)}) WHEN ${sq("VARCHAR")} THEN ${jstr("obj", p)} ELSE CAST(${jraw("obj", p)} AS VARCHAR) END, ${sq("[]")})`
+  const sysPayload = `(CASE sub WHEN ${sq("stop_hook_summary")} THEN nullif(concat_ws(chr(10), ${["$.hookInfos", "$.hookErrors", "$.hookAdditionalContext", "$.stopReason"].map(sysField).join(", ")}), ${sq("")}) ` +
+    `WHEN ${sq("api_error")} THEN nullif(concat_ws(chr(10), ${["$.error", "$.source"].map(sysField).join(", ")}), ${sq("")}) ` +
+    `WHEN ${sq("turn_duration")} THEN ${nullText} ELSE raw END)`
+  const sysText = `WHEN ${sq("system")} THEN coalesce(${textOf(jraw("obj", "$.content"))}, ${sysPayload}) ` +
     `WHEN ${sq("summary")} THEN ${jstr("obj", "$.summary")} WHEN ${sq("queue-operation")} THEN ${textOf(jraw("obj", "$.content"))} `
   const attBranch = `WHEN ${sq("attachment")} THEN (CASE WHEN ${hook} THEN ${needs.attHook ? `coalesce(nullif(concat_ws(chr(10), ${attText(1)}, ${attText(2)}, ${attText(3)}, ${attText(4)}), ${sq("")}), ${attJson})` : nullText} ` +
     `WHEN atype = ${sq("queued_command")} THEN ${needs.attQueued ? `coalesce(${attText(5)}, ${attJson})` : nullText} ` +
-    `ELSE ${needs.attOther ? `coalesce(${attText(1)}, ${attJson})` : nullText} END) `
+    `ELSE ${needs.attOther ? `coalesce(${attText(1)}, ${attText(6)}, ${attJson})` : nullText} END) `
   const entryText = `(CASE type ${needs.sys ? sysText : ""}${needs.att ? attBranch : ""}END)`
   // toolUseResult.file is an OBJECT holding the file content for a Read: only its filePath is compared, never the content.
   const tfile = `coalesce(${jstr("tur", "$.filePath")}, CASE json_type(tur, ${sq("$.file")}) WHEN ${sq("VARCHAR")} THEN ${jstr("tur", "$.file")} ` +
@@ -898,7 +910,7 @@ function scopeFilters(opts: SearchOptions, mode: "line" | "element" | "change"):
     if (opts.type) filters.push(`type = ${sq(opts.type)}`)
   }
   // An explicit --type already says which entries are wanted, so the default exclusions only apply without it.
-  // Request entries are out of element mode too (owner ruling 2026-11-17): an api-request-blob holds a COPY of the whole conversation, so
+  // Request entries are out of element mode too (a ruling of the main agent, 2026-11-17, not the owner's): an api-request-blob holds a COPY of the whole conversation, so
   // its tool_use / tool_result blocks would be counted a second time (measured on this project: 5573 of the 14614 Bash "git" call blocks sit in
   // blobs, and 30963 of the 93635 Bash call blocks).
   if (mode !== "change" && !opts.type && !opts.includeRequests) filters.push(`coalesce(type, ${sq("")}) NOT IN (${REQUEST_TYPES.map(sq).join(",")})`)
