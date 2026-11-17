@@ -514,6 +514,15 @@ suite("searchCli — element mode (TRDD-OIMXULDJ)", () => {
     assert.strictEqual((await runE("NEEDLE-meta", { kinds: ["prompt"] })).total, 0, "isMeta user entries are not prompts")
   })
 
+  test("hook + attachment + command searched together find the union of the three kinds, each element once (attachment text branches are built per selected kind)", async function () {
+    this.timeout(60_000)
+    const sel = ["hook", "attachment", "command"]
+    const r = await runE("NEEDLE", { kinds: sel })
+    assert.deepStrictEqual(gotElements(r.hits), expectedElements("NEEDLE", sel))
+    assert.strictEqual(r.total, expectedElements("NEEDLE", sel).length)
+    assert.ok(expectedElements("NEEDLE", sel).some(s => s.endsWith(":hook")) && expectedElements("NEEDLE", sel).some(s => s.endsWith(":command")) && expectedElements("NEEDLE", sel).some(s => s.endsWith(":attachment")), "the fixture holds all three kinds")
+  })
+
   test("--tool returns the call and its output, a * mask works, an unknown tool finds nothing", async function () {
     this.timeout(60_000)
     const bash = (e: Fx["els"][number]): boolean => e.tool === "Bash"

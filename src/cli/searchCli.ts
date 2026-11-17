@@ -453,7 +453,10 @@ const ENTRY_COLUMNS = [
   `${jraw("obj", "$.toolUseResult")} AS tur`,
 ].join(", ")
 
-interface ElementNeeds { plain: boolean; sys: boolean; att: boolean; text: boolean; thinking: boolean; call: boolean; output: boolean }
+interface ElementNeeds {
+  plain: boolean; sys: boolean; att: boolean; attHook: boolean; attQueued: boolean; attOther: boolean
+  text: boolean; thinking: boolean; call: boolean; output: boolean
+}
 interface ElementFields { file?: string; commit?: string; needs: ElementNeeds; keep?: string }
 
 /** SQL for the elements of the lines of `input`: a table expression with the columns obj (the parsed line, NULL when invalid), raw (its text),
@@ -505,10 +508,23 @@ function elementRows(input: string, pass: string, f: ElementFields): string {
   const plainKinds = `(CASE WHEN type = ${sq("assistant")} THEN ${kindList("response")} ` +
     `WHEN type = ${sq("user")} AND NOT ismeta THEN (CASE WHEN starts_with(${plain}, ${sq("<command-name>")}) THEN ${kindList("command")} ELSE ${kindList("prompt")} END) ` +
     `ELSE ${NO_KINDS} END)`
-  const att = jraw("obj", "$.attachment")
-  const attText = (p: string): string => textOf(jraw(att, `$.${p}`))
-  const attJson = `CAST(${att} AS VARCHAR)`
+  // ONE json_extract per attachment line whose text is built (it returns every part the attachment texts read), and attachment text is built only for
+  // the branches (hook / queued_command / other) that a selected kind reads. MEASURED (TRDD-OIMXULDJ): memory grows with the number of JSON function
+  // nodes evaluated on a row once the 400-700 KB instructions / prompt_snapshot attachment lines are present (4 such nodes already ran out of memory at
+  // 1.5GB); the old text ran ~14-24 nodes per attachment row, and one extract alone (without the per-kind gating) still failed. The fix is the one extract
+  // PLUS the gating. INFERRED, not shown: why (a parse retained per node per 2048-row vector).
+  const ATT_PARTS = ["$.attachment", "$.attachment.content", "$.attachment.stdout", "$.attachment.stderr", "$.attachment.blockingError", "$.attachment.prompt"]
+  const attPart = (k: number): string => `aparts[${k + 1}]`
+  const attText = (k: number): string => textOf(attPart(k))
+  const attJson = `CAST(${attPart(0)} AS VARCHAR)`
   const hook = `atype IN (${inList(HOOK_ATTACHMENT_TYPES)})`
+  const queued = `atype = ${sq("queued_command")}`
+  // The attachment lines that a selected kind reads the text of. A NULL atype is an "other" attachment (the ELSE of attKinds).
+  const attWanted = [needs.attHook ? hook : "", needs.attQueued ? queued : "", needs.attOther ? `NOT coalesce(${hook} OR ${queued}, false)` : ""].filter(Boolean).join(" OR ")
+  const keepExpr = f.keep !== undefined ? `coalesce(${f.keep}, false)` : "true"
+  const attWrap = needs.att && attWanted !== ""
+    ? `(SELECT *, CASE WHEN keep AND type = ${sq("attachment")} AND (${attWanted}) THEN json_extract(obj, [${inList(ATT_PARTS)}]) END AS aparts FROM (SELECT *, ${keepExpr} AS keep FROM ${input}))`
+    : `(SELECT *, ${keepExpr} AS keep FROM ${input})`
   const sysKinds = `WHEN ${sq("system")} THEN (CASE sub WHEN ${sq("stop_hook_summary")} THEN ${kindList("hook")} ` +
     `WHEN ${sq("local_command")} THEN ${kindList("command")} WHEN ${sq("api_error")} THEN ${kindList("error")} ` +
     `WHEN ${sq("scheduled_task_fire")} THEN ${kindList("cron")} WHEN ${sq("compact_boundary")} THEN ${kindList("compact")} ELSE ${kindList("system")} END) ` +
@@ -517,8 +533,9 @@ function elementRows(input: string, pass: string, f: ElementFields): string {
   const entryKinds = `(CASE type ${needs.sys ? sysKinds : ""}${needs.att ? attKinds : ""}ELSE ${NO_KINDS} END)`
   const sysText = `WHEN ${sq("system")} THEN coalesce(${textOf(jraw("obj", "$.content"))}, raw) ` +
     `WHEN ${sq("summary")} THEN ${jstr("obj", "$.summary")} WHEN ${sq("queue-operation")} THEN ${textOf(jraw("obj", "$.content"))} `
-  const attBranch = `WHEN ${sq("attachment")} THEN (CASE WHEN ${hook} THEN coalesce(nullif(concat_ws(chr(10), ${attText("content")}, ${attText("stdout")}, ${attText("stderr")}, ${attText("blockingError")}), ${sq("")}), ${attJson}) ` +
-    `WHEN atype = ${sq("queued_command")} THEN coalesce(${attText("prompt")}, ${attJson}) ELSE coalesce(${attText("content")}, ${attJson}) END) `
+  const attBranch = `WHEN ${sq("attachment")} THEN (CASE WHEN ${hook} THEN ${needs.attHook ? `coalesce(nullif(concat_ws(chr(10), ${attText(1)}, ${attText(2)}, ${attText(3)}, ${attText(4)}), ${sq("")}), ${attJson})` : nullText} ` +
+    `WHEN atype = ${sq("queued_command")} THEN ${needs.attQueued ? `coalesce(${attText(5)}, ${attJson})` : nullText} ` +
+    `ELSE ${needs.attOther ? `coalesce(${attText(1)}, ${attJson})` : nullText} END) `
   const entryText = `(CASE type ${needs.sys ? sysText : ""}${needs.att ? attBranch : ""}END)`
   // toolUseResult.file is an OBJECT holding the file content for a Read: only its filePath is compared, never the content.
   const tfile = `coalesce(${jstr("tur", "$.filePath")}, CASE json_type(tur, ${sq("$.file")}) WHEN ${sq("VARCHAR")} THEN ${jstr("tur", "$.file")} ` +
@@ -549,7 +566,7 @@ function elementRows(input: string, pass: string, f: ElementFields): string {
       ${needs.output ? `coalesce(json_exists(tur, ${sq("$.structuredPatch")}) OR json_exists(tur, ${sq("$.bashEditDiff")}), false)` : "false"} AS patch,
       ${needs.output ? tfile : nullText} AS tfile, ${needs.output ? `CAST(${jraw("tur", "$.gitOperation")} AS VARCHAR)` : nullText} AS tgit,
       ${blocks} AS bl
-    FROM (SELECT *, ${f.keep !== undefined ? `coalesce(${f.keep}, false)` : "true"} AS keep FROM ${input})`
+    FROM ${attWrap}`
   const level2 = `SELECT ${pass}, h, ts, type, role, ismeta, ekinds, etxt, patch, tfile, tgit, UNNEST(bl) AS b, UNNEST(range(1, len(bl) + 1)) AS i FROM (${level1})`
   return `SELECT ${pass}, h, ts, type, role,
       (CASE WHEN b IS NULL THEN ekinds ELSE ${blockKinds} END) AS kinds,
@@ -570,7 +587,12 @@ function elementNeeds(kinds: string[], toolScoped: boolean, subOnly: boolean): E
     // plain = a string message.content, sys = system / summary / queue-operation lines, att = attachment lines.
     plain: subOnly || (!toolScoped && any("prompt", "response", "command")),
     sys: subOnly || (!toolScoped && any("command", "hook", "compact", "error", "cron", "system")),
+    // att = any attachment source; attHook / attQueued / attOther = the three attachment text branches (hook attachment types, queued_command, every
+    // other type), so that a search for hooks never builds the text of the big attachments (prompt_snapshot, instructions) that only --kind attachment reads.
     att: subOnly || (!toolScoped && any("command", "hook", "attachment")),
+    attHook: subOnly || (!toolScoped && any("hook")),
+    attQueued: subOnly || (!toolScoped && any("command")),
+    attOther: subOnly || (!toolScoped && any("attachment")),
     text: subOnly || (!toolScoped && any("prompt", "response", "command")),
     thinking: subOnly || (!toolScoped && any("thinking")),
     call: subOnly || toolScoped || any("tool-call", "diff", "subagent"),
