@@ -1399,6 +1399,19 @@ impl DurableState {
         self.last_cards_save = Instant::now();
     }
 
+    /// TRDD-O4LU9SYJ — one card save right after the boot sweep. WHY: `tick` returns early until
+    /// `offsets_save` (60 s by default) has passed since this state was opened, so without this a
+    /// run killed in its first minute saved no cards however early its sweep ended. WHY it does
+    /// NOT set `first_cards_saved`: the first timed tick must still make its early save for cards
+    /// that arrive between this save and that tick (an unchanged save writes 0 bytes). Offsets need
+    /// nothing here: `ingest_chunk` already appended each chunk's read positions after its puts.
+    pub fn save_cards_after_boot_sweep(&mut self, state: &std::sync::Mutex<crate::CoreState>) {
+        if self.cards_dirty {
+            self.cards_dirty = false;
+            self.save_cards(state);
+        }
+    }
+
     /// The durable-save timer (server.ts): every offsets_save — offsets when dirty, cards when
     /// dirty AND their own (slower) cadence elapsed. `force` (shutdown) flushes both now — a
     /// graceful stop loses nothing; an unchanged save costs zero bytes either way.
@@ -1664,6 +1677,11 @@ pub fn start_sweeper(
                 watch_attached,
                 watch_failed: watch_failed.len(),
             }));
+            // TRDD-O4LU9SYJ: the boot sweep's cards reach the card log now, not at the first timed
+            // tick 60 s after start. WHY after the boot report: the listeners wait on that report,
+            // and this save must not delay them. TRADE-OFF: the save runs on this sweeper thread, so the
+            // watcher loop and the 1h backfill start only after it; a first save that may compact delays them.
+            durable.save_cards_after_boot_sweep(&state);
             // TRDD-RVKQDLRD: this thread DELIBERATELY stays at normal priority (no background QoS).
             // Most of its lock holds are short (sweep ingestion is chunked, SCAN_CHUNK per lock;
             // the 1h backfill is bounded, <=200 cards per lock), but each non-empty ingest batch
@@ -1870,7 +1888,8 @@ pub fn strip_timeline_value(card: &mut Map<String, Value>) {
 
 #[cfg(test)]
 mod sweeper_backstop_tests {
-    use super::{should_full_sweep, DurableState, LogTailer};
+    use super::{should_full_sweep, start_sweeper, DurableState, LogTailer};
+    use agentlens_logscan::discovery::{Env, Platform};
     use std::time::{Duration, Instant};
 
     /// The pre-streaming whole-file implementation, kept verbatim as the oracle (TRDD-735Q3JF4).
@@ -1972,5 +1991,92 @@ mod sweeper_backstop_tests {
         assert!(saved.contains_key("early-save-card"), "the card is on disk after the first timer tick");
         drop(state);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// TRDD-O4LU9SYJ: the boot sweep's cards reach the card log at once, not at the first timed tick
+    /// 60 s after start, and that save leaves the early timed save armed. It shows: a dirty card is on
+    /// disk right after `save_cards_after_boot_sweep`, before any tick; a second call with nothing dirty
+    /// writes no bytes; `first_cards_saved` stays false; and the first timed tick still saves a card
+    /// that arrived after the boot-sweep save.
+    #[test]
+    fn the_boot_sweep_save_writes_dirty_cards_at_once_and_leaves_the_early_timed_save_armed() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("alcore-boot-cards-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = std::sync::Mutex::new(crate::CoreState::open(&dir));
+        let card = |id: &str| {
+            serde_json::json!({
+                "sessionId": id, "source": "claude_code",
+                "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": []
+            })
+        };
+        // The card log's two files, as `DeltaLog::new(dir, "log-sessions")` names them.
+        let card_log_bytes = || (std::fs::read(dir.join("log-sessions.snapshot.ndjson")).ok(), std::fs::read(dir.join("log-sessions.delta.ndjson")).ok());
+        let mut durable = DurableState::open(&dir);
+        // Set explicitly: AGENTLENS_CARDS_SAVE_MS in the environment must not change what this test proves.
+        durable.cards_save = std::time::Duration::from_millis(300_000);
+
+        state.lock().unwrap().cards.put(&card("boot-sweep-card"));
+        durable.mark_dirty();
+        durable.save_cards_after_boot_sweep(&state);
+        let saved = crate::delta_log::DeltaLog::new(&dir, "log-sessions").load().unwrap();
+        assert!(saved.contains_key("boot-sweep-card"), "the boot sweep's card is on disk before any tick");
+        let after_first_save = card_log_bytes();
+        durable.save_cards_after_boot_sweep(&state);
+        assert!(card_log_bytes() == after_first_save, "a second boot-sweep save with nothing dirty writes no bytes");
+        assert!(!durable.first_cards_saved, "the boot-sweep save does not spend the first timed tick's early save");
+
+        state.lock().unwrap().cards.put(&card("timed-card"));
+        durable.mark_dirty();
+        // Set explicitly, as the test above: AGENTLENS_OFFSETS_SAVE_MS must not change what this proves.
+        durable.offsets_save = std::time::Duration::from_millis(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        durable.tick(&LogTailer::default(), &state, false);
+        let saved = crate::delta_log::DeltaLog::new(&dir, "log-sessions").load().unwrap();
+        assert!(saved.contains_key("timed-card"), "the first timed tick saves the card that arrived after the boot-sweep save");
+        assert!(durable.first_cards_saved, "the first timed tick spends the early save");
+        drop(state);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// TRDD-O4LU9SYJ: the call in `start_sweeper` after the boot report is what writes the boot sweep
+    /// cards to the card log before the first timed tick. It boots the real sweeper thread on a fake home
+    /// with one Claude session and polls the card log for that session for up to 30 s (the poll ends
+    /// at the first hit; a starved boot sweep on the dev host once took 23 s), still inside the 60 s
+    /// offsets cadence (this assumes AGENTLENS_OFFSETS_SAVE_MS is unset), so only the boot-time save can
+    /// write it. Without the call the card log stays empty until the stop flush, and this test fails.
+    #[test]
+    fn the_sweeper_boot_writes_the_boot_sweep_cards_before_the_first_timed_tick() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("alcore-boot-sweeper-{}-{nanos}", std::process::id()));
+        let home = root.join("home");
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let rel = ".claude/projects/-Users-someone-proj/cccccccc-1111-2222-3333-444444444444.jsonl";
+        let session = home.join(rel);
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/logs-home").join(rel);
+        std::fs::copy(&fixture, &session).unwrap();
+        std::fs::File::options().write(true).open(&session).unwrap().set_modified(std::time::SystemTime::now()).unwrap();
+        let sid = "cccccccc-1111-2222-3333-444444444444";
+        let env = Env { home: home.clone(), platform: Platform::Darwin, vars: std::collections::HashMap::new() };
+        let state = std::sync::Arc::new(std::sync::Mutex::new(crate::CoreState::open(&data)));
+        let (_boot, handle) = start_sweeper(state.clone(), env, data.clone(), Duration::from_secs(3600)).unwrap();
+        let needle = format!("\"k\":\"{sid}\"");
+        let on_disk = || {
+            ["log-sessions.snapshot.ndjson", "log-sessions.delta.ndjson"]
+                .iter()
+                .any(|f| std::fs::read_to_string(data.join(f)).is_ok_and(|text| text.contains(&needle)))
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !on_disk() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let written = on_disk();
+        handle.signal();
+        assert!(handle.join_within(Duration::from_secs(30)), "the sweeper thread stops within 30 s");
+        drop(state);
+        assert!(written, "the boot sweep card is on the card log within 30 s, before any timed tick");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
