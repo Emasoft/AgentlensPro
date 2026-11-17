@@ -4,7 +4,7 @@ title: search - increment 4 help skill docs changelog and version
 column: human_review
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T12:52:51+0100
+updated: 2026-11-17T13:00:38+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -64,3 +64,4 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 - 2026-11-17 12:40+0100, main agent. Increment 4 COMMITTED as 8590184d (usage text with one line per flag and four worked examples, the usage-versus-KNOWN test, skill section, CLAUDE.md entry, CHANGELOG bullet). Read whole by the main agent: the worker's report, the five diffs, the help text as the compiled module printed it. Rerun by the main agent: compile-tests exit 0, the search test file 74 passing, check-types exit 0, eslint on both files 0 errors, check-identities exit 0, and pnpm run compile exit 0 (lint 0 errors 529 warnings; bundle rebuilt 12:28). Boxes 1 and 3 ticked. Box 2 stays OPEN for one word: the version is NOT bumped, by the owner order on TRDD-HSPUF5XH (bump only after all cards are done); skill, CLAUDE.md and CHANGELOG are done. Box 4 stays OPEN: the bare command is refused by the kill switch (exit 69), which is the owner's to lift. Known limits: the examples ran on a 4-entry fixture through the compiled module, not through the bare command; the usage test checks flag names and own lines, not what each description says; CLAUDE.md cites a report under reports/ that this repository ignores (TRDD-G4DDKLZ9). By the worker's own report it deleted the '## Commands' heading of the skill once (restored; the diff shows additions only) and wrote scratch files into the session scratchpad instead of a _dev folder.
 - 2026-11-17 12:44+0100, main agent. SUPERSEDES 'Box 2 stays OPEN' in the line above: box 2 is now ticked, after the words 'and version' were removed from its text (the bump is TRDD-HSPUF5XH's, not done). Column moved to human_review: the one open box (4, the bare command returns hits) needs the owner to lift the kill switch. implementation-commits: 8590184d.
 - 2026-11-17 12:52+0100 (clock read), main agent. CORRECTION: the times '12:40' and '12:44' on the two lines above were written without reading the clock; both lines were written between 12:28 and 12:32. Also: the report that CLAUDE.md cites (reports/search/20261117_120240+0100-project-wide-search.md, 50 lines) was read whole by the main agent at about 12:45; its figures agree with the cards and with the --fuzzy cost sentence of the help text.
+- 2026-11-17 13:00+0100 (clock read), main agent. The 'about 12:45' on the line above is an estimate, not a clock reading.
