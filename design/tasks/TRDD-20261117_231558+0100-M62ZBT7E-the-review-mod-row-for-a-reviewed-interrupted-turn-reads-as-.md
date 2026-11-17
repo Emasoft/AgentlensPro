@@ -4,7 +4,7 @@ title: The review mod row for a reviewed interrupted turn reads as a failed revi
 column: backburner
 status: tasked
 created: 2026-11-17T23:15:58+0100
-updated: 2026-11-17T23:15:58+0100
+updated: 2026-11-17T23:25:31+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -27,6 +27,7 @@ For the review of a turn that was cut short the review mod prints one user-only 
 - The report of the first one is in the next Stop display, headed "interrupted turn 22:56" with VERDICT PASS. So the review ran and was delivered.
 - INFERRED from that timing, not from documentation: a prompt submitted mid-turn ends the running turn with isAborted true. The mods documentation says only that turn.complete has isAborted true for a turn the user interrupted.
 - Code path: turn.complete with isAborted on a main, non-janitor turn starts reviewInterrupted from a timer after 1.5 s; its finally block calls logUsage with no sink, which prints the row.
+- 2026-11-17T23:25:30+0100 WIDER PASS (main agent, local read of the 4 transcripts written since the boot at 21:45, from the boot to 23:25): 3 rows 'interrupted review' in 2 sessions (2 and 1), 0 in the other two; 0 rows REVIEW FAILED and 0 rows REVIEW DEFERRED. All 3 rows follow a prompt taken from the input queue: two have the queue entries next to them (enqueue then dequeue of a typed message; in one of them the dequeue lands 8 s after the enqueue with no Stop since the turn began), one follows a slash command. The reviews took 37, 42 and 89 s. So the row is not frequent and the wording-only scope of this card stands. What stays INFERRED: that a queued prompt delivered while a turn runs ends that turn as aborted (3 of 3 rows fit; no documentation says it). COST not in scope here: each such review reads the whole conversation again (273k to 418k tokens from cache in the rows seen, 0.15 to 0.23 USD each), so every prompt typed while a turn runs buys one extra review.
 
 ## Acceptance
 - [ ] The row says in plain words that the review of an interrupted turn FINISHED, with its verdict (PASS or BLOCK) before the cost.
