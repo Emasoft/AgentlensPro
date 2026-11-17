@@ -1,10 +1,10 @@
 ---
 trdd-id: OIMXULDJ
 title: search - increment 2 categories and element level matching
-column: dev
+column: ai_review
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T11:10:35+0100
+updated: 2026-11-17T11:35:35+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-16T23:49:17+0100
-implementation-commits: [3b84e6b5, 6dce222c, 37e538fc]
+implementation-commits: [3b84e6b5, 6dce222c, 37e538fc, b626970a]
 ---
 
 # search - increment 2 categories and element level matching
@@ -46,7 +46,7 @@ Increment 1 matches the raw JSON line. Categories need the PARTS of an entry: on
 ## Acceptance
 - [x] One fixture line holding text + thinking + two tool calls yields separate hits, each with its kind, and a pattern present only in the thinking block is not reported as a response.
 - [x] A plain-string user content is found as `prompt`; a tool output present both as a block and as `toolUseResult.stdout` is counted once.
-- [ ] Each kind in the list has one test with a matching and a non-matching element.
+- [x] Each kind in the list has one test with a matching and a non-matching element.
 - [x] `--tool Bash` returns the call and its output; a `*` mask on the tool name works.
 - [x] `--file` and `--commit` each have a test. `--kind model-change` reports the fixture's change with the right line.
 - [x] A pattern containing a double quote and one containing a newline are found (the prefilter is skipped).
@@ -58,6 +58,8 @@ Increment 1 matches the raw JSON line. Categories need the PARTS of an entry: on
 - 2026-11-16T23:49:17+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-17T01:15:05+0100 — column → todo by main-agent@agentlenspro. increment 1 landed (6584d2dd, 4f134558); proposal reviewed by the harness, findings recorded on the card
 - 2026-11-17T01:15:06+0100 — column → dev by main-agent@agentlenspro. increment 1 landed (6584d2dd, 4f134558); proposal reviewed by the harness, findings recorded on the card
+- 2026-11-17T11:35:35+0100 — column → testing by main-agent@agentlenspro. all eight acceptance boxes ticked; code at 37e538fc plus test commit b626970a
+- 2026-11-17T11:35:35+0100 — column → ai_review by main-agent@agentlenspro. tests ran before the move (71 passing, types 0, lint 0); awaiting the harness review of this turn
 
 ## Engine plan after increment 1
 
@@ -94,3 +96,4 @@ Increment 1 matches the raw JSON line. Categories need the PARTS of an entry: on
 2026-11-17T10:35+0100 main agent, CORRECTION of a count in the note above and in the message of commit 0bef9b91: the number of names that the worker's uncommitted diff adds and the committed source lacks is 39, not 35 (35 was written without counting); 0 of them are in the build under test. Counted by a loop over the list of declared names in the diff (substring test with grep -F on each file).
 2026-11-17T10:37+0100 main agent, BOX 7 follow-up after its review. (1) BUILD IDENTITY NOW MEASURED: the committed source (git show 37e538fc:src/cli/searchCli.ts) emitted by TypeScript transpileModule with the options of tsconfig.test.json is byte-equal to builds_dev/o3u-out-before/test/cli/searchCli.js (75,284 bytes both, same sha256 prefix 49252ea8d990e98c); the build of 31c34fb8 is not equal (73,563 bytes), so the comparison can fail. This replaces the marker-name check, which excluded added names only, and whose list was the worker's diff as of 10:33 (481 added, 63 deleted lines). Not compared: the other modules that searchCli.js loads from that build folder; the worker's task touches two files only, and git status shows no other changed file under src. (2) CONTENTION, worded as measured: the six full process snapshots were searched for node, tsc and mocha: 37 or 38 such lines each, 4 of them of this repository in every snapshot, all at 0.0% CPU (the disk-sample monitor, two tsserver processes and the typings installer, each hours old). So at the two instants around each run no compile or test process of this repository was alive; a process that lived only between two instants is not excluded. (3) The earlier wall times on this card (28 to 33 s, 67 to 197 s, 13 to 14 s) are NOT comparable with today's: build, load, the thread setting (they record 1 thread; today's runs set none) and the pattern were not matched. No cause of the difference is claimed. (4) The figures are engine-level and one run each; a run through the CLI entry is still unmeasured.
 2026-11-17T11:10+0100 main agent: BOX 8 TICKED. On the final source of increment 3 (commit 7fe63866, which holds this increment too) the main agent ran pnpm run check-types (exit 0) and pnpm run lint (exit 0, 0 errors, 529 warnings in the whole project, 0 lint lines naming searchCli.ts or searchCli.test.ts); output reports_dev/O3U0K4HY/main-gate/. "Clean" is read as: no error, and no warning in the two files of this card. BOX 3 is the only open box: a sonnet worker adds one non-matching element of their own kind for thinking, diff, subagent, command, compact and cron to the element fixture (test file only) and adjusts the line count asserted by the --show test of increment 3 (37 lines today).
+- 2026-11-17 11:35+0100, main agent. BOX 3 TICKED on commit b626970a (test file only). The audit found six kinds (thinking, diff, subagent, command, compact, cron) with a matching element and no non-matching one. Fixture entries 38 to 43 add one each (QUIETWORD, no NEEDLE), and the per-kind test now also asserts that a QUIETWORD search of each of the six kinds returns exactly 1 element, equal to the fixture declaration. Main agent, on the final file: diff read whole (49 lines), compile-tests 0, the one mocha file 71 passing, check-types 0, eslint --quiet 0. WORKER'S REPORT, not rerun by the main agent: emptying the els of entry 38 gives 1 failing (before the presence check existed the same change gave 71 passing, which is why the check was added after the first harness review); adding a NEEDLE to entry 38 gives 1 failing. LIMITS: the presence check compares against expectedElements, the same helper as the other assertions; the count of exactly 1 is the part that does not depend on it. File lines after the two added consts move by 2 and after the comment by 3; fixture entry numbers are unchanged. The worker restored its two temporary edits by hand and one fastedit undo reverted an earlier edit of its own, which it found through git diff and reapplied. SCANNER: ubs did not finish on the test file within 600 s (exit 124, host load 25 to 44); a rerun with a 1800 s bound is in progress and its result is written below when it ends. No scanner runs at commit in this repository (see TRDD-O3U0K4HY, note of this date). Full suite not run: it waits for the push.
