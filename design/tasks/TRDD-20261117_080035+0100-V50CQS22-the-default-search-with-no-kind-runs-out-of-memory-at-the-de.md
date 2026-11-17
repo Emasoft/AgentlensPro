@@ -4,7 +4,7 @@ title: The default search with no kind runs out of memory at the default limit o
 column: dev
 status: tasked
 created: 2026-11-17T08:00:35+0100
-updated: 2026-11-17T12:35:30+0100
+updated: 2026-11-17T15:09:34+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -31,7 +31,7 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 - [x] Its per-transcript counts equal those of the current build at 16GB (reference to take before the change).
 - [ ] A test or a documented measurement guards it; types, lint and the search test file pass.
 - [ ] The memory need of the default search is measured against corpus size (or the search retries with one thread or a higher limit on an out-of-memory error), so that growth of the project does not bring the failure back unannounced.
-- [ ] It is read where an invalid-JSON line goes in line mode (the frozen set holds 10; line mode reports 0 skipped), and the obj-is-null branch of the merged filter is exercised by a committed test.
+- [x] It is read where an invalid-JSON line goes in line mode (the frozen set holds 10; line mode reports 0 skipped), and the obj-is-null branch of the merged filter is exercised by a committed test.
 
 ## Notes and lessons learned
 2026-11-17T08:04+0100 main agent, wording of this card narrowed: the measurement went through searchTranscripts (the library function the command calls) in the test build with the frozen file list, not through the agentlenspro executable; the real command may add options or pick another file set, and it was not run (the collector is disabled by the owner). A worker (sonnet) was started on this card without a separate proposal turn; its brief stops it after diagnosis if the fix needs a design change. Until it hands back, no other worker edits src/cli/searchCli.ts. Note for whoever tests: a stale experiment copy out/test/cli/searchCliVariant3.js sits beside the built module (left by the TRDD-OIMXULDJ worker, not removed). 
@@ -50,3 +50,4 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 ## STATE
 
 - 2026-11-17 12:35+0100, main agent. The help text shipped in 8590184d says --fuzzy costs 'about 1.3 times the CPU of a plain search (measured on a 2,972 MB project)'. That ratio comes from runs under host load 30 to 148 (user CPU 13.7 to 14.7 s plain, 18.6 to 18.7 s fuzzy). The quiet-host runs owed here (plain and fuzzy, three each) are what confirms or corrects that sentence; if they give another ratio the help text must change.
+- 2026-11-17 15:09+0100 (clock read), main agent. LAST BOX (invalid-JSON line in line mode; obj-is-null branch under a committed test). First half was answered at 09:33 above (the frozen set holds no invalid line, so 'line mode reports 0 skipped' is right). Second half, now: READ BY ME in src/cli/searchCli.ts at HEAD: the one WHERE is 'obj IS NULL OR (scope filters AND match)' (:1331); stage 1 selects '(obj IS NULL) AS bad' from read_ndjson_objects(… ignore_errors=true) (:1340 to :1349); skipped is 'count(*), count(DISTINCT filename) FROM hits WHERE bad' and those rows are then deleted (:1366 to :1368). READ BY ME in src/test/searchCli.test.ts :377 to :400: two committed line-mode tests (no kind option; a torn last line; a malformed middle line) assert skipped equal to 1 line in 1 file, in hits mode, count mode and with a role filter, for a one-file and a two-file scope. RUN BY ME at 15:09 (reports_dev/V50CQS22/20261117-linemode-skipped-tests.txt; one test file, filter 'torn|malformed line in the middle', compiled files newer than both sources, sources unchanged since 8590184d): 6 passing, among them both tests and the element-mode torn-line test, exit 0. So the reader does give a row with a NULL object for an invalid line and the count sees it: measured by those assertions. INFERRED, not run: that such a row can enter the hits table ONLY through the 'obj IS NULL' half (its raw text is NULL, so the match is NULL); no run with that half removed was made. A worker's code reading with line ranges for line, element and change mode is in reports_dev/V50CQS22/20261117_150510+0100-invalid-json-line-mode.md (its earlier 150133 file is superseded). Box ticked on that basis. STILL OPEN on this card: the cause shown by a one-variable experiment; a test or documented measurement guarding the memory fix; the memory need against corpus size (or a retry).
