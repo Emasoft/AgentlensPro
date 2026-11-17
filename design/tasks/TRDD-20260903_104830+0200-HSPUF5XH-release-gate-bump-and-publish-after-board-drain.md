@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-17T17:09:32+0100
+updated: 2026-11-17T17:51:39+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -224,6 +224,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 - TRDD-3RVTC1HY (when fixed): any panic exits the server so the hook revive restarts it.
 - TRDD-6B7VV2Z7 (3a5874a5): when the card database is missing, unreadable or refused at startup, the server no longer trusts saved read positions that ran ahead of the card snapshot; it re-reads every log file, so missing or stale session cards are rebuilt. After an ingest-version upgrade, a deleted transcript's stale card no longer comes back.
 - 2026-11-17T17:09+0100 FOR THE RELEASE THAT SHIPS e9782faf (TRDD-JDQR0HDT) and eef01b1d (TRDD-YR6WX7VQ), destructive on upgrade in one case: at the first start of the new build, a data folder whose card store ALREADY carries clear_in_progress = 1 (an interrupted clear) has its card snapshot tombstoned, cards of deleted transcripts included (their only copy), where the old build restored them. The CHANGELOG entry must say so. THIS MACHINE, read today: copies of the live card store report 'no clear in progress' (74,730 cards; reports_dev/YR6WX7VQ/gate/prep.log:5, gate-load/prep.log:5). Those copies ALSO printed 'card store reuse refused, the offsets log is stamped with another ingest version; discarding the cards and cold-rescanning': that refusal is an artefact of the gate script, which copies the card and offsets files but not log-delta-version.json (scripts_dev/wcg-gate4b.py:38-39), and version_is_current (log_reader.rs:908-913) refuses a folder with no stamp. The live folder's stamp reads {"v":7} and LOG_INGEST_VERSION is 7 (log_reader.rs:751), so by that check the live folder's first start reuses the store; not run on the live folder (the collector belongs to the owner and is taken as stopped from earlier in the session, not re-observed now). Before the first live start of a new build: read the stamp and the flag again.
+- From TRDD-YR6WX7VQ (2026-11-17 17:51, commit eef01b1d, not yet pushed or deployed): (1) the full test suite is owed before the push; no full run has covered this commit. (2) The first start of the new binary on the live data folder appends the cards the files are missing in one save: on a copy of the live files that was 43,569 keys and 63,345,885 bytes; no tombstone, no compaction. (3) While the store is ahead of the card files a start holds the state lock about 4.5 s in the sweeper's restore (control binary 4,494 and 4,543 ms, patched first start 4,216 ms, at 74,730 to 75,106 cards); after the gap is closed the patched restart held it 614 ms (one run each). (4) Once per reused start the sweeper spends one file pass before its next loop: 0.34 s on the live copy on a quiet host, 32.9 s at twice that log size under host load about 100; a stop that lands inside the pass exits without the sweeper's forced save, as a kill would (TRDD-QXODI7TR).
 
 ## Notes
 

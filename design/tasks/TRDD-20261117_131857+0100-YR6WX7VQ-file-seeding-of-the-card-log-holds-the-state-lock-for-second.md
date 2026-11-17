@@ -4,7 +4,7 @@ title: File seeding of the card log holds the state lock for seconds to minutes 
 column: dev
 status: tasked
 created: 2026-11-17T13:18:57+0100
-updated: 2026-11-17T17:47:23+0100
+updated: 2026-11-17T17:51:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -27,7 +27,7 @@ Change 2 of TRDD-WCG7I5D8 seeds the card-log hashes from the card-log files at a
 Take the file pass off the state lock and off the path that delays the listeners, and make it cheaper (the test seed_hash_equality.rs shows the raw payload bytes of a line hash like the re-serialized parse, which spares the parse and re-serialize). Find the cause of the slow cases first.
 
 ## Acceptance
-- [ ] The cause of the 55.6 s and of the unfinished restore is narrowed by runs that separate CPU load and the post-kill state (reworded 2026-11-17 17:48; the first wording also asked for disk load alone, which was not separated and is now on TRDD-JKVUBKLR): host CPU load slows the pass (10.8 s and 72.1 s under 28 busy processes, single runs, bracketing the 55.6 s seen once under a release compile); the post-kill state alone adds nothing on a quiet host (1.90 to 2.06 s in seven runs with and without a kill before). Not explained and moved to TRDD-JKVUBKLR: why the slowdown exceeds a fair CPU share, and disk load alone.
+- [ ] The cause of the 55.6 s and of the unfinished restore is narrowed by runs that separate CPU load and the post-kill state (reworded 2026-11-17 17:48; the first wording also asked for disk load alone, which was not separated and is now on TRDD-JKVUBKLR): host CPU load slows the pass (10.8 s and 72.1 s under 28 busy processes, single runs; so CPU load alone is enough for a pass as long as the 55.6 s, which was logged once by cell C1-patched of gate 4c of TRDD-WCG7I5D8: change-2 binary, started 12:56:15 after a kill, 1-minute load 24.4 at its start and 91.1 at its end, 'state lock held 55630 ms by crates/agentlens-core/src/log_reader.rs:1650' in reports_dev/WCG7I5D8/gate4c/C1-patched.log; that the load there was a release compile is by this card's earlier entry, not in the results file; the unfinished restore is cell D4 of gate 4d, 28 busy processes after a kill, load 129 to 258); the post-kill state alone adds nothing on a quiet host (1.90 to 2.06 s in seven runs with and without a kill before). Not explained and moved to TRDD-JKVUBKLR: why the slowdown exceeds a fair CPU share, and disk load alone.
 - [x] A patched reused start holds the state lock under 1 s for the file seeding on an 82 MB card log, on a host under a real release compile, after a kill.
 - [x] The gates run on the new code in place of gates 4b, 4c and 4d of TRDD-WCG7I5D8 pass: reports_dev/YR6WX7VQ/gate (quiet host: unchanged restart, kill then catch-up, stop before the first timed tick) and reports_dev/YR6WX7VQ/gate-load (kill, then control and patched under a release compile). Change 2 of TRDD-WCG7I5D8 is NOT applied; commit eef01b1d replaces it (reworded 2026-11-17 after the two gates; the first wording named gates written for change 2).
 - [x] Control arm added to the rerun of gate 4d: the UNPATCHED binary started after a kill under the same load as the patched one, so the patch's share of a slow start can be read (added 2026-11-17 13:24+0100 after reading D4.log and K4.log whole).

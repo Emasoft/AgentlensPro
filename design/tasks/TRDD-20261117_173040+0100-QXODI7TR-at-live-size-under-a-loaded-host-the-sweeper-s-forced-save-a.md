@@ -4,7 +4,7 @@ title: At live size under a loaded host the sweeper's forced save at stop overra
 column: backburner
 status: tasked
 created: 2026-11-17T17:30:40+0100
-updated: 2026-11-17T17:47:23+0100
+updated: 2026-11-17T17:51:39+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -25,6 +25,7 @@ Seen once, 2026-11-17, run LV2 of the TRDD-YR6WX7VQ live-size run (reports_dev/Y
 ## Not known
 Whether the unpatched binary does the same at this size (a control run is in progress on TRDD-YR6WX7VQ); how long a forced save takes at 75,106 cards on a quiet host; whether the sweeper was in a sweep, in save_offsets or in save_cards.
 LIMIT from TRDD-YR6WX7VQ (2026-11-17 17:47): a stop is blind while the sweeper is inside a file pass or a save. Seen once (cell DK of the cause run): a graceful stop during a pass gave up after the 8 s budget and exited 0 without the sweeper's forced save; no card was lost and the next start caught up (cell DN). Control at live size: the unpatched binary's restart stopped inside the budget at load 8.8, the patched one overran at load about 101; the loads differ, so whether the overrun predates commit eef01b1d is still open.
+NEXT (2026-11-17 17:51): the run that discriminates is a control-binary restart at live size under a CPU-only load (busy processes, no writers; TRDD-H9UX6HFB forbids a writing generator): if the control also prints 'stop gave up', the overrun predates commit eef01b1d.
 
 ## Acceptance
 - [ ] The duration of the forced save at live size is measured on a quiet host and under CPU load, with a line in the log that says what the sweeper is doing when a stop waits for it.
