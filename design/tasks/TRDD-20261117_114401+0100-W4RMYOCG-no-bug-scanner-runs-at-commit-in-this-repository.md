@@ -4,7 +4,7 @@ title: No bug scanner runs at commit in this repository
 column: todo
 status: tasked
 created: 2026-11-17T11:44:01+0100
-updated: 2026-11-17T12:03:26+0100
+updated: 2026-11-17T12:35:30+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -46,3 +46,7 @@ The hook is the owner's machine-wide file and its scope sentence says the limit 
 ## Notes and lessons learned
 
 - 2026-11-17 12:03+0100, main agent. UNSCANNED code commits now: 37e538fc, 7fe63866 (src/cli/searchCli.ts scanned by hand at that state: 0 critical; its test file not), b626970a, e343ec69. e343ec69 was committed after this card was written, without the manual scan the card asks for: the scan of one file took 164 s to over 13 minutes on the loaded host, and the main agent chose to commit and record the debt here. The procedure of box 2 is not yet followed.
+
+## STATE
+
+- 2026-11-17 12:35+0100, main agent. One more commit made with no scanner at commit: 8590184d (src/cli/searchCli.ts usage text and the KNOWN export, src/test/searchCli.test.ts one test). The list of unscanned commits is now 37e538fc, 7fe63866, b626970a, e343ec69, 8590184d.

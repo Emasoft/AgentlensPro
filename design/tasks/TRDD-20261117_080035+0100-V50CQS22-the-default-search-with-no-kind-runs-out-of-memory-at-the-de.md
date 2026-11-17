@@ -4,7 +4,7 @@ title: The default search with no kind runs out of memory at the default limit o
 column: dev
 status: tasked
 created: 2026-11-17T08:00:35+0100
-updated: 2026-11-17T11:44:37+0100
+updated: 2026-11-17T12:35:30+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -46,3 +46,7 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 
 - 2026-11-17T08:00:35+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-17T09:11:47+0100 — column → dev by main-agent@agentlenspro. fix committed, open boxes remain
+
+## STATE
+
+- 2026-11-17 12:35+0100, main agent. The help text shipped in 8590184d says --fuzzy costs 'about 1.3 times the CPU of a plain search (measured on a 2,972 MB project)'. That ratio comes from runs under host load 30 to 148 (user CPU 13.7 to 14.7 s plain, 18.6 to 18.7 s fuzzy). The quiet-host runs owed here (plain and fuzzy, three each) are what confirms or corrects that sentence; if they give another ratio the help text must change.
