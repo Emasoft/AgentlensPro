@@ -4,7 +4,7 @@ title: The card-log file pass slows 5 to 59 times under host load, more than a f
 column: backburner
 status: tasked
 created: 2026-11-17T17:30:40+0100
-updated: 2026-11-17T17:55:25+0100
+updated: 2026-11-17T17:58:15+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -28,6 +28,7 @@ One run each showed no difference between a start after a kill and a plain resta
 ## Not established
 Disk load alone (both disk cells ran at host load 215; the no-kill disk cell was never run; the generator that was used is forbidden now, TRDD-H9UX6HFB). The spread between two CPU cells of the same kind (10.8 and 72.1 s): no cell was repeated, and the host is shared. Whether memory pressure, core type or the thread's run-time class explains the excess over a fair share. Whether tombstone removal by IndexMap shift_remove (delta_log.rs, index_files) is what makes a tombstone-heavy log five times slower than the live shape (inferred from two sizes, not measured).
 Kill and load together against load alone at equal load: the two cells after a kill (72.1 s at load 100 to 114, 113.4 s at load 215) ran at higher load than the cells without a kill (10.5 s at 50 to 95, 10.8 s at 23 to 100); a restart at live size without a kill took 32.9 s at load 4 to 101 (added 2026-11-17 17:55).
+Second source for the tombstone-removal cost (2026-11-17 17:58): the read-only review of eef01b1d (reports_dev/YR6WX7VQ/20261117_175341+0100-review-eef01b1d.md, NIT-4) also names ix.live.shift_remove(k) in index_files (delta_log.rs, about line 352) as O(n) per tombstone; a code read by two readers, still not measured.
 
 ## Acceptance
 - [ ] One cell is repeated at least three times on a host whose load is recorded per second, with the sweeper thread's run-time class read once.
