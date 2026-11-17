@@ -752,3 +752,315 @@ suite("searchCli — scope filters in element and model-change mode (TRDD-OIMXUL
     assert.deepStrictEqual(changes((await runF("", { kinds: ["model-change"], branch: "br-b" })).hits), ["4:m-y -> m-z"])
   })
 })
+
+// ── match modes, --show and --context (TRDD-O3U0K4HY) ────────────────────────────────────────────
+// Every expected value is read off the fixtures below: the entries of a file are numbered 1.. in the order they are written.
+
+const PROJECT_M = "/fake/match"
+const DIR_M = path.join(CFG, "projects", projectSlugOf(PROJECT_M))
+const SID_M1 = "11111111-aaaa-bbbb-cccc-dddddddddddd"
+const SID_M2 = "22222222-aaaa-bbbb-cccc-dddddddddddd"
+const FILE_M1 = path.join(DIR_M, `${SID_M1}.jsonl`)
+const FILE_M2 = path.join(DIR_M, `${SID_M2}.jsonl`)
+const promptAt = (n: number, content: string): Record<string, unknown> => ({
+  type: "user", timestamp: `2026-08-20T10:${String(n).padStart(2, "0")}:00.000Z`, message: { role: "user", content },
+})
+const M1_TEXT = [
+  /* 1 */ "report status", /* 2 */ "the port is open", /* 3 */ "Transport layer", /* 4 */ "50% off, 100% done", /* 5 */ "50 percent, 1000 done",
+  /* 6 */ "item_x here", /* 7 */ "first line\nsecond word here", /* 8 */ "Hello World", /* 9 */ "hello world", /* 10 */ "ping the server",
+  /* 11 */ "she said \"hi\" twice", /* 12 */ "itemXx here", /* 13 */ "the planet is here", /* 14 */ "a plonet appeared", /* 15 */ "a plnet appeared",
+  /* 16 */ "a plaanet appeared", /* 17 */ "a plonex appeared", /* 18 */ "a plnaet appeared", /* 19 */ "mango applx", /* 20 */ "a lamq and a planet",
+  /* 21 */ "a lamp and a planet", /* 22 */ "mango then apple",
+]
+writeJsonl(FILE_M1, M1_TEXT.map((t, i) => promptAt(i + 1, t)))
+writeJsonl(FILE_M2, ["Hello again", "the port of call"].map((t, i) => promptAt(i + 1, t)))
+const fileOf = (file: string, session: string): TranscriptFile => ({ path: file, session, agent: null, size: fs.statSync(file).size, mtimeMs: 0 })
+const numeric = (a: number, b: number): number => a - b
+
+/** The lines of M1 that a pattern finds. The four engine paths (one transcript or two, the raw line or the prompt elements) must give the same lines in the same
+ *  order, each with a line number and an excerpt: a stage that disagreed with the other would show as a null line or an empty excerpt. */
+async function linesM(pattern: string, opts: SearchOptions = {}): Promise<number[]> {
+  const answers: number[][] = []
+  for (const files of [[fileOf(FILE_M1, SID_M1)], discoverTranscripts(PROJECT_M, {})]) {
+    for (const extra of [{}, { kinds: ["prompt"] }]) {
+      const r = await searchTranscripts(files, pattern, { limit: 500, order: "old", ...opts, ...extra })
+      const mine = r.hits.filter(h => h.session === SID_M1)
+      assert.ok(mine.every(h => h.line !== null && h.excerpt !== ""), `${pattern}: every hit has a line and an excerpt (${files.length} file(s), ${JSON.stringify(extra)})`)
+      answers.push(mine.map(h => h.line as number))
+    }
+  }
+  for (const a of answers) assert.deepStrictEqual(a, answers[0], `${pattern}: the four engine paths agree`)
+  return answers[0]
+}
+
+suite("searchCli — match modes (TRDD-O3U0K4HY)", () => {
+  suiteSetup(pointAtFixture)
+  suiteTeardown(restoreConfig)
+
+  test("--mask: * is any run, ? is one character, a literal % and _ of the pattern are not wildcards", async function () {
+    this.timeout(120_000)
+    assert.deepStrictEqual(await linesM("rep*status", { mask: true }), [1], "* stands for a run of characters")
+    assert.deepStrictEqual(await linesM("stat?s", { mask: true }), [1], "? stands for exactly one character")
+    assert.deepStrictEqual(await linesM("p?rt", { mask: true }), [1, 2, 3])
+    assert.deepStrictEqual(await linesM("50% *", { mask: true }), [4], "a % is a percent sign: line 5 ('50 percent') would match if it were LIKE's wildcard")
+    assert.deepStrictEqual(await linesM("item_x", { mask: true }), [6], "a _ is an underscore: line 12 (itemXx) would match if it were LIKE's wildcard")
+    assert.deepStrictEqual(await linesM("item?x", { mask: true }), [6, 12], "while ? is one character")
+    assert.deepStrictEqual(await linesM("said \"hi\"", { mask: true }), [11], "a quote is JSON-escaped in the raw line")
+    assert.deepStrictEqual(await linesM("HELLO*", { mask: true }), [8, 9], "case-insensitive by default")
+    const r = await searchTranscripts([fileOf(FILE_M1, SID_M1)], "rep*status", { mask: true })
+    assert.ok(r.hits[0].excerpt.includes("report status"), r.hits[0].excerpt)
+  })
+
+  test("--word does not match inside a longer word, and matches at the start, at the end and next to a newline", async function () {
+    this.timeout(120_000)
+    assert.deepStrictEqual(await linesM("port"), [1, 2, 3], "a plain search finds 'port' inside 'report' and 'Transport'")
+    assert.deepStrictEqual(await linesM("port", { word: true }), [2], "--word finds only the whole word")
+    assert.deepStrictEqual(await linesM("report", { word: true }), [1], "at the start of the text")
+    assert.deepStrictEqual(await linesM("Transport", { word: true }), [3])
+    assert.deepStrictEqual(await linesM("world", { word: true }), [8, 9], "at the end of the text")
+    assert.deepStrictEqual(await linesM("second", { word: true }), [7], "a word that starts after a newline (\\n in the raw line)")
+    assert.deepStrictEqual(await linesM("line", { word: true }), [7], "a word that ends before a newline")
+    assert.deepStrictEqual(await linesM("item_x", { word: true }), [6], "_ is a word character and a regex-special one: escaped")
+    assert.deepStrictEqual(await linesM("50%", { word: true }), [4], "a pattern ending in punctuation")
+    const r = await searchTranscripts([fileOf(FILE_M1, SID_M1)], "port", { word: true })
+    assert.ok(r.hits[0].excerpt.includes("the port is open"), r.hits[0].excerpt)
+  })
+
+  test("--case makes literal, mask and word matching case-sensitive, and is refused with --fuzzy", async function () {
+    this.timeout(120_000)
+    assert.deepStrictEqual(await linesM("Hello"), [8, 9])
+    assert.deepStrictEqual(await linesM("Hello", { caseSensitive: true }), [8])
+    assert.deepStrictEqual(await linesM("hello", { caseSensitive: true }), [9])
+    assert.deepStrictEqual(await linesM("Hello*", { mask: true, caseSensitive: true }), [8])
+    assert.deepStrictEqual(await linesM("PORT", { word: true }), [2])
+    assert.deepStrictEqual(await linesM("PORT", { word: true, caseSensitive: true }), [])
+    assert.deepStrictEqual(await linesM("port", { word: true, caseSensitive: true }), [2])
+    await assert.rejects(() => runSearchCli(["x", "--fuzzy", "--case"]), (e: unknown) => e instanceof UsageError && /--case/.test((e as Error).message))
+  })
+
+  test("--fuzzy: words in any order; one substitution, deletion and insertion in a 6-letter word match; two edits and a 4-letter word's one edit do not", async function () {
+    this.timeout(120_000)
+    // planet: 13 exact, 14 substituted (plonet), 15 deleted (plnet), 16 inserted (plaanet), 20 and 21 exact; 17 (plonex) is two edits and 18 (plnaet) a transposition: not found.
+    assert.deepStrictEqual((await linesM("planet", { fuzzy: true })).sort(numeric), [13, 14, 15, 16, 20, 21])
+    assert.deepStrictEqual((await linesM("apple mango", { fuzzy: true })).sort(numeric), [19, 22], "line 22 holds the words in the other order, line 19 has applx for apple")
+    assert.deepStrictEqual((await linesM("mango apple", { fuzzy: true })).sort(numeric), [19, 22])
+    assert.deepStrictEqual(await linesM("lamp planet", { fuzzy: true }), [21], "lamq is one edit from the 4-letter lamp: line 20 needs an exact lamp")
+    assert.deepStrictEqual((await linesM("plAnet", { fuzzy: true })).sort(numeric), [13, 14, 15, 16, 20, 21], "case-insensitive")
+  })
+
+  test("the excerpt of every match mode is a window around the match, also deep inside a long line", async function () {
+    this.timeout(60_000)
+    const long = path.join(CFG, "projects", projectSlugOf("/fake/long"), "66666666-aaaa-bbbb-cccc-dddddddddddd.jsonl")
+    writeJsonl(long, [promptAt(1, `${"z ".repeat(750)}the plonet is here ${"y ".repeat(300)}`)])
+    const f = fileOf(long, "66666666-aaaa-bbbb-cccc-dddddddddddd")
+    for (const opts of [{}, { mask: true }, { word: true }, { fuzzy: true }] as SearchOptions[]) {
+      const pattern = opts.mask ? "plo?et" : opts.fuzzy ? "planet" : "plonet"
+      for (const extra of [{}, { kinds: ["prompt"] }]) {
+        const r = await searchTranscripts([f, fileOf(FILE_M2, SID_M2)], pattern, { ...opts, ...extra })
+        assert.strictEqual(r.hits.length, 1, `${pattern} ${JSON.stringify(opts)}`)
+        assert.ok(r.hits[0].excerpt.includes("the plonet is here"), `${pattern} ${JSON.stringify(opts)} ${JSON.stringify(extra)}: ${r.hits[0].excerpt.slice(0, 80)}`)
+        assert.ok(r.hits[0].excerpt.length <= 300)
+      }
+    }
+  })
+
+  test("--fuzzy orders the hits by the words held exactly, then by time (file order for one transcript)", async function () {
+    this.timeout(120_000)
+    const lines = async (files: TranscriptFile[], pattern: string, order?: "new" | "old"): Promise<number[]> =>
+      (await searchTranscripts(files, pattern, { fuzzy: true, limit: 500, order })).hits.filter(h => h.session === SID_M1).map(h => h.line as number)
+    const one = [fileOf(FILE_M1, SID_M1)]
+    const two = discoverTranscripts(PROJECT_M, {})
+    assert.deepStrictEqual(await lines(one, "planet"), [13, 20, 21, 14, 15, 16], "exact words first, each group in file order (file order alone would be 13,14,15,16,20,21)")
+    assert.deepStrictEqual(await lines(two, "planet", "new"), [21, 20, 13, 16, 15, 14], "two transcripts: exact first, each group newest first")
+    assert.deepStrictEqual(await lines(two, "planet", "old"), [13, 20, 21, 14, 15, 16], "--order old: each group oldest first")
+    assert.deepStrictEqual(await lines(two, "apple mango", "old"), [22, 19], "both words exact (22) before one word edited (19), although 19 is older")
+    assert.deepStrictEqual(await lines(one, "apple mango", "old"), [22, 19], "one transcript with --order: same")
+    const el = await searchTranscripts(two, "apple mango", { fuzzy: true, kinds: ["prompt"], order: "old" })
+    assert.deepStrictEqual(el.hits.filter(h => h.session === SID_M1).map(h => h.line), [22, 19], "element mode orders the same way")
+  })
+
+  test("a --fuzzy pattern with no word or a word over 40 characters is a usage error", async () => {
+    for (const bad of ["   ", "x".repeat(41)]) {
+      await assert.rejects(() => searchTranscripts([fileOf(FILE_M1, SID_M1)], bad, { fuzzy: true }), (e: unknown) => e instanceof UsageError, JSON.stringify(bad))
+    }
+    assert.strictEqual((await searchTranscripts([fileOf(FILE_M1, SID_M1)], "x".repeat(40), { fuzzy: true })).total, 0, "40 characters is accepted")
+  })
+
+  test("two match modes together are a usage error, whichever pair", async () => {
+    for (const pair of [["--regex", "--mask"], ["--regex", "--word"], ["--regex", "--fuzzy"], ["--mask", "--word"], ["--mask", "--fuzzy"], ["--word", "--fuzzy"]]) {
+      await assert.rejects(() => runSearchCli(["x", ...pair]), (e: unknown) => e instanceof UsageError && /mutually exclusive/.test((e as Error).message), pair.join(" "))
+      await assert.rejects(() => searchTranscripts([fileOf(FILE_M1, SID_M1)], "x", { [pair[0].slice(2)]: true, [pair[1].slice(2)]: true } as SearchOptions), (e: unknown) => e instanceof UsageError, `engine: ${pair.join(" ")}`)
+    }
+    const help = await runCli(["--help"])
+    for (const flag of ["--mask", "--word", "--fuzzy", "--case", "--context", "--show", "--max-chars", "NOT covered"]) assert.ok(help.out.includes(flag), flag)
+  })
+
+  test("the CLI flags --mask, --word, --fuzzy and --case reach the engine", async function () {
+    this.timeout(60_000)
+    const cli = async (...flags: string[]): Promise<number[]> =>
+      (JSON.parse((await runCli(["--project", PROJECT_M, "--session", "11111111", "--json", "--order", "old", ...flags])).out) as { hits: SearchHit[] }).hits.map(h => h.line as number)
+    assert.deepStrictEqual(await cli("p?rt", "--mask"), [1, 2, 3])
+    assert.deepStrictEqual(await cli("port", "--word"), [2])
+    assert.deepStrictEqual(await cli("Hello", "--case"), [8])
+    assert.deepStrictEqual((await cli("apple mango", "--fuzzy")).sort(numeric), [19, 22])
+  })
+})
+
+// ── --show and --context fixtures ────────────────────────────────────────────────────────────────
+
+const PROJECT_S = "/fake/show"
+const SID_S = "33333333-aaaa-bbbb-cccc-dddddddddddd"
+const FILE_S = path.join(CFG, "projects", projectSlugOf(PROJECT_S), `${SID_S}.jsonl`)
+const LONG_TEXT = `${"L".repeat(6000)} END-OF-LONG`
+fs.mkdirSync(path.dirname(FILE_S), { recursive: true })
+// A blank line between entries 2 and 3: the reader does not count it, so the third entry is line 3, and --show must number like the hits do.
+fs.writeFileSync(FILE_S, [
+  promptAt(1, LONG_TEXT), { type: "progress", timestamp: "2026-08-20T10:02:00.000Z", data: { marker: "PROGRESS-MARKER" } }, "", promptAt(3, "SHOWME third entry"),
+].map(l => (typeof l === "string" ? l : JSON.stringify(l))).join("\n") + "\n")
+
+const PROJECT_C = "/fake/ctx"
+const SID_C1 = "44444444-aaaa-bbbb-cccc-dddddddddddd"
+const SID_C2 = "55555555-aaaa-bbbb-cccc-dddddddddddd"
+const FILE_C1 = path.join(CFG, "projects", projectSlugOf(PROJECT_C), `${SID_C1}.jsonl`)
+const FILE_C2 = path.join(CFG, "projects", projectSlugOf(PROJECT_C), `${SID_C2}.jsonl`)
+writeJsonl(FILE_C1, [
+  promptAt(1, "c1 line one"), promptAt(2, "c1 line two CTXHIT"), promptAt(3, "c1 line three CTXHIT"),
+  { type: "progress", timestamp: "2026-08-20T10:04:00.000Z", data: { n: 4 } }, promptAt(5, "c1 line five CTXHIT"),
+])
+writeJsonl(FILE_C2, [promptAt(1, "c2 first CTXHIT"), promptAt(2, "c2 second")])
+
+suite("searchCli — --show and --context (TRDD-O3U0K4HY)", () => {
+  suiteSetup(pointAtFixture)
+  suiteTeardown(restoreConfig)
+
+  test("--show prints every element of the named entry: its kind, its tool and its full text", async function () {
+    this.timeout(60_000)
+    const r = await runCli(["--show", "eeeeeeee:2", "--project", PROJECT_E])
+    assert.strictEqual(r.code, 0)
+    const head = r.out.split("\n")[0]
+    assert.match(head, /^eeeeeeee\t#2\t2026-08-18T10:00:01\.000Z\t\[assistant\]$/)
+    const block = (label: string, text: string): string => `--- [${label}] ${text.length} chars\n${text}\n`
+    assert.strictEqual(r.out, `${head}\n${block("response", "resp NEEDLE-r")}${block("thinking", "think NEEDLE-t")}${block("tool-call Bash", bashStatus.text)}${block("diff Edit", editA.text)}`)
+    const output = await runCli(["--show", "eeeeeeee:3", "--project", PROJECT_E])
+    assert.ok(output.out.includes("--- [tool-output Bash] 24 chars\non branch NEEDLE-o\nline2\n"), `the tool of an output comes from its call: ${output.out}`)
+    const json = JSON.parse((await runCli(["--show", "eeeeeeee:2", "--project", PROJECT_E, "--json"])).out) as { line: number; session: string; elements: Array<{ kind: string }>; truncated: boolean }
+    assert.deepStrictEqual([json.line, json.session, json.elements.map(e => e.kind), json.truncated], [2, SID_E, ["response", "thinking", "tool-call", "diff"], false])
+  })
+
+  test("--show --agent reads the sub-agent transcript, without it the main transcript", async function () {
+    this.timeout(60_000)
+    const sub = await runCli(["--show", "eeeeeeee:2", "--agent", "ffff", "--project", PROJECT_E])
+    assert.strictEqual(sub.code, 0)
+    assert.match(sub.out.split("\n")[0], /^eeeeeeee:ffff4444\t#2\t/)
+    assert.ok(sub.out.includes("sub reply NEEDLE-sr") && !sub.out.includes("resp NEEDLE-r"), sub.out)
+  })
+
+  test("--show refuses an unknown session or line with exit 2, and a malformed request with a usage error", async function () {
+    this.timeout(60_000)
+    for (const argv of [
+      ["--show", "zzzzzzzz:1"], ["--show", "eeeeeeee:999"], ["--show", "eeeeeeee:2", "--agent", "nope"], ["--show", "eeeeeeee:1", "--agent", "ffff", "--project", "/fake/nowhere"],
+    ]) {
+      const r = await runCli([...argv, ...(argv.includes("--project") ? [] : ["--project", PROJECT_E])])
+      assert.strictEqual(r.code, 2, argv.join(" "))
+      assert.strictEqual(r.out, "", "nothing on stdout")
+    }
+    assert.ok((await runCli(["--show", "eeeeeeee:999", "--project", PROJECT_E])).err.includes("has 37 line(s)"), "the error says how many lines there are")
+    for (const bad of [
+      ["--show", "eeeeeeee"], ["--show", "eeeeeeee:0"], ["--show", "eeeeeeee:x"], ["--show", "eeeeeeee:2", "NEEDLE"], ["--show", "eeeeeeee:2", "--count"],
+      ["--show", "eeeeeeee:2", "--limit", "3"], ["--show", "eeeeeeee:2", "--max-chars", "100001"], ["--show"], ["NEEDLE", "--max-chars", "5"],
+    ]) {
+      await assert.rejects(() => runSearchCli(bad), (e: unknown) => e instanceof UsageError, bad.join(" "))
+    }
+  })
+
+  test("--show cuts the text at --max-chars (default 4000), says so, and --max-chars 7000 shows it whole", async function () {
+    this.timeout(60_000)
+    const cut = await runCli(["--show", `${SID_S.slice(0, 8)}:1`, "--project", PROJECT_S])
+    assert.strictEqual(cut.code, 0)
+    assert.ok(cut.out.includes(`--- [prompt] ${LONG_TEXT.length} chars\n${"L".repeat(4000)}\n--- cut at 4000 chars`), "4000 characters of text, the full size in the header, the cut reported")
+    assert.ok(!cut.out.includes("END-OF-LONG"))
+    const whole = await runCli(["--show", `${SID_S.slice(0, 8)}:1`, "--project", PROJECT_S, "--max-chars", "7000"])
+    assert.ok(whole.out.includes("END-OF-LONG") && !whole.out.includes("--- cut"), "whole")
+    const small = JSON.parse((await runCli(["--show", `${SID_S.slice(0, 8)}:1`, "--project", PROJECT_S, "--max-chars", "100", "--json"])).out) as { truncated: boolean; elements: Array<{ chars: number; text: string }> }
+    assert.deepStrictEqual([small.truncated, small.elements[0].chars, small.elements[0].text.length], [true, LONG_TEXT.length, 100])
+  })
+
+  test("--show numbers the entries like a hit does (a blank line is not counted) and prints an entry with no text as its JSON line", async function () {
+    this.timeout(60_000)
+    const hit = JSON.parse((await runCli(["SHOWME", "--project", PROJECT_S, "--json"])).out) as { hits: SearchHit[] }
+    assert.strictEqual(hit.hits[0].line, 3, "the blank line is skipped by the reader")
+    const shown = await runCli(["--show", `${SID_S.slice(0, 8)}:${hit.hits[0].line}`, "--project", PROJECT_S])
+    assert.ok(shown.out.includes("SHOWME third entry"), shown.out)
+    const progress = await runCli(["--show", `${SID_S.slice(0, 8)}:2`, "--project", PROJECT_S])
+    assert.ok(progress.out.includes("--- [progress]") && progress.out.includes("PROGRESS-MARKER"), progress.out)
+  })
+
+  test("--context 1 prints the neighbour entries of the same transcript, never another one, and leaves out entries that are hits themselves", async function () {
+    this.timeout(120_000)
+    const ctx = (hits: SearchHit[], session: string, line: number): Array<[number, string, string]> =>
+      (hits.find(h => h.session === session && h.line === line)?.context ?? []).map(c => [c.line, c.kind, c.text])
+    for (const files of [[fileOf(FILE_C1, SID_C1)], discoverTranscripts(PROJECT_C, {})]) {
+      for (const extra of [{}, { kinds: ["prompt"] }]) {
+        const r = await searchTranscripts(files, "CTXHIT", { context: 1, limit: 500, ...extra })
+        const label = `${files.length} file(s) ${JSON.stringify(extra)}`
+        assert.deepStrictEqual(ctx(r.hits, SID_C1, 2), [[1, "prompt", "c1 line one"]], `line 3 is a hit and not repeated as context (${label})`)
+        assert.deepStrictEqual(ctx(r.hits, SID_C1, 3), [[4, "progress", ""]], `line 2 is a hit; an entry without text still counts (${label})`)
+        assert.deepStrictEqual(ctx(r.hits, SID_C1, 5), [[4, "progress", ""]], `the last entry has nothing after it (${label})`)
+        if (files.length === 2) {
+          assert.deepStrictEqual(ctx(r.hits, SID_C2, 1), [[2, "prompt", "c2 second"]], `the first entry has nothing before it: the end of the other transcript is not context (${label})`)
+        }
+      }
+    }
+    const wide = await searchTranscripts(discoverTranscripts(PROJECT_C, {}), "CTXHIT", { context: 5, limit: 500 })
+    assert.deepStrictEqual(ctx(wide.hits, SID_C1, 5), [[1, "prompt", "c1 line one"], [4, "progress", ""]], "a window of 5 still stays inside the transcript")
+    assert.deepStrictEqual(ctx(wide.hits, SID_C2, 1), [[2, "prompt", "c2 second"]])
+    assert.ok(wide.hits.every(h => (h.context ?? []).every(c => !c.text.startsWith(h.session === SID_C1 ? "c2" : "c1"))), "no entry of another transcript")
+    assert.strictEqual((await searchTranscripts(discoverTranscripts(PROJECT_C, {}), "CTXHIT", { limit: 500 })).hits.some(h => h.context !== undefined), false, "no context without the option")
+  })
+
+  test("--context in the CLI: [context ...] rows around each hit, a -- line between hits, a context list in --json, limits refused", async function () {
+    this.timeout(60_000)
+    const text = await runCli(["CTXHIT", "--project", PROJECT_C, "--session", "44444444", "--context", "1", "--order", "old"])
+    assert.strictEqual(text.code, 0)
+    const rows = text.out.trimEnd().split("\n").map(l => l.split("\t"))
+    assert.deepStrictEqual(rows.map(r => (r.length === 1 ? r[0] : `${r[1]} ${r[3].startsWith("[context") ? "ctx" : "hit"}`)), [
+      "#1 ctx", "#2 hit", "--", "#3 hit", "#4 ctx", "--", "#4 ctx", "#5 hit",
+    ])
+    assert.strictEqual(rows[0][3], "[context prompt]")
+    assert.strictEqual(rows[0][4], "c1 line one")
+    const json = JSON.parse((await runCli(["CTXHIT", "--project", PROJECT_C, "--context", "1", "--json"])).out) as { hits: SearchHit[] }
+    assert.ok(json.hits.every(h => Array.isArray(h.context)))
+    for (const bad of [["x", "--context", "6"], ["x", "--context", "0"], ["x", "--context", "2", "--count"], ["x", "--context", "2", "--files"], ["x", "--context", "many"]]) {
+      await assert.rejects(() => runSearchCli(bad), (e: unknown) => e instanceof UsageError, bad.join(" "))
+    }
+  })
+
+  test("a search with --worktrees returns the hit inside the worktree transcript with its true line", async function () {
+    this.timeout(60_000)
+    const r = await run("NEEDLE", {}, { worktrees: true })
+    assert.deepStrictEqual(spot(r.hits.filter(h => h.session === SID_W)), want(FILE_W, "NEEDLE", "dddddddd"), "wt NEEDLE is line 1 of the worktree transcript")
+    assert.strictEqual(spot((await run("NEEDLE")).hits).some(s => s.startsWith("dddddddd")), false, "without --worktrees it is not searched")
+  })
+
+  test("a search with --agent returns only the sub-agent hit", async function () {
+    this.timeout(60_000)
+    const r = JSON.parse((await runCli(["NEEDLE", "--project", PROJECT, "--agent", "cccc", "--json"])).out) as { total: number; hits: SearchHit[] }
+    assert.deepStrictEqual(spot(r.hits), want(FILE_SUB, "NEEDLE", "aaaaaaaa:cccc3333"))
+    assert.strictEqual(r.total, 1)
+  })
+
+  test("a search run from an empty working directory leaves that directory empty (no .tmp spill folder)", async function () {
+    this.timeout(60_000)
+    const empty = fs.mkdtempSync(path.join(tmpDir, "empty-cwd-"))
+    const before = process.cwd()
+    process.chdir(empty)
+    try {
+      for (const argv of [["NEEDLE", "--project", PROJECT], ["NEEDLE", "--project", PROJECT, "--kind", "prompt,response"], ["NEEDLE", "--project", PROJECT, "--fuzzy", "--context", "1"]]) {
+        assert.strictEqual((await runCli(argv)).code, 0, argv.join(" "))
+      }
+    } finally {
+      process.chdir(before)
+    }
+    assert.deepStrictEqual(fs.readdirSync(empty), [], "DuckDB must not create .tmp in the cwd: temp_directory is set empty")
+  })
+})

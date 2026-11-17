@@ -1,5 +1,6 @@
 // src/cli/searchCli.ts — `agentlenspro search`: grep a project's transcript .jsonl files with DuckDB
-// (TRDD-P31SWA8I; project-wide scope, filters and output: TRDD-UIQS9RXZ).
+// (TRDD-P31SWA8I; project-wide scope, filters and output: TRDD-UIQS9RXZ; element mode: TRDD-OIMXULDJ; match modes, --show and --context:
+// TRDD-O3U0K4HY).
 //
 // WHY DUCKDB AND NOT A JS LINE LOOP: a main transcript here is routinely 60MB+ with MB-sized
 // tool_result lines; read_ndjson_objects streams it off disk (several threads for small files, one thread
@@ -59,6 +60,16 @@ filters:
 match:
   --regex              <pattern> is a regular expression matched against the RAW JSON line (a quote
                        is \\" and a newline is \\n there). Default: literal, case-insensitive
+  --mask               <pattern> is a mask: * stands for any run of characters, ? for exactly one (neither can be searched for
+                       literally); matched anywhere in the text. In line mode ? counts raw JSON characters (a quote is two)
+  --word               <pattern> as a whole word: not preceded or followed by a letter, digit or _ (so "port" is not in
+                       "report"). In line mode a newline or tab of the JSON line also ends a word
+  --fuzzy              <pattern> is split on spaces into words; an entry matches when EVERY word is in it, in any order. A word of
+                       5 or more characters (at most 40) also matches with ONE character substituted, deleted or inserted; a
+                       shorter word must match exactly. A transposition (two letters swapped, "recieve") is two edits and is
+                       NOT covered. Always case-insensitive. Hits come ordered by how many words matched exactly, then as --order
+  --case               literal, --mask and --word matching become case-sensitive (--regex is case-sensitive already; not with --fuzzy)
+  --regex, --mask, --word and --fuzzy are mutually exclusive: two together are a usage error
 elements (any of --kind, --tool, --file or --commit searches ELEMENTS instead of raw JSON lines):
   --kind K[,K]         prompt response thinking tool-call tool-output diff subagent hook command compact error cron system
                        attachment model-change. A diff, subagent or error element is ALSO a tool-call / tool-output element;
@@ -73,7 +84,8 @@ elements (any of --kind, --tool, --file or --commit searches ELEMENTS instead of
   Element mode matches the UNESCAPED text of an element (a quote is a quote, a newline a newline), line mode the RAW JSON
   line (a quote is \\" there): the same pattern, and above all the same --regex, can give different hits with and without
   --kind. In element mode total, --count and --files count ELEMENTS, not lines (one line can hold several). The excerpt
-  is readable text, not JSON. It is slower than line mode: every kept line is parsed into its blocks.
+  is readable text, not JSON. It is slower than line mode: every kept line is parsed into its blocks, so with --kind, --tool, --file or --commit
+  narrow the scope (--since, --session, --agent) when you search every transcript of a large project.
   The text of an element is plain text only for the content and text fields: a tool call's text is its name, a newline, then its input JSON.
   A system entry with no content field is matched on its own fields: stop_hook_summary on hookInfos, hookErrors, hookAdditionalContext and
   stopReason, api_error on error and source, turn_duration on nothing; any other such subtype on its whole raw line. An attachment is matched
@@ -83,9 +95,19 @@ output:
   --width N            excerpt length in characters (default 300, max 2000)
   --order new|old      newest first / oldest first; without it: file order when exactly one transcript is in scope, otherwise newest first
   --count              per transcript: <count> <session8>[:<agent8>], largest first
+  --context N          print the N (1 to 5) entries before and after each hit of the same transcript, one line each: the first text of
+                       the entry, with [context <kind>] in the bracket; a -- line separates the hits. Not with --count or --files
   --files              only the paths of the transcripts that match (not with --count)
   --json               machine output: {line, ts, type, role, excerpt, session, agent, file} per
-                       match + total; element mode adds kind and tool to every match
+                       match + total; element mode adds kind and tool to every match; --context adds a context list
+                       (line, ts, kind, tool, text) to every match
+
+show (one entry, no pattern):  agentlenspro search --show <session>:<line> [--max-chars N] [--agent ID] [--json]
+  --show SESSION:LINE  print the entry that a hit named (its session and #line) in readable form: every element's kind and text,
+                       the text of all the elements together cut at --max-chars N (default 4000, max 100000; the cut is reported).
+                       An entry with no text element prints as its raw JSON line. SESSION is an id or a unique prefix of 6+
+                       characters. A sub-agent entry needs --agent ID (without it the main transcript is read). Only --project,
+                       --worktrees, --agent and --json go with it; a session or line that does not exist is exit 2
 
 text line: <session8>[:<agent8>] <TAB> #<line> <TAB> <ts> <TAB> [role|type] <TAB> <excerpt>
        in element mode the bracket is [<kind>] or [<kind> <tool>], e.g. [tool-output Bash]
@@ -103,10 +125,10 @@ exit:
 
 const VALUED = new Set([
   '--project', '--session', '--agent', '--since', '--until', '--branch', '--cwd', '--worktree', '--model',
-  '--role', '--type', '--limit', '--width', '--order', '--kind', '--tool', '--file', '--commit',
+  '--role', '--type', '--limit', '--width', '--order', '--kind', '--tool', '--file', '--commit', '--show', '--max-chars', '--context',
 ])
 const KNOWN = new Set([
-  ...VALUED, '--regex', '--json', '--count', '--files', '--main-only', '--subagents-only', '--worktrees',
+  ...VALUED, '--regex', '--mask', '--word', '--fuzzy', '--case', '--json', '--count', '--files', '--main-only', '--subagents-only', '--worktrees',
   '--include-requests', '--include-attachments', '--help', '-h',
 ])
 
@@ -137,6 +159,157 @@ const ELEMENT_SCAN_THREADS = 1
 /** SQL single-quoted literal — the codebase queries by interpolation, so quoting is load-bearing. */
 function sq(s: string): string {
   return `'${s.replace(/'/g, "''")}'`
+}
+
+// ── match modes (TRDD-O3U0K4HY) ──────────────────────────────────────────────────────────────────
+
+/** How a pattern is matched against a column. ONE object per search, used by stage 1, by stage 2 and by the raw-line prefilter, so the stages
+ *  can never disagree about what a match is (a disagreement shows as a hit with line null and an empty excerpt). A column is the raw JSON line in line
+ *  mode (a quote is \" there) and the unescaped element text in element mode; `rawLine` says which, and the pattern is spelled to fit. */
+export interface Matcher {
+  /** SQL boolean: `col` holds a match. */
+  test(col: string): string
+  /** SQL text: at most `width` characters of `col`, around the first match. */
+  excerpt(col: string, width: number): string
+  /** SQL integer: how many words of a --fuzzy pattern `col` holds exactly; null in every other mode (only --fuzzy orders its hits). */
+  score(col: string): string | null
+  /** SQL condition over `raw` that every raw line holding a match satisfies, or null when there is none (see literalPrefilter). Element mode only. */
+  prefilter: string | null
+}
+
+/** The longest --fuzzy word: its one-edit alternation has about 3 x length alternatives, each as long as the word. */
+const FUZZY_MAX_WORD = 40
+/** A --fuzzy word shorter than this must match exactly: one edit in a 4-letter word reaches too many unrelated words. */
+const FUZZY_MIN_EDIT_WORD = 5
+
+/** A string as a transcript line spells it inside a JSON string (quote, backslash, newline and control characters escaped). */
+const jsonText = (s: string): string => JSON.stringify(s).slice(1, -1)
+/** An RE2 literal: ASCII punctuation is backslash-escaped (RE2 accepts that for every punctuation character, `_` included), every other character is itself. */
+const reLiteral = (chars: string[]): string => chars.map(c => (/[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]/.test(c) ? `\\${c}` : c)).join("")
+/** A LIKE literal under ESCAPE '\'. */
+const likeLiteral = (s: string): string => s.replace(/[\\%_]/g, "\\$&")
+const around = (col: string, width: number, position: string): string => `substr(${col}, greatest(1, ${position} - 100), ${width})`
+
+/** True when JSON stores `s` verbatim: printable ASCII without a quote or a backslash. */
+const verbatimInJson = (s: string): boolean => s !== "" && Array.from(s).every(c => {
+  const n = c.codePointAt(0) ?? 0
+  return n >= 0x20 && n <= 0x7e && c !== "\"" && c !== "\\"
+})
+
+/** A raw-line condition that every line holding a match must satisfy, or null when none is sound. Sound only for a literal
+ *  pattern made of printable ASCII without a quote or a backslash: JSON then stores it verbatim, so an element text that
+ *  holds it lies inside the raw line. A quote, a backslash, a control character or a non-ASCII character can be
+ *  written differently in the raw line (or match across what the escaping hides): no prefilter, every line in scope is split.
+ *  Only a literal pattern has one: --mask, --word and --fuzzy gave the same counts with a prefilter built from their literal parts and without one
+ *  (one unrepeated comparison of 5 element-mode searches on 3,246 transcripts, 0 differing transcripts, no clear speed difference under changing load),
+ *  so they go without it and need no soundness argument. */
+function literalPrefilter(pattern: string): string | null {
+  return verbatimInJson(pattern) ? `strpos(lower(raw), lower(${sq(pattern)})) > 0` : null
+}
+
+/** The alternation of a word with at most ONE edit: itself, one unit replaced by any character, one unit deleted, one character inserted. `units` are the
+ *  RE2 literals of its characters. A transposition is two edits and is not covered (the help says so). */
+function oneEdit(units: string[]): string {
+  const alts = new Set<string>([units.join("")])
+  for (let i = 0; i < units.length; i++) {
+    alts.add([...units.slice(0, i), ".", ...units.slice(i + 1)].join(""))
+    alts.add([...units.slice(0, i), ...units.slice(i + 1)].join(""))
+  }
+  for (let i = 0; i <= units.length; i++) alts.add([...units.slice(0, i), ".", ...units.slice(i)].join(""))
+  return `(?:${[...alts].join("|")})`
+}
+
+type MatchOptions = Pick<SearchOptions, "regex" | "mask" | "word" | "fuzzy" | "caseSensitive">
+
+/** Build the matcher of a search. The default (a literal, case-insensitive) and --regex produce exactly the SQL they always did. */
+export function buildMatcher(pattern: string, opts: MatchOptions, rawLine: boolean): Matcher {
+  const cs = opts.caseSensitive === true
+  // The pattern as the column spells it: JSON-escaped for the raw line, or a quote, a backslash or a newline silently finds nothing.
+  const spell = (s: string): string => (rawLine ? jsonText(s) : s)
+  const fold = (e: string): string => (cs ? e : `lower(${e})`)
+
+  if (opts.regex) {
+    // A regex is matched as typed, against the raw line or the element text: it is case-sensitive unless it says (?i).
+    return {
+      test: col => `regexp_matches(${col}, ${sq(pattern)})`,
+      excerpt: (col, width) => `substr(regexp_extract(${col}, ${sq(pattern)}), 1, ${width})`,
+      score: () => null,
+      prefilter: null,
+    }
+  }
+
+  if (opts.mask) {
+    // * is any run of characters, ? one character, anything else is itself; translated to LIKE with %, _ and the escape character escaped.
+    // Matched ANYWHERE in the text (wrapped in %), like a literal. In the raw line a quote is two characters (\"), so ? counts raw characters there.
+    let like = ""
+    let run = ""
+    const segments: string[] = []
+    for (const c of Array.from(pattern)) {
+      if (c === "*" || c === "?") {
+        if (run !== "") segments.push(run)
+        run = ""
+        like += c === "*" ? "%" : "_"
+      } else {
+        run += c
+        like += likeLiteral(spell(c))
+      }
+    }
+    if (run !== "") segments.push(run)
+    // LIKE gives no position: the excerpt is a window around the first literal segment (every match holds it).
+    const anchor = segments.length > 0 ? sq(spell(segments[0])) : null
+    return {
+      test: col => `${col} ${cs ? "LIKE" : "ILIKE"} ${sq(`%${like}%`)} ESCAPE ${sq("\\")}`,
+      excerpt: (col, width) => (anchor === null ? `substr(${col}, 1, ${width})` : around(col, width, `strpos(${fold(col)}, ${fold(anchor)})`)),
+      score: () => null,
+      prefilter: null,
+    }
+  }
+
+  if (opts.word) {
+    // A whole word: not preceded or followed by a letter, a digit or _ (RE2 \b is ASCII-only, this edge is not). In the raw line a newline or a tab
+    // is the two characters \n / \t, which would read as a letter n / t glued to the word, so they count as an edge there.
+    const edge = "[^\\p{L}\\p{N}_]"
+    const re = `${cs ? "" : "(?i)"}(^|${edge}${rawLine ? "|\\\\[nrt]" : ""})${reLiteral(Array.from(spell(pattern)))}($|${edge})`
+    return {
+      test: col => `regexp_matches(${col}, ${sq(re)})`,
+      // The match includes its edge characters, which is what makes strpos find THIS occurrence and not the same letters inside a longer word.
+      excerpt: (col, width) => around(col, width, `strpos(${col}, regexp_extract(${col}, ${sq(re)}))`),
+      score: () => null,
+      prefilter: null,
+    }
+  }
+
+  if (opts.fuzzy) {
+    const words = pattern.split(/\s+/).filter(w => w !== "")
+    if (words.length === 0) throw new UsageError("--fuzzy needs at least one word in the pattern")
+    const tooLong = words.find(w => Array.from(w).length > FUZZY_MAX_WORD)
+    if (tooLong !== undefined) throw new UsageError(`--fuzzy words are at most ${FUZZY_MAX_WORD} characters (got ${Array.from(tooLong).length})`)
+    const parts = words.map(w => {
+      const chars = Array.from(w)
+      const exact = (col: string): string => `strpos(lower(${col}), lower(${sq(spell(w))}))`
+      if (chars.length < FUZZY_MIN_EDIT_WORD) return { test: (col: string) => `${exact(col)} > 0`, position: (col: string) => `nullif(${exact(col)}, 0)` }
+      const re = `(?is)${oneEdit(chars.map(c => reLiteral(Array.from(spell(c)))))}`
+      return {
+        test: (col: string) => `regexp_matches(${col}, ${sq(re)})`,
+        position: (col: string) => `nullif(strpos(${col}, nullif(regexp_extract(${col}, ${sq(re)}), ${sq("")})), 0)`,
+      }
+    })
+    return {
+      test: col => parts.map(p => p.test(col)).join(" AND "),
+      excerpt: (col, width) => around(col, width, `coalesce(${parts.map(p => p.position(col)).join(", ")}, 1)`),
+      // How many words are in the text EXACTLY (an edited one does not count): the order of the hits.
+      score: col => words.map(w => `(CASE WHEN strpos(lower(${col}), lower(${sq(spell(w))})) > 0 THEN 1 ELSE 0 END)`).join(" + "),
+      prefilter: null,
+    }
+  }
+
+  const needle = sq(spell(pattern))
+  return {
+    test: col => `strpos(${fold(col)}, ${fold(needle)}) > 0`,
+    excerpt: (col, width) => around(col, width, `strpos(${fold(col)}, ${fold(needle)})`),
+    score: () => null,
+    prefilter: literalPrefilter(pattern),
+  }
 }
 
 // ── time arguments ───────────────────────────────────────────────────────────────────────────────
@@ -262,6 +435,14 @@ export function discoverTranscripts(project: string, scope: ScopeOptions = {}): 
 
 export interface SearchOptions {
   regex?: boolean
+  /** Match modes: mutually exclusive with each other and with `regex` (checkSearchOptions). */
+  mask?: boolean
+  word?: boolean
+  fuzzy?: boolean
+  /** Literal, mask and word matching become case-sensitive. */
+  caseSensitive?: boolean
+  /** Print this many entries (1 to MAX_CONTEXT) before and after each hit, from the same transcript, one line each. */
+  context?: number
   role?: string
   type?: string
   limit?: number
@@ -289,6 +470,14 @@ export interface SearchOptions {
   commit?: string
 }
 
+/** One entry next to a hit: its first element as one line (kind, tool and text cut to the excerpt width). */
+export interface ContextEntry {
+  line: number
+  ts: string | null
+  kind: string
+  tool: string | null
+  text: string
+}
 export interface SearchHit {
   /** 1-based physical line; null when the transcript changed between the two stages. */
   line: number | null
@@ -302,6 +491,8 @@ export interface SearchHit {
   /** Element mode only: the element kind (a tool output is "tool-output", a model switch "model-change") and, for a tool call or its output, the tool name. */
   kind?: string
   tool?: string | null
+  /** Only with `context`: the entries around the hit, in file order, the hit itself and other hits left out. */
+  context?: ContextEntry[]
 }
 
 export interface FileCount {
@@ -482,7 +673,7 @@ function elementRows(input: string, pass: string, f: ElementFields): string {
   const input_ = `coalesce(CAST(${jraw("b", "$.input")} AS VARCHAR), ${sq("")})`
   const nullText = "NULL::VARCHAR"
   // The tool-call text is the name, a NEWLINE, then the input JSON: a pattern that spans the joint contains a newline,
-  // and a pattern with a control character never uses the raw-line prefilter (rawPrefilter), so no match is lost by it.
+  // and a pattern with a control character never uses the raw-line prefilter (literalPrefilter), so no match is lost by it.
   const textBranches = [
     needs.text ? `WHEN ${bt} = ${sq("text")} THEN ${jstr("b", "$.text")}` : "",
     needs.thinking ? `WHEN ${bt} = ${sq("thinking")} THEN ${jstr("b", "$.thinking")}` : "",
@@ -612,31 +803,15 @@ function elementNeeds(kinds: string[], toolScoped: boolean, subOnly: boolean): E
   }
 }
 
-/** A raw-line condition that every line holding a match must satisfy, or null when none is sound. Sound only for a literal
- *  pattern made of printable ASCII without a quote or a backslash: JSON then stores it verbatim, so an element text that
- *  holds it lies inside the raw line. A regex, a quote, a backslash, a control character or a non-ASCII character can be
- *  written differently in the raw line (or match across what the escaping hides): no prefilter, every line in scope is split. */
-function rawPrefilter(pattern: string, regex: boolean): string | null {
-  if (regex || pattern === "") return null
-  for (const c of pattern) {
-    const n = c.codePointAt(0) ?? 0
-    if (n < 0x20 || n > 0x7e || c === "\"" || c === "\\") return null
-  }
-  return `strpos(lower(raw), lower(${sq(pattern)})) > 0`
-}
-
-const textMatch = (col: string, pattern: string, regex: boolean): string =>
-  regex ? `regexp_matches(${col}, ${sq(pattern)})` : `strpos(lower(${col}), lower(${sq(pattern)})) > 0`
-const textExcerpt = (col: string, pattern: string, regex: boolean, width: number): string =>
-  regex ? `substr(regexp_extract(${col}, ${sq(pattern)}), 1, ${width})`
-    : `substr(${col}, greatest(1, strpos(lower(${col}), lower(${sq(pattern)})) - 100), ${width})`
 /** --tool names: exact, or a mask where * stands for any run of characters. */
 const toolMatch = (col: string, tools: string[]): string =>
   `(${tools.map(m => `${col} LIKE ${sq(m.replace(/[\\%_]/g, "\\$&").replace(/\*/g, "%"))} ESCAPE ${sq("\\")}`).join(" OR ")})`
 
 interface ElementQuery extends ElementFields {
   pattern: string
-  regex: boolean
+  matcher: Matcher
+  /** --fuzzy orders its hits by the number of words held exactly: stage 1 stores that count as `score` (never in count or model-change mode). */
+  scored: boolean
   kinds: string[]
   tools?: string[]
   filters: string[]
@@ -686,7 +861,7 @@ function elementStage1(group: TranscriptFile[], maxObjectSize: number, create: b
   if (q.tools) conds.push(`((x.tool IS NOT NULL AND ${toolMatch("x.tool", q.tools)}) OR coalesce(c.in_tool, false))`)
   if (q.file !== undefined) conds.push("(x.fdir OR coalesce(c.in_file, false))")
   if (q.commit !== undefined) conds.push("x.cdir")
-  conds.push(textMatch("x.txt", q.pattern, q.regex))
+  conds.push(q.matcher.test("x.txt"))
   const isBad = `list_contains(x.kinds, ${sq(BAD_KIND)})`
   const keepParts = [q.prefilter, ...q.filters].filter((p): p is string => p !== null)
   const keep = keepParts.length > 0 ? keepParts.join(" AND ") : undefined
@@ -701,7 +876,7 @@ function elementStage1(group: TranscriptFile[], maxObjectSize: number, create: b
     SELECT x.filename, x.line, x.ts, x.type, x.role,
            list_filter(${kindsAll}, k -> k IN (${sel}))[1] AS kind,
            ${q.needCalls ? "coalesce(x.tool, c.name)" : "x.tool"} AS tool,
-           x.tuid AS tuid, x.idx AS idx, x.h AS h, ${isBad} AS bad, NULL::VARCHAR AS note
+           x.tuid AS tuid, x.idx AS idx, x.h AS h, ${isBad} AS bad, NULL::VARCHAR AS note${q.scored ? `, ${q.matcher.score("x.txt")} AS score` : ""}
     FROM x ${q.needCalls ? "LEFT JOIN calls c ON c.filename = x.filename AND c.id = x.tuid" : ""}
     WHERE ${isBad} OR (${conds.join(" AND ")})`
 }
@@ -722,7 +897,7 @@ function changeStage1(group: TranscriptFile[], maxObjectSize: number, create: bo
  *  filtered-out entry still counts as the previous model of the next one. */
 function changeStage2(q: ElementQuery): string {
   const filters = [...q.filters]
-  if (q.pattern !== "") filters.push(textMatch("note", q.pattern, q.regex))
+  if (q.pattern !== "") filters.push(q.matcher.test("note"))
   return `
     CREATE TEMP TABLE ehits AS
     SELECT filename, NULL::BIGINT AS line, ts, ${sq("assistant")} AS type, ${sq("assistant")} AS role, ${sq("model-change")} AS kind,
@@ -760,8 +935,8 @@ async function assignElementLines(con: DuckDBConnection, shown: ShownElement[], 
       // Only the lines of the shown hits are split; the prefilter and the md5 test come first, so the split runs on a handful of lines.
       const wantedLines = `(SELECT rn, obj, raw, ${ENTRY_COLUMNS} FROM (SELECT rn, obj, raw FROM (${source}) WHERE ${q.prefilter ? `${q.prefilter} AND ` : ""}md5(raw) IN (${hashes})))`
       const rows = (await con.runAndReadAll(
-        `SELECT rn, h, idx, tool, ${textExcerpt("txt", q.pattern, q.regex, width)} AS excerpt FROM (${elementRows(wantedLines, "rn", q)})
-         WHERE idx IN (${idxs}) AND ${textMatch("txt", q.pattern, q.regex)} ORDER BY rn`,
+        `SELECT rn, h, idx, tool, ${q.matcher.excerpt("txt", width)} AS excerpt FROM (${elementRows(wantedLines, "rn", q)})
+         WHERE idx IN (${idxs}) AND ${q.matcher.test("txt")} ORDER BY rn`,
       )).getRowObjects()
       for (const r of rows) {
         const key = `${String(r.h)}#${Number(r.idx)}`
@@ -771,18 +946,7 @@ async function assignElementLines(con: DuckDBConnection, shown: ShownElement[], 
     }
     // An output whose call was not in the first scan: its name is the one of the tool_use block with that id, in the same transcript.
     const unnamed = elements.filter(i => i.hit.tool === null && i.tuid !== null)
-    const names = new Map<string, string>()
-    if (unnamed.length > 0) {
-      const ids = [...new Set(unnamed.map(i => i.tuid as string))].map(sq).join(",")
-      const rows = (await con.runAndReadAll(
-        `SELECT ${jstr("b", "$.id")} AS id, ${jstr("b", "$.name")} AS name FROM (
-           SELECT UNNEST(from_json(${jraw("json", "$.message.content")}, ${sq(JSON_LIST)})) AS b
-           FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)
-           WHERE ${jstr("json", "$.type")} = ${sq("assistant")} AND json_type(json, ${sq("$.message.content")}) = ${sq("ARRAY")})
-         WHERE ${jstr("b", "$.id")} IN (${ids})`,
-      )).getRowObjects()
-      for (const r of rows) names.set(String(r.id), String(r.name))
-    }
+    const names = unnamed.length > 0 ? await toolNames(con, file, unnamed.map(i => i.tuid as string)) : new Map<string, string>()
     for (const { hit, h, idx, tuid, note } of items) {
       const key = `${h}#${note !== null ? 0 : idx}`
       hit.line = lines.get(key)?.shift() ?? null
@@ -791,6 +955,154 @@ async function assignElementLines(con: DuckDBConnection, shown: ShownElement[], 
       hit.excerpt = (found?.excerpt ?? "").replace(/\s+/g, " ").trim()
       hit.tool = hit.tool ?? found?.tool ?? (tuid !== null ? names.get(tuid) ?? null : null)
     }
+  }
+}
+
+
+/** The tool names of the tool_use blocks with these ids, in one transcript. */
+async function toolNames(con: DuckDBConnection, file: string, ids: string[]): Promise<Map<string, string>> {
+  const rows = (await con.runAndReadAll(
+    `SELECT ${jstr("b", "$.id")} AS id, ${jstr("b", "$.name")} AS name FROM (
+       SELECT UNNEST(from_json(${jraw("json", "$.message.content")}, ${sq(JSON_LIST)})) AS b
+       FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)
+       WHERE ${jstr("json", "$.type")} = ${sq("assistant")} AND json_type(json, ${sq("$.message.content")}) = ${sq("ARRAY")})
+     WHERE ${jstr("b", "$.id")} IN (${[...new Set(ids)].map(sq).join(",")})`,
+  )).getRowObjects()
+  return new Map(rows.map(r => [String(r.id), String(r.name)]))
+}
+
+// ── single entries: --show and --context (TRDD-O3U0K4HY) ─────────────────────────────────────────
+//
+// An entry is one physical line of a transcript. --show prints one entry whole, --context prints the entries around each hit as one line each. Both read
+// the entries by line number from ONE transcript with the same row_number() over the same reader as stage 2, so a number printed by a hit finds the same entry.
+
+/** The most entries --context prints on each side of a hit. */
+export const MAX_CONTEXT = 5
+
+/** Every element source switched on: a single entry is read whole, whatever its kind. */
+const ALL_NEEDS: ElementNeeds = {
+  plain: true, sys: true, att: true, attHook: true, attQueued: true, attOther: true, text: true, thinking: true, call: true, output: true,
+}
+
+interface EntryElement { kind: string | null; tool: string | null; tuid: string | null; text: string; chars: number }
+interface Entry { ts: string | null; type: string | null; role: string | null; bad: boolean; elements: EntryElement[]; rawText: string; rawChars: number }
+
+/** The entries at these physical lines of ONE transcript, each element's text cut to `maxChars` IN SQL (an MB-sized tool output never crosses into V8).
+ *  The row_number() runs over the reader and not over a split of the file in JS: the reader does not count a blank line, and the numbers must be the ones a
+ *  hit carries. A line that yields no element (a progress entry, a turn_duration, an image-only message) is still an entry: it comes back with no elements.
+ *  A line that is not in the result does not exist. */
+async function readEntries(con: DuckDBConnection, file: string, lines: number[], maxChars: number): Promise<Map<number, Entry>> {
+  // The two settings of every stage-2 pass: row_number() numbers the scan order, so the order must be preserved and the scan single-threaded.
+  await con.run("SET preserve_insertion_order = true")
+  await con.run("SET threads = 1")
+  const source = `SELECT row_number() OVER () AS rn, json AS obj, CAST(json AS VARCHAR) AS raw FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`
+  const rows = (await con.runAndReadAll(
+    `WITH w AS (SELECT rn, obj, raw, ${ENTRY_COLUMNS} FROM (SELECT rn, obj, raw FROM (${source}) WHERE rn IN (${lines.join(",")})))
+     SELECT w.rn, w.ts, w.type, w.role, (w.obj IS NULL) AS bad, substr(w.raw, 1, ${maxChars}) AS rawtext, length(w.raw) AS rawchars,
+            e.idx, e.kind, e.tool, e.tuid, e.text, e.chars
+     FROM w LEFT JOIN (
+       SELECT rn, idx, kinds[1] AS kind, tool, tuid, substr(txt, 1, ${maxChars}) AS text, length(txt) AS chars
+       FROM (${elementRows("w", "rn", { needs: ALL_NEEDS })})) e ON e.rn = w.rn
+     ORDER BY w.rn, e.idx`,
+  )).getRowObjects()
+  const out = new Map<number, Entry>()
+  for (const r of rows) {
+    const line = Number(r.rn)
+    let entry = out.get(line)
+    if (entry === undefined) {
+      entry = {
+        ts: (r.ts as string | null) ?? null, type: (r.type as string | null) ?? null, role: (r.role as string | null) ?? null,
+        bad: Boolean(r.bad), elements: [], rawText: String(r.rawtext ?? ""), rawChars: Number(r.rawchars ?? 0),
+      }
+      out.set(line, entry)
+    }
+    // An element with no text (an image block, a turn_duration) has nothing to print.
+    if (r.idx !== null && r.idx !== undefined && Number(r.chars ?? 0) > 0) {
+      entry.elements.push({
+        kind: (r.kind as string | null) ?? null, tool: (r.tool as string | null) ?? null, tuid: (r.tuid as string | null) ?? null,
+        text: String(r.text ?? ""), chars: Number(r.chars),
+      })
+    }
+  }
+  return out
+}
+
+/** The entries around each shown hit (same transcript only: the lines are numbers of the hit's own file, and a line the file does not have is absent from
+ *  readEntries). An entry that is itself a shown hit is left out: it is printed as a hit. A hit with line null (the transcript changed between the stages) has no context.
+ *  Returns the milliseconds it took, which the caller adds to the `lines` timing. */
+async function addContext(con: DuckDBConnection, hits: SearchHit[], n: number, width: number): Promise<number> {
+  const started = Date.now()
+  const hitLines = new Set(hits.filter(h => h.line !== null).map(h => `${h.file}#${h.line}`))
+  const wanted = new Map<string, Set<number>>()
+  for (const h of hits) {
+    if (h.line === null) continue
+    const set = wanted.get(h.file) ?? new Set<number>()
+    for (let d = -n; d <= n; d++) if (d !== 0 && h.line + d >= 1) set.add(h.line + d)
+    wanted.set(h.file, set)
+  }
+  const entries = new Map<string, Map<number, Entry>>()
+  for (const [file, set] of wanted) entries.set(file, await readEntries(con, file, [...set].sort((a, b) => a - b), width))
+  for (const h of hits) {
+    if (h.line === null) continue
+    const found = entries.get(h.file) ?? new Map<number, Entry>()
+    h.context = []
+    for (let line = h.line - n; line <= h.line + n; line++) {
+      const entry = found.get(line)
+      if (line === h.line || entry === undefined || hitLines.has(`${h.file}#${line}`)) continue
+      const first = entry.elements[0]
+      h.context.push({
+        line,
+        ts: entry.bad ? null : entry.ts,
+        kind: entry.bad ? "invalid-json" : first?.kind ?? entry.type ?? "?",
+        tool: first?.tool ?? null,
+        text: first === undefined ? "" : first.text.replace(/\s+/g, " ").trim().slice(0, width),
+      })
+    }
+  }
+  return Date.now() - started
+}
+
+export interface ShownEntry {
+  session: string
+  agent: string | null
+  file: string
+  line: number
+  ts: string | null
+  type: string | null
+  role: string | null
+  elements: Array<{ kind: string; tool: string | null; chars: number; text: string }>
+  /** True when --max-chars cut the text of an element. */
+  truncated: boolean
+}
+
+/** One entry, whole: every element's kind and text, the text of ALL elements together bounded by `maxChars`. An entry without any element with text (a
+ *  progress entry) is shown as its raw JSON line. A line the transcript does not have, or one that is not valid JSON, is a SearchScopeError (exit 2). */
+export async function showEntry(file: TranscriptFile, line: number, maxChars: number): Promise<ShownEntry> {
+  const { inst, con } = await openDuck()
+  try {
+    const entry = (await readEntries(con, file.path, [line], maxChars)).get(line)
+    if (entry === undefined) {
+      const total = Number((await con.runAndReadAll(`SELECT count(*) AS n FROM read_ndjson_objects(${sq(file.path)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`)).getRowObjects()[0].n)
+      throw new SearchScopeError(`line ${line} does not exist: ${file.path} has ${total} line(s)`)
+    }
+    if (entry.bad) throw new SearchScopeError(`line ${line} of ${file.path} is not valid JSON (the reader skips it)`)
+    const parts = entry.elements.length > 0
+      ? entry.elements
+      : [{ kind: entry.type ?? "entry", tool: null, tuid: null, text: entry.rawText, chars: entry.rawChars }]
+    const unnamed = parts.filter(p => p.tool === null && p.tuid !== null)
+    const names = unnamed.length > 0 ? await toolNames(con, file.path, unnamed.map(p => p.tuid as string)) : new Map<string, string>()
+    let left = maxChars
+    let cut = false
+    const elements = parts.map(p => {
+      const text = p.text.slice(0, Math.max(0, left))
+      left -= text.length
+      if (text.length < p.chars) cut = true
+      return { kind: p.kind ?? entry.type ?? "entry", tool: p.tool ?? (p.tuid !== null ? names.get(p.tuid) ?? null : null), chars: p.chars, text }
+    })
+    return { session: file.session, agent: file.agent, file: file.path, line, ts: entry.ts, type: entry.type, role: entry.role, elements, truncated: cut }
+  } finally {
+    con.closeSync()
+    inst.closeSync()
   }
 }
 
@@ -804,13 +1116,15 @@ async function searchElements(files: TranscriptFile[], pattern: string, opts: Se
   const countMode = opts.mode === "count"
   const withLine = files.length === 1 && !countMode
   const byFile = withLine && !opts.order
-  const regex = opts.regex === true
+  // model-change needs no pattern and never matches an empty one (changeStage2): the default matcher keeps an empty pattern with --fuzzy from being refused.
+  const matcher = buildMatcher(pattern, pattern === "" ? {} : opts, false)
+  const scored = !changeMode && !countMode && matcher.score("x") !== null
   const toolScoped = Boolean(opts.tools) || opts.file !== undefined || opts.commit !== undefined
   const subOnly = kinds.length === 1 && kinds[0] === "subagent" && !toolScoped
   const q: ElementQuery = {
-    pattern, regex, kinds, tools: opts.tools, file: opts.file, commit: opts.commit,
+    pattern, matcher, scored, kinds, tools: opts.tools, file: opts.file, commit: opts.commit,
     filters: scopeFilters(opts, changeMode ? "change" : "element"),
-    prefilter: rawPrefilter(pattern, regex),
+    prefilter: matcher.prefilter,
     withLine,
     needCalls: Boolean(opts.tools) || opts.file !== undefined || kinds.includes("subagent"),
     subOnly,
@@ -862,7 +1176,9 @@ async function searchElements(files: TranscriptFile[], pattern: string, opts: Se
     }
 
     const total = Number((await con.runAndReadAll("SELECT count(*) AS n FROM ehits")).getRowObjects()[0].n)
-    const orderBy = byFile ? "line, idx" : `(ts IS NULL), ts ${opts.order === "old" ? "ASC" : "DESC"}, filename, idx, h`
+    // --fuzzy: the hits with the most words held exactly come first, then the usual order.
+    const byScore = scored ? "score DESC, " : ""
+    const orderBy = byFile ? `${byScore}line, idx` : `${byScore}(ts IS NULL), ts ${opts.order === "old" ? "ASC" : "DESC"}, filename, idx, h`
     const rows = (await con.runAndReadAll(`SELECT filename, line, ts, type, role, kind, tool, tuid, idx, h, note FROM ehits ORDER BY ${orderBy} LIMIT ${limit}`)).getRowObjects()
     const pending: ShownElement[] = []
     const hits = rows.map(r => {
@@ -892,6 +1208,7 @@ async function searchElements(files: TranscriptFile[], pattern: string, opts: Se
       await assignElementLines(con, pending, q, width)
       linesMs = Date.now() - linesStart
     }
+    if (opts.context !== undefined) linesMs += await addContext(con, hits, opts.context, width)
     return { hits, total, counts: [], timing: { scanMs, linesMs }, skipped }
   } finally {
     con.closeSync()
@@ -940,6 +1257,20 @@ export function checkElementOptions(pattern: string, opts: SearchOptions): void 
   if (opts.commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(opts.commit)) throw new UsageError(`--commit expects 7 to 40 hex characters, got "${opts.commit}"`)
 }
 
+
+/** The match-mode and context rules, checked before any transcript is searched (and by the engine itself). */
+export function checkSearchOptions(pattern: string, opts: SearchOptions): void {
+  const modes = (["regex", "mask", "word", "fuzzy"] as const).filter(m => opts[m] === true)
+  if (modes.length > 1) throw new UsageError(`${modes.map(m => `--${m}`).join(" and ")} are mutually exclusive: use one match mode`)
+  // --fuzzy folds case by definition: a flag that would be ignored is refused, not accepted. (--regex is case-sensitive already, so --case is true there.)
+  if (opts.caseSensitive && opts.fuzzy) throw new UsageError("--case does not apply to --fuzzy, which is always case-insensitive")
+  // A --kind model-change search needs no pattern; every other search has one (checked by checkElementOptions and runSearchCli).
+  if (pattern !== "") buildMatcher(pattern, opts, true)
+  if (opts.context !== undefined && (!Number.isInteger(opts.context) || opts.context < 1 || opts.context > MAX_CONTEXT)) {
+    throw new UsageError(`--context expects a whole number from 1 to ${MAX_CONTEXT}`)
+  }
+}
+
 /** Any of these switches the engine from raw lines to elements. */
 const isElementMode = (opts: SearchOptions): boolean =>
   Boolean(opts.kinds?.length) || Boolean(opts.tools?.length) || opts.file !== undefined || opts.commit !== undefined
@@ -949,6 +1280,7 @@ const isElementMode = (opts: SearchOptions): boolean =>
  * through sq(), and the transcript text never enters V8 beyond the shown excerpts.
  */
 export async function searchTranscripts(files: TranscriptFile[], pattern: string, opts: SearchOptions = {}): Promise<SearchResult> {
+  checkSearchOptions(pattern, opts)
   if (files.length === 0) return { hits: [], total: 0, counts: [], timing: { scanMs: 0, linesMs: 0 }, skipped: { lines: 0, files: 0 } }
   if (isElementMode(opts)) return searchElements(files, pattern, opts)
   const limit = Math.min(Math.max(1, opts.limit ?? 20), 500)
@@ -958,17 +1290,14 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
   const byFile = single && !opts.order
   const meta = new Map(files.map(f => [f.path, f]))
 
-  // Literal mode matches the RAW JSON line, where a quote is \" and a newline is \n: escape the
-  // pattern the way JSON would, or a pattern with any of those silently finds nothing.
-  const needle = opts.regex ? pattern : JSON.stringify(pattern).slice(1, -1)
-  const matchExpr = opts.regex
-    ? `regexp_matches(raw, ${sq(needle)})`
-    : `strpos(lower(raw), lower(${sq(needle)})) > 0`
-  // Excerpt: a window around the first hit (literal) or the first regex capture, bounded by --width.
-  // Computed in SQL so an MB-sized tool_result line never crosses into JS.
-  const excerptExpr = opts.regex
-    ? `substr(regexp_extract(raw, ${sq(needle)}), 1, ${width})`
-    : `substr(raw, greatest(1, strpos(lower(raw), lower(${sq(needle)})) - 100), ${width})`
+  // The matcher spells the pattern for the RAW JSON line (a quote is \" there, a newline \n) and builds the match and the excerpt from it, in SQL so an
+  // MB-sized tool_result line never crosses into JS; stage 2 (assignLines) reuses the same two expressions.
+  const matcher = buildMatcher(pattern, opts, true)
+  const matchExpr = matcher.test("raw")
+  const excerptExpr = matcher.excerpt("raw", width)
+  // --fuzzy only: the number of words held exactly, stored per hit to order them. Not in count mode (no order there).
+  const scoreExpr = countMode ? null : matcher.score("raw")
+  const scoreColumn = scoreExpr === null ? "" : `, ${scoreExpr} AS score`
 
   const filters = scopeFilters(opts, "line")
   // ONE filter for the match and the scope filters (TRDD-V50CQS22). With two stacked filters (the match in the m CTE, the scope filters on
@@ -981,8 +1310,8 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
   const columns = countMode
     ? 'filename'
     : single
-      ? `filename, line, ts, type, role, ${excerptExpr} AS excerpt, NULL::VARCHAR AS h`
-      : "filename, line, ts, type, role, '' AS excerpt, md5(raw) AS h"
+      ? `filename, line, ts, type, role, ${excerptExpr} AS excerpt, NULL::VARCHAR AS h${scoreColumn}`
+      : `filename, line, ts, type, role, '' AS excerpt, md5(raw) AS h${scoreColumn}`
   const stage1 = (group: TranscriptFile[], maxObjectSize: number, create: boolean): string => `
     ${create ? 'CREATE TEMP TABLE hits AS' : 'INSERT INTO hits'}
     WITH src AS (
@@ -1031,7 +1360,9 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
     }
 
     const total = Number((await con.runAndReadAll('SELECT count(*) AS n FROM hits')).getRowObjects()[0].n)
-    const orderBy = byFile ? 'line' : `(ts IS NULL), ts ${opts.order === 'old' ? 'ASC' : 'DESC'}, filename, line`
+    // --fuzzy: the hits with the most words held exactly come first (also in file order), then the usual order.
+    const byScore = scoreExpr === null ? '' : 'score DESC, '
+    const orderBy = byFile ? `${byScore}line` : `${byScore}(ts IS NULL), ts ${opts.order === 'old' ? 'ASC' : 'DESC'}, filename, line`
     const rows = (await con.runAndReadAll(`SELECT filename, line, ts, type, role, excerpt, h FROM hits ORDER BY ${orderBy} LIMIT ${limit}`)).getRowObjects()
     const pending: Array<{ hit: SearchHit; h: string }> = []
     const hits = rows.map(r => {
@@ -1060,6 +1391,7 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
       await assignLines(con, pending, excerptExpr, matchExpr)
       linesMs = Date.now() - linesStart
     }
+    if (opts.context !== undefined) linesMs += await addContext(con, hits, opts.context, width)
     return { hits, total, counts: [], timing: { scanMs, linesMs }, skipped }
   } finally {
     con.closeSync()
@@ -1108,9 +1440,74 @@ function tag(x: { session: string; agent: string | null }): string {
   return x.session.slice(0, 8) + (x.agent ? `:${x.agent.slice(0, 8)}` : '')
 }
 
+
+/** One context row: the columns of a hit row, with [context <kind> <tool>] where a hit has its bracket. */
+function contextLine(h: SearchHit, c: ContextEntry): string {
+  return `${tag(h)}\t#${c.line}\t${c.ts ?? '-'}\t[context ${c.kind}${c.tool ? ` ${c.tool}` : ''}]\t${c.text}`
+}
+
 // stdout is the matches alone, stderr the description of the run (see the file header).
 const writeOut = (line: string): void => { process.stdout.write(`${line}\n`) }
 const writeErr = (line: string): void => { process.stderr.write(`${line}\n`) }
+
+const DEFAULT_SHOW_CHARS = 4000
+const MAX_SHOW_CHARS = 100000
+/** What --show accepts. It is a lookup of ONE entry: a filter, a match or an output flag would be silently ignored, so each is refused. */
+const SHOW_FLAGS = new Set(['--show', '--max-chars', '--project', '--worktrees', '--agent', '--json'])
+
+/** `--show <session>:<line>`: one entry in readable form. A malformed spec or flag is a UsageError (64); a session or line that does not exist is exit 2. */
+async function runShow(argv: string[], spec: string): Promise<number> {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (!a.startsWith('-')) throw new UsageError(`--show takes no search pattern (got "${a}")`)
+    if (!SHOW_FLAGS.has(a)) throw new UsageError(`${a} does not apply to --show (it accepts ${[...SHOW_FLAGS].join(', ')})`)
+    if (VALUED.has(a)) i++
+  }
+  const parsed = /^(.+):(\d+)$/.exec(spec)
+  if (parsed === null || Number(parsed[2]) < 1) throw new UsageError(`--show expects <session>:<line> with a line number from 1, got "${spec}"`)
+  const [, sessionId, lineText] = parsed
+  const maxChars = positiveArg(argv, '--max-chars') ?? DEFAULT_SHOW_CHARS
+  if (maxChars > MAX_SHOW_CHARS) throw new UsageError(`--max-chars is at most ${MAX_SHOW_CHARS}`)
+  const agents = listArg(argv, '--agent')
+  let files: TranscriptFile[]
+  try {
+    // Without --agent the entry is in the main transcript of the session; with it, in the sub-agent transcript that the id names.
+    files = discoverTranscripts(projectArg(argv), { sessions: [sessionId], agents, mainOnly: agents === undefined, worktrees: argv.includes('--worktrees') })
+  } catch (e) {
+    if (e instanceof SearchScopeError) {
+      writeErr(e.message)
+      return EXIT.UNKNOWN
+    }
+    throw e
+  }
+  if (files.length !== 1) {
+    writeErr(files.length === 0
+      ? `no ${agents === undefined ? 'main' : 'sub-agent'} transcript for session "${sessionId}" in this project (--agent ID names a sub-agent transcript; --project / --worktrees change the scope)`
+      : `${files.length} transcripts match: ${files.map(f => path.basename(f.path)).join(', ')} — name one with --agent`)
+    return EXIT.UNKNOWN
+  }
+  let shown: ShownEntry
+  try {
+    shown = await showEntry(files[0], Number(lineText), maxChars)
+  } catch (e) {
+    if (e instanceof SearchScopeError) {
+      writeErr(e.message)
+      return EXIT.UNKNOWN
+    }
+    throw e
+  }
+  if (argv.includes('--json')) {
+    writeOut(JSON.stringify(shown))
+    return EXIT.OK
+  }
+  writeOut(`${tag(shown)}\t#${shown.line}\t${shown.ts ?? '-'}\t[${shown.role ?? shown.type ?? '?'}]`)
+  for (const e of shown.elements) {
+    writeOut(`--- [${e.kind}${e.tool ? ` ${e.tool}` : ''}] ${e.chars} chars`)
+    if (e.text !== '') writeOut(e.text)
+  }
+  if (shown.truncated) writeOut(`--- cut at ${maxChars} chars (--max-chars N, at most ${MAX_SHOW_CHARS})`)
+  return EXIT.OK
+}
 
 export async function runSearchCli(argv: string[]): Promise<number> {
   assertKnownFlags(argv, KNOWN, VALUED, 'agentlenspro search --help')
@@ -1118,6 +1515,11 @@ export async function runSearchCli(argv: string[]): Promise<number> {
     writeOut(SEARCH_USAGE)
     return EXIT.OK
   }
+  const has = (flag: string): boolean => argv.includes(flag)
+  // --show is a lookup of one entry, not a search: it has no pattern, so it is handled before the pattern is required.
+  const show = flagValue(argv, '--show', '<session>:<line>')
+  if (show !== undefined) return runShow(argv, show)
+  if (has('--max-chars')) throw new UsageError('--max-chars only applies to --show')
   const positionals: string[] = []
   for (let i = 0; i < argv.length; i++) {
     if (VALUED.has(argv[i])) { i++; continue }
@@ -1132,7 +1534,13 @@ export async function runSearchCli(argv: string[]): Promise<number> {
   else if (pattern === '') throw new UsageError('a search <pattern> is required — see: agentlenspro search --help')
   if (positionals.length > 1) throw new UsageError(`one pattern only (got ${positionals.length}) — quote patterns containing spaces`)
 
-  const has = (flag: string): boolean => argv.includes(flag)
+  const contextN = positiveArg(argv, '--context')
+  if (contextN !== undefined && (has('--count') || has('--files'))) throw new UsageError('--context does not apply to --count or --files')
+  // The match modes and --context, validated before any transcript is read; the same object goes to the engine.
+  const matchOpts: SearchOptions = {
+    regex: has('--regex'), mask: has('--mask'), word: has('--word'), fuzzy: has('--fuzzy'), caseSensitive: has('--case'), context: contextN,
+  }
+  checkSearchOptions(pattern, matchOpts)
   const limit = positiveArg(argv, '--limit')
   const width = positiveArg(argv, '--width')
   if (has('--main-only') && has('--subagents-only')) throw new UsageError('--main-only and --subagents-only are mutually exclusive')
@@ -1172,7 +1580,7 @@ export async function runSearchCli(argv: string[]): Promise<number> {
   const filesMode = has('--files')
   const t0 = Date.now()
   const { hits, total, counts, timing, skipped } = await searchTranscripts(files, pattern, {
-    regex: has('--regex'),
+    ...matchOpts,
     role: flagValue(argv, '--role'),
     type: flagValue(argv, '--type'),
     limit,
@@ -1205,10 +1613,15 @@ export async function runSearchCli(argv: string[]): Promise<number> {
   } else if (asJson) {
     writeOut(JSON.stringify({ total, hits, skipped }))
   } else {
-    for (const h of hits) {
+    // With --context a hit is printed with the entries around it (grep convention: a -- line between groups).
+    hits.forEach((h, i) => {
+      if (contextN !== undefined && i > 0) writeOut('--')
+      const context = h.context ?? []
+      for (const c of context.filter(c => c.line < (h.line ?? 0))) writeOut(contextLine(h, c))
       const label = h.kind !== undefined ? `${h.kind}${h.tool ? ` ${h.tool}` : ''}` : h.role ?? h.type ?? '?'
       writeOut(`${tag(h)}\t#${h.line ?? '?'}\t${h.ts ?? '-'}\t[${label}]\t${h.excerpt}`)
-    }
+      for (const c of context.filter(c => c.line > (h.line ?? 0))) writeOut(contextLine(h, c))
+    })
   }
   return EXIT.OK
 }
