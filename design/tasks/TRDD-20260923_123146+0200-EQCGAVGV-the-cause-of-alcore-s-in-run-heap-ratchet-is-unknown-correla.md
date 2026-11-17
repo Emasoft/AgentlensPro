@@ -2,9 +2,9 @@
 trdd-id: EQCGAVGV
 status: tasked
 title: The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
-column: blocked
+column: todo
 created: 2026-09-23T12:31:46+0200
-updated: 2026-10-17T20:12:07+0200
+updated: 2026-11-17T19:48:32+0100
 current-owner: main-session
 created-by: main-session
 task-type: spike
@@ -16,8 +16,8 @@ approved: true
 approval-judge: main-session
 approval-datetime: 2026-09-23T12:31:46+0200
 npt: [C19SUVPH, PQ40PZ9D, 9SOYXKNE, Z0A777XW, CEAZZHHO]
-blocked-by: [PQ40PZ9D, Z0A777XW]
-pre-block-column: dev
+blocked-by: []
+pre-block-column: 
 ---
 
 # The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
@@ -42,6 +42,7 @@ The 60-minute passive live correlation (report below) found summary.misses and s
 
 - 2026-09-23T12:31:46+0200 — MANDATE issued by main-session (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-23T23:12:30+0200 — column → blocked. waits on the open npt prerequisite cards; the passive work that ran in dev is done
+- 2026-11-17T19:48:32+0100 — column → todo by main-agent@agentlenspro. blockers TRDD-PQ40PZ9D and TRDD-Z0A777XW are complete and archived (validator BLOCKER-RELEASED); of its npt cards C19SUVPH and CEAZZHHO are complete and 9SOYXKNE is in deploy, which this card's STATE calls not blocking (the next step runs on an isolated instance built from HEAD); it stood in dev before the block; to todo because nobody is working it now Cleared blocked-by (--clear-blocker override).
 
 ## 2026-09-23T14:10:37+0200 — correction to the passive-correlation section
 

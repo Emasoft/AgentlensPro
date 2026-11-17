@@ -1,9 +1,9 @@
 ---
 trdd-id: ORGJ0E3G
 title: Transcript session cost bills every cache write at the 5m rate
-column: blocked
+column: todo
 created: 2026-09-24T14:38:23+0200
-updated: 2026-10-16T17:07:16+0200
+updated: 2026-11-17T19:48:21+0100
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: bugfix
@@ -15,9 +15,9 @@ approved: true
 approval-judge: emanuelesabetta
 approval-datetime: 2026-09-24T14:38:23+0200
 implementation-commits: [513623fe, 80958154, 86f4fa22, 63f41d04]
-blocked-by: [TWDGR75R]
+blocked-by: []
 status: tasked
-pre-block-column: dev
+pre-block-column: 
 unblock-when: [trdd:TWDGR75R terminal]
 blocker-probe: [trddgrep, why, ORGJ0E3G]
 blocker-holds-if: not-match:READY
@@ -29,6 +29,7 @@ blocker-holds-if: not-match:READY
 
 - 2026-09-24T14:38:23+0200 — MANDATE issued by emanuelesabetta (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-16T11:13:33+0200 — column → blocked by main-agent@agentlenspro. deploy waits on TWDGR75R establishing the OOM cause; triage row 16
+- 2026-11-17T19:48:21+0100 — column → todo by main-agent@agentlenspro. blocker TRDD-TWDGR75R is complete and archived (validator BLOCKER-RELEASED); it stood in dev before the block; to todo, not dev, because nobody is working it now; its STATE still names a deploy gate (a full-size memory run), which must be re-read against the 4 GB test-data cap before any work Cleared blocked-by (--clear-blocker override).
 
 ## Evidence
 

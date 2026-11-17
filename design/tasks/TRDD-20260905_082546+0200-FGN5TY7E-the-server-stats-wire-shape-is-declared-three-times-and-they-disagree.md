@@ -1,9 +1,9 @@
 ---
 trdd-id: FGN5TY7E
 title: The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
-column: blocked
+column: todo
 created: 2026-09-05T08:25:46+0200
-updated: 2026-10-16T17:07:14+0200
+updated: 2026-11-17T19:48:11+0100
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -11,12 +11,15 @@ min-approval-requirement: none
 created-by: U0L78B3Z
 related: [U0L78B3Z, ZIWEB0UW, 8ADTIGKT, HDUETCU7]
 implementation-commits: [0c01a3e1, 7659b9ca, 34569e8f]
-blocked-by: [HDUETCU7]
+blocked-by: []
 status: tasked
-pre-block-column: testing
+pre-block-column: 
 unblock-when: [trdd:HDUETCU7 terminal]
 blocker-probe: [trddgrep, why, FGN5TY7E]
 blocker-holds-if: not-match:READY
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-17T19:48:11+0100
 ---
 
 # The server-stats bodies shape is hand-declared twice in one file and the two declarations disagree
@@ -179,3 +182,4 @@ Corrections to the entry above (2026-10-05, after a review of commit d1eb1de9). 
 ## Approval log
 
 - 2026-10-16T11:13:34+0200 — column → blocked by main-agent@agentlenspro. box 4 rides on HDUETCU7, which waits in human_review; triage row 8
+- 2026-11-17T19:48:11+0100 — column → todo by main-agent@agentlenspro. blocker TRDD-HDUETCU7 is complete and archived (validator BLOCKER-RELEASED); it stood in testing before the block; to todo, not testing, because nobody is working it now; next step is the open box 4, to be judged on HDUETCU7's evidence Cleared blocked-by (--clear-blocker override).
