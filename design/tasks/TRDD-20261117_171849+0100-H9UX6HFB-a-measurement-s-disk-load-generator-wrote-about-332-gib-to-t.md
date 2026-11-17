@@ -4,7 +4,7 @@ title: A measurement's disk-load generator wrote about 332 GiB to the boot disk 
 column: todo
 status: tasked
 created: 2026-11-17T17:18:49+0100
-updated: 2026-11-17T17:19:15+0100
+updated: 2026-11-17T17:23:33+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,7 +28,7 @@ The plan checked the alive size against the cap and never estimated the write ra
 ## Acceptance
 - [x] scripts_dev/yr6-gate-cause.py cannot be rerun with the writing load (guard at the top), and a disk load for a later measurement is read-only or has a cumulative byte budget under 4 GiB checked in its loop.
 - [ ] The cap paragraph of CLAUDE.md says that cumulative bytes written by a load generator count against the 4 GB cap, not only the alive size.
-- [ ] The owner is told in the status of the turn that found it.
+- [x] The owner is told in the status of the turn that found it.
 Note 2026-11-17 17:19: box 1 ticked for its first half (the script stops at its first line with a message naming this card; checked by running it). The second half binds any later measurement.
 
 ## Approval log
