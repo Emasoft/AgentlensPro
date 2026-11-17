@@ -4,7 +4,7 @@ title: The bug scanner does not finish on the two search files and uses 5.7 GB
 column: backburner
 status: tasked
 created: 2026-11-17T06:50:16+0100
-updated: 2026-11-17T06:50:16+0100
+updated: 2026-11-17T06:54:42+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,6 +28,7 @@ Measured 2026-11-17 by the main agent. Command: ubs --files=src/cli/searchCli.ts
 - [ ] TRDD-UIQS9RXZ and TRDD-OIMXULDJ each have a scanner verdict, or an owner decision that another check replaces it for these files.
 
 ## Notes and lessons learned
+2026-11-17T06:54+0100 main agent, CORRECTION: which copy of the two files the scanner read is NOT established. The run was started from the repository root with the names src/cli/searchCli.ts and src/test/searchCli.test.ts and the scratch directory as project directory; both names also exist in the working tree. The scanner copied its inputs to a shadow workspace, which was gone when I looked for it after stopping the run, so it could not be compared with the 4f134558 copies or with the working tree. Read 'scratch copies' in the body above as 'the two search files, copy not established'. The next attempt must pass absolute paths of the copies and scan one file at a time.
 
 ## Approval log
 

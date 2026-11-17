@@ -4,7 +4,7 @@ title: search across all sessions of the project - increment 1 scope filters and
 column: ai_review
 status: tasked
 created: 2026-11-16T23:48:04+0100
-updated: 2026-11-17T06:52:52+0100
+updated: 2026-11-17T06:54:43+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -81,6 +81,7 @@ Files: src/cli/searchCli.ts, src/test/searchCli.test.ts (and the one-line verb s
 - 2026-11-17 01:18 — COMMIT 4f134558 IS NOT BUG-SCANNED. ubs on the two files ran 900 s, its js module timed out and it printed 'Status: partial — js: timeout', Files 0, exit 2 (reports_dev/UIQS9RXZ/main4-ubs.txt). Cause not established. Also corrected from the last note: the cause of the gap between the two timing batches (7.3 to 8.3 s, then 3.7 to 4.4 s) is NOT established; no load reading was taken around the first batch, and the second ran beside that scanner. The A/B timed only the 'obj IS NULL OR' predicate inside a count query (3 runs per arm); the bad column, the extra aggregate and the DELETE were not timed.
 - 2026-11-17 01:20 — The bug scanner's own line, read in full: "Scanner module 'js' timed out after 900s (UBS_MODULE_TIMEOUT) and was terminated; the result is PARTIAL (this language was not scanned). A common cause is a build tool such as cargo blocking on a locked target/ directory or on network access. Raise UBS_MODULE_TIMEOUT or investigate the wedge." That is a generic hint; what wedged this run was not investigated. TO DO when the increment 2 worker has returned (a scan now would compete with its measurements): one ubs run per file on the committed tree; if it times out again, a card for the scanner timeout. The backup of the TRDD-7NHUU6GK change was checked: git apply --check -R on the patch exits 0, and the test copy is byte-identical (cmp).
 2026-11-17T06:52+0100 main agent: the scanner verdict owed for commit 4f134558 could not be produced. ubs on scratch copies of the two committed files ran 11 min 26 s with no output after 'Scanning js...', its JS module at 5.7 GB of memory, and was stopped (TRDD-MA6H11NB). The current machine-wide pre-commit hook does not scan this repository (TRDD-9G5JC6OD). This card stays in ai_review until MA6H11NB gives a verdict or the owner accepts another check for these files.
+2026-11-17T06:54+0100 main agent, CORRECTION to the note above: which copy of the two files the scanner read (the 4f134558 copies or the working tree) is not established; its shadow workspace was gone before it could be compared. The rest of the note stands.
 
 ## Review of the test file by the main agent
 
