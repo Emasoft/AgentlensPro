@@ -4,7 +4,7 @@ title: get_account_status refuses to run while AgentlensPro is disabled
 column: complete
 status: tasked
 created: 2026-10-29T07:52:44+0100
-updated: 2026-11-18T00:04:44+0100
+updated: 2026-11-18T00:29:35+0100
 current-owner: main-agent@AgentlensPro
 created-by: main-agent@AgentlensPro
 task-type: bugfix
@@ -46,6 +46,7 @@ release-via: publish
 - 2026-10-29 — box 3 scope: it holds for each working, matched key (key 03 is refused with 403; an unmatched key refreshes nothing). The 10-minute bound is tested (steady-state test); the per-model weekly window rests on the header parser (WINDOW_HEADER, SCOPE_LABELS), not on an observed run.
 - 2026-10-29 — correction to the STATE bullet on 2642b168: since 1e2d30ed the archive warning names the rows that no working key refreshes (keyRefreshesRow); only the Exception sentence counts key-taken readings. Box 6's full-suite run is of a2da6a12; d21fdf8f changed only a changelog line and two comments; check-identities re-run on HEAD passed.
 2026-11-18T00:04:44+0100 — main-agent@agentlenspro — AUDIT of the six acceptance boxes against the tree at commit 8a0ecd94 (worker report reports_dev/G93MZOBJ/20261117_235335+0100-audit-HO94JMKD.md, gitignored; the lines named here were read by the main agent). Boxes 1, 2 and 4: met by reading the code path; their tests were not run. Box 3 (one max_tokens 0 probe at most every 10 minutes per key): holds for runs that do not overlap. For two runs that start together it does not hold: settle() in src/longOAuthKeys.ts reads the stamp (readStamp), probes (probeRateLimits) and writes the stamp only afterwards (record), with no lock, and the doc comment of refreshLongKeys says «No lock: two runs that start together can each probe a key once». The lock of commit a2da6a12 guards the usage-endpoint fetch in src/subscriptionUsage.ts, not this path (by the worker report; the main agent read only that longOAuthKeys.ts holds the word lock in that one comment). DECISION (main agent, in charge by owner order): accepted as a documented limit, no lock added. Cost of the limit: one extra zero-token message per key when two --all runs start within one probe time of each other. The second sentence of that comment («The TTL bounds that to one message per key») is wrong for overlapping runs and is corrected in a comment-only commit. Boxes 5 and 6 (review triage, full suite): not re-checked; the full suite runs before a push. Stale body text found by the audit and left as it is (terminal card): Increment 1 names isFileOnlyAccountStatus, renamed to isAllAccountsStatus in f301e1c4; the box-3 entry names a «steady-state test» that has no such title (the TTL tests are in src/test/longOAuthKeys.test.ts).
+2026-11-18T00:29:33+0100 — main-agent@agentlenspro — CLARIFICATION of the audit entry above: «met by reading the code path» for boxes 1, 2 and 4 is the reading of the audit worker, not of the main agent. The main agent read only the lines of box 3 (settle and refreshLongKeys in src/longOAuthKeys.ts, the call in src/cli/allAccountsCli.ts). The comment correction of commit 2d1a5c5b named the stamp for every case; it is being reworded by mechanism (the stamp for a failed, refused or unmatched key, the archive record for a refreshed one).
 
 ## Owner directive
 
