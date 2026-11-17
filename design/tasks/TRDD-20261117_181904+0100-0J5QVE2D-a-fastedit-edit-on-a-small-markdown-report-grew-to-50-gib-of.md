@@ -4,7 +4,7 @@ title: A fastedit edit on a small Markdown report grew to 50 GiB of memory and f
 column: backburner
 status: tasked
 created: 2026-11-17T18:19:04+0100
-updated: 2026-11-17T18:32:19+0100
+updated: 2026-11-17T18:36:52+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -40,6 +40,7 @@ Evidence: `reports_dev/fastedit-runaway/20261117_181649+0100-pid42290-ps.txt` (t
 - 2026-11-17T18:25:21+0100 added from the worker's own handback and the harness review of its turn (not re-checked by the main agent): the tool is fastedit 0.5.0 with the default backend mlx and a model cached on this machine, no FASTEDIT variable set, so by that reading the report text did not leave the machine (no network trace was taken). Before it was put in the background the edit printed 'falling through to the validated model path' and 'Whole-file merge attempt 1/9 rejected: truncated (model hit the token cap)'. So the process that grew was a whole-file merge by the local model with up to 9 attempts; that the growth comes from those attempts is INFERRED. The worker had no way to stop the job. At 18:25 another session of the owner (a different project) had its own fastedit edit running at 3.26 GiB after 27 s; it is not this project's and was not touched.
 - 2026-11-17T18:31:17+0100 box 1: the rule is now a LOCAL memory note of this project (worker-prompts-time-limit-fastedit-edit, lint 0 findings, found by a recall on 'boot disk free space falling swap fastedit') and the two worker prompts sent at 18:29 carry it (timeout 120, reports written once with fastedit create, stop on the model-path message). It binds only sessions that recall the note; no hook enforces it. LEFTOVER for the owner, made by the main agent's first attempt at that note (a cd into the memory folder made the tool derive a wrong project name): a stray folder under the user's Claude projects folder whose name ends in 'AgentlensPro-memory', holding one copy of the page and an index file. Not deleted (outside the project, no git).
 - 2026-11-17T18:32:17+0100 wording, after the harness review: 'nearly all of it was compressed or swapped' is INFERRED from resident size against footprint, not measured. The saved command line is one ps line of 1,050 bytes; whether ps cut the snippet short was not checked, so 'the full command line' may be a part of it.
+- 2026-11-17T18:36:51+0100 wording, after the harness review: box 1 is ticked for a PRACTICE (a memory note and the prompts sent since), not for an enforcement; nothing stops a prompt that omits it. Of the three worker prompts sent since, one forbids fastedit edit altogether and one prescribed the --replace form that then failed. The stray folder holds THREE files (the page copy, an index database and a .gitignore), not two. The main agent's own deviations while writing the note: a cd into the memory folder (the cause of the stray folder), and scratch files built with shell redirects.
 
 ## To do
 
