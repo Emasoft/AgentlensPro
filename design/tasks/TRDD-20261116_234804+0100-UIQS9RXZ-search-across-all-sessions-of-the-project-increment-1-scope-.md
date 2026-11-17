@@ -4,7 +4,7 @@ title: search across all sessions of the project - increment 1 scope filters and
 column: ai_review
 status: tasked
 created: 2026-11-16T23:48:04+0100
-updated: 2026-11-18T00:05:54+0100
+updated: 2026-11-18T00:35:34+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-16T23:48:04+0100
+implementation-commits: [6584d2dd, 4f134558, fdb11dc5, 41356db4]
 ---
 
 # search across all sessions of the project - increment 1 scope filters and output
@@ -83,6 +84,8 @@ Files: src/cli/searchCli.ts, src/test/searchCli.test.ts (and the one-line verb s
 2026-11-17T06:52+0100 main agent: the scanner verdict owed for commit 4f134558 could not be produced. ubs on scratch copies of the two committed files ran 11 min 26 s with no output after 'Scanning js...', its JS module at 5.7 GB of memory, and was stopped (TRDD-MA6H11NB). The current machine-wide pre-commit hook does not scan this repository (TRDD-9G5JC6OD). This card stays in ai_review until MA6H11NB gives a verdict or the owner accepts another check for these files.
 2026-11-17T06:54+0100 main agent, CORRECTION to the note above: which copy of the two files the scanner read (the 4f134558 copies or the working tree) is not established; its shadow workspace was gone before it could be compared. The rest of the note stands.
 2026-11-18T00:05:53+0100 — AUDIT of the nine boxes against the tree at 8a0ecd94 (worker report reports_dev/G93MZOBJ/20261117_235507+0100-audit-UIQS9RXZ.md, gitignored; the main agent read the lines named here). BOX 3: the test had no search with a relative span, only a conversion assertion (parseTimeArg of «2h»). Added to the same test: one search with --since 3h and one with --until 1d against a fixed now of 2026-08-19T12:00:00Z, each with one entry inside the window and one outside. BOX 7: the file ran alone after the change: 74 passing, mocha exit 0 (reports_dev/UIQS9RXZ/20261118_0014-box-runs/02-mocha-searchCli.txt; the compiled file holds the new assertions). BOX 9: pnpm run check-types exit 0; pnpm run lint exit 0 with 529 warnings and 0 errors (same folder), both on 8a0ecd94 plus the test change. «Clean» is read as 0 errors. BOX 8 UNTICKED: the recorded figures (wall 3.7 to 8.3 s, peak RSS 728 to 759 MB) were measured at 4f134558, and eight later commits touch src/cli/searchCli.ts, so they are not figures of the final code. A new measurement needs the search verb, and the verb exits 69 while ~/.agentlens/DISABLED exists (search is not in READ_ONLY_VERBS, src/cli/foreignTelemetry.ts:41). That flag is the owner's; the main agent does not go around it. NEXT: when the flag is gone, or the owner allows search while disabled, run /usr/bin/time -l on one project-wide literal search with the current bundle, and list the project root before and after. Also still owed, outside the boxes: a ubs verdict (TRDD-MA6H11NB).
+2026-11-18T00:29:33+0100 — CORRECTIONS to the audit note above (harness review of that turn). (1) The assertions added in fdb11dc5 hand the search function an ISO string made by parseTimeArg: composition only. The wiring of a typed relative flag (runSearchCli, the two lines that call parseTimeArg with now) is not covered by them; a command-line test for it is being added by a worker. (2) «eight later commits» was the count of the audit worker; git log 4f134558..HEAD on src/cli/searchCli.ts lists seven: 8590184d, e343ec69, 7fe63866, 37e538fc, 31c34fb8, 6dce222c, 3b84e6b5. The wall and memory figures quoted are those of the approval log of this card and of the worker reading of reports_dev/UIQS9RXZ/main4-timing*.txt; the main agent did not read those files. (3) The gate behind box 8 was read whole: disabledNotice (src/cli/foreignTelemetry.ts) returns null only for HOOK_PATH_VERBS, READ_ONLY_VERBS, DISABLED_PASSTHROUGH and get_account_status --all, and search is in none of them; killSwitchHalf (src/cli/killSwitch.ts) returns «file» when the flag file exists, and it exists; main.ts returns the code of the notice before the verb switch. The command itself was not started, because the launch self-heal runs before that gate.
+2026-11-18T00:35:34+0100 — main agent. The command-line test announced in the corrections note landed as commit 41356db4 (test «a relative --since / --until typed on the command line becomes a bound», suite «searchCli — usage contract»): runCli with --since 1w gives total 0 and with --until 1w total 6 against the fixture. Written by a worker; the diff was read whole by the main agent; the worker run of the single file shows 75 passing (reports_dev/UIQS9RXZ/cli-span/3b-mocha-searchCli.txt, line 30 names the test). LIMITS: real clock (holds while the clock is later than 2026-08-26); it does not tell 1w from a zero offset for --until (both give 6), the fixed-clock assertions of fdb11dc5 cover the arithmetic; no mutation run. Box 8 stays unticked (the owner flag file blocks the command).
 
 ## Review of the test file by the main agent
 
