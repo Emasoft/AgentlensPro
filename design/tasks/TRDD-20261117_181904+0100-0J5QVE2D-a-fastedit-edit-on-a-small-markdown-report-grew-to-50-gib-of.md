@@ -4,7 +4,7 @@ title: A fastedit edit on a small Markdown report grew to 50 GiB of memory and f
 column: backburner
 status: tasked
 created: 2026-11-17T18:19:04+0100
-updated: 2026-11-17T18:19:04+0100
+updated: 2026-11-17T18:25:22+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,6 +37,7 @@ Evidence: `reports_dev/fastedit-runaway/20261117_181649+0100-pid42290-ps.txt` (t
 - Whether the report file it was editing is intact. Its modification time is 18:16, the minute of the stop. Treat `reports_dev/WCG7I5D8/20261117_175752+0100-card-gate-state.md` as unchecked.
 - The fastedit version.
 - The second largest process at that time was the local decision-model server (23.25 GiB), which belongs to the owner and was not touched.
+- 2026-11-17T18:25:21+0100 added from the worker's own handback and the harness review of its turn (not re-checked by the main agent): the tool is fastedit 0.5.0 with the default backend mlx and a model cached on this machine, no FASTEDIT variable set, so by that reading the report text did not leave the machine (no network trace was taken). Before it was put in the background the edit printed 'falling through to the validated model path' and 'Whole-file merge attempt 1/9 rejected: truncated (model hit the token cap)'. So the process that grew was a whole-file merge by the local model with up to 9 attempts; that the growth comes from those attempts is INFERRED. The worker had no way to stop the job. At 18:25 another session of the owner (a different project) had its own fastedit edit running at 3.26 GiB after 27 s; it is not this project's and was not touched.
 
 ## To do
 
