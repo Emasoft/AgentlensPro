@@ -4,7 +4,7 @@ title: search reads other files when a transcript path contains a star, a questi
 column: todo
 status: tasked
 created: 2026-11-17T13:52:23+0100
-updated: 2026-11-17T13:52:23+0100
+updated: 2026-11-17T13:58:47+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,6 +29,7 @@ MEASURED (DuckDB v1.5.4 through @duckdb/node-api, one-line scratch files, script
 So with such a path the search reports hits from files outside the scope, or misses the file, with no error.
 
 REACH, read not measured: the transcript folder is the Claude config folder plus projects plus a slug; whether the slug can hold these characters was not checked, and the home or config folder itself can (a volume or folder name with brackets). The search test file has no case for it.
+PRECISION added 2026-11-17 13:58+0100: the experiment called read_ndjson_objects directly, with one path and with a list. The search function and its seven read sites were NOT run with such a path; they use that same reader call with the path quoted by sq, and five of the seven line numbers come from a worker's report (557, 944, 990, 1021, 1108), two were seen by the main agent in the source (851, 1342). One run of each script, DuckDB v1.5.4 only.
 
 ## Fix direction
 Escape pattern characters in every path handed to DuckDB, in ONE helper used by all seven sites, or pass paths in a way that is not pattern-expanded. Which escape DuckDB 1.5.4 honours is to be measured first (a bracket class around the character, or a backslash), with the three folder pairs above as the test.
