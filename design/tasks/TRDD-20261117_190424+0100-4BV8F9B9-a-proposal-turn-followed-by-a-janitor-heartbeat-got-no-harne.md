@@ -1,10 +1,10 @@
 ---
 trdd-id: 4BV8F9B9
 title: A proposal turn followed by a janitor heartbeat got no harness review
-column: backburner
+column: dev
 status: tasked
 created: 2026-11-17T19:04:24+0100
-updated: 2026-11-17T19:04:24+0100
+updated: 2026-11-17T20:18:08+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,3 +29,4 @@ Seen twice on 2026-11-17 in the AgentlensPro session. A turn whose reply carried
 ## Approval log
 
 - 2026-11-17T19:04:24+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T20:18:08+0100 — column → dev by main-agent@agentlenspro. read-only diagnosis handed to a worker (box 1)
