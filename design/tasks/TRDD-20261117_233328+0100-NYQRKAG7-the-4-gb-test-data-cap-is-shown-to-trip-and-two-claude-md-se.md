@@ -4,7 +4,7 @@ title: The 4 GB test data cap is shown to trip and two CLAUDE.md sentences about
 column: todo
 status: tasked
 created: 2026-11-17T23:33:28+0100
-updated: 2026-11-17T23:33:28+0100
+updated: 2026-11-17T23:37:51+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: docs
@@ -40,7 +40,7 @@ Goal set by the owner on 2026-11-17: verify that the 4 GB cap on test data is al
 ## Acceptance
 - [x] The trip test is run alone and passes (output above).
 - [x] The coverage guard passes.
-- [ ] CLAUDE.md: the sentence "prove COVERAGE only, never that the cap trips" names the trip test and its limit, and the recipe for one mocha file includes `--ui tdd`.
+- [x] CLAUDE.md: the sentence "prove COVERAGE only, never that the cap trips" names the trip test and its limit, and the recipe for one mocha file includes `--ui tdd`.
 - [ ] The Rust proof test (agentlens-spool/tests/test_data_cap.rs) is run once after the reboot, under the cargo gate.
 
 ## Approval log
