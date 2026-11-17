@@ -959,7 +959,12 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
     : `substr(raw, greatest(1, strpos(lower(raw), lower(${sq(needle)})) - 100), ${width})`
 
   const filters = scopeFilters(opts, "line")
-  const where = filters.length > 0 ? `WHERE obj IS NULL OR (${filters.join(' AND ')})` : ''
+  // ONE filter for the match and the scope filters (TRDD-V50CQS22). With two stacked filters (the match in the m CTE, the scope filters on
+  // top) DuckDB keeps two FILTER operators, and the default search (no kind, so no element mode) ran out of memory at
+  // AGENTLENS_DUCKDB_MEMORY_LIMIT 1.5GB, unset and 3GB on this project's 3,246 transcripts. One filter with the same rows out empirically avoids
+  // it (small-file scan group, 1 thread: peak RSS 1.36 GB with two filters against 0.43-0.53 GB with one; measured 2026-11-17). The thread
+  // count is not the cause (1 to 4 threads all failed with two filters). The mechanism inside DuckDB was not found; headroom is thin on 4 threads (1.0-1.2 GB).
+  const where = `WHERE obj IS NULL OR (${[...filters, matchExpr].join(' AND ')})`
 
   const columns = countMode
     ? 'filename'
@@ -976,7 +981,7 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
              json_extract_string(obj, '$.timestamp') AS ts,
              json_extract_string(obj, '$.type') AS type,
              json_extract_string(obj, '$.message.role') AS role
-      FROM src WHERE obj IS NULL OR ${matchExpr}
+      FROM src
     )
     SELECT ${columns}, (obj IS NULL) AS bad FROM m ${where}`
 
