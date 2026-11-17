@@ -1,10 +1,10 @@
 ---
 trdd-id: WCG7I5D8
 title: The card snapshot lags by days because hard-cap exits come before the first card save
-column: todo
+column: dev
 status: tasked
 created: 2026-10-15T04:28:05+0200
-updated: 2026-11-17T10:56:40+0100
+updated: 2026-11-17T10:56:48+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
