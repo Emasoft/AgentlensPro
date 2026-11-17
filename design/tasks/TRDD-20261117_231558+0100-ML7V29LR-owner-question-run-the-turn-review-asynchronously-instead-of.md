@@ -4,7 +4,7 @@ title: Owner question - run the turn review asynchronously instead of blocking t
 column: backburner
 status: tasked
 created: 2026-11-17T23:15:58+0100
-updated: 2026-11-17T23:15:58+0100
+updated: 2026-11-17T23:43:25+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -43,3 +43,7 @@ Not added to the blockers of TRDD-HSPUF5XH: this is a design question for the ow
 ## Approval log
 
 - 2026-11-17T23:15:58+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-17T23:43:23+0100 AFTER TWO HARNESS REVIEWS (main agent). (1) The recommendation 'mixed' is WITHDRAWN: its criterion (block only when the turn carries the proposal marker or wrote files) keeps almost every working turn of a session like this one blocking, because the scanner counts a git commit as work; no share of turns was counted and no wait per Stop was timed, so no gain is known. The three options stand without a recommendation. (2) MISSING CASE for any async option: a review still running when the next prompt arrives (where does its report go, and does a BLOCK that arrives late still block). (3) Waits seen, not a measurement: three reviews of interrupted turns took 37, 42 and 89 s; in another session one Stop phase took 132 s from the end of the turn to the end of its Stop hooks (all Stop hooks together). (4) Turns that get no review today, by the 0.7.11 source: a janitor turn; a turn opened by a message of another agent that wrote and proposed nothing; a Stop fired again with nothing new; an interrupted turn with no work and no proposal; a review that failed is retried by blocking the stop and deferred after 2 rounds (MAX_ROUNDS = 2, line 72); a turn past the cap of 2 blocking rounds is deferred.

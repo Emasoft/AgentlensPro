@@ -4,7 +4,7 @@ title: The 4 GB test data cap is shown to trip and two CLAUDE.md sentences about
 column: todo
 status: tasked
 created: 2026-11-17T23:33:28+0100
-updated: 2026-11-17T23:37:51+0100
+updated: 2026-11-17T23:43:26+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: docs
@@ -46,3 +46,7 @@ Goal set by the owner on 2026-11-17: verify that the 4 GB cap on test data is al
 ## Approval log
 
 - 2026-11-17T23:33:28+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-17T23:43:23+0100 The CLAUDE.md recipe was verified with --timeout 10000 on the command line; --no-config drops the 10 s timeout of .mocharc.cjs too (mocha falls back to 2 s), and the recipe line does not say so. A test file that relies on the 10 s timeout needs --timeout 10000 added. Not put into CLAUDE.md yet.
