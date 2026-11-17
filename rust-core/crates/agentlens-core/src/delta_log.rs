@@ -40,6 +40,8 @@ pub struct DeltaLog {
     delta_path: PathBuf,
     /// key → hash of the last SERIALIZED form persisted; what makes an unchanged save a no-op.
     written: IndexMap<String, u64>,
+    /// The most body text the last `save_from` held in memory at once (see `peak_body_bytes`).
+    peak_body: usize,
 }
 
 fn hash_json(s: &str) -> u64 {
@@ -55,6 +57,14 @@ fn sums_match(sums: &[(u64, u64)]) -> impl Fn(usize, &str, &Value) -> bool + '_ 
 
 fn size_of(p: &Path) -> u64 {
     fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+
+/// Whether a save that leaves the delta at `delta_bytes` compacts (the delta passed the small-delta
+/// floor AND the snapshot ratio). ONE definition for `save_from`'s mid-pass check and its final
+/// decision, so the two cannot drift (TRDD-WCG7I5D8).
+fn compaction_due(snap_bytes: u64, delta_bytes: u64) -> bool {
+    delta_bytes > COMPACT_MIN_BYTES && delta_bytes as f64 > snap_bytes as f64 * COMPACT_RATIO
 }
 
 
@@ -268,6 +278,7 @@ impl DeltaLog {
             snapshot_path: dir.join(format!("{name}.snapshot.ndjson")),
             delta_path: dir.join(format!("{name}.delta.ndjson")),
             written: IndexMap::new(),
+            peak_body: 0,
         }
     }
 
@@ -708,7 +719,7 @@ impl DeltaLog {
         let mut body = String::new();
         let mut appended = 0usize;
         for (k, v) in records {
-            if self.note_record(k, v, &mut body).1 {
+            if self.note_record(k, v, &mut body, true).1 > 0 {
                 appended += 1;
             }
         }
@@ -716,25 +727,31 @@ impl DeltaLog {
     }
 
     /// One record of `changed_lines` / `save_from`'s pass 1: hash its serialized form and, when the
-    /// hash differs from `written` (or the key is new), push its `{"k":...,"v":...}` line onto `body`
-    /// and record the new hash. Returns (the key's index in `written`, whether a line was pushed).
+    /// hash differs from `written` (or the key is new), record the new hash and return the length of
+    /// its `{"k":...,"v":...}` line (0 = unchanged); when `collect` the line is also pushed onto `body`.
+    /// Returns (the key's index in `written`, that length).
     /// TRDD-2JOIAH2G: one definition shared by both, so the streamed save cannot drift from
     /// append_changed in line format or in when `written` changes. WHY `written` is updated here,
     /// BEFORE the line reaches the disk: today's semantics, kept — a failed write leaves the record
     /// marked written, so it is not re-appended until it changes again.
-    fn note_record(&mut self, k: &str, v: &Value, body: &mut String) -> (usize, bool) {
+    /// TRDD-WCG7I5D8: WHY `collect` — once `save_from` knows it will compact, the line text is never
+    /// written, but `written` must still move and the length is still counted; `false` skips only the text.
+    fn note_record(&mut self, k: &str, v: &Value, body: &mut String, collect: bool) -> (usize, usize) {
         let json = serde_json::to_string(v).unwrap_or_default();
         let h = hash_json(&json);
         let i = match self.written.get_full_mut(k) {
-            Some((i, _, slot)) if *slot == h => return (i, false), // unchanged — the whole saving
+            Some((i, _, slot)) if *slot == h => return (i, 0), // unchanged — the whole saving
             Some((i, _, slot)) => {
                 *slot = h;
                 i
             }
             None => self.written.insert_full(k.to_owned(), h).0,
         };
-        body.push_str(&format!("{{\"k\":{},\"v\":{json}}}\n", serde_json::to_string(k).unwrap_or_default()));
-        (i, true)
+        let line = format!("{{\"k\":{},\"v\":{json}}}\n", serde_json::to_string(k).unwrap_or_default());
+        if collect {
+            body.push_str(&line);
+        }
+        (i, line.len())
     }
 
     /// Persist `records`, writing ONLY what changed. Nothing changed ⇒ ZERO bytes written.
@@ -762,7 +779,10 @@ impl DeltaLog {
     /// layer, keyed by the same sessionId-or-"" rule persist_record uses), and a repeated key makes
     /// the compaction verify fail (Err, delta kept) instead of writing a wrong snapshot.
     ///
-    /// Out of scope, as before: on a mass change `body` still holds every changed line in memory.
+    /// TRDD-WCG7I5D8: `body` holds the changed lines only until compaction becomes certain (delta + body
+    /// past both thresholds); from then on the text is dropped and only `written`, the counts and the
+    /// line lengths move, so a mass change never holds more than about `max(COMPACT_MIN_BYTES,
+    /// snapshot size)` of text. Which bytes reach the disk is unchanged.
     pub fn save_from<F, I, K, V>(&mut self, records: F) -> Result<SaveResult, String>
     where
         F: Fn() -> I,
@@ -775,25 +795,52 @@ impl DeltaLog {
         }
         let original = self.written.len();
         let mut seen = vec![false; original];
+        // TRDD-WCG7I5D8: the two sizes are read BEFORE pass 1, not after it, so pass 1 can tell the
+        // moment compaction becomes certain. WHY that moment matters: a compacting save never writes
+        // the body (it rewrites the snapshot from `records()` in pass 2), so once delta + body
+        // passes both compaction thresholds the line text is dead weight; keeping it made the peak
+        // the whole changed set (about the whole store for a log that lags it).
+        let snap_bytes = size_of(&self.snapshot_path);
+        let delta_base = size_of(&self.delta_path);
         let mut body = String::new();
+        // `body_len` counts every changed line, collected or not; it is what `compaction_due` reads.
+        let (mut body_len, mut collect, mut peak) = (0u64, true, 0usize);
         let (mut appended, mut count) = (0usize, 0usize);
         for (k, v) in records() {
             let v: &Value = v.borrow();
-            let (i, pushed) = self.note_record(k.as_ref(), v, &mut body);
+            let (i, line) = self.note_record(k.as_ref(), v, &mut body, collect);
             if i < original {
                 // WHY: keys must be unique (doc above); a repeated key must fail loudly in tests, not only at compaction's count check.
                 debug_assert!(!seen[i], "save_from: key {:?} repeated in records", k.as_ref());
                 seen[i] = true;
             }
-            appended += usize::from(pushed);
+            appended += usize::from(line > 0);
+            body_len += line as u64;
+            peak = peak.max(body.len());
+            // Monotone: body_len only grows, so a save that is due now is due at the end. Free the text
+            // and stop collecting it; `written`, `seen`, `appended` and `count` keep moving.
+            if collect && compaction_due(snap_bytes, delta_base + body_len) {
+                collect = false;
+                body = String::new();
+            }
             count += 1;
         }
         let mut deleted = 0usize;
         // `zip` stops at `seen`'s end, so only the original keys are candidates.
         for ((k, _), _) in self.written.iter().zip(&seen).filter(|(_, s)| !**s) {
-            body.push_str(&format!("{{\"k\":{},\"d\":1}}\n", serde_json::to_string(k).unwrap_or_default())); // tombstone
+            if collect {
+                let line = format!("{{\"k\":{},\"d\":1}}\n", serde_json::to_string(k).unwrap_or_default()); // tombstone
+                body.push_str(&line);
+                body_len += line.len() as u64;
+                peak = peak.max(body.len());
+                if compaction_due(snap_bytes, delta_base + body_len) {
+                    collect = false;
+                    body = String::new();
+                }
+            }
             deleted += 1;
         }
+        self.peak_body = peak;
         if deleted > 0 {
             // One ordered pass; pass 1 only appended, so index `i` here is the original index `i`.
             let mut i = 0usize;
@@ -803,16 +850,16 @@ impl DeltaLog {
                 keep
             });
         }
-        if body.is_empty() {
+        // WHY not `body.is_empty()`: the text may have been freed above.
+        if appended == 0 && deleted == 0 {
             return Ok(SaveResult::default());
         }
-        let snap_bytes = size_of(&self.snapshot_path);
-        let delta_bytes = size_of(&self.delta_path) + body.len() as u64;
-        if delta_bytes > COMPACT_MIN_BYTES && delta_bytes as f64 > snap_bytes as f64 * COMPACT_RATIO {
+        if compaction_due(snap_bytes, delta_base + body_len) {
             // Pass 2. `count` is pass 1's: compact() refuses a pass 2 that sees a different number.
             let bytes = self.compact(records(), count)?;
             return Ok(SaveResult { appended, deleted, bytes, compacted: true });
         }
+        debug_assert!(collect && body.len() as u64 == body_len, "an append needs the whole body");
         // TRDD-0R0NGVK6: append branch only (compaction above rewrites the snapshot and removes the
         // delta). Cut a torn tail a kill mid-append left, or this body is glued onto it and becomes
         // a corrupt mid-file line every later load() refuses; replay already ignored the fragment.
@@ -873,6 +920,15 @@ impl DeltaLog {
     /// Total bytes on disk (both files).
     pub fn disk_bytes(&self) -> u64 {
         size_of(&self.snapshot_path) + size_of(&self.delta_path)
+    }
+
+    /// TRDD-WCG7I5D8 — the most body TEXT the last `save_from` held in memory at once, in bytes. WHY
+    /// public and always compiled: the memory gate reads it from an integration test, which cannot
+    /// see `cfg(test)` items. A compacting save stops collecting text once compaction is certain, so
+    /// this stays near `max(COMPACT_MIN_BYTES, snapshot size)` however many records changed.
+    #[doc(hidden)]
+    pub fn peak_body_bytes(&self) -> usize {
+        self.peak_body
     }
 }
 
@@ -1092,6 +1148,86 @@ mod tests {
         assert_eq!((r.appended, r.deleted), (1, 0));
         assert_eq!(text(&delta), format!("{first}{{\"k\":\"/p/two.jsonl\",\"v\":{{\"bytesRead\":9,\"mtimeMs\":1785578400000.0,\"ino\":42,\"size\":9}}}}\n"));
         assert_eq!(log.save_from(|| recs.iter().cloned()).unwrap(), SaveResult::default());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+
+    /// The ndjson text of `records` as a snapshot holds it: one `{"k":..,"v":..}` line each, in order.
+    fn snapshot_text(records: &[(&str, Value)]) -> String {
+        records.iter().map(|(k, v)| format!("{{\"k\":{},\"v\":{}}}\n", serde_json::to_string(k).unwrap(), serde_json::to_string(v).unwrap())).collect()
+    }
+
+    /// TRDD-WCG7I5D8 — a save that must compact does not keep the text of its changed lines. No
+    /// snapshot and no delta, 400 new records of about 1 KiB (about 410 KiB of lines, over the 256 KiB
+    /// floor): the save compacts, the snapshot is exactly the records, and the body text it held at
+    /// once stayed within the floor plus ONE line, not the whole changed set. The `bytes`, `appended`
+    /// and a repeat save of 0 bytes show `written` kept moving after the text stopped being collected.
+    #[test]
+    fn a_save_that_must_compact_over_an_absent_snapshot_holds_at_most_the_floor_of_body_text() {
+        let dir = unit_dir("c1-absent");
+        let mut log = DeltaLog::new(&dir, "s");
+        let recs: Vec<(String, Value)> = (0..400).map(|i| (format!("k{i:03}"), json!("x".repeat(1000 + i % 7)))).collect();
+        let refs: Vec<(&str, Value)> = recs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        let want = snapshot_text(&refs);
+        let longest = want.lines().map(|l| l.len() + 1).max().unwrap();
+        assert!(want.len() > 3 * COMPACT_MIN_BYTES as usize / 2, "the changed set is well over the floor, or this proves nothing");
+        let r = log.save_from(|| refs.iter().map(|(k, v)| (*k, v))).unwrap();
+        assert_eq!((r.appended, r.deleted, r.compacted, r.bytes), (400, 0, true, want.len() as u64));
+        assert_eq!(text(&dir.join("s.snapshot.ndjson")), want, "the snapshot is exactly the records, in order");
+        assert!(!dir.join("s.delta.ndjson").exists(), "no delta after a compaction");
+        assert!(
+            log.peak_body_bytes() <= COMPACT_MIN_BYTES as usize + longest,
+            "peak body text {} must stay under the floor {} plus one line {}",
+            log.peak_body_bytes(),
+            COMPACT_MIN_BYTES,
+            longest
+        );
+        assert_eq!(log.save_from(|| refs.iter().map(|(k, v)| (*k, v))).unwrap(), SaveResult::default(), "`written` kept marking records after the stop");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// TRDD-WCG7I5D8 — the same stop with a PRESENT snapshot, and the threshold crossed in the MIDDLE of
+    /// pass 1 with work still to come: of six 50 KB records, r1..r4 change to 120 KB (the crossing
+    /// comes at r3), r5 is deleted, r6 is new, r0 is unchanged. The snapshot is exactly the final set
+    /// (r0 included), the delta is gone, SaveResult counts every change including the ones after the
+    /// crossing, the body text held stayed within the snapshot size plus one line, and a repeat save
+    /// writes 0 bytes (so `written` and the deletion were applied in full).
+    #[test]
+    fn a_save_that_crosses_the_compaction_threshold_mid_pass_over_a_present_snapshot_counts_and_writes_everything() {
+        let dir = unit_dir("c1-present");
+        let (snap, delta) = (dir.join("s.snapshot.ndjson"), dir.join("s.delta.ndjson"));
+        let mut log = DeltaLog::new(&dir, "s");
+        let blob = |c: char, n: usize| json!(c.to_string().repeat(n));
+        let save = |log: &mut DeltaLog, recs: &[(&str, Value)]| log.save_from(|| recs.iter().map(|(k, v)| (*k, v))).unwrap();
+        let first: Vec<(&str, Value)> = ["r0", "r1", "r2", "r3", "r4", "r5"].iter().map(|k| (*k, blob('a', 50_000))).collect();
+        let r = save(&mut log, &first);
+        assert!(r.compacted && snap.exists() && !delta.exists(), "the setup save compacts into a snapshot: {r:?}");
+        let snap_before = text(&snap).len();
+
+        let second: Vec<(&str, Value)> = vec![
+            ("r0", blob('a', 50_000)),
+            ("r1", blob('b', 120_000)),
+            ("r2", blob('c', 120_000)),
+            ("r3", blob('d', 120_000)),
+            ("r4", blob('e', 120_000)),
+            ("r6", blob('f', 1_000)),
+        ];
+        let body_total: usize = snapshot_text(&second[1..]).len();
+        let r = save(&mut log, &second);
+        assert_eq!((r.appended, r.deleted, r.compacted), (5, 1, true), "r1..r4 changed + r6 new, r5 deleted, compacted");
+        let want = snapshot_text(&second);
+        assert_eq!(text(&snap), want, "the snapshot is exactly the final record set, unchanged r0 included");
+        assert_eq!(r.bytes, want.len() as u64);
+        assert!(!delta.exists(), "the delta is gone");
+        assert!(
+            log.peak_body_bytes() <= snap_before + 120_100,
+            "peak body text {} must stay under the snapshot size {snap_before} plus one line",
+            log.peak_body_bytes()
+        );
+        assert!(log.peak_body_bytes() < body_total, "and below the whole changed set {body_total}, or the stop never happened");
+        assert_eq!(save(&mut log, &second), SaveResult::default(), "a repeat save writes nothing");
+        let back = DeltaLog::new(&dir, "s").load().unwrap();
+        assert_eq!(back.keys().collect::<Vec<_>>(), ["r0", "r1", "r2", "r3", "r4", "r6"]);
         let _ = fs::remove_dir_all(&dir);
     }
 }
