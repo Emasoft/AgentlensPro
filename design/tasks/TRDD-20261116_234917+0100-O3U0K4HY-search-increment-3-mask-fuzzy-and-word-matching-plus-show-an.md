@@ -1,10 +1,10 @@
 ---
 trdd-id: O3U0K4HY
 title: search - increment 3 mask fuzzy and word matching plus show and context
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T02:25:12+0100
+updated: 2026-11-17T10:17:10+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -50,3 +50,4 @@ Increment 3 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 ## Added by the review of TRDD-UIQS9RXZ
 
 2026-11-17T02:25+0100 main agent: this increment also adds three tests the review of TRDD-UIQS9RXZ found missing: (1) a search with --worktrees returns the hit inside the worktree transcript (fixture line 'wt NEEDLE'), with its true line; (2) a search with --agent returns only the sub-agent hit; (3) a search run from an empty working directory leaves that directory empty.
+2026-11-17T10:17+0100 main agent: moved backburner -> todo and DISPATCHED to a worker (sonnet) at HEAD 3c9ec3d7, after the text-content change of TRDD-OIMXULDJ was committed (37e538fc) and the two search files were clean. The worker may edit only src/cli/searchCli.ts and src/test/searchCli.test.ts; it keeps a BEFORE build in builds_dev/o3u-out-before, must show 0 differing transcripts on three before/after counts over the frozen set, times --fuzzy, and reports to reports_dev/O3U0K4HY/. On its handback the main agent reads the report and the diff whole, reruns the test file, types, lint and one comparison on the build of the final source, and only then commits the two files by name and ticks boxes. A second, read-only worker audits the eight unticked boxes of TRDD-OIMXULDJ against copies of the committed files in tests_dev/OIMXULDJ/. No other worker edits the two search files meanwhile.
