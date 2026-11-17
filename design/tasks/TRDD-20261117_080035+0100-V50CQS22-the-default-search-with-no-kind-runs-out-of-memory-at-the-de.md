@@ -4,7 +4,7 @@ title: The default search with no kind runs out of memory at the default limit o
 column: backburner
 status: tasked
 created: 2026-11-17T08:00:35+0100
-updated: 2026-11-17T08:00:35+0100
+updated: 2026-11-17T08:04:21+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -31,6 +31,7 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 - [ ] A test or a documented measurement guards it; types, lint and the search test file pass.
 
 ## Notes and lessons learned
+2026-11-17T08:04+0100 main agent, wording of this card narrowed: the measurement went through searchTranscripts (the library function the command calls) in the test build with the frozen file list, not through the agentlenspro executable; the real command may add options or pick another file set, and it was not run (the collector is disabled by the owner). A worker (sonnet) was started on this card without a separate proposal turn; its brief stops it after diagnosis if the fix needs a design change. Until it hands back, no other worker edits src/cli/searchCli.ts. Note for whoever tests: a stale experiment copy out/test/cli/searchCliVariant3.js sits beside the built module (left by the TRDD-OIMXULDJ worker, not removed). 
 
 ## Approval log
 
