@@ -8,7 +8,7 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   searchTranscript, searchTranscripts, discoverTranscripts, parseTimeArg, runSearchCli, openDuck, TranscriptFile,
-  SearchScopeError, SearchHit, SearchOptions, ScopeOptions, ELEMENT_KINDS,
+  SearchScopeError, SearchHit, SearchOptions, ScopeOptions, ELEMENT_KINDS, SEARCH_USAGE, KNOWN,
 } from '../cli/searchCli'
 import { UsageError } from '../cli/cliErrors'
 import { projectSlugOf } from '../projectSlug'
@@ -323,6 +323,22 @@ suite('searchCli — usage contract', () => {
   test('a non-numeric --limit is refused', async () => {
     await assert.rejects(() => runSearchCli(['needle', '--session', 'abc123', '--limit', 'lots']),
       (e: unknown) => e instanceof UsageError)
+  })
+
+  test('the flags named in SEARCH_USAGE are exactly the flags the parser accepts (KNOWN), and each accepted flag starts its own usage line', () => {
+    // A flag is a token that starts after whitespace, "(", "[" or ","; the lookbehind keeps out "<slug>--claude-worktrees-" and the lone "--" separator.
+    const named = new Set(SEARCH_USAGE.match(/(?<=[\s(\[,])--?[A-Za-z][\w-]*/g) ?? [])
+    const notDocumented = [...KNOWN].filter(f => !named.has(f)).sort()
+    const notAccepted = [...named].filter(f => !KNOWN.has(f)).sort()
+    assert.deepStrictEqual({ notDocumented, notAccepted }, { notDocumented: [], notAccepted: [] })
+    // Own line: two spaces, the flag, then a space (or the "--help, -h" alias pair). "--regex, --mask" in the mutual-exclusion sentence does not count,
+    // so deleting a flag's own line fails even when other prose still names the flag.
+    const ownLine = new Set<string>()
+    for (const line of SEARCH_USAGE.split('\n')) {
+      const m = /^ {2}(--?[A-Za-z][\w-]*)(?:, (-[A-Za-z]))?(?= |$)/.exec(line)
+      if (m) { ownLine.add(m[1]); if (m[2]) ownLine.add(m[2]) }
+    }
+    assert.deepStrictEqual([...KNOWN].filter(f => !ownLine.has(f)).sort(), [], 'every accepted flag needs a usage line of its own')
   })
 })
 

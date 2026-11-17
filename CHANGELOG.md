@@ -8,6 +8,8 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`agentlenspro search <pattern>` — grep every transcript of the current project.** Reads the project's Claude transcripts (main and sub-agent, every session) off disk with DuckDB, with no server. Match modes: literal, `--regex`, `--mask`, `--word`, `--fuzzy`. Element mode (`--kind`, `--tool`, `--file`, `--commit`) matches prompts, responses, tool calls and outputs, diffs, sub-agent results and hooks as readable text, and `--kind model-change` lists where the model changed; `--show SESSION:LINE` prints one entry. Scope, filter and output flags are listed by `agentlenspro search --help`.
+
 - **get_account_status --all reads the owner's long-lived OAuth keys.** Set CLAUDE_CODE_LONG_OAUTH_KEY_01 through _10 to '<email>|<token>' in the environment. Each valid key is probed with a max_tokens 0 claude-fable-5-1 message (about 33 input tokens, no output), at most once per 10 minutes per key; that message is billed, and on an idle account it probably opens a new 5-hour window. The reply's anthropic-ratelimit-unified headers become the 5-hour, 7-day and Fable windows, filed under the account whose email matches and cross-checked against the 7-day reset within 60 seconds (refused on a mismatch). The usage endpoint answers 403 oauth_scope_insufficient to these keys, which is why this path exists. --no-refresh reads the files only. Tokens are read only from the environment and are never printed or stored (TRDD-HO94JMKD, increment 2).
 
 - **A long-lived key whose check failed inside the 10-minute wait now shows its error with no figures and when it was checked, instead of an old archived reading.** (TRDD-HO94JMKD)

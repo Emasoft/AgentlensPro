@@ -188,6 +188,25 @@ text refers to in **bold** are listed here with the file that holds them.
 The four rules that keep a diagnosis cheap (batch, `--out`, never paste JSON) are **Rules for
 agents**, at the end of this file.
 
+## Search past transcripts with `agentlenspro search` — do not read them by hand
+
+To find what an earlier session or sub-agent did, said or got back, search the project's transcripts
+instead of opening `.jsonl` files by hand. It needs no server, reads
+every session of the current project (main and sub-agent) and prints one line per hit plus a stderr summary:
+
+```bash
+agentlenspro search "ENOENT" --since 2d                                 # an error anywhere in the project, last 2 days
+agentlenspro search "finished" --kind subagent --since 1d --limit 5     # what sub-agents reported
+agentlenspro search --show aaaaaaaa:12 --agent bbbb2222                 # one hit in full: <session>:<line> from the hit line
+agentlenspro search --kind model-change --session aaaaaaaa              # when did the model change (from -> to)
+```
+
+Narrow first with `--since`, `--session`, `--agent`, `--kind`, `--tool`, `--file`, `--commit`; use `--count` or
+`--files` first when you only need where it is. Match modes: literal (default), `--regex`, `--mask`, `--word`,
+`--fuzzy`. The cost grows with the size of the project and the load of the machine; element mode (`--kind`) and `--fuzzy`
+cost more than a plain search. `agentlenspro search --help` lists every flag. The ids above are made up; use the
+session and `#line` that a hit printed.
+
 ## Commands
 
 ```bash

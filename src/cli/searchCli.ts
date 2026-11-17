@@ -45,8 +45,9 @@ scope:
   --subagents-only     sub-agent transcripts only
   --worktrees          also search the project's sibling worktree folders (<slug>--claude-worktrees-*)
 filters:
-  --since T / --until T  ISO date or datetime (no zone = local time) or a span: 30m 2h 3d 1w;
-                       an entry with no timestamp is excluded when either is given
+  --since T            ISO date or datetime (no zone = local time) or a span: 30m 2h 3d 1w; an entry with no timestamp is
+                       excluded when --since or --until is given
+  --until T            same forms as --since: the upper end of the time window
   --branch B           entries whose gitBranch is B
   --cwd TEXT           entries whose cwd contains TEXT
   --worktree NAME      entries whose cwd contains /worktrees/NAME
@@ -67,7 +68,9 @@ match:
   --fuzzy              <pattern> is split on spaces into words; an entry matches when EVERY word is in it, in any order. A word of
                        5 or more characters (at most 40) also matches with ONE character substituted, deleted or inserted; a
                        shorter word must match exactly. A transposition (two letters swapped, "recieve") is two edits and is
-                       NOT covered. Always case-insensitive. Hits come ordered by how many words matched exactly, then as --order
+                       NOT covered. Always case-insensitive. Hits come ordered by how many words matched exactly, then as --order.
+                       Cost: about 1.3 times the CPU of a plain search (measured on a 2,972 MB project); no promise of seconds, the wall
+                       time follows the project size and the load of the machine
   --case               literal, --mask and --word matching become case-sensitive (--regex is case-sensitive already; not with --fuzzy)
   --regex, --mask, --word and --fuzzy are mutually exclusive: two together are a usage error
 elements (any of --kind, --tool, --file or --commit searches ELEMENTS instead of raw JSON lines):
@@ -108,6 +111,7 @@ show (one entry, no pattern):  agentlenspro search --show <session>:<line> [--ma
                        An entry with no text element prints as its raw JSON line. SESSION is an id or a unique prefix of 6+
                        characters. A sub-agent entry needs --agent ID (without it the main transcript is read). Only --project,
                        --worktrees, --agent and --json go with it; a session or line that does not exist is exit 2
+  --max-chars N        with --show only: cut the shown text at N characters (default 4000, max 100000)
 
 text line: <session8>[:<agent8>] <TAB> #<line> <TAB> <ts> <TAB> [role|type] <TAB> <excerpt>
        in element mode the bracket is [<kind>] or [<kind> <tool>], e.g. [tool-output Bash]
@@ -117,17 +121,27 @@ stderr: transcripts and MB searched, matches, shown, total ms (scan = all-file s
        so each blank line lowers every later line number by one. A line larger than about 512 MiB makes the whole search fail
        with a maximum_object_size error; it is not skipped.
 
+help:
+  --help, -h           print this text
 exit:
   0 = searched (even with 0 matches) · 2 = no transcript found / unreadable · 64 = bad usage
 
-  agentlenspro search "ENOENT" --since 2d --type user
-  agentlenspro search "hook" --subagents-only --count --worktrees`
+examples (ids here are made up; a hit line names the real session and #line):
+  find an error across the whole project, last two days:
+    agentlenspro search "ENOENT" --since 2d --type user
+  what did a sub-agent report (its finished result), then read that one entry in full from the hit's session, #line and agent:
+    agentlenspro search "finished" --kind subagent --since 1d --limit 5
+    agentlenspro search --show aaaaaaaa:12 --agent bbbb2222
+  when did the model change in a session (from -> to, one row per change):
+    agentlenspro search --kind model-change --session aaaaaaaa
+  per-transcript hit counts including sub-agents and sibling worktrees:
+    agentlenspro search "hook" --subagents-only --count --worktrees`
 
 const VALUED = new Set([
   '--project', '--session', '--agent', '--since', '--until', '--branch', '--cwd', '--worktree', '--model',
   '--role', '--type', '--limit', '--width', '--order', '--kind', '--tool', '--file', '--commit', '--show', '--max-chars', '--context',
 ])
-const KNOWN = new Set([
+export const KNOWN = new Set([
   ...VALUED, '--regex', '--mask', '--word', '--fuzzy', '--case', '--json', '--count', '--files', '--main-only', '--subagents-only', '--worktrees',
   '--include-requests', '--include-attachments', '--help', '-h',
 ])

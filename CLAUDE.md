@@ -39,6 +39,12 @@ agentlenspro cache-state [--json]                # is THIS project's cache warm 
                                                  # one word, `warm`/`cold`; exit 0=warm 1=cold
                                                  # 2=cannot answer (stdout EMPTY, never `cold`).
                                                  # Same harness-reported row as cache-expired
+agentlenspro search <pattern> [flags]            # grep THIS project's transcripts (main + sub-agent, every
+                                                 # session) with DuckDB, off disk, no server: literal/--regex/
+                                                 # --mask/--word/--fuzzy; element mode via --kind/--tool/--file/
+                                                 # --commit; `--show SESSION:LINE` prints one entry. Use it
+                                                 # instead of reading .jsonl by hand. Measured timings and the
+                                                 # memory limit: reports/search/20261117_120240+0100-project-wide-search.md
 ```
 
 Both `--install-*` settings flags go through `safeConfigEdit`; they never clobber other tools'
