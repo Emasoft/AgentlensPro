@@ -4,7 +4,7 @@ title: No bug scanner runs at commit in this repository
 column: todo
 status: tasked
 created: 2026-11-17T11:44:01+0100
-updated: 2026-11-17T11:44:38+0100
+updated: 2026-11-17T12:03:26+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -42,3 +42,7 @@ The hook is the owner's machine-wide file and its scope sentence says the limit 
 
 - 2026-11-17T11:44:01+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-17T11:44:38+0100 — column → todo by main-agent@agentlenspro. boxes 2 to 4 are workable without the owner's decision
+
+## Notes and lessons learned
+
+- 2026-11-17 12:03+0100, main agent. UNSCANNED code commits now: 37e538fc, 7fe63866 (src/cli/searchCli.ts scanned by hand at that state: 0 critical; its test file not), b626970a, e343ec69. e343ec69 was committed after this card was written, without the manual scan the card asks for: the scan of one file took 164 s to over 13 minutes on the loaded host, and the main agent chose to commit and record the debt here. The procedure of box 2 is not yet followed.
