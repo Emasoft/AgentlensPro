@@ -1,10 +1,10 @@
 ---
 trdd-id: G2GGBQ0U
 title: search - increment 4 help skill docs changelog and version
-column: backburner
+column: dev
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T11:44:37+0100
+updated: 2026-11-17T11:58:59+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -39,6 +39,8 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 ## Approval log
 
 - 2026-11-16T23:49:17+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T11:58:57+0100 — column → todo by main-agent@agentlenspro. increments 1 to 3 and the three follow-ups are landed; dispatched
+- 2026-11-17T11:58:59+0100 — column → dev by main-agent@agentlenspro. increments 1 to 3 and the three follow-ups are landed; dispatched
 
 ## Notes
 
@@ -50,3 +52,4 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 ## Notes and lessons learned
 
 - 2026-11-17 11:44+0100, main agent, from the harness review of the turn that closed TRDD-O3U0K4HY. THE --fuzzy HELP GETS A COST SENTENCE in this increment. The gate rule on TRDD-O3U0K4HY was: over 15 s in either mode means a scope sentence in the --fuzzy help. It passed on 3.20 s and 3.91 s (whole command, default mode, 20 shown, pattern `permission denied`, 2,277 hits, 1 minute load 11 to 12). Later runs of the same command on the same build crossed it: 16.48 s at load 30 to 71, then 31.76, 34.30 and 41.96 s at 1 minute load 54 to 148 (reports_dev/O3U0K4HY/main-gate/settle-fuzzy-vs-plain.txt, frozen build builds_dev/o3u-out-7fe63866). The plain search of the same pattern, run in alternation, took 25.24, 29.88 and 29.60 s, so the wall time is the shared host, not the fuzzy mode: user CPU is 13.65 to 14.69 s plain against 18.58 to 18.72 s fuzzy in those six runs, a ratio of about 1.3 (the 11:06 fuzzy runs used 9.20 and 10.98 s of user CPU; why the CPU time itself doubles under load was not examined). The rule as written uses whole-command wall time and it tripped, so the sentence is owed. Text to state: --fuzzy costs about 1.3 times the CPU of a plain search (measured on a 2,972 MB project), with no promise of seconds.
+- 2026-11-17 11:58+0100, main agent. DISPATCHED to one worker, with two changes to the plan, decided by the main agent: (1) plan item 6, no version bump in this card: TRDD-HSPUF5XH says the bump and the publish wait until every open card is terminal, so the CHANGELOG entry goes under the existing Unreleased heading and package.json stays at 2.34.0. This departs from the CLAUDE.md convention (bump in the same change), which that card overrides until the release. (2) plan item 5 is NOT built: adding search to READ_ONLY_VERBS stays a proposal for the owner (notes of 2026-11-17 01:18 and 01:20 above). Consequence for the last acceptance box: while the kill switch is on, the bare command may be refused; the worker is told to copy the refusal verbatim and stop, and never to touch the switch. The search follow-ups TRDD-6DRB39PR, TRDD-RSV3UEJ9 and TRDD-WC4VBIMX landed first (e343ec69), so the help describes the fixed behaviour.
