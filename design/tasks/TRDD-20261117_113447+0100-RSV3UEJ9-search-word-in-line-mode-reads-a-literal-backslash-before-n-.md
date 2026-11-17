@@ -22,7 +22,7 @@ approval-datetime: 2026-11-17T11:34:47+0100
 Found while reading commit 7fe63866 (TRDD-O3U0K4HY, increment 3). Status: INFERRED from the code, not reproduced.
 
 ## What the code does
-In line mode the search runs on the raw JSON line, where a newline, a carriage return and a tab of the text are written as a backslash followed by n, r or t. So --word accepts that two-character escape as a word edge (src/cli/searchCli.ts line 272 at 7fe63866: the edge alternative added when rawLine is true). A LITERAL backslash followed by n, r or t in the text (a Windows path such as C:\\new, a regular expression, a LaTeX command) is written in the raw line as two backslashes and the letter, and the second backslash plus the letter reads as the same escape. Then --word ew would report the ew of new as a whole word, although in the text it is preceded by the letter n.
+In line mode the search runs on the raw JSON line, where a newline, a carriage return and a tab of the text are written as a backslash followed by n, r or t. So --word accepts that two-character escape as a word edge (src/cli/searchCli.ts line 272 at 7fe63866: the edge alternative added when rawLine is true). A LITERAL backslash followed by n, r or t in the text (a Windows path, a regular expression, a LaTeX command: one backslash, then the letter) is written in the raw line as two backslashes and the letter, and the second backslash plus the letter reads as the same escape. Then --word ew would report the ew of new as a whole word, although in the text it is preceded by the letter n.
 
 ## Scope
 Line mode only. Element mode searches the decoded text, where this cannot happen.
