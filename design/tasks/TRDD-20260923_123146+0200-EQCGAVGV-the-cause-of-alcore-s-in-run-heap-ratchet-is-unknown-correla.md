@@ -1,5 +1,6 @@
 ---
 trdd-id: EQCGAVGV
+status: tasked
 title: The cause of alcore's in-run heap ratchet is unknown - correlate before choosing a fix
 column: blocked
 created: 2026-09-23T12:31:46+0200

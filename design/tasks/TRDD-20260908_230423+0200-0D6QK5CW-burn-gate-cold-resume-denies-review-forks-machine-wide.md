@@ -1,5 +1,6 @@
 ---
 trdd-id: 0D6QK5CW
+status: tasked
 title: The burn-gate cold-resume rule denies review forks machine-wide and deadlocks the review gate
 column: blocked
 pre-block-column: testing

@@ -1,5 +1,6 @@
 ---
 trdd-id: CAJ5RCP9
+status: tasked
 title: Durable cache-event history that joins the OTEL ledger with the statusline feed
 column: todo
 created: 2026-09-02T21:52:02+0200

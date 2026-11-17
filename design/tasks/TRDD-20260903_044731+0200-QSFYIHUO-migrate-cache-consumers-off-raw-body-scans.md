@@ -16,7 +16,8 @@ blocked-by: []
 status: tasked
 implementation-commits: cc49a819, d74c74dd, cbe06222, 5577ce98, 7c40d383
 unblock-when: []
-derived: false
+derived: true
+derived-kind: eht
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-16T23:06:26+0100
