@@ -4,7 +4,7 @@ title: search - increment 3 mask fuzzy and word matching plus show and context
 column: backburner
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-16T23:49:17+0100
+updated: 2026-11-17T02:25:12+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -46,3 +46,7 @@ Increment 3 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 ## Approval log
 
 - 2026-11-16T23:49:17+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Added by the review of TRDD-UIQS9RXZ
+
+2026-11-17T02:25+0100 main agent: this increment also adds three tests the review of TRDD-UIQS9RXZ found missing: (1) a search with --worktrees returns the hit inside the worktree transcript (fixture line 'wt NEEDLE'), with its true line; (2) a search with --agent returns only the sub-agent hit; (3) a search run from an empty working directory leaves that directory empty.
