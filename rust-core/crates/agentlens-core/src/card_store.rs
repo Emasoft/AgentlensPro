@@ -734,6 +734,16 @@ impl CardStore {
         self.set_meta("clear_in_progress", "0");
     }
 
+    /// TRDD-PGMMB2QG increment B: the `clear_in_progress` flag of this LIVE store, for the tests only. WHY: the
+    /// test helper that reads the flag from the file needs the store closed (a second connection to a file this
+    /// process has open is a second writer), and the two-clear test must read the flag between two calls on the same store.
+    #[cfg(test)]
+    pub(crate) fn clear_in_progress_for_test(&self) -> String {
+        self.conn
+            .query_row("SELECT value FROM meta WHERE key = 'clear_in_progress'", [], |r| r.get(0))
+            .expect("read the clear_in_progress flag")
+    }
+
     /// Drop every row WITHOUT the `/api/clear` flag — for `restore`, which found a reused database
     /// whose offsets are version-stale and must fall back to the cold-rescan path on an empty
     /// store (the flag would be wrong: no rescan is pending on a sweeper message).

@@ -1490,9 +1490,27 @@ impl DurableState {
     /// version stamp and the persist counters are updated as `save_cards` does. WHY `first_cards_saved` is not
     /// touched: same reason as `save_cards_after_boot_sweep`. WHY no state lock may be held by the caller: the
     /// persist snapshot is taken under it here (std Mutex is not reentrant).
-    pub fn finish_clear_after_save(&mut self, state: &std::sync::Mutex<crate::CoreState>) -> bool {
+    /// `sweep_epoch` is the card store `epoch()` the caller captured where the last `Msg::Clear` was drained
+    /// (next to `tailer.clear()`), before the full sweep whose rescan this call ends. TRDD-PGMMB2QG increment B. INVARIANT: the flag is reset
+    /// only when no `/api/clear` landed since then (the epoch is unchanged under the state lock, checked with the
+    /// persist snapshot and again in the final lock before `finish_clear`). WHY: a clear that lands while a
+    /// rescan runs drops the cards that rescan put so far, so ending it would rewrite the card log from an
+    /// incomplete store and reset the flag next to that store. When the epoch differs the call returns false, the
+    /// flag stays 1 and `clear_pending` stays true in the loop: the later clear sent its `Msg::Clear` under the
+    /// same state lock hold that bumped the epoch, so the next drain orders another full sweep and captures the
+    /// new epoch. A difference found in the final lock (after the rewrite) keeps the bookkeeping that describes
+    /// the rewritten files (hashes, version stamp, counters) and sets the dirty mark again, so the next save
+    /// brings the card log level with the store.
+    pub fn finish_clear_after_save(&mut self, state: &std::sync::Mutex<crate::CoreState>, sweep_epoch: u64) -> bool {
         let snap = {
             let st = state.lock_timed();
+            // TRDD-PGMMB2QG increment B: first epoch comparison, under the same lock hold as the snapshot. A clear
+            // since the last `Msg::Clear` was drained emptied the store and the rescan has not put its cards back: rewriting the card
+            // log from this snapshot would end the clear on an incomplete store.
+            if st.cards.epoch() != sweep_epoch {
+                eprintln!("{} alcore: another clear landed during the rescan of the previous one; the card log is not rewritten and the clear stays pending", crate::log_ts());
+                return false;
+            }
             st.cards.persist_snapshot()
         };
         let rewritten = self.cards.rewrite_from(|| snap.iter().map(persist_record));
@@ -1511,6 +1529,14 @@ impl DurableState {
         let mut st = state.lock_timed();
         st.persist.cards_writes += 1;
         st.persist.cards_bytes += bytes;
+        // TRDD-PGMMB2QG increment B: second epoch comparison, in the lock that precedes `finish_clear`. WHY: a clear
+        // can land between the snapshot and here (the rewrite takes time). The files just written are the snapshot
+        // and the hashes describe them, so that bookkeeping stays; the store is now behind them, so the cards are
+        // marked dirty again and the flag stays 1 (the later clear left `clear_pending` true in the loop).
+        if st.cards.epoch() != sweep_epoch {
+            self.cards_dirty = true;
+            return false;
+        }
         st.cards.finish_clear();
         true
     }
@@ -1820,12 +1846,15 @@ pub fn start_sweeper(
             let mut needs_full = false;
             // TRDD-9VX3WTGU: `/api/clear` emptied the card store and set `clear_in_progress` in
             // its meta table; it stays set until the full rescan this flag tracks has put every
-            // card back (see `CardStore::clear`). Residual window, accepted: a SECOND clear that
-            // lands while the first rescan runs has its flag reset by the first rescan's end; the
-            // second rescan then runs with the flag already 0 (a crash inside it would be reused
-            // as an incomplete corpus). Two clears back to back are an operator action, and the
-            // alternative is a counter threaded through the clear message.
+            // card back (see `CardStore::clear`). TRDD-PGMMB2QG increment B: a SECOND clear that lands while
+            // the first rescan runs drops the cards that rescan put so far, so the flag is reset only when no
+            // clear landed since the last `Msg::Clear` was drained: `clear_epoch` is the store epoch captured at each
+            // drain arm (next to `tailer.clear()`), and `finish_clear_after_save` compares it with the epoch at the end. WHY not a counter
+            // threaded through the clear message: the epoch is bumped by `CardStore::clear` under the same state
+            // lock hold that sends `Msg::Clear`, so the later clear is never lost: it leaves `clear_pending` true
+            // and the next drain orders another full sweep.
             let mut clear_pending = false;
+            let mut clear_epoch: u64 = 0;
             loop {
                 // TRDD-ORGJ0E3G follow-up: drain every message ALREADY queued (non-blocking,
                 // try_recv until Empty) before even considering a backfill chunk. Without this a
@@ -1843,6 +1872,15 @@ pub fn start_sweeper(
                         Ok(Msg::Unnamed) => needs_full = true,
                         Ok(Msg::Clear) => {
                             tailer.clear();
+                            // TRDD-PGMMB2QG increment B (coordinator correction): the card store clear epoch is captured HERE,
+                            // where `Msg::Clear` is drained, with no state lock held (the loop top level). WHY here and not at
+                            // the sweep start: after a failed rewrite `clear_pending` stays true with no new message, so a
+                            // later clear that landed before a sweep-start read would be absorbed by that read while its
+                            // `Msg::Clear` is still queued and the tailer still holds full positions: the sweep would read
+                            // nothing and the flag would be reset over an empty store. `clear_all` bumps the epoch and sends
+                            // `Msg::Clear` under ONE hold of the state lock, so an epoch equal at the reset means every clear
+                            // has had its message drained, its tailer clear done and a full sweep after it.
+                            clear_epoch = state.lock_timed().cards.epoch();
                             needs_full = true;
                             clear_pending = true;
                         }
@@ -1893,6 +1931,7 @@ pub fn start_sweeper(
                     Ok(Msg::Unnamed) => needs_full = true,
                     Ok(Msg::Clear) => {
                         tailer.clear();
+                        clear_epoch = state.lock_timed().cards.epoch(); // TRDD-PGMMB2QG: see the first arm
                         needs_full = true;
                         clear_pending = true;
                     }
@@ -1926,6 +1965,7 @@ pub fn start_sweeper(
                             }
                             Ok(Msg::Clear) => {
                                 tailer.clear();
+                                clear_epoch = state.lock_timed().cards.epoch(); // TRDD-PGMMB2QG: see the first arm
                                 needs_full = true;
                                 clear_pending = true;
                                 break;
@@ -1979,7 +2019,9 @@ pub fn start_sweeper(
                 // fake it); a failed rewrite keeps the clear pending and the next full sweep tries again. Called
                 // with no state lock held: the rewrite takes the persist snapshot under the lock itself (std
                 // Mutex is not reentrant).
-                if clear_pending && full_sweep && durable.finish_clear_after_save(&state) {
+                // TRDD-PGMMB2QG increment B: `clear_epoch` (captured where the last `Msg::Clear` was drained) goes in, so a
+                // clear that landed after that drain makes the call return false and `clear_pending` stays true.
+                if clear_pending && full_sweep && durable.finish_clear_after_save(&state, clear_epoch) {
                     clear_pending = false;
                 }
                 durable.tick(&tailer, &state, false);
@@ -2467,7 +2509,7 @@ mod sweeper_backstop_tests {
     fn finish_clear_after_save_tombstones_every_cleared_key_then_resets_the_flag() {
         let root = seed_test_root("clear-save-ok");
         let (data, state, mut durable) = cleared_and_rescanned(&root);
-        assert!(durable.finish_clear_after_save(&state), "the rewrite succeeded, so the clear is finished");
+        assert!(durable.finish_clear_after_save(&state, store_epoch(&state)), "the rewrite succeeded, so the clear is finished");
         let files = crate::delta_log::DeltaLog::new(&data, "log-sessions").load().unwrap();
         let keys: Vec<&str> = files.keys().map(String::as_str).collect();
         assert_eq!(keys, ["a"], "no cleared key is left in the card log (b and the files-only ghost are tombstoned)");
@@ -2499,7 +2541,7 @@ mod sweeper_backstop_tests {
         let before = card_log_bytes();
         set_mode(0o555, 0o444);
         let control_unwritable = std::fs::File::create(data.join("probe")).is_err();
-        let finished = durable.finish_clear_after_save(&state);
+        let finished = durable.finish_clear_after_save(&state, store_epoch(&state));
         set_mode(0o755, 0o644);
         assert!(control_unwritable, "control: the card-log directory really refuses a write (not running as root)");
         assert!(!finished, "a failed card log rewrite does not finish the clear");
@@ -2529,11 +2571,11 @@ mod sweeper_backstop_tests {
         };
         set_mode(0o555, 0o444);
         let control_unwritable = std::fs::File::create(data.join("probe")).is_err();
-        let first = durable.finish_clear_after_save(&state);
+        let first = durable.finish_clear_after_save(&state, store_epoch(&state));
         set_mode(0o755, 0o644);
         assert!(control_unwritable, "control: the card-log directory really refuses a write (not running as root)");
         assert!(!first, "the first save fails");
-        assert!(durable.finish_clear_after_save(&state), "the retry on a writable card log succeeds");
+        assert!(durable.finish_clear_after_save(&state, store_epoch(&state)), "the retry on a writable card log succeeds");
         let files = crate::delta_log::DeltaLog::new(&data, "log-sessions").load().unwrap();
         let keys: Vec<&str> = files.keys().map(String::as_str).collect();
         assert_eq!(keys, ["a"], "the retry rewrote the card log from the store: b and the files-only ghost are gone");
@@ -2604,7 +2646,7 @@ mod sweeper_backstop_tests {
         durable.offsets_save = Duration::from_millis(1);
         set_card_log_mode(&data, 0o555, 0o444);
         let control_unwritable = std::fs::File::create(data.join("probe")).is_err();
-        let first = durable.finish_clear_after_save(&state);
+        let first = durable.finish_clear_after_save(&state, store_epoch(&state));
         std::thread::sleep(Duration::from_millis(5));
         durable.tick(&LogTailer::default(), &state, false);
         let early_save_spent = durable.first_cards_saved;
@@ -2612,7 +2654,7 @@ mod sweeper_backstop_tests {
         assert!(control_unwritable, "control: the card-log directory really refuses a write (not running as root)");
         assert!(!first, "the first attempt fails on the save");
         assert!(early_save_spent, "control: the timed tick ran its early card save between the two attempts");
-        assert!(durable.finish_clear_after_save(&state), "the second attempt, on a writable card log, succeeds");
+        assert!(durable.finish_clear_after_save(&state, store_epoch(&state)), "the second attempt, on a writable card log, succeeds");
         let want: indexmap::IndexMap<String, serde_json::Value> = state.lock().unwrap().cards.parsed_cards().iter().map(super::persist_record).collect();
         assert_eq!(crate::delta_log::DeltaLog::new(&data, "log-sessions").load().unwrap(), want, "the card log equals the store although a tick ran in between");
         drop(state);
@@ -2647,7 +2689,7 @@ mod sweeper_backstop_tests {
             st.cards.put(&seed_test_card("a"));
         }
         durable.mark_dirty();
-        assert!(durable.finish_clear_after_save(&state), "the rewrite does not read the damaged card log: the clear is finished");
+        assert!(durable.finish_clear_after_save(&state, store_epoch(&state)), "the rewrite does not read the damaged card log: the clear is finished");
         let want: indexmap::IndexMap<String, serde_json::Value> = state.lock().unwrap().cards.parsed_cards().iter().map(super::persist_record).collect();
         let got = crate::delta_log::DeltaLog::new(&data, "log-sessions").load().expect("the card log is readable again");
         assert_eq!(got.keys().collect::<Vec<_>>(), ["a"], "only the card the rescan put back");
@@ -2751,6 +2793,93 @@ mod sweeper_backstop_tests {
         keys.sort();
         assert_eq!(keys, ["x", "y"], "the early save appended every card of the store");
         assert!(durable.first_cards_saved, "and it was the early save");
+        drop(state);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-PGMMB2QG: the card store clear epoch. The sweeper loop captures it where it drains a `Msg::Clear` (next to
+    /// `tailer.clear()`); these tests read it directly, so the loop's three capture sites are not exercised here.
+    fn store_epoch(state: &std::sync::Mutex<crate::CoreState>) -> u64 {
+        state.lock().unwrap().cards.epoch()
+    }
+
+    /// TRDD-PGMMB2QG increment B1: a SECOND clear that lands after the last `Msg::Clear` was drained and its epoch
+    /// captured (the rescan of the first clear is still running) makes `finish_clear_after_save` return false, with the
+    /// flag still 1 and both card log files byte-identical (no rewrite from the incomplete store); a call with the
+    /// epoch captured after the second clear then returns true, resets the flag and leaves the card log equal to the store. Mutation:
+    /// remove both epoch comparisons and the first call finishes the clear, so this test fails at the flag.
+    #[test]
+    fn a_second_clear_during_the_rescan_keeps_the_flag_and_the_card_log_until_a_call_with_the_new_epoch() {
+        let root = seed_test_root("clear-b1");
+        let (data, state, mut durable) = cleared_and_rescanned(&root);
+        let sweep_epoch = store_epoch(&state);
+        assert_eq!(state.lock().unwrap().cards.clear_in_progress_for_test(), "1", "control: the first clear set the flag");
+        {
+            // The second clear lands: it drops what the first rescan put (`a`); the second rescan has put `c` so far.
+            let mut st = state.lock().unwrap();
+            st.cards.clear();
+            st.cards.put(&seed_test_card("c"));
+        }
+        let new_epoch = store_epoch(&state);
+        assert_ne!(new_epoch, sweep_epoch, "control: the second clear bumped the epoch");
+        let card_log_bytes = || (std::fs::read(data.join("log-sessions.snapshot.ndjson")).ok(), std::fs::read(data.join("log-sessions.delta.ndjson")).ok());
+        let before = card_log_bytes();
+        let finished = durable.finish_clear_after_save(&state, sweep_epoch);
+        assert_eq!(state.lock().unwrap().cards.clear_in_progress_for_test(), "1", "the flag stays set");
+        assert!(card_log_bytes() == before, "and both card log files are byte-identical: no rewrite from the incomplete store");
+        assert!(!finished, "a clear landed since the last Msg::Clear was drained: the clear is not finished");
+        assert!(durable.finish_clear_after_save(&state, new_epoch), "a call with the epoch captured after the second clear finishes it");
+        assert_eq!(state.lock().unwrap().cards.clear_in_progress_for_test(), "0", "the flag is reset");
+        let want: indexmap::IndexMap<String, serde_json::Value> = state.lock().unwrap().cards.parsed_cards().iter().map(super::persist_record).collect();
+        assert_eq!(want.keys().collect::<Vec<_>>(), ["c"], "control: the store holds only the card put after the second clear");
+        assert_eq!(crate::delta_log::DeltaLog::new(&data, "log-sessions").load().unwrap(), want, "and the card log equals the store");
+        drop(state);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-PGMMB2QG T8 (box 2): a reused start dropped with no tick at all (a stop that landed during the file
+    /// pass, the forced save skipped) leaves the card log files byte-identical to what they were; a second
+    /// reused start over the same files and store brings the card log level with the store at its first timed
+    /// tick: the card the first start put is appended and the files-only key is tombstoned.
+    #[test]
+    fn a_reused_start_dropped_with_no_tick_is_brought_level_by_the_next_starts_first_timed_tick() {
+        let root = seed_test_root("clear-t8");
+        let (data, env) = previous_run_with_cards(&root, &["kept"]);
+        let mut ghost = indexmap::IndexMap::new();
+        ghost.insert("ghost".to_string(), seed_test_card("ghost"));
+        crate::delta_log::DeltaLog::new(&data, "log-sessions").append_changed(&ghost).unwrap();
+        let card_log_bytes = || (std::fs::read(data.join("log-sessions.snapshot.ndjson")).ok(), std::fs::read(data.join("log-sessions.delta.ndjson")).ok());
+        let before = card_log_bytes();
+        {
+            let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+            assert!(state.lock().unwrap().cards.reused(), "the first start reuses the previous run store");
+            let mut durable = DurableState::open(&data);
+            let mut tailer = LogTailer::default();
+            durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+            assert!(durable.seed_from_files_pending, "the file pass is owed");
+            state.lock().unwrap().cards.put(&seed_test_card("store-only"));
+            durable.mark_dirty();
+            // Dropped here: no tick, no forced save.
+        }
+        assert!(card_log_bytes() == before, "the start that was dropped with no tick wrote nothing");
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+        assert!(state.lock().unwrap().cards.reused(), "the second start reuses the store the first one left");
+        let mut durable = DurableState::open(&data);
+        // Set explicitly: AGENTLENS_CARDS_SAVE_MS and AGENTLENS_OFFSETS_SAVE_MS in the environment must not change what this proves.
+        durable.cards_save = Duration::from_millis(300_000);
+        durable.offsets_save = Duration::from_millis(1);
+        let mut tailer = LogTailer::default();
+        durable.restore(&mut tailer, &mut state.lock().unwrap(), &env).unwrap();
+        assert!(durable.seed_from_files_pending, "the second start owes the file pass too");
+        durable.mark_dirty();
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&tailer, &state, false);
+        let want: indexmap::IndexMap<String, serde_json::Value> = state.lock().unwrap().cards.parsed_cards().iter().map(super::persist_record).collect();
+        let mut want_keys: Vec<&str> = want.keys().map(String::as_str).collect();
+        want_keys.sort_unstable();
+        assert_eq!(want_keys, ["kept", "store-only"], "control: the store holds the card the first start put");
+        assert_eq!(crate::delta_log::DeltaLog::new(&data, "log-sessions").load().unwrap(), want, "the first timed tick brought the card log level with the store");
+        assert!(!card_log_keys(&data).contains(&"ghost".to_string()), "the files-only key is tombstoned");
         drop(state);
         std::fs::remove_dir_all(&root).unwrap();
     }
