@@ -4,7 +4,7 @@ title: The catch-up card save tombstones every file key the store lacks with no 
 column: todo
 status: tasked
 created: 2026-11-17T17:56:24+0100
-updated: 2026-11-17T18:39:22+0100
+updated: 2026-11-17T18:55:55+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,6 +37,7 @@ Whether a ceiling is wanted at all (refuse and log when the files hold many more
 - [ ] The pass is retried, or its one-shot nature after an Err is stated at the flag (review NIT-1).
 - [ ] A test of a process end between finish_clear and the first card save, then a reused start (the store is smaller than the card log and the reuse gate passes; the catch-up save tombstones the cleared keys and prints the count). The existing test a_database_with_a_clear_in_progress covers a kill BEFORE finish_clear only (tests/card_reuse.rs:122, by the worker's report).
 - [ ] The count line of 119f0716 has an assertion (a test that fails when the line or its counts are wrong) and has been seen once in the log of a built server.
+- [ ] The two-clear window is decided (added 2026-11-17T18:55:55+0100 from TRDD-WCG7I5D8): a second /api/clear that lands while the rescan of the first runs has its flag reset by the end of the first rescan (code comment at log_reader.rs:1745-1750, 'accepted'); a process end during the second rescan then leaves full read positions next to an incomplete store, which the next start reuses and never refreshes. Either the flag is reset only when no later clear is pending, or the acceptance is kept and stated here with its reason.
 
 ## Approval log
 
