@@ -1,10 +1,10 @@
 ---
 trdd-id: OIMXULDJ
 title: search - increment 2 categories and element level matching
-column: backburner
+column: dev
 status: tasked
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T01:14:51+0100
+updated: 2026-11-17T01:15:06+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -55,6 +55,8 @@ Increment 1 matches the raw JSON line. Categories need the PARTS of an entry: on
 ## Approval log
 
 - 2026-11-16T23:49:17+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T01:15:05+0100 — column → todo by main-agent@agentlenspro. increment 1 landed (6584d2dd, 4f134558); proposal reviewed by the harness, findings recorded on the card
+- 2026-11-17T01:15:06+0100 — column → dev by main-agent@agentlenspro. increment 1 landed (6584d2dd, 4f134558); proposal reviewed by the harness, findings recorded on the card
 
 ## Engine plan after increment 1
 
