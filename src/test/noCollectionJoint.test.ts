@@ -490,4 +490,36 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
     assert.ok(rows !== null, 'the store holds a statusline WAL for the sample')
     assert.deepStrictEqual(rows.map(r => r.session_id), ['joint-statusline'], 'the stored sample is the one POSTed')
   })
+
+  test('leg 10 — TRDD-VS1FCUMU: with NO server the bundled status-line hook stores the sample on disk, statusline-history reads it, and the real alcore statusline-seal turns it into a part', async () => {
+    assert.ok(fs.readFileSync(CLI, 'utf8').includes('wal-cli.ndjson'), 'the bundle predates TRDD-VS1FCUMU — a failed esbuild leaves the stale bundle')
+    const leg = await makeLeg('sl-noserver'); legs.push(leg)
+    fs.writeFileSync(path.join(leg.data, 'DISABLED'), 'joint test leg 10\n')
+    // No server is started, and AGENTLENS_NO_REVIVE=1 keeps the hook from starting one (or the sealer).
+    const hook = cli(leg, ['statusline'], { input: JSON.stringify({ session_id: 'joint-noserver', cost: { total_cost_usd: 2 } }), extra: { AGENTLENS_NO_REVIVE: '1' }, timeoutMs: 60_000 })
+    assert.strictEqual(hook.code, 0, hook.stderr + hook.stdout)
+    assert.deepStrictEqual(alcoresFor(leg.data), [], 'no alcore runs on this data dir: the sample was stored by the hook alone')
+    // The day directory is read back, not computed: the hook stamps its own clock and a run can cross UTC midnight.
+    const mainDir = path.join(leg.data, 'statusline', 'main')
+    const days = fs.readdirSync(mainDir)
+    assert.strictEqual(days.length, 1, `one day partition, got ${JSON.stringify(days)}`)
+    const dayDir = path.join(mainDir, days[0])
+    assert.deepStrictEqual(fs.readdirSync(dayDir), ['wal-cli.ndjson'], 'the hook wrote the write-ahead file and nothing else')
+    assert.strictEqual(fs.readFileSync(path.join(dayDir, 'wal-cli.ndjson'), 'utf8').trim().split('\n').length, 1, 'one line for one sample')
+    // The CLI reads the store off disk, still with no server. The table prints the first 8 characters of the session id.
+    const hist = cli(leg, ['statusline-history', 'sessions'], { extra: { AGENTLENS_NO_REVIVE: '1' }, timeoutMs: 120_000 })
+    assert.strictEqual(hist.code, 0, hist.stderr + hist.stdout)
+    assert.ok(hist.stdout.includes('joint-no'), `statusline-history shows the session with no server: ${hist.stdout}${hist.stderr}`)
+    // The real binary compacts it. The byte threshold is lowered because today's file is a few hundred bytes.
+    const seal = cp.spawnSync(ALCORE, ['statusline-seal', '--data-dir', leg.data], { env: { ...legEnv(leg), AGENTLENS_STATUSLINE_CLI_SEAL_BYTES: '1' }, encoding: 'utf8', timeout: 120_000 })
+    assert.strictEqual(seal.status, 0, seal.stderr)
+    assert.ok(seal.stdout.includes('sealed 1 WAL'), seal.stdout + seal.stderr)
+    const after = fs.readdirSync(dayDir)
+    assert.strictEqual(after.filter(f => f.startsWith('part-') && f.endsWith('.parquet')).length, 1, `one part, got ${JSON.stringify(after)}`)
+    assert.strictEqual(after.filter(f => f.startsWith('wal-')).length, 0, `no write-ahead file left, got ${JSON.stringify(after)}`)
+    assert.deepStrictEqual(alcoresFor(leg.data), [], 'the sealer exited and no server was started')
+    const rows = await queryStatusline(path.join(leg.data, 'statusline'), 'main', 'SELECT session_id, cost_total_cost_usd AS cost FROM samples')
+    assert.ok(rows !== null, 'the part is readable')
+    assert.deepStrictEqual(rows.map(r => [r.session_id, Number(r.cost)]), [['joint-noserver', 2]], 'the sealed row is the sample the hook stored')
+  })
 })
