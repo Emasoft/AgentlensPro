@@ -45,7 +45,7 @@ impl Store {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_alcore"));
         cmd.arg("statusline-seal").arg("--data-dir").arg(&self.base);
         // The knobs under test are set per call; an ambient value must not leak in.
-        for k in ["AGENTLENS_STATUSLINE_CLI_SEAL_BYTES", "AGENTLENS_STATUSLINE_SEAL_BUDGET_MS", "AGENTLENS_STATUSLINE_SEAL_ROWS", "AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS"] {
+        for k in ["AGENTLENS_STATUSLINE_CLI_SEAL_BYTES", "AGENTLENS_STATUSLINE_SEAL_BUDGET_MS", "AGENTLENS_STATUSLINE_SEAL_ROWS", "AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS", "AGENTLENS_STATUSLINE_SEAL_TEST_DEFAULT_SAMPLE"] {
             cmd.env_remove(k);
         }
         for (k, v) in env {
@@ -240,4 +240,60 @@ fn a_line_appended_after_the_part_was_written_is_not_deleted_with_the_file() {
     assert!(out.contains("sealed 1 WAL"), "{out}");
     assert!(names(&d, "wal-", ".ndjson").is_empty(), "nothing is left to seal");
     assert_eq!(s.rows(), 4.0, "the late line is in the part");
+}
+
+/// 30,000 lines, past the reader's default schema sample: the LAST line adds the key `late_key`
+/// and turns the integer `n` into 1.5.
+fn late_key_file() -> String {
+    let mut body = lines(29_999);
+    body.push_str("{\"ts\":1577836900000,\"session_id\":\"s0\",\"statusline_stream\":\"main\",\"n\":1.5,\"late_key\":7}\n");
+    body
+}
+
+/// (rows, rows with late_key, max late_key, sum of n) as the store's own reader returns them.
+fn late_key_stats(s: &Store) -> (f64, f64, f64, f64) {
+    let rows = agentlens_core::statusline_store::query_statusline(
+        &s.root(),
+        "main",
+        "SELECT count(*) AS total, count(late_key) AS c, max(late_key) AS m, sum(n) AS s FROM samples",
+        None,
+        None,
+        &HashMap::new(),
+    )
+    .unwrap()
+    .expect("the store holds data");
+    let f = |k: &str| rows[0][k].as_f64().unwrap();
+    (f("total"), f("c"), f("m"), f("s"))
+}
+
+#[test]
+fn a_key_first_seen_after_the_schema_sample_is_kept_and_a_late_fraction_is_not_rounded() {
+    let s = Store::new("latekey");
+    let d = s.day_dir(PAST);
+    std::fs::write(d.join("wal-cli.ndjson"), late_key_file()).unwrap();
+    let (code, out) = s.seal(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("sealed 1 WAL"), "{out}");
+    assert!(names(&d, "wal-", ".ndjson").is_empty(), "the numbers below are read from the part alone");
+    assert_eq!(late_key_stats(&s), (30_000.0, 1.0, 7.0, 449_955_002.5), "rows, rows with late_key, its value, the sum of n with its fraction");
+}
+
+#[test]
+fn a_part_that_lacks_a_key_of_the_file_is_dropped_and_the_file_is_kept() {
+    // The debug-only knob restores the reader's default schema sample, so the part of this file
+    // lacks `late_key` while its row count matches: the case the key check exists for.
+    let s = Store::new("keygate");
+    let d = s.day_dir(PAST);
+    std::fs::write(d.join("wal-cli.ndjson"), late_key_file()).unwrap();
+    let (code, out) = s.seal(&[("AGENTLENS_STATUSLINE_SEAL_TEST_DEFAULT_SAMPLE", "1")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(names(&d, "part-", ".parquet").is_empty(), "the part that lacks the key is removed");
+    assert_eq!(names(&d, "wal-", ".ndjson").len(), 1, "the file is kept");
+    assert_eq!(s.rows(), 30_000.0, "every row is still readable from the kept file");
+    // Without the knob the same file seals whole.
+    let (code, out) = s.seal(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(names(&d, "part-", ".parquet").len(), 1, "one part");
+    assert!(names(&d, "wal-", ".ndjson").is_empty(), "no write-ahead file is left");
+    assert_eq!(late_key_stats(&s), (30_000.0, 1.0, 7.0, 449_955_002.5));
 }
