@@ -1,10 +1,10 @@
 ---
 trdd-id: YL3EWT6N
 title: agentlenspro detects and reinstalls missing or outdated hooks skills agents and rules in user scope
-column: todo
+column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-18T13:55:50+0100
+updated: 2026-11-18T13:58:29+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -26,6 +26,7 @@ relevant-rules: [1]
 - 2026-10-14T16:43:38+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-16T11:13:20+0200 — column → human_review by main-agent@agentlenspro. owner answers to decisions (a)-(d), asked 2026-10-14; row 13
 - 2026-11-16T23:05:54+0100 — column → todo by main-agent@agentlenspro. decisions (a)-(d) made in the owner's stead on 2026-11-16; items 4 to 6 are now buildable
+- 2026-11-18T13:58:29+0100 — column → dev by main-agent@agentlenspro. in active work since 2026-11-18: items 5, 9 and 11 landed, item 4 is with a worker
 
 ## Owner request
 
