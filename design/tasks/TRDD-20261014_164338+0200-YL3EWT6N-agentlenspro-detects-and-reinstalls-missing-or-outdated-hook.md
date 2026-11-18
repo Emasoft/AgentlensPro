@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: todo
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-16T23:05:54+0100
+updated: 2026-11-18T01:50:08+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-14T16:43:38+0200
 implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a, 765c44f2, 403b1137, ae4979be, 6a31062d, f6504dee, 42017224]
+relevant-rules: [1]
 ---
 
 # agentlenspro detects and reinstalls missing or outdated hooks skills agents and rules in user scope
@@ -67,3 +68,8 @@ NOT PLANNED, proposal only. Follow-up (review of 42017224): with the read-only h
 (d) Running from a git checkout: the checkout's own files are what gets installed, and the known-hash check of item 4 applies to release builds only. Reason: a developer's edited skill has no release hash by definition.
 Batch question: a batch with a refusing member must leave ONE JSON object on stderr that lists each member's error; its stdout keeps the results of the members that succeeded. Reason: several objects back to back cannot be parsed as one document. This is new work and needs its own card.
 NOT decided, left for the owner: whether agentlenspro ships the review part of ~/.claude/rules/turn-protocol-and-review.md as a versioned rule. That file is written by the owner and holds much that is not about agentlenspro, so installing over it is the owner's call.
+
+## Owner orders 2026-11-18
+
+2026-11-18T01:49:59+0100 — OWNER, verbatim, four messages: «also the updates must trigger the updates of all installed extensions and hooks in claude.» · «when i said that the update must trigger the update of all installed extensions and hooks, i don't mean that the npm package must use scripts post-instal. instead never use those, since they are vehicles for malicious code. i meant that simply at first execution the agentlenscli must detect if the installed extensions are out of date and then update them overwriting them with the new.» · «this means you have to insert a version number somewhere in every installed extensions from agentlenspro» · «yes, add it as a golden rule.» The golden rule is PRRD G1.1 (no install-time lifecycle scripts). These orders were first recorded on TRDD-5FKVMOE3, which this card supersedes.
+2026-11-18T01:49:59+0100 — What changes in the plan (reading of the main agent, not the owner words). (i) Item 4 changes: an installed surface that is older than the running package, or carries no version stamp, is OVERWRITTEN at the first execution of the CLI after an update; it is no longer left in place with a warning. Decision (c) stays: a surface stamped with a NEWER version than the running CLI is left in place with one warning line. (ii) Item 5 widens: the version stamp goes on EVERY surface AgentlensPro installs, not only skills and agents: each hook registration, the statusLine and subagentStatusLine registrations, the skill folder, each agent file, and the review mod if AgentlensPro installs it. (iii) New item 8: the statusLine registration has no automatic repair today (installStatusline is called only from --install-statusline, src/cli/diagnosticsCli.ts:667; REPAIR_STEPS has no key for it). It gets a repair step. (iv) New item 9: a build check fails when package.json declares preinstall, install, postinstall or prepare (PRRD G1.1). On 2026-11-18 package.json declares none of them; prepublishOnly is its only lifecycle key. (v) New item 10: the review mod and the server binary have no refresh code. The server binary ships inside the package, so a new package brings a new binary; what is missing is the restart of a running server that still executes the old one. The review mod is a Claude Code plugin installed by the plugin manager, not by this CLI; whether the CLI may reinstall it is open. Today the self-heal detects drift by content hash (skill tree, agent files) and by rebuilt hook matchers, with no version comparison anywhere. Evidence for (iii) to (v) and for that last sentence: reports_dev/update-refresh/20261118_013500+0100-update-refresh-surfaces-v2.md, a worker report the main agent read whole; the source lines it cites were not re-read.

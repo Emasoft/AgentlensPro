@@ -1,10 +1,10 @@
 ---
 trdd-id: 5FKVMOE3
 title: An update of agentlenspro refreshes every installed hook, skill, agent and mod in Claude Code with no manual step
-column: todo
-status: tasked
+column: superseded
+status: archived
 created: 2026-11-18T01:24:13+0100
-updated: 2026-11-18T01:45:54+0100
+updated: 2026-11-18T01:50:27+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-18T01:24:13+0100
 relevant-rules: [1]
+superseded-by: [YL3EWT6N]
 ---
 
 # An update of agentlenspro refreshes every installed hook, skill, agent and mod in Claude Code with no manual step
@@ -33,6 +34,7 @@ Related: TRDD-RBBEX59R (the launch self-heal under the switch), TRDD-HSPUF5XH (r
 ## Approval log
 
 - 2026-11-18T01:24:13+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T01:50:27+0100 — SUPERSEDED by main-agent@agentlenspro. duplicate of TRDD-YL3EWT6N, found after minting; its owner quotes and gap list were copied there on 2026-11-18.
 
 ## Owner clarifications 2026-11-18
 
