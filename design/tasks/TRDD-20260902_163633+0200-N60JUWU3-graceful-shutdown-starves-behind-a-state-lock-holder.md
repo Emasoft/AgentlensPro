@@ -3,7 +3,7 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-10-16T11:16:40+0200
+updated: 2026-11-19T00:43:54+0100
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -201,3 +201,7 @@ cooperative request path.
 ## Approval log
 
 - 2026-10-16T11:13:15+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 32
+
+## Triage 2026-11-19
+
+2026-11-19T00:43+0100 main agent — source: reports_dev/sonnet-worker/20261119_w63-triage-mvr6-n60j/report.md (read whole). The fix landed in 420e6bb9; three Acceptance boxes are open. Box 2 has a real gap, INFERRED from two read sites and not run: record_stop runs only in the Flushed arm of alcore.rs, and collector_lifecycle.rs:125 reads a missing stoppedAt as crash, so the boot after a timed-out stop reports a crash. That fix and a unit test are in dev (worker w65). Box 3: the CLI regex is extracted into a pure function, with a unit test against the exact alcore line, in dev (worker w66). OWNER QUESTION on box 1: on TimedOut the flush is skipped by design, so 'span/statusline flushes on disk' cannot hold under a real 120 s lock holder; only the stop bound, the pid release and the log line can be asserted. An end-to-end test also needs an out-of-process lock holder, which means a feature-gated test hook in production code (the card forbids a debug endpoint). Proposal, not done: reword box 1 to 'stop completes within the bound, releases the pid lock, and logs the holder', and decide whether a feature-gated test hook is acceptable.
