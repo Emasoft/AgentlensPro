@@ -4,7 +4,7 @@ title: The status line is stored with no server - hook appends to the write-ahea
 column: dev
 status: tasked
 created: 2026-11-18T02:15:01+0100
-updated: 2026-11-18T02:57:03+0100
+updated: 2026-11-18T02:57:52+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-18T02:15:01+0100
-implementation-commits: [b78fee7e, e5b4af2e]
+implementation-commits: [b78fee7e, e5b4af2e, db19c528]
 ---
 
 # The status line is stored with no server - hook appends to the write-ahead file and alcore statusline-seal compacts
@@ -58,9 +58,9 @@ On branch `feat/rbbex59r-c2` (TRDD-RBBEX59R step d3) the status-line hook only P
 
 ## Checklist
 
-- [ ] Rust change + `tests/statusline_seal_cli.rs` green, `statusline_parity` and the `statusline_store` unit tests green, clippy clean
-- [ ] TypeScript change + `statuslineDiskFallback.test.ts` and `statuslineCapture.test.ts` green, check-types clean
-- [ ] Joint leg 10: no server, sample on disk, `statusline-history` shows it, `alcore statusline-seal` makes a part
+- [x] Rust change + `tests/statusline_seal_cli.rs` green, `statusline_parity` and the `statusline_store` unit tests green, clippy clean
+- [x] TypeScript change + `statuslineDiskFallback.test.ts` and `statuslineCapture.test.ts` green, check-types clean
+- [x] Joint leg 10: no server, sample on disk, `statusline-history` shows it, `alcore statusline-seal` makes a part
 - [ ] Docs: operations.md, CHANGELOG, the header comments of the two source files
 - [ ] Sealer proved on a sample of at most 4 GB of the live backlog before the live deploy
 
@@ -93,3 +93,4 @@ On branch `feat/rbbex59r-c2` (TRDD-RBBEX59R step d3) the status-line hook only P
 - NEXT ACTION: (1) read joint-raw2/c3-joint-leg10.txt whole; on '1 passing' commit src/test/noCollectionJoint.test.ts in the worktree by name; on a failure read the assertion and correct the snippet through a worker (leg 10 assumes that 'statusline-history sessions' exits 0 under a DISABLED file and that the day directory holds only wal-cli.ndjson). (2) Docs through a worker, then commit: the lines listed under Progress, plus a CHANGELOG Added entry (text below). (3) Prove the test-data cap applies to worktree cargo runs: cargo test --manifest-path builds_dev/rbbex59r-c2/rust-core/Cargo.toml -p agentlens-spool --test test_data_cap, run from the repository root. (4) Advisor call, then tick the checklist. (5) Merge fix/setup-agent-preflight into the worktree with --no-ff and rerun the gates of TRDD-RBBEX59R. (6) Sealer proof on a sample of at most 4 GB of the live backlog (~/.agentlens/statusline, 6.2 GB, du -sk before any copy), then the deploy steps of TRDD-RBBEX59R.
 - DOC TEXT (decided): CHANGELOG 11 replace 'With the server down a sample is lost (it is never spooled), and only the detached revive fires.' by 'With no server answering, the status-line hook appends the sample to the store's own write-ahead file (TRDD-VS1FCUMU, under Added), so the sample is kept; it never enters the hook spool, and the detached revive still fires.' CHANGELOG 15 replace the sentence that starts 'With the server kept down' by 'With the server kept down (agentlenspro server stop --stay-down, or the NO_REVIVE brake), the status-line hook appends every sample to the store's write-ahead file by itself (TRDD-VS1FCUMU, under Added), with or without the kill-switch.' CHANGELOG 17, README 182 and operations.md 90: after 'which stores it' add 'and when no server takes the sample the hook stores it on disk itself'. CHANGELOG Added, new first entry: the status line is stored with no server; path <dataDir>/statusline/<stream>/<UTC day>/wal-cli.ndjson; readers statusline-history, cache-state and cache-expired see it at once; alcore statusline-seal --data-dir DIR compacts with no port, no pidfile, nice 15, no purge; started by the hook at most once per 30 s, never under AGENTLENS_NO_REVIVE=1, never beside a live server; knobs AGENTLENS_STATUSLINE_CLI_SEAL_BYTES (16 MiB) and AGENTLENS_STATUSLINE_SEAL_BUDGET_MS (20 s); a sample can be stored twice when its POST had not settled at the render deadline.
 - GOTCHAS: worker prompts state EXPECTED as an rc or a count only, and a ps check needs a bracketed pattern ('[r]bbex59r-c2') or it matches its own shell. A fastedit literal is the whole stripped line. Long doc lines: build the new line in scripts_dev from the old one, then apply it with fastedit --lines N:N --snippet @file and re-read the lines. Never run /janitor-write-handoff here: it sends the transcript to an outside model. The plugin reload of 02:49 (claude-plugins-validation 5.23.1, llm-externalizer 14.6.5) was NOT run and its ack is recorded, so no new marker is expected: the owner types /reload-plugins, or it is run at a moment with no agent in flight.
+- UPDATE 03:05, supersedes 'IN FLIGHT' and step (1) of NEXT ACTION above: the worker finished. Worktree is at db19c528 and clean: joint leg 10 ran '1 passing (5s)' against the release alcore built from e5b4af2e (ad-hoc signed, in builds_dev/rbbex59r-c2/bin-native/darwin-arm64/) and the rebuilt worktree bundle; statuslineDiskFallback 11 passing and statuslineCapture 24 passing on the same build; the main-tree bundle is unchanged (ls -l and sha256 compared before and after). Raw output read by the main agent in reports_dev/VS1FCUMU/joint-raw2/. The other joint legs were not rerun. NEXT ACTION now starts at step (2), the docs. No worker is running.
