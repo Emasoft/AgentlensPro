@@ -45,7 +45,7 @@ import { packageVersion } from '../packageVersion'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
   INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration, reviewModInstalled,
-  hooksVerdict, parseOurCommand, stampedCommand,
+  hooksVerdict, parseOurCommand, stampedCommand, statuslineDrift, installStatusline,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES, agentSurfaceState, skillSurfaceState,
 } from './hookInstall'
@@ -1126,6 +1126,65 @@ const stepHooks: StepDef = {
   },
 }
 
+// TRDD-YL3EWT6N item 8b: refresh a stale status line stamp of ours. Never creates a missing key and never wraps a foreign command (installing the
+// status line is the explicit --install-statusline verb, TRDD-FBLI5FNQ), keeps a newer stamp. An entry of ours that does not parse is a SKIP row with
+// a fix-by-hand detail: the launch repair skips it silently, so setup is where it is reported. WHY SKIP and not FAIL: runSetup is fail-fast (the STEPS
+// loop: after a FAIL every later step is "not run"), so a FAIL here would stop the skill, old-package and server steps over an entry the user owns; a
+// SKIP row is shown in the table and does not fail setup, like a kept edited skill. The verify re-reads settings.json; it does NOT run the registered
+// command, which would execute the user's own status line script and write a synthetic row into the status line store.
+const stepStatusline: StepDef = {
+  name: 'statusline',
+  async run(ctx) {
+    const state = readSettingsFresh(ctx.settingsPath)
+    if (state === 'unparseable') {
+      return { result: { step: this.name, found: `${ctx.settingsPath} is not parseable JSON`, action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup — never start fresh over user config' }, acted: false }
+    }
+    if (state === 'absent') {
+      return { result: { step: this.name, found: 'no settings.json', action: 'none', verify: 'SKIP', detail: 'setup does not install the status line; run agentlenspro --install-statusline' }, acted: false }
+    }
+    const running = packageVersion()
+    const drift = statuslineDrift(state, running)
+    const found = [
+      drift.stale.length > 0
+        ? `stale: ${drift.stale.join(', ')}`
+        : drift.current.length + drift.keptNewer.length + drift.unparseable.length === 0
+        ? 'no agentlenspro status line capture installed (setup does not install it, TRDD-FBLI5FNQ; run agentlenspro --install-statusline)'
+        : 'no stale status line stamp',
+      ...drift.keptNewer.map(k => `${k.key} stamped ${k.stamp}, newer than this CLI (${running}), kept`),
+      ...drift.unparseable.map(k => `${k} looks like ours but is not parseable`),
+    ].join('; ')
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found, action: drift.stale.length > 0 ? 'would: refresh the status line stamp via safeConfigEdit' : 'none', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    let acted = false
+    if (drift.stale.length > 0) {
+      try {
+        await installStatusline(false, { settingsPath: ctx.settingsPath, pathEnv: ctx.pathEnv, log: ctx.log, repairOnly: true })
+      } catch (e) {
+        return { result: { step: this.name, found, action: 'refused', verify: 'FAIL', detail: (e as Error).message }, acted: false }
+      }
+      acted = true
+    }
+    const action = acted ? 'refreshed' : 'none'
+    const after = readSettingsFresh(ctx.settingsPath)
+    if (after === 'absent' || after === 'unparseable') return { result: { step: this.name, found, action, verify: 'FAIL', detail: `post-state ${after}` }, acted }
+    const left = statuslineDrift(after, running)
+    if (left.stale.length > 0) return { result: { step: this.name, found, action, verify: 'FAIL', detail: `still stale: ${left.stale.join(', ')}` }, acted }
+    // PASS with the same detail when this run refreshed the other key: the launch repair (autoSetup.ts defaultRepair) counts only PASS as a restore,
+    // so a SKIP there would print "could not restore status line" for a refresh that worked. SKIP only when the step did nothing.
+    if (left.unparseable.length > 0) {
+      return {
+        result: {
+          step: this.name, found, action, verify: acted ? 'PASS' : 'SKIP',
+          detail: `${left.unparseable.join(', ')} in ${ctx.settingsPath} looks like ours but is not parseable, so its stamp is never refreshed — fix that command by hand (agentlenspro --install-statusline refuses it too)`,
+        },
+        acted,
+      }
+    }
+    return { result: { step: this.name, found, action, verify: 'PASS', detail: 'stamps re-read from settings.json' }, acted }
+  },
+}
+
 const stepSkill: StepDef = {
   name: 'skill',
   async run(ctx) {
@@ -1819,11 +1878,11 @@ function printDetection(ctx: Ctx): void {
 
 // stepOtel runs BEFORE hooks and skills: the telemetry verdict comes first, so a foreign setup stops the run
 // before anything else is installed (owner order 2026-10-02; the same order as autoSetup.ensureInstalled).
-const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOtel, stepHooks, stepSkill, stepOldPackage, stepServerGuarded, stepSelfTest, stepMemoryCheck]
+const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOtel, stepHooks, stepStatusline, stepSkill, stepOldPackage, stepServerGuarded, stepSelfTest, stepMemoryCheck]
 
-/** The three steps the auto-launch path may run on their own (autoSetup.ts) — a partial repair must
+/** The four steps the auto-launch path may run on their own (autoSetup.ts) — a partial repair must
  *  not start the server or run the self-test, which is what a full runSetup would do. */
-export const REPAIR_STEPS = { hooks: stepHooks, skill: stepSkill, 'otel-env': stepOtel } as const
+export const REPAIR_STEPS = { hooks: stepHooks, statusline: stepStatusline, skill: stepSkill, 'otel-env': stepOtel } as const
 
 /** Full hook drift list, per event: what differs (timeout old→new, command form, missing). Read-only. */
 export function hookDriftList(settingsPath: string): Array<{ event: string; problem: string }> {

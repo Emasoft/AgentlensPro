@@ -648,6 +648,15 @@ export type StatuslineVerdict =
   | { kind: 'foreign'; command: string }
   | { kind: 'current' | 'older' | 'newer'; parsed: ParsedStatusline }
 
+/** The command string of one status line settings key, or null. The one reader for installStatusline and statuslineDrift, so the launch drift and
+ *  the repair can never read a key differently (a disagreement would re-run the repair on every launch). */
+function statuslineCurrent(settings: Record<string, unknown>, key: string): string | null {
+  const obj = settings[key]
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+  const command = (obj as Record<string, unknown>).command
+  return typeof command === 'string' ? command : null
+}
+
 /** The verdict of the value of one status line settings key against the running version. absent: no command (null or blank). foreign: a command that
  *  is not ours (it gets wrapped). unparseable: ours by its base but the remainder does not parse. Otherwise the stamp against the running version
  *  (compareStampVersions): current (same), older (older, or none or malformed), newer. */
@@ -659,6 +668,29 @@ export function statuslineVerdict(current: string | null, running: string): Stat
   if (parsed.stamp === null) return { kind: 'older', parsed }
   const c = compareStampVersions(parsed.stamp, running)
   return { kind: c < 0 ? 'older' : c === 0 ? 'current' : 'newer', parsed }
+}
+
+/** The launch drift of the status line (TRDD-YL3EWT6N item 8b), on the same verdict as planStatuslineSurface. stale: ours with an older stamp or
+ *  none, what the repairOnly install refreshes. keptNewer: ours stamped newer than this CLI, kept and announced once. unparseable: ours by its base
+ *  but not parseable; the repair skips it, so it is no launch drift (setup reports it). Absent and foreign keys are none of these: the repair never
+ *  creates or wraps. current: ours at the running stamp. */
+export interface StatuslineDrift {
+  stale: string[]
+  keptNewer: Array<{ key: string; stamp: string }>
+  unparseable: string[]
+  current: string[]
+}
+
+export function statuslineDrift(settings: Record<string, unknown>, running: string): StatuslineDrift {
+  const out: StatuslineDrift = { stale: [], keptNewer: [], unparseable: [], current: [] }
+  for (const surface of STATUSLINE_SURFACES) {
+    const v = statuslineVerdict(statuslineCurrent(settings, surface.key), running)
+    if (v.kind === 'older') out.stale.push(`${surface.key} ${v.parsed.stamp === null ? 'unstamped' : `stamp ${v.parsed.stamp}`} → ${running}`)
+    else if (v.kind === 'newer' && v.parsed.stamp !== null) out.keptNewer.push({ key: surface.key, stamp: v.parsed.stamp })
+    else if (v.kind === 'unparseable') out.unparseable.push(surface.key)
+    else if (v.kind === 'current') out.current.push(surface.key)
+  }
+  return out
 }
 
 export interface InstallStatuslineOptions {
@@ -798,9 +830,7 @@ export async function installStatusline(uninstall: boolean, opts: InstallStatusl
   const ops: SafeEditOp[] = []
   const surfaces: StatuslineSurfaceResult[] = []
   for (const surface of STATUSLINE_SURFACES) {
-    const obj = (settings[surface.key] && typeof settings[surface.key] === 'object' && !Array.isArray(settings[surface.key])
-      ? settings[surface.key] : null) as Record<string, unknown> | null
-    const current = typeof obj?.command === 'string' ? obj.command : null
+    const current = statuslineCurrent(settings, surface.key)
     const planned = planStatuslineSurface(surface, current, uninstall, settingsFile, running, opts.repairOnly === true)
     ops.push(...planned.ops)
     surfaces.push(planned.result)
@@ -1216,12 +1246,12 @@ export function installSkills(opts: InstallSkillOptions = {}): Array<{ name: str
 /** One installed skill or agent that the shipped copy did NOT overwrite (TRDD-YL3EWT6N item 4). Its notice store lives in this file and not in
  *  autoSetup.ts because the source guard of autoSetup.test.ts forbids a file write (or JSON.stringify) in autoSetup.ts. */
 export interface KeptSurface {
-  kind: 'agent' | 'skill' | 'hooks'
+  kind: 'agent' | 'skill' | 'hooks' | 'statusline'
   name: string
   verdict: 'keep-newer' | 'keep-edited'
   installedStamp: string | null
   shippedStamp: string | null
-  /** The installed file (agent), directory (skill) or settings.json (hooks) the notice names. */
+  /** The installed file (agent), directory (skill) or settings.json (hooks, statusline) the notice names. */
   path: string
 }
 
@@ -1229,6 +1259,11 @@ export interface KeptSurface {
  *  skills and agents of item 4. */
 export function keptHooksSurface(settingsFile: string, installed: string, running: string): KeptSurface {
   return { kind: 'hooks', name: 'registrations', verdict: 'keep-newer', installedStamp: installed, shippedStamp: running, path: settingsFile }
+}
+
+/** The kept entry for a status line key stamped newer than the running CLI (item 8b): same notice store, same once-per-pair rule. */
+export function keptStatuslineSurface(settingsFile: string, key: string, installed: string, running: string): KeptSurface {
+  return { kind: 'statusline', name: key, verdict: 'keep-newer', installedStamp: installed, shippedStamp: running, path: settingsFile }
 }
 
 const KEPT_FILE = 'surface-kept.json'
@@ -1249,6 +1284,8 @@ export function announceKeptSurfaces(dataDir: string, kept: readonly KeptSurface
   for (const k of fresh) {
     say(k.kind === 'hooks'
       ? `agentlenspro: hook registrations in ${k.path} are stamped ${k.installedStamp}, newer than this CLI (${k.shippedStamp}), left in place`
+      : k.kind === 'statusline'
+      ? `agentlenspro: ${k.name} in ${k.path} is stamped ${k.installedStamp}, newer than this CLI (${k.shippedStamp}), left in place`
       : k.verdict === 'keep-newer'
       ? `agentlenspro: ${k.kind} ${k.name}: the installed copy is version ${k.installedStamp}, newer than the shipped ${k.shippedStamp}, left in place`
       : `agentlenspro: ${k.kind} ${k.name}: the installed copy differs from the shipped file of the same version (${k.installedStamp}), left in place; to restore it delete ${k.path} and run agentlenspro setup`)

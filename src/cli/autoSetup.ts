@@ -38,7 +38,7 @@
 // `agentlenspro disable` is never lifted here (its reason is kept, and so is its collection-off effect).
 
 import * as path from "path"
-import { AGENT_NAMES, KeptSurface, SKILL_NAMES, agentSurfaceState, announceKeptSurfaces, hooksVerdict, keptHooksSurface, resolveOnPath, skillFiles, skillSurfaceState, skillTreeHash } from "./hookInstall"
+import { AGENT_NAMES, KeptSurface, SKILL_NAMES, agentSurfaceState, announceKeptSurfaces, hooksVerdict, keptHooksSurface, keptStatuslineSurface, resolveOnPath, skillFiles, skillSurfaceState, skillTreeHash, statuslineDrift } from "./hookInstall"
 import { packageVersion } from "../packageVersion"
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
@@ -108,7 +108,7 @@ function sameBytes(a: string, b: string): boolean {
 }
 
 /** Read-only presence + drift checks. Never throws on a missing path; never writes. The drifts come out in
- *  REPAIR ORDER — telemetry first, then hooks, skills, agents — and `conflicts` is the telemetry verdict. */
+ *  REPAIR ORDER — telemetry first, then hooks, status line, skills, agents — and `conflicts` is the telemetry verdict. */
 export function detectDrift(ctx: Ctx): Detection {
   const drifts: Drift[] = []
   let conflicts: TelemetryConflict[] = []
@@ -137,6 +137,14 @@ export function detectDrift(ctx: Ctx): Detection {
       kept.push(keptHooksSurface(ctx.settingsPath, hooksV.newest, packageVersion()))
     } else if (settings === "absent" || !hooksConverged(settings)) {
       drifts.push({ piece: "hooks", step: "hooks", reason: settings === "absent" ? "no settings.json" : "registration missing or stale (incl. the 120s timeout)" })
+    }
+    // Item 8b: a status line command of ours with an older stamp or none is drift; a newer one is kept and announced once. An unparseable one is
+    // skipped by the repair, so it is no drift (counting it would re-run the repair on every launch); setup reports it. Absent and foreign keys are
+    // never touched.
+    if (settings !== "absent") {
+      const sl = statuslineDrift(settings, packageVersion())
+      if (sl.stale.length > 0) drifts.push({ piece: "status line", step: "statusline", reason: sl.stale.join(", ") })
+      for (const k of sl.keptNewer) kept.push(keptStatuslineSurface(ctx.settingsPath, k.key, k.stamp, packageVersion()))
     }
   }
 
