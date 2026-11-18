@@ -1174,6 +1174,17 @@ fn resolve_session_card_offlock(
     session_id: &str,
     now: i64,
 ) -> Option<Value> {
+    resolve_session_card_offlock_with(st2, summary, session_id, || reparse_session_card(env, session_id, now))
+}
+
+/// The body of `resolve_session_card_offlock`, with the reparse injected. The seam exists so a test can prove the
+/// reparse runs with no CoreState guard held (TRDD-MVR6PXC0); production passes `reparse_session_card`.
+fn resolve_session_card_offlock_with(
+    st2: &Arc<Mutex<CoreState>>,
+    summary: &Value,
+    session_id: &str,
+    reparse: impl FnOnce() -> Option<Value>,
+) -> Option<Value> {
     let mut session = summary_card(summary, session_id);
     if timeline_empty(session.as_ref()) {
         // Lock 1: one indexed point query on the card table.
@@ -1183,7 +1194,7 @@ fn resolve_session_card_offlock(
         };
         if has_log {
             // NO GUARD IS ALIVE HERE — this is the multi-MB disk read + JSONL parse.
-            if let Some(card) = reparse_session_card(env, session_id, now) {
+            if let Some(card) = reparse() {
                 // Lock 2: the accountId stamp + the store.
                 let mut st = st2.lock_timed();
                 session = Some(stamp_and_store_reparsed(&mut st, card));
@@ -4801,6 +4812,51 @@ mod rebuild_admission_tests {
         let dir = std::env::temp_dir().join(format!("al-{}-{}-{}", tag, std::process::id(), n));
         std::fs::create_dir_all(&dir).unwrap();
         (dir.clone(), RemoveOnDrop(dir))
+    }
+
+    /// TRDD-MVR6PXC0: the reparse in `resolve_session_card_offlock` must run with NO CoreState guard held — the state
+    /// mutex is the ingest path's mutex, and the reparse is a multi-MB parse. Thread A is parked INSIDE the injected
+    /// reparse; while it is parked, the main thread must be able to take the state mutex.
+    ///
+    /// MUTATION CHECK: move the `reparse()` call in `resolve_session_card_offlock_with` inside the first lock
+    /// section (before `st` is dropped) and this MUST fail on the try_lock assertion.
+    #[test]
+    fn offlock_reparse_runs_without_the_state_guard() {
+        const S: &str = "offlock-sid";
+        let (dir, _cleanup) = unique_dir("offlock-reparse");
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        let empty_card = serde_json::json!({ "sessionId": S, "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": [] });
+        state.lock_timed().put_log_session(empty_card.clone());
+        let summary = serde_json::json!({ "sessions": [empty_card] });
+
+        let (in_reparse_tx, in_reparse_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let worker_state = Arc::clone(&state);
+        let worker = std::thread::spawn(move || {
+            super::resolve_session_card_offlock_with(&worker_state, &summary, S, move || {
+                in_reparse_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).expect("the main thread never released the reparse");
+                Some(serde_json::json!({ "sessionId": S, "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": [{ "kind": "turn" }] }))
+            })
+        });
+
+        in_reparse_rx.recv_timeout(Duration::from_secs(5)).expect("the reparse closure never started");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut lock_free_during_reparse = false;
+        while Instant::now() < deadline {
+            if state.try_lock().is_ok() {
+                lock_free_during_reparse = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        release_tx.send(()).unwrap();
+        let resolved = worker.join().expect("the resolving thread panicked");
+
+        assert!(lock_free_during_reparse, "the state mutex stayed held for 2 s while the reparse was running: the guard is not dropped before the reparse");
+        let resolved = resolved.expect("the reparsed card must be returned");
+        assert!(resolved["timeline"].as_array().is_some_and(|t| !t.is_empty()), "the returned card must carry the reparsed timeline, got {resolved}");
+        assert!(state.lock_timed().cards.contains(S), "the reparsed card must be stored");
     }
 
     /// TRDD-735Q3JF4 item 1: the loop must not pre-build for nobody. A fresh state that no reader has
