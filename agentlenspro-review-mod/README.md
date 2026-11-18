@@ -38,9 +38,25 @@ At every main-thread **Stop**:
    The usage box has a header (title | model) and two sections, `turn under review:` (the turn being reviewed, with `(main)` or `(subagent <type>)` and `· N calls` when it made several) and `review turn:` (the sum of every model call this Stop made: measure-plan, measure-judge, review and retries). A section is its heading, a `cache r/w` bar (full inner width; green = cache read, red = cache create, 100% = cache read + cache create; uncached input and output are not in it), `in <n> · out <n> · cache read <n> · cache create <n>`, and the cost of that one turn; there is no session total, and a call with no reply is one line (`1 call no reply (aborted), not billed`) with no bar. The per-call breakdown goes to the plain debug log line. The turn-under-review section is on by default; set the plugin option `show_reviewed_turn` to false (`/config`) to leave it out. Its usage is summed from the `turn.step` requests the turn made (one record per request). The usage has no 5m/1h split of the cache writes, so a write the API did not split is priced by inference: for a main turn (Stop, or an interrupted turn) at the cache TTL that `agentlenspro cache-state --json` reports for the main conversation (`1h` or `5m`) when it answers for this session with a snapshot no older than the turn's first request, else at the 1-hour rate; for a subagent turn (SubagentStop, which never asks) and every call the mod itself makes at the 5-minute rate (measured in this project on 2026-11-15: the 53 review-fork transcripts carrying the mod's harness markers wrote 24,962,065 cache tokens, all at the 5-minute rate, 0 at 1h). A main turn's section starts with a row such as `cache warm · ttl 1h · last miss messages_rewritten 2h ago`, or `cache state unknown` when the command exits 2, fails, or answers stale or for another session (never a guessed `cold`). The box is about 80 columns wide on ordinary totals and widens with larger totals rather than truncating a number. When colour is off, the bar stays readable: hit cells keep `█` and miss cells become `░` (for example `██░░░░░░ 28% hit`), and no escape code is printed; `░` (U+2591) has East Asian Width N (narrow), where `…` (U+2026) has A (ambiguous). Colour is judged off by `NO_COLOR` set non-empty, `FORCE_COLOR=0` or `false`, `TERM=dumb`, or `CLAUDE_CODE_ENTRYPOINT=claude-vscode` (that value is unverified: it has not been read from a real VS Code session); any other `FORCE_COLOR` value forces colour on, and with no signal at all colour stays on.
 
 An **interrupted turn** (Esc) fires no Stop. `turn.complete` with `isAborted` schedules the same review from
-a timer. At once the user sees one summary row; the report and its usage box are held in memory and shown,
-oldest first, ahead of the next main-thread Stop's own display (janitor turns included; a subagent's Stop never flushes them), and dropped at
-SessionStart. The report is injected into the next prompt, and the next Stop blocks if a BLOCK was not addressed.
+a timer. When that review ends the user sees ONE row. It is the turn that was interrupted, not the review, and the
+row says what the review did, with the verdict before the cost:
+
+- `review-mod: review of the interrupted turn finished: PASS · cost … · report and usage box after the next completed reply`:
+  the review ran to its end and found no blocker.
+- `review-mod: review of the interrupted turn finished: BLOCK (the agent gets the findings with the next prompt) · cost … · …`:
+  the review ran to its end and found blockers.
+- `review-mod: REVIEW DEFERRED, the review of the interrupted turn did not finish (reason in the row above) · cost … · usage box after the next completed reply`:
+  the review made model calls and produced no report; the work is reviewed at the next stop.
+
+The report and its usage box are held in session state (`$.state`, key `heldInterrupted`) and shown, oldest first,
+each under the heading `interrupted turn HH:MM`, ahead of the next main-thread Stop's own display (janitor turns
+included; a subagent's Stop never flushes them). The mod no longer drops them at a compaction between the review
+and that Stop (0.7.12), and by the mods documentation the session state outlasts a compaction and a reload of the
+mod. `/clear`, `/resume` and `/branch` do drop them: they leave the conversation the box belongs to and, by the
+mods documentation, the engine resets the session state there. One row then says how many
+went: `review-mod: N held interrupted-turn report(s) dropped, not shown: /clear left the conversation they belonged to …`.
+When a box could not be held, the row says `NOT held for the next reply (<reason>)` instead of promising it. The
+report is injected into the next prompt, and the next Stop blocks if a BLOCK was not addressed.
 
 ## Subagents (0.6.0)
 
@@ -86,6 +102,14 @@ and (d) alone bounds it to 2 reviews.
   stop and is retried at the next stop, up to the round cap. Past the cap nothing is dropped: the unreviewed
   work is kept as a debt and the NEXT stop must review it (even if that turn changed nothing), logged as
   `REVIEW DEFERRED`. The same holds for an interrupted turn whose review could not run.
+- The held report and usage box of an interrupted turn are shown only by a later main-thread Stop of the same
+  conversation. `/clear`, `/resume` and `/branch` drop them: by the mods documentation the engine resets the session
+  state there (the copy for the model, `pendingReview`, goes with the same reset), and the mod empties the value
+  itself. The row that says so is counted in a module variable, so it is not printed when the mod was reloaded
+  between the review and the command. A session that ends before its next Stop never shows the box. A review still
+  running when one of those commands is given holds its box in the conversation that follows. As of 0.7.12 all of
+  this rests on the test of the mod and on the mods documentation: no live session has yet run an Esc, a compaction
+  and a Stop, or a `/clear` with a box held.
 - The review fork has no tools: it judges what the conversation and the diff show it.
 - Cost: one fork per changing turn, three for a proposal, each re-reading the whole conversation from the
   prompt cache (at a 400k context, about 40k input-equivalent tokens per fork) plus its answer.
@@ -110,3 +134,23 @@ and (d) alone bounds it to 2 reviews.
 ```bash
 claude plugin install agentlenspro-review-mod@emasoft-plugins
 ```
+
+## Changes
+
+### 0.7.12
+
+- **The report and usage box of a reviewed interrupted turn are no longer dropped by the mod at a compaction**
+  (TRDD-ISEF8YO7). They were kept in a module variable that every `classic.SessionStart` emptied, and that event
+  also fires after a compaction, so a box held before a compaction was dropped and no later Stop showed it (the new
+  test fails on 0.7.11 for this reason). A live case of 2026-11-17 fits this; its cause is not established, because
+  a reload of the mod at the compaction would have emptied the variable too. They are now session state (`$.state`,
+  key `heldInterrupted`), which by the mods documentation a compaction and a reload of the mod leave in place.
+  `/clear`, `/resume` and `/branch` drop them, and one row says how many went. This is shown by the test of the
+  mod, not yet by a live session.
+- **The row of an interrupted turn says what the review did** (TRDD-M62ZBT7E). The old row,
+  `review-mod: interrupted review $… · box after next reply`, read as a review that was itself interrupted. It is
+  the TURN that was interrupted. The row now reads `review of the interrupted turn finished: PASS` or `… BLOCK`
+  when the review ran to its end, with the verdict before the cost, and `REVIEW DEFERRED, the review of the
+  interrupted turn did not finish` when it made model calls and produced no report. "After the next completed
+  reply" means the display of the next main-thread Stop.
+- New test `tests/held-interrupted.test.ts` (run with `claude plugin test`).

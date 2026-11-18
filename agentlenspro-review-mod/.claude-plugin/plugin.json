@@ -1,6 +1,6 @@
 {
   "name": "agentlenspro-review-mod",
-  "version": "0.7.11",
+  "version": "0.7.12",
   "description": "The harness runs the adversarial REVIEW (and, for a proposal, the MEASUREMENT) of every main turn via $.model.fork and of every typed subagent turn via $.model.complete, blocks on findings, and injects every report into the parent model's next prompt; interrupted turns are reviewed too. Janitor turns, internal agents and agent-message turns that changed nothing are exempt. The model spawns nothing. Usage is shown to the user only; the coloured copy of each report is printed by a Stop/SubagentStop command hook (needs python3). Needs the agentlenspro CLI with work/proposal in review-gate --json-verdict.",
   "types": "./types/index.d.ts",
   "userConfig": {
