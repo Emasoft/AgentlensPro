@@ -1,10 +1,10 @@
 ---
 trdd-id: C6W0SWUT
 title: Rust DuckDB readers were not examined for paths with pattern characters
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T11:52:27+0100
-updated: 2026-11-18T19:57:21+0100
+updated: 2026-11-18T19:57:48+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-18T11:52:27+0100
+implementation-commits: [290f0bc8, 02f6a0ca]
 ---
 
 # Rust DuckDB readers were not examined for paths with pattern characters
@@ -44,3 +45,4 @@ Opened 2026-11-18 by the main agent from TRDD-CXNUWXX7. Measured there (DuckDB v
 ## Approval log
 
 - 2026-11-18T11:52:27+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T19:57:48+0100 — COMPLETE by main-agent@agentlenspro. all three acceptance boxes ticked with evidence; fix in 290f0bc8 and 02f6a0ca.
