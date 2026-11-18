@@ -91,7 +91,7 @@ agentlenspro list --desc                  # discover tools
 agentlenspro help <tool>                  # flags from the live schema
 agentlenspro <tool> --param value --out FILE   # full JSON to disk, digest to stdout
 agentlenspro --install-otel               # wire Claude Code telemetry (verified transaction)
-agentlenspro --install-hooks              # wire lifecycle capture + burn-gate + image cache-guard
+agentlenspro --install-hooks              # wire lifecycle capture + burn-gate + image cache-guard (each entry version-stamped)
 agentlenspro --install-skill              # (re)install every shipped skill into ~/.claude/skills/
 agentlenspro --hooks                      # show/flip the runtime switches (instant, no restart)
 ```

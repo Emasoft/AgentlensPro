@@ -196,7 +196,9 @@ operations:
                         transaction; migrates every previous-generation registration
                         (spy-agentlens*.sh paths, agentlenspro-hook/-gate PATH bins) and
                         removes dead claude-spyglass entries + env.SPYGLASS_DIR. Other tools'
-                        hooks on the same events are never touched. Idempotent.
+                        hooks on the same events are never touched. Idempotent. Each
+                        command is registered as '<command> --stamp <version>'; setup and
+                        the launch repair keep a newer stamp in place, this verb overwrites it.
   --uninstall-hooks     remove exactly those agentlens hook entries — every generation
                         (nothing else)
   --install-otel        add the Claude Code telemetry env vars to ~/.claude/settings.json via a
