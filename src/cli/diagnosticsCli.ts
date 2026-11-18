@@ -92,12 +92,12 @@ usage:
   agentlenspro disk-monitor install|uninstall|status
                                               two launchd jobs (macOS): a resident disk-sample --volumes-only --resident (kept alive) and --walks-only
                                               every 300 s, even with no Claude session. Opt-in: setup prints the command, never installs it
-  agentlenspro search <pattern> --session ID [--role R] [--type T] [--regex] [--limit N] [--json]
-                                              search one session's transcript .jsonl (tool outputs,
-                                              agent responses, prompts) with DuckDB's streaming NDJSON
-                                              reader — fast on 60MB+ transcripts, works with the
-                                              server down. --session takes an exact id or a unique
-                                              >=6-char prefix; matches on stdout, coverage on stderr
+  agentlenspro search <pattern> [--project DIR] [--session ID] [--kind K] [--since T] [--regex|--mask|--word|--fuzzy] [--count] [--limit N] [--json]
+                                              search every transcript of this project (main and sub-agent,
+                                              every session) with DuckDB, off disk, with the server down.
+                                              --project DIR searches another project; --session narrows to
+                                              one session; --show SESSION:LINE prints one entry. Matches on
+                                              stdout, coverage on stderr. All flags: agentlenspro search --help
   agentlenspro budget --minutes N [--watch [SEC]] [--with-risks] [--window 5h|7d|binding]
                                               will the rate-limit window OUTLAST a timed run? Preflight
                                               once, or --watch the whole batch: the minutes still to go

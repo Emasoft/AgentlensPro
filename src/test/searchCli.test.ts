@@ -7,10 +7,10 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
-  searchTranscript, searchTranscripts, discoverTranscripts, parseTimeArg, runSearchCli, openDuck, TranscriptFile,
+  searchTranscript, searchTranscripts, discoverTranscripts, parseTimeArg, runSearchCli, openDuck, showEntry, TranscriptFile,
   SearchScopeError, SearchHit, SearchOptions, ScopeOptions, ELEMENT_KINDS, SEARCH_USAGE, KNOWN,
 } from '../cli/searchCli'
-import { UsageError } from '../cli/cliErrors'
+import { EXIT, UsageError } from '../cli/cliErrors'
 import { projectSlugOf } from '../projectSlug'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-search-'))
@@ -1155,6 +1155,93 @@ suite("searchCli — --show and --context (TRDD-O3U0K4HY)", () => {
     } finally {
       con.closeSync()
       inst.closeSync()
+    }
+  })
+})
+
+// ── a transcript path that DuckDB would read as a file pattern (TRDD-E3Y37BU8) and a transcript gone at scan time (TRDD-IHCB2GWA) ──
+const globRoot = path.join(tmpDir, 'glob')
+const marker = (dir: string): string => `NEEDLE in ${dir}`
+/** One transcript at <globRoot>/<dir>/x.jsonl holding ONE line that names its own folder, so a read of another folder shows in the hit. */
+function globFile(dir: string): TranscriptFile {
+  const p = path.join(globRoot, dir, 'x.jsonl')
+  writeJsonl(p, [{ type: 'user', timestamp: '2026-08-18T10:00:00.000Z', message: { role: 'user', content: marker(dir) } }])
+  return { path: p, session: dir, agent: null, size: fs.statSync(p).size, mtimeMs: 0 }
+}
+
+suite('searchCli — pattern characters in a transcript path and a transcript that vanished (TRDD-E3Y37BU8, TRDD-IHCB2GWA)', () => {
+  // Each named folder sits beside a decoy that the unescaped path would also match as a file pattern (measured on DuckDB 1.5.4: star and question mark
+  // read both files, a bracket class reads only the decoy). A path holding a backslash is not expanded by DuckDB at all (measured, 12 of 12 reads with
+  // pattern characters in the same path), so the helper passes it as it is; back\slash holds no pattern character and must keep working.
+  const PAIRS: Array<[string, string]> = [
+    ['star*dir', 'starXdir'], ['q?dir', 'qZdir'], ['br[ac]ket', 'braket'], ['op[en', 'opxen'], ['cl]ose', 'clxose'], ['back\\slash', 'backXslash'],
+    ['a\\*b', 'a\\Xb'], ['b\\?c', 'b\\Xc'], ['x\\[yz]', 'x\\y'],
+  ]
+
+  for (const [named, decoy] of PAIRS) {
+    test(`a transcript in a folder named ${named} is read alone, in line mode, count mode, element mode and --show`, async function () {
+      this.timeout(60_000)
+      const f = globFile(named)
+      globFile(decoy)
+      const plain = globFile('plain')
+      for (const files of [[f], [f, plain]]) {
+        const label = `${files.length} file(s)`
+        const lineHits = await searchTranscripts(files, 'NEEDLE', { limit: 500 })
+        const expected = files.map(x => `${x.path}#1`).sort()
+        assert.deepStrictEqual(lineHits.hits.map(h => `${h.file}#${h.line}`).sort(), expected, `line mode, ${label}`)
+        assert.ok(lineHits.hits.find(h => h.file === f.path)?.excerpt.includes(JSON.stringify(marker(named)).slice(1, -1)), `line mode excerpt, ${label}`) // the raw line spells a backslash as two
+        assert.strictEqual(lineHits.total, files.length, `line mode total, ${label}`)
+        const counted = await searchTranscripts(files, 'NEEDLE', { mode: 'count' })
+        assert.deepStrictEqual(counted.counts.map(c => c.file).sort(), files.map(x => x.path).sort(), `count mode, ${label}`)
+        const elements = await searchTranscripts(files, 'NEEDLE', { kinds: ['prompt'], limit: 500 })
+        assert.deepStrictEqual(elements.hits.map(h => `${h.file}#${h.line}`).sort(), expected, `element mode, ${label}`)
+        assert.ok(elements.hits.find(h => h.file === f.path)?.excerpt.includes(marker(named)), `element mode excerpt, ${label}`)
+      }
+      const shown = await showEntry(f, 1, 1000)
+      assert.ok(shown.elements.some(e => e.text.includes(marker(named))), '--show reads the named folder')
+    })
+  }
+
+  test('a transcript listed but gone at scan time fails the search with one message that names it and says to rerun', async function () {
+    this.timeout(60_000)
+    const live = globFile('plain')
+    const goneA = globFile('gone-a')
+    const goneB = globFile('gone-b')
+    fs.unlinkSync(goneA.path)
+    fs.unlinkSync(goneB.path)
+    const named = (e: unknown, gone: TranscriptFile[]): boolean =>
+      e instanceof SearchScopeError && gone.every(g => e.message.includes(g.path)) && !e.message.includes(live.path) && /rerun/.test(e.message)
+    for (const opts of [{}, { mode: 'count' as const }, { kinds: ['prompt'] }, { kinds: ['prompt'], mode: 'count' as const }]) {
+      const label = JSON.stringify(opts)
+      await assert.rejects(searchTranscripts([goneA], 'NEEDLE', opts), (e: unknown) => named(e, [goneA]), `one gone file ${label}`)
+      await assert.rejects(searchTranscripts([live, goneA], 'NEEDLE', opts), (e: unknown) => named(e, [goneA]), `one gone beside a live one ${label}`)
+      await assert.rejects(searchTranscripts([live, goneA, goneB], 'NEEDLE', opts), (e: unknown) => named(e, [goneA, goneB]), `two gone ${label}`)
+    }
+  })
+})
+
+suite('searchCli — out of memory (TRDD-V50CQS22)', () => {
+  suiteSetup(pointAtFixture)
+  suiteTeardown(restoreConfig)
+
+  test('a real DuckDB out-of-memory error ends the search with exit 2 and ONE line that names the limit, the variable that raises it and the flags that narrow', async function () {
+    this.timeout(60_000)
+    // Real, not mocked: the JSON reader allocates a 128 MiB buffer per scan, so a 16 MB limit fails on the smallest fixture (measured 2026-11-18).
+    const saved = process.env['AGENTLENS_DUCKDB_MEMORY_LIMIT']
+    process.env['AGENTLENS_DUCKDB_MEMORY_LIMIT'] = '16MB'
+    try {
+      const r = await runCli(['NEEDLE', '--project', PROJECT])
+      assert.strictEqual(r.code, EXIT.UNKNOWN)
+      assert.strictEqual(r.out, '', 'no match output')
+      const message = r.err.trimEnd()
+      assert.ok(!message.includes('\n'), `one line, got: ${message}`)
+      assert.ok(message.includes('Out of Memory Error'), 'names the DuckDB error')
+      assert.ok(message.includes('16MB'), 'names the limit in force')
+      assert.ok(message.includes('AGENTLENS_DUCKDB_MEMORY_LIMIT'), 'names the variable that raises it')
+      for (const flag of ['--since', '--session', '--kind']) assert.ok(message.includes(flag), `names ${flag}`)
+    } finally {
+      if (saved === undefined) delete process.env['AGENTLENS_DUCKDB_MEMORY_LIMIT']
+      else process.env['AGENTLENS_DUCKDB_MEMORY_LIMIT'] = saved
     }
   })
 })

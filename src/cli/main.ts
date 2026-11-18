@@ -42,7 +42,7 @@ import { runCacheExpiredCli } from './cacheExpiredCli'
 import { runCacheStateCli } from './cacheStateCli'
 import { runLastCompactCli } from './lastCompactCli'
 import { runModelHeadroomCli } from './modelHeadroomCli'
-import { runSearchCli } from './searchCli'
+import { runSearchCli, SEARCH_USAGE } from './searchCli'
 import { runHookContextCostCli } from './hookContextCostCli'
 import { runDiskSampleCli } from './diskSample'
 import { runDiskCli, runDiskWatchCli } from './diskCli'
@@ -229,6 +229,13 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
   // help, and only because that help genuinely lives in the server's live schema; a down or slow
   // server falls back to USAGE via the client's own connect deadline.
   if (argv.some(a => a === '--help' || a === '-h')) {
+    // WHY: the help of the search verb itself was unreachable from the command line (found 2026-11-18). 'search' is a management verb, so this branch
+    // answered every `search --help` with the global USAGE and runSearchCli never saw the flag; its own SEARCH_USAGE (every search flag) was dead text.
+    // Static text only, like every management verb here: no socket, no launch check, no search.
+    if (cmd === 'search') {
+      console.log(SEARCH_USAGE)
+      return 0
+    }
     if (cmd && !cmd.startsWith('-') && !MANAGEMENT_VERBS.has(cmd)) {
       try {
         await runDiagnosticsCli(['help', cmd])
@@ -251,6 +258,11 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
   // short-circuits: an unrecognized name must keep falling through to the diagnostics lookup and
   // fail loudly, or a typo would be answered with usage and a success code — which is worse than
   // the dead-end it replaced, because nothing tells the user the name was wrong.
+  // `help search` is `search --help`: the same static text (see the branch above), found 2026-11-18.
+  if (cmd === 'help' && argv[1] === 'search') {
+    console.log(SEARCH_USAGE)
+    return 0
+  }
   if (cmd === 'help' && argv[1] !== undefined && MANAGEMENT_VERBS.has(argv[1])) {
     console.log(USAGE)
     return 0

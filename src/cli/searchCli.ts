@@ -175,6 +175,31 @@ function sq(s: string): string {
   return `'${s.replace(/'/g, "''")}'`
 }
 
+/** A transcript path as a DuckDB string literal that names exactly that file (TRDD-E3Y37BU8). read_ndjson_objects expands * ? and [ in a path as a file
+ *  pattern: a folder named star*dir read the files of starXdir too, and br[ac]ket read only the file under braket, with no error (measured 2026-11-17 and
+ *  2026-11-18, DuckDB 1.5.4, reports_dev/sonnet-worker/20261118_search-fixes/). A backslash as an escape does NOT work (no files found). A bracket class
+ *  does: [*] [?] [[] each match the character itself, and a lone ] is already literal. But a path holding a backslash is not expanded at all (12 of 12 reads,
+ *  pattern characters in the same path included; measured on macOS only, where a backslash is an ordinary file-name character; on Windows it is a separator and
+ *  this was not measured), and a bracket class in it is misread, so it is passed as it is. */
+function sqPath(p: string): string {
+  return sq(p.includes("\\") ? p : p.replace(/[*?[]/g, "[$&]"))
+}
+
+/** The DuckDB memory limit in force: the env var, else 2GB. One source for the connection and for the out-of-memory message. */
+function duckMemoryLimit(): string {
+  return process.env["AGENTLENS_DUCKDB_MEMORY_LIMIT"]?.trim() || "2GB"
+}
+
+/** TRDD-IHCB2GWA: a transcript listed and stat-ed, then deleted before its scan ran, makes read_ndjson_objects fail with IO Error: No files found that match
+ *  the pattern (measured, also for one gone file among live ones). Return a SearchScopeError naming the gone files and saying to rerun; fail, never drop a file
+ *  silently or retry, so the totals that are printed are always those of every listed transcript. Any other error, or one with no gone file, comes back as it was. */
+function vanishedOr(e: unknown, files: TranscriptFile[]): unknown {
+  if (!(e instanceof Error) || !e.message.startsWith("IO Error: No files found that match the pattern")) return e
+  const gone = files.filter(f => !fs.existsSync(f.path))
+  if (gone.length === 0) return e
+  return new SearchScopeError(`${gone.length} transcript(s) vanished while the search ran: ${gone.map(f => f.path).join(", ")} — rerun the search`)
+}
+
 // ── match modes (TRDD-O3U0K4HY) ──────────────────────────────────────────────────────────────────
 
 /** How a pattern is matched against a column. ONE object per search, used by stage 1, by stage 2 and by the raw-line prefilter, so the stages
@@ -554,7 +579,7 @@ async function assignLines(con: DuckDBConnection, shown: Array<{ hit: SearchHit;
       `SELECT rn, h, excerpt FROM (
          SELECT rn, md5(raw) AS h, ${excerptExpr} AS excerpt FROM (
            SELECT row_number() OVER () AS rn, CAST(json AS VARCHAR) AS raw
-           FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true))
+           FROM read_ndjson_objects(${sqPath(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true))
          WHERE ${matchExpr})
        WHERE h IN (${wanted.map(sq).join(",")}) ORDER BY rn`,
     )).getRowObjects()
@@ -577,7 +602,7 @@ async function assignLines(con: DuckDBConnection, shown: Array<{ hit: SearchHit;
 export async function openDuck(): Promise<{ inst: DuckDBInstance; con: DuckDBConnection }> {
   const { DuckDBInstance } = await import("@duckdb/node-api")
   const inst = await DuckDBInstance.create(":memory:", {
-    memory_limit: process.env["AGENTLENS_DUCKDB_MEMORY_LIMIT"]?.trim() || "2GB",
+    memory_limit: duckMemoryLimit(),
     // Starts at ONE thread; each stage-1 scan group sets its own count (SET threads). The JSON reader holds
     // ~2 x maximum_object_size of buffer per thread: on this project (3 GB), scanning ALL files at once with
     // the 256 MB cap hit the 2GB no-spill limit in 4 of 10 runs with 2 threads and in 0 of 10 with 1 (whole
@@ -848,7 +873,7 @@ interface ElementQuery extends ElementFields {
 }
 
 const readNdjson = (group: TranscriptFile[], maxObjectSize: number): string =>
-  `read_ndjson_objects([${group.map(f => sq(f.path)).join(",")}], filename=true, maximum_object_size=${maxObjectSize}, ignore_errors=true)`
+  `read_ndjson_objects([${group.map(f => sqPath(f.path)).join(",")}], filename=true, maximum_object_size=${maxObjectSize}, ignore_errors=true)`
 
 /** First scan (only when needed): (filename, tool_use id, name, flags) of the calls that a filter or --kind subagent refers to. */
 function callsStage(group: TranscriptFile[], maxObjectSize: number, create: boolean, q: ElementQuery): string {
@@ -941,7 +966,7 @@ async function assignElementLines(con: DuckDBConnection, shown: ShownElement[], 
   const byFile = new Map<string, ShownElement[]>()
   for (const s of shown) byFile.set(s.hit.file, [...(byFile.get(s.hit.file) ?? []), s])
   for (const [file, items] of byFile) {
-    const source = `SELECT row_number() OVER () AS rn, json AS obj, CAST(json AS VARCHAR) AS raw FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`
+    const source = `SELECT row_number() OVER () AS rn, json AS obj, CAST(json AS VARCHAR) AS raw FROM read_ndjson_objects(${sqPath(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`
     const hashes = [...new Set(items.map(i => i.h))].map(sq).join(",")
     const lines = new Map<string, number[]>()
     const excerpts = new Map<string, { excerpt: string; tool: string | null }>()
@@ -987,7 +1012,7 @@ async function toolNames(con: DuckDBConnection, file: string, ids: string[]): Pr
   const rows = (await con.runAndReadAll(
     `SELECT ${jstr("b", "$.id")} AS id, ${jstr("b", "$.name")} AS name FROM (
        SELECT UNNEST(from_json(${jraw("json", "$.message.content")}, ${sq(JSON_LIST)})) AS b
-       FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)
+       FROM read_ndjson_objects(${sqPath(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)
        WHERE ${jstr("json", "$.type")} = ${sq("assistant")} AND json_type(json, ${sq("$.message.content")}) = ${sq("ARRAY")})
      WHERE ${jstr("b", "$.id")} IN (${[...new Set(ids)].map(sq).join(",")})`,
   )).getRowObjects()
@@ -1018,7 +1043,7 @@ async function readEntries(con: DuckDBConnection, file: string, lines: number[],
   // The two settings of every stage-2 pass: row_number() numbers the scan order, so the order must be preserved and the scan single-threaded.
   await con.run("SET preserve_insertion_order = true")
   await con.run("SET threads = 1")
-  const source = `SELECT row_number() OVER () AS rn, json AS obj, CAST(json AS VARCHAR) AS raw FROM read_ndjson_objects(${sq(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`
+  const source = `SELECT row_number() OVER () AS rn, json AS obj, CAST(json AS VARCHAR) AS raw FROM read_ndjson_objects(${sqPath(file)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`
   const rows = (await con.runAndReadAll(
     `WITH w AS (SELECT rn, obj, raw, ${ENTRY_COLUMNS} FROM (SELECT rn, obj, raw FROM (${source}) WHERE rn IN (${lines.join(",")})))
      SELECT w.rn, w.ts, w.type, w.role, (w.obj IS NULL) AS bad, substr(w.raw, 1, ${maxChars}) AS rawtext, length(w.raw) AS rawchars,
@@ -1105,7 +1130,7 @@ export async function showEntry(file: TranscriptFile, line: number, maxChars: nu
   try {
     const entry = (await readEntries(con, file.path, [line], maxChars)).get(line)
     if (entry === undefined) {
-      const total = Number((await con.runAndReadAll(`SELECT count(*) AS n FROM read_ndjson_objects(${sq(file.path)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`)).getRowObjects()[0].n)
+      const total = Number((await con.runAndReadAll(`SELECT count(*) AS n FROM read_ndjson_objects(${sqPath(file.path)}, maximum_object_size=${MAX_OBJECT_SIZE}, ignore_errors=true)`)).getRowObjects()[0].n)
       throw new SearchScopeError(`line ${line} does not exist: ${file.path} has ${total} line(s)`)
     }
     if (entry.bad) throw new SearchScopeError(`line ${line} of ${file.path} is not valid JSON (the reader skips it)`)
@@ -1233,6 +1258,8 @@ async function searchElements(files: TranscriptFile[], pattern: string, opts: Se
     }
     if (opts.context !== undefined) linesMs += await addContext(con, hits, opts.context, width)
     return { hits, total, counts: [], timing: { scanMs, linesMs }, skipped }
+  } catch (e) {
+    throw vanishedOr(e, files)
   } finally {
     con.closeSync()
     inst.closeSync()
@@ -1339,7 +1366,7 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
     ${create ? 'CREATE TEMP TABLE hits AS' : 'INSERT INTO hits'}
     WITH src AS (
       SELECT filename, ${single ? 'row_number() OVER ()' : 'NULL::BIGINT'} AS line, json AS obj, CAST(json AS VARCHAR) AS raw
-      FROM read_ndjson_objects([${group.map(f => sq(f.path)).join(',')}], filename=true, maximum_object_size=${maxObjectSize}, ignore_errors=true)
+      FROM read_ndjson_objects([${group.map(f => sqPath(f.path)).join(',')}], filename=true, maximum_object_size=${maxObjectSize}, ignore_errors=true)
     ), m AS (
       SELECT filename, line, obj, raw,
              json_extract_string(obj, '$.timestamp') AS ts,
@@ -1416,6 +1443,8 @@ export async function searchTranscripts(files: TranscriptFile[], pattern: string
     }
     if (opts.context !== undefined) linesMs += await addContext(con, hits, opts.context, width)
     return { hits, total, counts: [], timing: { scanMs, linesMs }, skipped }
+  } catch (e) {
+    throw vanishedOr(e, files)
   } finally {
     con.closeSync()
     inst.closeSync()
@@ -1602,24 +1631,41 @@ export async function runSearchCli(argv: string[]): Promise<number> {
   const countMode = has('--count')
   const filesMode = has('--files')
   const t0 = Date.now()
-  const { hits, total, counts, timing, skipped } = await searchTranscripts(files, pattern, {
-    ...matchOpts,
-    role: flagValue(argv, '--role'),
-    type: flagValue(argv, '--type'),
-    limit,
-    width,
-    since,
-    until,
-    branch: flagValue(argv, '--branch'),
-    cwd: flagValue(argv, '--cwd'),
-    worktree: flagValue(argv, '--worktree'),
-    model: flagValue(argv, '--model'),
-    includeRequests: has('--include-requests'),
-    includeAttachments: has('--include-attachments'),
-    order: orderRaw,
-    mode: countMode || filesMode ? 'count' : 'hits',
-    ...elementOpts,
-  })
+  let result: SearchResult
+  try {
+    result = await searchTranscripts(files, pattern, {
+      ...matchOpts,
+      role: flagValue(argv, '--role'),
+      type: flagValue(argv, '--type'),
+      limit,
+      width,
+      since,
+      until,
+      branch: flagValue(argv, '--branch'),
+      cwd: flagValue(argv, '--cwd'),
+      worktree: flagValue(argv, '--worktree'),
+      model: flagValue(argv, '--model'),
+      includeRequests: has('--include-requests'),
+      includeAttachments: has('--include-attachments'),
+      order: orderRaw,
+      mode: countMode || filesMode ? 'count' : 'hits',
+      ...elementOpts,
+    })
+  } catch (e) {
+    // A transcript that vanished during the run (TRDD-IHCB2GWA): one message naming it, exit non-zero.
+    if (e instanceof SearchScopeError) {
+      writeErr(e.message)
+      return EXIT.UNKNOWN
+    }
+    // TRDD-V50CQS22: DuckDB's own text advises SET threads / SET memory_limit, which nobody running this command can issue; say what this command offers.
+    // No retry: a retry at a higher limit would hide the need and the machine's memory is the user's to spend.
+    if (e instanceof Error && e.message.startsWith('Out of Memory Error')) {
+      writeErr(`search ran out of memory at the DuckDB memory limit ${duckMemoryLimit()} (${e.message.split("\n")[0]}) — raise the limit with AGENTLENS_DUCKDB_MEMORY_LIMIT (for example 4GB), or narrow the search with --since, --session or --kind`)
+      return EXIT.UNKNOWN
+    }
+    throw e
+  }
+  const { hits, total, counts, timing, skipped } = result
   // WHAT was searched + coverage → stderr; matches alone → stdout (pipe-safe split).
   const mb = (files.reduce((n, f) => n + f.size, 0) / 1048576).toFixed(1)
   const shown = countMode || filesMode ? `${counts.length} transcript(s) match` : `showing ${hits.length}`
