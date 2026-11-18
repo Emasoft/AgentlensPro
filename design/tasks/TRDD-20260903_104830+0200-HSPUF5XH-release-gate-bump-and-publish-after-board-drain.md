@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-18T12:12:02+0100
+updated: 2026-11-18T12:35:23+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -273,6 +273,7 @@ FROM TRDD-RTHA7EWK item 5 (commit 69caf856, 2026-11-18), owed in the publish pas
 - 2026-11-18 ADDED after the review of W23 (main agent): (1) GATE BEFORE THE FIRST SERVER START on the new alcore: run alcore serve on an isolated data dir (own HOME, free ports, never 4318, --no-log-scan --no-collection) with a write-ahead file of 20,481 rows and one later row holding a new key, and read that key through the status-line reader; until then the live file is NOT tested for the reader fix of TRDD-ZKNP5IJY (alcore has only the commands serve and statusline-seal, so the reader runs only under serve). (2) Signing changed the size from 56,292,560 B to 55,965,424 B (about 327 KB less); cause not read, the signed file passed codesign -v and two smokes. (3) Provenance has no build record beyond the output file: the build started after commit 15e5a1b8 on a clean rust-core tree, by the reports of W22.
 - 2026-11-18 CORRECTION kept here because TRDD-ZKNP5IJY is archived and cannot change: its close reason says each fix has a test that failed before and passed after. For the TypeScript half the red and green runs were taken with the reader edit and the two seal edits applied together, so the seal test is not shown to fail on the seal change alone (the Evidence notes of that card say the same).
 - 2026-11-18 RULE for the next swap of a live binary (main agent, after a review): copy the live file to a backup folder first, and the worker prompt pre-decides that the backup is copied back when the smoke of the staged file fails. The swap of 11:41 had no such branch; its three smokes passed.
+VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version changes, run node scripts/stamp-surfaces.js --write and commit the 14 stamped surfaces, or pnpm run check-stamps fails (it runs in compile and package once step A2 lands).
 
 ## Notes and lessons learned
 
