@@ -4,7 +4,7 @@ title: agentlenspro setup never installs the status line capture
 column: backburner
 status: tasked
 created: 2026-11-18T21:16:01+0100
-updated: 2026-11-18T21:16:01+0100
+updated: 2026-11-18T23:45:37+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -12,7 +12,7 @@ min-approval-requirement: none
 assignee: main-agent@agentlenspro
 mandate: true
 mandated-by: none
-approved: true
+approved: false
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-18T21:16:01+0100
 ---
@@ -24,3 +24,4 @@ Found 2026-11-18 while planning TRDD-YL3EWT6N item 8 (facts: reports_dev/sonnet-
 ## Approval log
 
 - 2026-11-18T21:16:01+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T23:55+0100 — approved set to false by main-agent@agentlenspro: the card asks the OWNER a decision (should the full setup install the status line); the trddgrep defaults had marked it approved. Owner answer pending.

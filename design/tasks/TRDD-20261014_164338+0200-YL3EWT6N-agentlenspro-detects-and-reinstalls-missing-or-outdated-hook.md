@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-18T23:43:21+0100
+updated: 2026-11-18T23:45:36+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -179,3 +179,4 @@ Fact checked 2026-11-18: git log -S 'agentlenspro statusline' -- src/cli/hookIns
 8a tests, red first: the stamped install form for both keys; parse of every old and new form (bare, --subagent, --inner, --subagent --inner, each with and without --stamp); statusline-history is not ours; an unstamped entry of ours with an inner command holding a single quote is rewritten with the inner text byte-identical; older, newer, current and unparseable verdicts; parseStatuslineArgs on the argv of a stamped wrapped command gives the same inner text and subagent flag. Existing pins in src/test/statuslineCapture.test.ts (for example :267, subagentStatusLine.command equal to the bare constant) change to the stamped form.
 2026-11-18 decision (c) scope for item 8, same as item 5B: setup and the launch repair (repairOnly) never downgrade a newer status line stamp, they keep it with one notice; the explicit --install-statusline verb overwrites a newer stamp and logs one line naming the replaced stamp, as --install-hooks does (hookInstall.ts:443-445).
 2026-11-18 8a known narrowing: parseOurStatusline reads only one space before --inner (the form installStatusline has written since 9b116510); a hand-edited entry with a tab there is unparseable, so the explicit verb refuses it naming the key and the launch repair skips it, where the old unwrap restored it (f481d41b hookInstall.ts:597-604: indexOf of '--inner ' after a plain prefix test). Accepted: fail-fast with a named refusal instead of a guess.
+2026-11-18 8b LIVE EFFECT, to go in the release notes: after the next bundle build, the first qualifying launch on a machine whose status line was installed by an earlier version (unstamped, as both keys are in the live settings.json, measure claim 6) rewrites statusLine and subagentStatusLine once through safeConfigEdit, inner command byte-identical, with a settings.json.agentlens-bak backup. 8b decisions after the review: an unparseable entry of ours is SKIP with a fix-by-hand detail in the setup step, not FAIL, because runSetup is fail-fast and a FAIL would stop the skill, old-package and server steps over an entry the user owns; when no status line of ours is present setup says 'no agentlenspro status line capture installed' and names TRDD-FBLI5FNQ.
