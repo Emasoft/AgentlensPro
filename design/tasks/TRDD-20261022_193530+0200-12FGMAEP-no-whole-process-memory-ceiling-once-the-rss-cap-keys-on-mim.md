@@ -4,7 +4,7 @@ title: No whole-process memory ceiling once the RSS cap keys on mimalloc commit
 column: todo
 status: tasked
 created: 2026-10-22T19:35:30+0200
-updated: 2026-11-18T02:25:57+0100
+updated: 2026-11-18T06:20:42+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -38,3 +38,8 @@ The production-cap run says deploy is BLOCKED, not merely thin: the heap reached
 ## Decision 2026-11-18
 
 - Owner, 2026-11-18, asked whether to publish without the backstop or to hold the publish (verbatim): «1. no idea what are you talking about. probably i forgot. decide yourself. solve the matter yourself if necessary.» Decision (main agent): the ceiling is implemented and tested before the publish tag. The unblock condition «owner backstop value or waiver» is met by this delegation; the value and the code steps are still to be written here after the main agent has read rss_guard.rs (map by a worker: reports_dev/12FGMAEP/20261118_015500+0100-memory-guard-map-v3.md, not yet verified against the source).
+
+## Facts 2026-11-18
+
+- 2026-11-18T06:20:41+0100 Guard coverage, read by the main agent: the 5 s flush tick that calls prune_window (the one production caller of rss_guard::check_and_enforce) is spawned in chores::spawn_all (chores.rs 1617-1629), which bin/alcore.rs calls at line 578, after the after_core_open mark (line 400) and after the synchronous restore and boot sweep (lines 466-477). No memory cap is checked during the store open or the boot sweep. The bins of agentlens-core are alcore.rs and alsummarize.rs; only alcore.rs references rss_guard.
+- 2026-11-18T06:20:41+0100 Footprint numbers on record. Run live-n2 of TRDD-735Q3JF4 (collection and log scan off): after open, commit 1051.3 MB and footprint 1551.0 MB (500 MB apart); at the breach, commit 2334 MB and footprint 2350 MB (16 MB apart; a floor for that run, not a bound). docs_dev/20261023-prodcap-run-report.md line 34: phys_footprint 2100 MB idle, peak 3132 MB, in a run with log scan off and bodies parked. hw.memsize of this Mac: 68719476736.
