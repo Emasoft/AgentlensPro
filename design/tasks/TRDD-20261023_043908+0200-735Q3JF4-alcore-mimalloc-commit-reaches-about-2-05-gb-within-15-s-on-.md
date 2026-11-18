@@ -4,7 +4,7 @@ title: alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and
 column: dev
 status: tasked
 created: 2026-10-23T04:39:08+0200
-updated: 2026-11-04T04:13:46+0100
+updated: 2026-11-18T05:06:15+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -186,3 +186,7 @@ Order of runs, after the same-binary log-scan-off control (STATE NEXT ACTION): o
 (d) A warm boot with a large backlog (20k-50k changed files) is unmeasured; it is the first place to look if a slow boot is reported.
 (e) Cold first boot (empty file_state): flushes counts one ingest call per 2,000 discovered files, the last partial slice included, so it is ceil(files / 2,000); it is not the warm mid-sweep save count, and the 200-file batch size does not apply to it.
 (f) The card stays open: steady memory is about 1.16 GB against a target of about 800 MB.
+
+## Live run 2026-11-18
+
+- 2026-11-18 04:50 to 04:55, the live data dir, alcore sha256 65e2ceca... started by a hook in no-collection mode (TRDD-RBBEX59R, CURRENT 05:06): boot 264.57 s (log scan files=70274 changed=19847 parsed=19517); first_summary_build at up=268.98 with mi_commit 1903.9 MB; pressure stages 1, 2 and 3 within 10 s (metric 1997602816, 2040987648, 2741895168 B), the window cut to 6 h; exit on the 2048 MB cap at uptime 279543 ms with mimalloc commit 2614 MB, process RSS 3225 MB, phys_footprint 1715 MB, card store rows 110619, resident spans 0. So with collection off and 0 resident spans the Rust heap still passes the cap: the cards and the first summary build are the load, not telemetry. rss-hard-cap.log holds 2115 exits. The server is held down by the revive brake (~/.agentlens/NO_REVIVE) since 04:58:05. TRDD-RBBEX59R is blocked by this card for its guards-answer acceptance.
