@@ -10,13 +10,19 @@
 //! the volume's size.
 //!
 //! THE DELETE GATE (TRDD-K3WDPR7M, USER directive 2026-07-15): a volume is deleted ONLY after
-//! EVERY one of its lumps is proven in the durable store — exact bytes AND the (src_name,
-//! capture-ts) row, through agentlens-store's verify gate (the same facts the TS per-file
+//! EVERY one of its lumps is proven in the durable store — exact bytes AND a row under its
+//! src_name, through agentlens-store's verify gate (the same facts the TS per-file
 //! verifyBodyInStore proves; the bulk shape is the measured KB17X5G2 throughput fix, chunked
-//! byte-bounded so a multi-GB volume never sits decompressed in RAM at once). Failure REASON
-//! text follows the Rust store's wording where the engines differ (ms timestamps instead of the
-//! TS per-file ISO strings) — the status and shape are the contract, diagnostic text is not,
-//! the same rule the /api/import parse-error path already applies.
+//! byte-bounded so a multi-GB volume never sits decompressed in RAM at once). ONE RELAXATION
+//! of the capture-ts half (TRDD-7NHUU6GK, 2026-11-18): a lump whose bytes are proven and whose
+//! row exists, but whose stored capture ts differs from the archive's (Claude Code re-emitted
+//! the same name and bytes at a new mtime), counts as proven for the purge. Before this, one
+//! such lump kept its volume on disk forever. The original capture time is not lost: the
+//! `.idx` sidecar is never deleted. A lump with unproven bytes or with no row still keeps the
+//! volume (`VolumeVerifyResult::purgeable`). Failure REASON text follows the Rust store's
+//! wording where the engines differ (ms timestamps instead of the TS per-file ISO strings) —
+//! the status and shape are the contract, diagnostic text is not, the same rule the
+//! /api/import parse-error path already applies.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -196,6 +202,20 @@ pub struct VolumeVerifyResult {
     pub entries: u64,
     pub verified: u64,
     pub failed: Vec<String>,
+    /// How many entries of `failed` are the ts-only failure (`agentlens_store::is_ts_only_failure`): bytes and row
+    /// proven, only the stored capture ts differs. Informational; `ok`, `verified` and `failed` are unchanged by it.
+    pub ts_only: u64,
+}
+
+impl VolumeVerifyResult {
+    /// Whether the purge may delete the volume: every lump proven (`ok`), or every lump either proven or failing
+    /// ONLY on the ts-only check, so each one has its bytes proven bit-exact and a store row under its name
+    /// (TRDD-7NHUU6GK). `failed.len() == ts_only` rules out any other failure; `verified + ts_only == entries`
+    /// rules out a lump that is missing from both counts (e.g. an unreadable lump, which is in `failed` and not in `ts_only`).
+    pub fn purgeable(&self) -> bool {
+        // `ts_only > 0` is defensive: an empty or unindexed volume already has a failed message, so it never reaches here with 0.
+        self.ok || (self.ts_only > 0 && self.failed.len() as u64 == self.ts_only && self.verified + self.ts_only == self.entries)
+    }
 }
 
 const VERIFY_CHUNK_BYTES: usize = 128 * 1024 * 1024;
@@ -203,7 +223,7 @@ const VERIFY_CHUNK_BYTES: usize = 128 * 1024 * 1024;
 pub fn verify_volume_in_store(store: &agentlens_store::Store, dir: &Path, volume_name: &str) -> VolumeVerifyResult {
     let volume_path = dir.join(volume_name);
     let entries: Vec<ArchiveEntry> = list_archive_entries(dir).into_iter().filter(|e| e.volume == volume_path).collect();
-    let mut res = VolumeVerifyResult { ok: false, entries: entries.len() as u64, verified: 0, failed: Vec::new() };
+    let mut res = VolumeVerifyResult { ok: false, entries: entries.len() as u64, verified: 0, failed: Vec::new(), ts_only: 0 };
     if entries.is_empty() {
         let bytes = std::fs::metadata(&volume_path).map(|m| m.len()).unwrap_or(0);
         res.failed.push(if bytes > 0 {
@@ -227,7 +247,14 @@ pub fn verify_volume_in_store(store: &agentlens_store::Store, dir: &Path, volume
                 for it in chunk.iter() {
                     match map.get(&it.src_name) {
                         Some(v) if v.ok => res.verified += 1,
-                        Some(v) => res.failed.push(v.reason.clone().unwrap_or_else(|| it.src_name.clone())),
+                        Some(v) => {
+                            // Only a reason the store itself wrote is tested: the fallback text pushed below is the
+                            // lump name, which comes from the archive, and must never be read as a verdict.
+                            if v.reason.as_deref().is_some_and(agentlens_store::is_ts_only_failure) {
+                                res.ts_only += 1;
+                            }
+                            res.failed.push(v.reason.clone().unwrap_or_else(|| it.src_name.clone()));
+                        }
                         None => res.failed.push(format!("{}: verify returned no verdict", it.src_name)),
                     }
                 }
@@ -329,7 +356,8 @@ pub fn bodies_export(data_dir: &Path, body: &[u8]) -> (u16, Value) {
 }
 
 /// POST /api/bodies/purge — destruction is EARNED, never assumed: each volume is deleted ONLY
-/// after every lump is proven in the store; a volume that fails stays on disk with its
+/// after every lump is proven in the store (bytes bit-exact AND a row under its name; a row whose capture ts only
+/// MOVED counts as proven, TRDD-7NHUU6GK, since the kept `.idx` holds the original capture time); a volume that fails stays on disk with its
 /// failures named (first 5 sampled). The `.idx` sidecars are ALWAYS kept.
 pub fn bodies_purge(data_dir: &Path) -> (u16, Value) {
     // The delete gate must prove each lump from DURABLE parquet only (TRDD-2HRA270Y step 3, A1).
@@ -370,7 +398,17 @@ pub fn bodies_purge(data_dir: &Path) -> (u16, Value) {
     let mut freed_bytes = 0u64;
     for v in names {
         let proof = verify_volume_in_store(&store, &arch, &v);
-        if !proof.ok {
+        // WHY (TRDD-7NHUU6GK): a volume whose only failures are ts-only (the lump bytes are proven bit-exact and the store
+        // holds a row for the name; Claude Code re-emitted the same name at a new mtime) is deleted, because the
+        // `.idx` sidecar below is never deleted and still carries the ORIGINAL capture time of every lump. Without
+        // this a re-emitted body kept its volume on disk forever. Any byte-unproven lump keeps the volume.
+        if !proof.purgeable() {
+            let unproven = proof.failed.len() as u64 - proof.ts_only;
+            println!(
+                "{} alcore: bodies archive purge: kept {v}: {unproven} lump(s) with unproven bytes, {} lump(s) with only a moved ts row",
+                crate::log_ts(),
+                proof.ts_only
+            );
             let mut k = Map::new();
             k.insert("volume".into(), Value::from(v));
             k.insert("verified".into(), Value::from(proof.verified));
@@ -383,7 +421,15 @@ pub fn bodies_purge(data_dir: &Path) -> (u16, Value) {
         if let Ok(m) = std::fs::metadata(&p) {
             if std::fs::remove_file(&p).is_ok() {
                 freed_bytes += m.len();
-                removed.push(Value::from(v));
+                removed.push(Value::from(v.clone()));
+                if !proof.ok {
+                    println!(
+                        "{} alcore: bodies archive purge: removed {}: {} lump(s) proven by bytes whose capture-ts row moved",
+                        crate::log_ts(),
+                        v,
+                        proof.ts_only
+                    );
+                }
             } // raced — as in TS, silently not-removed
         }
     }

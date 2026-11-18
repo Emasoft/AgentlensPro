@@ -1449,6 +1449,20 @@ pub struct VerifyResult {
     pub reason: Option<String>,
 }
 
+/// True when a failed verdict's reason is the ts-only failure: `stored ts != capture time`. Why that text
+/// PROVES bytes and row: `verify_bodies_in_store_cached` runs the sha256-reconstruction check and the
+/// row-existence check (keyed on body_id AND src_name) strictly BEFORE the ts check, each with its own
+/// `continue` on failure. So this reason can only be produced when the store reproduces the file bit-exact
+/// AND already holds a row for the same src_name, i.e. a re-emission of that name at a fresh mtime
+/// (TRDD-6SPXOV0P option A, TRDD-7NHUU6GK). Keep the text here in lockstep with that format string.
+pub fn is_ts_only_failure(reason: &str) -> bool {
+    // Anchored on the TAIL, not a substring: every other reason embeds the lump name, which comes from the archive's
+    // own .idx, and every other reason ends in fixed text, so only the real format ends in `stored ts <int> != capture time <int>`.
+    let Some((head, want)) = reason.rsplit_once(" != capture time ") else { return false };
+    let Some((_, stored)) = head.rsplit_once(" stored ts ") else { return false };
+    want.parse::<i64>().is_ok() && stored.parse::<i64>().is_ok()
+}
+
 pub struct VerifyItem {
     pub src_name: String,
     pub raw: String,
@@ -1793,5 +1807,24 @@ mod index_part_bodies_spill_tests {
         assert_eq!(rows, (FILES * BODIES) as i64);
         // belt-and-braces, index_part_bodies already returns Err on any NULL file_id.
         assert_eq!(orphans, 0);
+    }
+
+    /// The REAL reason `verify_bodies_in_store_cached` emits for a moved ts is recognised, and a lump name that embeds the phrase on another failure is not.
+    #[test]
+    fn the_real_ts_reason_is_recognised_and_a_crafted_name_is_not() {
+        let dir = std::env::temp_dir().join(format!("al-store-tsonly-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut store = open_store(&dir, "256MB", crate::cores::duckdb_threads()).expect("open");
+        let raw = "{\"model\":\"claude-opus-5\",\"messages\":[{\"role\":\"user\",\"content\":\"ts-only\"}]}";
+        ingest_body(&mut store, "aaaa0000.request.json", raw, 1_000_000).expect("ingest");
+        flush_detailed(&mut store).expect("flush");
+        let items = [VerifyItem { src_name: "aaaa0000.request.json".into(), raw: raw.into(), ts_ms: Some(1_000_000 + 60_000) }];
+        let map = verify_bodies_in_store(&store, &items).expect("verify");
+        let reason = map["aaaa0000.request.json"].reason.clone().expect("a ts failure has a reason");
+        assert_eq!(reason, "aaaa0000.request.json: stored ts 1000000 != capture time 1060000");
+        assert!(is_ts_only_failure(&reason));
+        assert!(!is_ts_only_failure("x stored ts 1 != capture time 2: no body row for this src_name (content may exist under another name)"));
+        assert!(!is_ts_only_failure("x: reconstruction != source bytes"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }
