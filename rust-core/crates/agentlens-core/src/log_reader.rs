@@ -1383,7 +1383,8 @@ impl DurableState {
                 // TRDD-YR6WX7VQ (review of eef01b1d): a card save that tombstones says so, with the counts. WHY: after
                 // the file pass the hashes in force are the FILE keys, so the catch-up save removes every key the card
                 // store lacks; the pass line prints only `keys` and `differs`, and without this line a mass removal
-                // would leave no trace in the log (TRDD-PGMMB2QG holds the open question of a ceiling).
+                // would leave no trace in the log (TRDD-PGMMB2QG: no ceiling was added; the reason is at the tombstone
+                // loop of `DeltaLog::save_from`).
                 if r.deleted > 0 {
                     eprintln!("{} {}", crate::log_ts(), card_save_tombstone_line(r.deleted, r.appended, r.compacted));
                     self.cards_tombstoned += r.deleted as u64;

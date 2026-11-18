@@ -861,6 +861,19 @@ impl DeltaLog {
             }
             count += 1;
         }
+        // TRDD-PGMMB2QG, decided 2026-11-18: NO ceiling on how many keys one save may tombstone. WHY: the caller's
+        // records are the truth by contract (a missing key is a deletion). A mass removal is INTENDED where a caller
+        // saves an empty map on purpose (log_reader.rs, TRDD-6B7VV2Z7: `self.offsets.save(&IndexMap::new())` in two
+        // places, `self.cards.save(&IndexMap::new())` in one). An /api/clear is ended by `finish_clear_after_save`,
+        // which rewrites the card log with `rewrite_from`; whether a timed `save_cards` can still run while a clear
+        // is pending was not established when this was written. Outside those cases the one known way to a mass
+        // removal is a card store that lost rows from outside this code before a reused start (a re-key of legacy
+        // keys is a second way by inference only). A ceiling would need a ratio, a refusal that leaves the log
+        // un-level with its source, and an exemption for the intended cases. What exists instead:
+        // `DurableState::save_cards` (log_reader.rs), the only non-test caller of `save_from` besides
+        // `DeltaLog::save`, prints the count and adds it to a counter (`card_save_tombstone_line`,
+        // `cards_tombstoned`). Do NOT assume the removed records stay readable in the snapshot file: this same call
+        // compacts when the tombstone lines push the delta past both thresholds of `compaction_due`.
         let mut deleted = 0usize;
         // `zip` stops at `seen`'s end, so only the original keys are candidates.
         for ((k, _), _) in self.written.iter().zip(&seen).filter(|(_, s)| !**s) {
