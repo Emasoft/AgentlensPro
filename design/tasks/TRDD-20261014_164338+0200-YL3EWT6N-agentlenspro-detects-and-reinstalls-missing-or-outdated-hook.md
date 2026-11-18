@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-19T00:18:52+0100
+updated: 2026-11-19T00:40:24+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-14T16:43:38+0200
-implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a, 765c44f2, 403b1137, ae4979be, 6a31062d, f6504dee, 42017224, 8a21c478, e08db829, 7a279550, 875aca58, 7eb0074a, b00b5bd5, 5d5dd76b, 410a7211, a41a6c55, 6d8a2047]
+implementation-commits: [ab5b1274, 87440d7e, d73b20cc, a065129a, 1069f1c8, 857cc34a, 765c44f2, 403b1137, ae4979be, 6a31062d, f6504dee, 42017224, 8a21c478, e08db829, 7a279550, 875aca58, 7eb0074a, b00b5bd5, 5d5dd76b, 410a7211, a41a6c55, 6d8a2047, e2c9b0f3]
 relevant-rules: [1]
 ---
 
@@ -74,6 +74,7 @@ NOT decided, left for the owner: whether agentlenspro ships the review part of ~
 2026-11-19T00:01+0100 — CURRENT, read with the 20:20 and 20:30 entries: item 8 LANDED in code, 8a a41a6c55 and 8b 6d8a2047 (details: Item 8 plan). Not deployed: no bundle built since; that the first qualifying launch rewrites both status line keys once is INFERRED. implementation-commits now also lists 7a279550, 875aca58, 7eb0074a, b00b5bd5, 5d5dd76b, 410a7211 (found by git log --grep, missing from the field). Still OPEN: item 10 (needs its own proposal), the CHANGELOG.md:25 parenthesis, the item 4 docs, the Dockerfile repair, the batch refusal contract card, the 2026-11-18 incident, the post-deploy jq check (hooks 17 stamped and 0 bare, plus both status line keys stamped), and the rest of the 20:30 list. NEXT: item 10 proposal, then the docs owed before the publish.
 2026-11-19T00:17+0100 — correction to the 00:01 entry and to commit d68fe671: seven commits were missing from implementation-commits (7a279550, 875aca58, 7eb0074a, b00b5bd5, 5d5dd76b, 410a7211, a41a6c55), not eight and not six; 6d8a2047 was added as new. Item 10 spec: section Item 10 plan (2026-11-19, after the harness review).
 2026-11-19T00:18+0100 — docs landed in bcc2e9ed: the CHANGELOG.md:25 clause removed (and the backup name corrected to -<time>-<pid>), the item 8 CHANGELOG bullet, a README paragraph on the version-stamp self-heal covering skills, agents, hooks and status line (the item 4 docs), and the status line step in operations.md. Item 10 is in dev with a sonnet-worker (spec: Item 10 plan section). Still OPEN: item 10, the Dockerfile repair, the batch refusal contract card, the 2026-11-18 incident, the post-deploy jq check, and the rest of the 20:30 list.
+2026-11-19T00:40+0100 — item 10 LANDED in code, e2c9b0f3: `alcore version` plus the post-verb restart of an out-of-date server (src/cli/versionRestart.ts). Checked by the main agent in this run: versionRestart.test 53, autoSetup.test 128, cliUsageContract.test 5 passing; check-types and eslint clean; cargo version_subcommand 2 passed; every path to stop() traced (versionRestart.ts 253-373) through the live pid, the NO_REVIVE brake, the binary stat, the memo, the lock and the data-dir ownership verdict. NOT verified: the restart against a live server and a rebuilt, codesigned alcore (waits on HSPUF5XH); no bundle built. Owed before the publish: the item 10 CHANGELOG bullet. Still OPEN: the Dockerfile repair, the batch refusal contract card, the 2026-11-18 incident, the post-deploy jq check, and the rest of the 20:30 list.
 
 ## Owner orders 2026-11-18
 
