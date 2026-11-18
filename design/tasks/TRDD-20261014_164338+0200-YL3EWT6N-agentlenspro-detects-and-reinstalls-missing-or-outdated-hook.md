@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-18T20:01:46+0100
+updated: 2026-11-18T20:23:26+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -55,7 +55,7 @@ Owner question (2026-10-14, measured): `batch` with a refusing member exits 2 wi
 Correction to 6a31062d's commit message: launch notices print AFTER the output only for a successful single tool call; on a parse/usage error thrown before the call (exit 64) or a thrown FAIL, cliMain's finally prints them BEFORE the error text that standalone/cli.ts prints.
 NOT PLANNED, proposal only. Follow-up (review of 42017224): with the read-only hot-path verbs excluded from the self-heal, an agent loop that only ever runs cache-expired, cache-state or last-compact on a fresh machine is never set up and answers 'cannot answer' forever. Consider naming `agentlenspro setup` in that answer when nothing is installed.
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-14
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-18
 
 2026-10-14 16:50: item 1 landed (ab5b1274), item 2 in dev, item 3 next. Items 4-6 need the owner's answers to decisions (a)-(d) — do NOT start them; the frontmatter's approved/mandate covers items 1-3 only. Evidence files under docs_dev/ are gitignored local scratch: the decisive facts are restated in this card's Plan.
 2026-10-14 17:35: items 1-3 landed (ab5b1274, 87440d7e + d73b20cc, a065129a); follow-up 3b (run the server-start check concurrently with the start, plus a cliMain wiring test) in dev. Items 4-6 still wait for the owner's decisions (a)-(d).
@@ -69,6 +69,7 @@ NOT PLANNED, proposal only. Follow-up (review of 42017224): with the read-only h
 (d) Running from a git checkout: the checkout's own files are what gets installed, and the known-hash check of item 4 applies to release builds only. Reason: a developer's edited skill has no release hash by definition.
 Batch question: a batch with a refusing member must leave ONE JSON object on stderr that lists each member's error; its stdout keeps the results of the members that succeeded. Reason: several objects back to back cannot be parsed as one document. This is new work and needs its own card.
 NOT decided, left for the owner: whether agentlenspro ships the review part of ~/.claude/rules/turn-protocol-and-review.md as a versioned rule. That file is written by the owner and holds much that is not about agentlenspro, so installing over it is the owner's call.
+2026-11-18 20:20 — CURRENT, supersedes the lines above (including their 'do NOT start items 4-6'). Source: the coordinator's read of reports_dev/cheap-worker/20261118_w53-card-status/report.md, a worker's row-by-row reading of this card. Landed: items 1, 2, 3 (with 3b, 3c), 5, 7, 9 and 11; item 4 code landed (its run through the linked CLI is not observed; its docs are owed before the publish); item 5B, the hook command stamp, committed 5d5dd76b and shipped in the 19:19 and 19:58 bundles. Live settings.json still holds 17 bare entries; setup --dry-run detects the stamp drift, and that the first qualifying launch rewrites them is INFERRED (Item 5 part B result). Item 6: decision (c) is never downgrade; anything beyond keep-newer-and-warn is not covered. OPEN: item 8 (status line stamp and repair step), item 10 (restart the live server when the binary on disk differs from the running version), a mixed-matcher test in src/test/hookStamp.test.ts, the parenthesis at CHANGELOG.md:25, the item 4 docs, the Dockerfile repair, the batch refusal contract (needs its own card), and the 2026-11-18 incident (four agent files overwritten, their prior content not recovered). NEXT: items 8 and 10, each as its own proposal, then the docs owed before the publish.
 
 ## Owner orders 2026-11-18
 
