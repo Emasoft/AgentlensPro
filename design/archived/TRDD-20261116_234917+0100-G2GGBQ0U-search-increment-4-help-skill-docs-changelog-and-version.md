@@ -1,10 +1,10 @@
 ---
 trdd-id: G2GGBQ0U
 title: search - increment 4 help skill docs changelog and version
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-11-16T23:49:17+0100
-updated: 2026-11-17T13:00:38+0100
+updated: 2026-11-18T09:13:28+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -35,7 +35,7 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 - [x] `agentlenspro search --help` shows every flag that exists and no flag that does not (a test compares the usage text with the KNOWN set).
 - [x] Skill, CLAUDE.md and CHANGELOG updated; `pnpm run check-identities` clean. (2026-11-17: the words 'and version' were taken out of this box by the main agent; the version bump belongs to TRDD-HSPUF5XH by the owner order recorded there, and is not done.)
 - [x] `pnpm run compile` exit 0.
-- [ ] After `node esbuild.js`, the bare command `agentlenspro search <pattern>` run in this project returns hits (which install the bare command resolves to is checked first).
+- [x] After `node esbuild.js`, the bare command `agentlenspro search <pattern>` run in this project returns hits (which install the bare command resolves to is checked first).
 
 ## Approval log
 
@@ -43,6 +43,7 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 - 2026-11-17T11:58:57+0100 — column → todo by main-agent@agentlenspro. increments 1 to 3 and the three follow-ups are landed; dispatched
 - 2026-11-17T11:58:59+0100 — column → dev by main-agent@agentlenspro. increments 1 to 3 and the three follow-ups are landed; dispatched
 - 2026-11-17T12:30:20+0100 — column → human_review by main-agent@agentlenspro. Three of four boxes met and committed in 8590184d; the last box needs the owner to lift the kill switch before the bare command can be run
+- 2026-11-18T09:13:28+0100 — COMPLETE by main-agent@agentlenspro. all four boxes ticked; the bare command returns hits from the bundle built from this tree.
 
 ## Notes
 
@@ -50,6 +51,7 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 - 2026-11-17 01:14 — DECIDED (main agent, in the owner's stead): search joins READ_ONLY_VERBS in src/cli/foreignTelemetry.ts (line 41). FACTS: search reads transcript files off disk, needs no server and writes nothing (src/cli/searchCli.ts, read whole); today it is refused while the kill switch is on (gate at foreignTelemetry.ts line 89), and the switch has been on since 2026-10-27, so no agent on this machine can use it. Owner directive of 2026-10-29 quoted in that file: a read must never be blocked by the off-switch brake. To do in this card: add the verb, a test that search passes the gate while DISABLED, then node esbuild.js and one end-to-end run of the bundle (never done so far). Also carried here from TRDD-UIQS9RXZ: a memory limit below 2GB with 4 threads is unmeasured.
 - 2026-11-17 01:18 — CORRECTION: the line above is a PROPOSAL FOR THE OWNER, not a decision. Every verb now in READ_ONLY_VERBS is there by a recorded owner decision, and the kill switch is the owner's. READ, all consumers (grep over src and standalone/cli.ts): foreignTelemetry.ts line 89 (the DISABLED gate) and autoSetup.ts line 55 (AUTOSETUP_EXCLUDED_VERBS, read by maybeAutoSetup at line 192), so adding search would do two things: let it run while disabled, and stop it from running the launch self-heal (it would never write settings, hooks or skills, nor start a server). main.ts lines 104 and 148 and the disk files only mention the set in comments (comments read through grep, the code around main.ts 104 and 148 not read). Nothing is built until the owner says yes.
 - 2026-11-17 01:20 — CORRECTION of 'every verb in READ_ONLY_VERBS is there by a recorded owner decision'. READ in the doc comment at foreignTelemetry.ts lines 28 to 40: only the four disk verbs are named as owner decisions (2026-11-16); cache-expired is there by a card fix (TRDD-CS2W7E77); for cache-state, last-compact, model-headroom and statusline-history that comment names no decision. READ in src/cli/main.ts: lines 100 to 109 are a table of time ceilings for polled verbs (cache-expired, cache-state, last-compact at 1,500 ms), and its comment says a test (autoSetup.test.ts) requires every key of that table to be in AUTOSETUP_EXCLUDED_VERBS; lines 144 to 152 are a table of reasons for verbs that carry no ceiling. The requirement runs from the ceiling table to the excluded set, not back, so adding search to the set needs no ceiling by that comment; whether search needs a line in the reasons table was not checked (the test file was not read). The proposal for the owner stands as a proposal.
+2026-11-18 main agent, BOX 4: the bare command resolves to /opt/homebrew/bin/agentlenspro, an npm link to this repository, so it runs standalone/cli.js built by node esbuild.js on 2026-11-18 04:50. Run in the project root at 08:59:43: agentlenspro search sealfail- --count exited 0 and printed five rows of hits (31, 24, 10, 9 and 7 entries in the main transcript and four subagent transcripts of session 2cae0ae7). Output: reports_dev/main-agent/20261118-search-bare-count.out. The earlier proposal to add search to READ_ONLY_VERBS is moot: the kill switch refuses no verb since TRDD-RBBEX59R step d. Closed by the main agent under the owner order to decide the remaining matters; the version bump stays with TRDD-HSPUF5XH.
 
 ## Notes and lessons learned
 
@@ -65,3 +67,4 @@ Increment 4 of 4 of the owner's 2026-11-16 search request (quoted in full on TRD
 - 2026-11-17 12:44+0100, main agent. SUPERSEDES 'Box 2 stays OPEN' in the line above: box 2 is now ticked, after the words 'and version' were removed from its text (the bump is TRDD-HSPUF5XH's, not done). Column moved to human_review: the one open box (4, the bare command returns hits) needs the owner to lift the kill switch. implementation-commits: 8590184d.
 - 2026-11-17 12:52+0100 (clock read), main agent. CORRECTION: the times '12:40' and '12:44' on the two lines above were written without reading the clock; both lines were written between 12:28 and 12:32. Also: the report that CLAUDE.md cites (reports/search/20261117_120240+0100-project-wide-search.md, 50 lines) was read whole by the main agent at about 12:45; its figures agree with the cards and with the --fuzzy cost sentence of the help text.
 - 2026-11-17 13:00+0100 (clock read), main agent. The 'about 12:45' on the line above is an estimate, not a clock reading.
+2026-11-18: box 4 ticked and the card closed; the note of the same date under Notes holds the run. Nothing is waiting on the owner for this card.
