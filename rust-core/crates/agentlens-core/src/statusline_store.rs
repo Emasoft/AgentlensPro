@@ -5,6 +5,13 @@
 //!
 //!   <root>/<stream>/YYYY-MM-DD/part-<epochMs>-<pid>-<seq>.parquet   sealed, immutable
 //!   <root>/<stream>/YYYY-MM-DD/wal-<pid>.ndjson                     active, un-sealed
+//!   <root>/<stream>/YYYY-MM-DD/wal-cli.ndjson                       appended by the status-line hook when no server took the sample
+//!   <root>/<stream>/YYYY-MM-DD/wal-cli.rot-<pid>-<base36><seq>.ndjson   wal-cli.ndjson renamed by a sealer, then sealed
+//!   <root>/.seal.lock                                               flock: one sealer per store, in any process
+//!   <root>/.seal-kick                                               time of the last sealer start by the hook
+//!
+//! TRDD-VS1FCUMU: `alcore statusline-seal --data-dir DIR` runs `maybe_seal` with no server (no port,
+//! no pidfile, no purge); the 60 s chore of the server runs the same function.
 //!
 //! Every layout choice is the TS module's measured one (parquet+zstd over zstd-NDJSON, flat
 //! dotted keys, no row packing, no UUID typing, large SEAL_ROWS) — the header there carries the

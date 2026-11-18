@@ -10,6 +10,9 @@
 //
 //   <root>/<stream>/YYYY-MM-DD/part-<epochMs>-<pid>-<seq>.parquet   sealed, immutable
 //   <root>/<stream>/YYYY-MM-DD/wal-<pid>.ndjson                     active, un-sealed
+//   <root>/<stream>/YYYY-MM-DD/wal-cli.ndjson                       appended by the status-line hook when no server took the sample
+//   <root>/<stream>/YYYY-MM-DD/wal-cli.rot-<pid>-<base36><seq>.ndjson   the same file renamed by the Rust sealer, then sealed
+//   (TRDD-VS1FCUMU: src/cli/statuslineCapture.ts appends; `alcore statusline-seal` and the server chore seal.)
 //
 // * PARQUET+ZSTD, not zstd-NDJSON. Measured over 40k real-but-perturbed samples: parquet wins at
 //   every realistic chunk size (10k rows: 823 KB vs 933 KB; 40k: 3197 KB vs 3724 KB) AND answers a
