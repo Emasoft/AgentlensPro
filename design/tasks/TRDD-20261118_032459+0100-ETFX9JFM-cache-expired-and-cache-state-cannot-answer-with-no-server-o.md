@@ -23,7 +23,7 @@ approval-datetime: 2026-11-18T03:24:59+0100
 
 Found while closing TRDD-VS1FCUMU (2026-11-18). Both verbs read the newest status-line sample through authoritativeFromWals (src/cli/cacheExpiredCli.ts 128-181 on feat/rbbex59r-c2), which reads only the wal-*.ndjson files of the two newest day directories and no parquet part; for a sample that is only in a part the verbs ask the server.
 
-RUN by the main agent 2026-11-18 03:18 on an isolated store with no server (raw output reports_dev/VS1FCUMU/cacheverbs-raw/, files 6 to 9): one sample in wal-cli.ndjson: cache-expired printed false and cache-state printed warm, exit 0. After alcore statusline-seal turned that file into a part: cache-expired exit 2 (cannot reach the server), cache-state exit 2 (no status-line sample with a prompt_cache block), while statusline-history sessions still listed the session.
+RUN by the main agent 2026-11-18 (the seal output file was written 03:19:42) on an isolated store with no server (raw output reports_dev/VS1FCUMU/cacheverbs-raw/, files 6 to 9): one sample in wal-cli.ndjson: cache-expired printed false and cache-state printed warm, exit 0. After alcore statusline-seal turned that file into a part: cache-expired exit 2 (cannot reach the server), cache-state exit 2 (no status-line sample with a prompt_cache block), while statusline-history sessions still listed the session.
 
 So with the server kept down, an IDLE session whose last sample has been sealed gets no answer, and an idle session is the case cache-expired exists for. Owner, 2026-11-18 (verbatim): «the agentlenspro cli must work just the same, only with less informations since the telemetry is missing or has holes».
 
