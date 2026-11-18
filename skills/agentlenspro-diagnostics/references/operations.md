@@ -94,10 +94,21 @@ process that sees it. The server runs in **no-collection mode** (answers, stores
 parks no skill: every verb runs while it is armed, and the burn-gate, the image cache-guard, the in-band advisor, the review
 gate, the review supervisor and the dashboard switches stay as they were. `disable` stops a running server (its mode is read
 only at boot) and the next hook revives it in no-collection mode; `server stop --stay-down` keeps it down. `disable` also turns
-raw-body capture off; `enable` clears the flag and restarts a server still in no-collection mode. It restarts nothing when no server answers,
-when the answering server belongs to another data dir (not ours to restart), when that server already collects, when this dir's server is in
-no-collection mode but the data dir resolved from the environment differs (the stop could hit another dir's server), when the NO_REVIVE
-brake is armed (honoured), or when `AGENTLENS_DISABLED=1` stays set in the environment (the verb cannot lift the env half).
+raw-body capture off; `enable` clears the flag and restarts a server still in no-collection mode. When a server answers, in three
+cases it restarts nothing, the server stays in no-collection mode, and `enable` prints the reason and exits 2:
+
+- The NO_REVIVE brake file (`NO_REVIVE` in the data dir, `~/.agentlens` by default) exists: `enable` honours it. Run
+  `agentlenspro server restart` (with `AGENTLENS_DISABLED` unset): it restarts the server in collection mode and deletes the
+  brake file itself once the start succeeds.
+- `AGENTLENS_DISABLED=1` stays set in the environment (the verb cannot lift the env half): unset it, then re-run
+  `agentlenspro enable`. With it set, `enable` exits 2 in every case, the exit-0 ones below included.
+- This dir's server is in no-collection mode but the data dir resolved from the environment differs from the enabled one (the
+  stop could hit another dir's server): re-run as `AGENTLENS_DATA_DIR=<enabled dir> agentlenspro enable`.
+
+It also restarts nothing, exit 0, when the answering server belongs to another data dir (not ours to restart) or already
+collects. When no server answers (exit 0, braked or not), nothing needs restarting: the next failed hook POST revives one in
+collection mode (the flag is gone), unless `AGENTLENS_NO_REVIVE=1` is set in the hook environment. If the NO_REVIVE brake file is
+armed, no hook revives one: `agentlenspro server start` lifts the brake and starts one, collecting.
 
 ⚠ **Neither is how you stop a burning workload.** The kill-switch stops the *measurement*, not the burn — the guards stay on, but
 the stored numbers you would diagnose the burn from stop exactly when they matter most. Reach for it only to take AgentlensPro's

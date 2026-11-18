@@ -4,7 +4,7 @@ title: RBBEX59R follow-ups after the deploy - false blame under load, operations
 column: todo
 status: tasked
 created: 2026-11-18T03:59:50+0100
-updated: 2026-11-18T05:30:06+0100
+updated: 2026-11-18T05:56:22+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -25,7 +25,7 @@ Four items moved here from the gate checklist of TRDD-RBBEX59R (its boxes 5 to 8
 ## Checklist
 
 - [ ] (from box 5) False blame under load: a skipped flush (the TimedOut arm of the 8 s budget) makes the Rust read-back and joint leg 9 fail as 'not stored' although the sample was accepted; add self.log_text() to the Rust assert message in rust-core/crates/agentlens-core/tests/no_collection_boot.rs and point the failure of leg 9 at server.log.
-- [ ] (from box 6) skills/agentlenspro-diagnostics/references/operations.md near line 97: say how to get collection back in the three cases where the server stays in no-collection mode after enable (NO_REVIVE: lift it, then agentlenspro server restart; AGENTLENS_DISABLED=1: unset it; the env-resolved data dir differs from the one enabled); follow through the 'no server answers' case (the next hook revives it in collection mode); '(honoured)' is vague; the first new line is about 146 characters against about 130 for its neighbours.
+- [x] (from box 6) skills/agentlenspro-diagnostics/references/operations.md near line 97: say how to get collection back in the three cases where the server stays in no-collection mode after enable (NO_REVIVE: lift it, then agentlenspro server restart; AGENTLENS_DISABLED=1: unset it; the env-resolved data dir differs from the one enabled); follow through the 'no server answers' case (the next hook revives it in collection mode); '(honoured)' is vague; the first new line is about 146 characters against about 130 for its neighbours.
 - [ ] (from box 7) Nits: the header comment of rust-core/crates/agentlens-core/tests/no_collection_boot.rs still describes a counter-only test; confirm Server Drop ignores kill and wait errors on an already-reaped child; a torn last ndjson line panics in unwrap instead of failing the assert; REVIVE_LOCK_TTL_MS is exported from src/cli/hookHandlers.ts only for a test; the A12 and server-down tests use a freePort() released before use (small bind race, accepted so far); these tests require alcore to exit within 60 s of SIGTERM (no_collection_boot.rs:83-85 fails the assert otherwise).
 - [ ] (from box 8) d3 wording: the foreign-lift clause under the env half (pinned in 761efb90 in src/test/autoSetup.test.ts) was on the d3 wording list and the d3 worker reports name no change to it; check the wording against the launch text and either change it or record why it stays.
 - [ ] (item 5, from TRDD-VS1FCUMU Known limits) A write-ahead file that the sealer refuses is retried with no bound and nobody is told: add a per-file failure marker with a backoff (the sealer skips the file while the marker is young), keep the error text that seal_one drops today (statusline_store.rs, the Err arm of run), give the hook-started sealer a log file in place of stdio ignore, and show refused files in agentlenspro doctor. A test must make a file unsealable and assert one attempt per backoff window.
@@ -35,3 +35,8 @@ Four items moved here from the gate checklist of TRDD-RBBEX59R (its boxes 5 to 8
 ## Approval log
 
 - 2026-11-18T03:59:50+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes 2026-11-18
+
+Item 2 DONE: operations.md lines 97-111 reworded by a worker; every claim checked by the main agent against src/cli/disableCli.ts (enableRestartPlan, restartIntoCollection, the envHalfArmed early return in runEnableCli), src/cli/serverControl.ts (restart: overrideBrake, then clearReviveBrake after a successful start; alcoreServeArgs adds --no-collection while the switch is armed) and src/cli/hookHandlers.ts (revive stops: a live pidfile owner, AGENTLENS_NO_REVIVE=1, the brake file). One error in the worker text found and fixed: with AGENTLENS_DISABLED=1 in the environment enable exits 2 in every case. Deviation accepted: the brief said lift the brake, then restart; the code shows server restart lifts it itself. check-no-identities rc 0. No test run (doc only).
+Item 3 decisions (main agent): the REVIVE_LOCK_TTL_MS export for a test stays (removing it changes the test seam for no behaviour gain); the freePort() bind race stays accepted; the 60 s SIGTERM exit requirement stays (the tests boot a data dir they create, no_collection_boot.rs:118-122). The header comment, Server Drop and the torn ndjson line are with a worker, together with item 1.
