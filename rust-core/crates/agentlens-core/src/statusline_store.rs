@@ -665,7 +665,8 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         // Test-only hold (tests/statusline_seal_cli.rs sets it; nothing else does): it widens the
         // gap between the verified read above and the delete below, so that test can place a
         // late append inside it. Unset or 0 = no wait.
-        let hold_ms = vars.get("AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS").and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
+        // Debug builds only: a release binary never waits here, whatever its environment holds.
+        let hold_ms = if cfg!(debug_assertions) { vars.get("AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS").and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0) } else { 0 };
         if hold_ms > 0 {
             std::thread::sleep(std::time::Duration::from_millis(hold_ms));
         }
@@ -676,7 +677,7 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         // apart: that needs a hook process stalled between its open and its write for longer
         // than the settle wait plus this whole seal, and landing in that exact gap.
         if std::fs::metadata(wal).map(|m| m.len()).ok() != len_at_start {
-            eprintln!("{} alcore: statusline seal: {} grew during the seal; kept for the next call", crate::log_ts(), wal.display());
+            eprintln!("{} alcore: statusline seal: {} changed length during the seal; kept for the next call", crate::log_ts(), wal.display());
             let _ = std::fs::remove_file(&out);
             return Ok(false);
         }
