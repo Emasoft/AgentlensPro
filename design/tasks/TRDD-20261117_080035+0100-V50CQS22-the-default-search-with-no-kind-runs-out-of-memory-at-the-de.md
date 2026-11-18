@@ -4,7 +4,7 @@ title: The default search with no kind runs out of memory at the default limit o
 column: dev
 status: tasked
 created: 2026-11-17T08:00:35+0100
-updated: 2026-11-18T11:02:52+0100
+updated: 2026-11-18T11:40:51+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -26,7 +26,7 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 
 ## Acceptance
 
-- [ ] The cause is shown by an experiment that changes one thing (for example the thread count of the line-mode scan groups), not inferred.
+- [x] The cause is shown by an experiment that changes one thing (for example the thread count of the line-mode scan groups), not inferred.
 - [x] The no-kind search passes 10 of 10 at 1.5GB on the frozen set in hits, count and files mode, literal and regex, with rc 137 counted apart.
 - [x] Its per-transcript counts equal those of the current build at 16GB (reference to take before the change).
 - [ ] A test or a documented measurement guards it; types, lint and the search test file pass.
@@ -56,6 +56,7 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 - 2026-11-17 15:39 ALL MATCHER BRANCHES RUN ON THE NULL ROWS (main agent; reports_dev/V50CQS22/20261117_153900+0100-matcher-branches-on-null-rows.txt; the 153800 file beside it is a failed run, kept): the test SQL was produced by buildMatcher of the compiled out/test/cli/searchCli.js (file time 12:21:33, later than the source file time 12:15:58) with rawLine=true, for 7 cases: literal, literal case-sensitive, regex, mask, word, fuzzy with a short word, fuzzy with a long and a short word. On the same 6-line scratch file, in every case the two NULL rows gave a NULL match and (obj IS NULL OR match) true; valid rows gave true or false. CORRECTION of the 15:25 line: what I ran then for the literal case was a LIKE of my own, not the product's literal test, which is strpos(lower(raw), lower(needle)) > 0; the product's own test is covered only by this run. Still NOT run: a file large enough for parallel reading, the element and change modes, and the installed global bundle.
 - 2026-11-18 10:25 to 10:31 +0100 (clock read), main agent, the REAL executable (linked bundle of 04:50, DISABLED armed, no server, default memory limit), one run each, host load 13 to 26: this project, plain default search, 3,383 transcripts 3,414 MB: rc 0, 5 matches, 16.9 s, peak resident 1,610 million bytes. The largest project on this machine (10,858 transcripts, 11,598 MB): count mode rc 0, 301,363 matches, 16.1 s, peak 1,844 million bytes; default hits mode rc 0, 301,374 matches, 35.3 s, peak 2,377 million bytes. So the command itself runs (open point c of 2026-11-17 is answered for these three runs) and the need does not grow in step with corpus size: 3.4 times the bytes gave 1.5 times the peak. Raw: reports_dev/main-agent/20261118-search-probe1.err, -probe2-reminzer.err, -probe3-reminzer-hits.err. Owner, 2026-11-18 (verbatim): «windows is not a priority now. i need the search option asap!».
 - 2026-11-18 main agent, CORRECTION of the note above: the sentence that the need does not grow in step with corpus size is withdrawn. The three runs used different patterns (5 matches against about 301,000), one run each, under host load 13 to 26, and this card records swings of about 300 million bytes between runs of one command. What stands: the three measured values, and that each run ended with rc 0 at the default limit. A related defect found the same day has its own card, TRDD-NRCIAFXS (search --help prints the global usage).
+- 2026-11-18 main agent, BOX 1 TICKED on this basis: the one thing changed is the form of the filter (commit 31c34fb8, 7 added and 2 removed lines: the match test and the scope filters as ONE WHERE instead of a CTE filter plus an outer filter). MEASURED BY ME, one run per cell: the builds before it fail with the out-of-memory error at 1.5GB, 2GB and 3GB (main17-nokind-matrix.txt, main18-nokind-modes.txt); the build with it passes at 1.5GB with equal per-transcript counts (main19-old-vs-new.txt). BY THE WORKER FILES, not rerun by me: the two-filter form fails at 1, 2, 3 and 4 threads, 3 runs each, so the thread count is not the cause. NOT SHOWN: the mechanism inside DuckDB (why two FILTER operators need more memory than one). STILL OPEN: box 4 (a test or documented measurement that guards it) and box 5 (memory need against corpus size; no retry, by the fail-fast decision of 2026-11-18). PLAN for both: one worker writes a read-only measurement script (nested subsets of the frozen file list, several memory limits, 3 runs each, peak resident size per run) and a tracked report under reports/search/; it starts when the host load is low, since this card records swings of about 300 million bytes between runs under load.
 
 ## Message part done 2026-11-18
 
