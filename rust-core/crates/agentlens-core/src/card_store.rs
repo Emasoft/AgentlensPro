@@ -1388,6 +1388,18 @@ fn open_conn(path: &Path, value: &str) -> agentlens_store::duckdb::Result<Connec
     Connection::open_with_flags(path, card_db_config(value)?)
 }
 
+/// TRDD-PGMMB2QG: the `clear_in_progress` flag of the card store under `store_dir`, read from the file.
+/// The store must be closed (two live stores over one file are two writers). The `log_reader` tests call
+/// it; it lives here, in the module that owns the file, so `log_reader.rs` opens no store itself
+/// (`scripts/check-duckdb-only.js` counts the files that open one). It returns the value, never a handle.
+#[cfg(test)]
+pub(crate) fn clear_flag_on_disk_for_test(store_dir: &Path) -> String {
+    Connection::open(store_dir.join(CARD_DB_FILE))
+        .unwrap()
+        .query_row("SELECT value FROM meta WHERE key = 'clear_in_progress'", [], |r| r.get(0))
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

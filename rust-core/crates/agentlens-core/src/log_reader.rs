@@ -2470,14 +2470,10 @@ mod sweeper_backstop_tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// TRDD-PGMMB2QG: the `clear_in_progress` flag of the card store under `store_dir`, read from the file.
-    /// The store must be closed (two live stores over one file are two writers).
-    fn clear_flag(store_dir: &std::path::Path) -> String {
-        agentlens_store::duckdb::Connection::open(store_dir.join(crate::card_store::CARD_DB_FILE))
-            .unwrap()
-            .query_row("SELECT value FROM meta WHERE key = 'clear_in_progress'", [], |r| r.get(0))
-            .unwrap()
-    }
+    // TRDD-PGMMB2QG: the `clear_in_progress` flag of the card store under a store directory, read from the
+    // file by `card_store`, which owns it. The store must be closed (two live stores over one file are two
+    // writers). This module opens no store itself (`scripts/check-duckdb-only.js` counts the files that do).
+    use crate::card_store::clear_flag_on_disk_for_test as clear_flag;
 
     /// TRDD-PGMMB2QG: a reused start over a card log holding `a`, `b` and `ghost` (a key only the card-log
     /// files hold: the store never had it), then an `/api/clear` and a rescan that puts back only `a`. Returns
