@@ -20,6 +20,12 @@
 //!    the log still records physical footprint (`proc_pid_rusage` `ri_phys_footprint`, what jetsam
 //!    charges) and RSS as evidence; RSS also counts resident-but-clean pages the OS reclaims free.
 //!    The breach label stays "RSS HARD CAP" so existing greps keep matching, although the decision is no longer RSS.
+//!
+//! TRDD-12FGMAEP: the commit cap does not charge memory outside mimalloc (DuckDB, the system malloc), so a
+//! runaway there would end in an OS kill with no log. `check_and_enforce` therefore also compares the macOS
+//! physical footprint with a footprint backstop (3 x the cap by default, at most half of the physical memory
+//! of the host when that is still above the cap; `AGENTLENS_FOOTPRINT_BACKSTOP_MB` overrides) and, above it,
+//! exits 1 with its own culprit log (label "FOOTPRINT BACKSTOP"). `describe_limits` prints both limits at boot.
 
 use std::io::Write;
 use std::path::Path;
@@ -522,12 +528,6 @@ pub fn write_diagnostic<W: std::io::Write>(
     mi: &MimallocInfo,
     s: &CulpritSnapshot,
 ) -> std::io::Result<()> {
-    fn opt(w: &mut impl std::io::Write, v: Option<impl std::fmt::Display>) -> std::io::Result<()> {
-        match v {
-            Some(x) => write!(w, "{x}"),
-            None => write!(w, "unavailable"),
-        }
-    }
     writeln!(
         w,
         "alcore: RSS HARD CAP — mimalloc commit {} MB > cap {} MB, exiting (evidence: {metric_name} {} MB)",
@@ -535,9 +535,32 @@ pub fn write_diagnostic<W: std::io::Write>(
         s.cap_bytes / 1024 / 1024,
         metric_bytes / 1024 / 1024,
     )?;
+    write_counter_lines(w, "RSS HARD CAP", metric_name, metric_bytes, mi, s)
+}
+
+/// Writes one optional counter, or "unavailable" when it is `None`.
+fn opt(w: &mut impl std::io::Write, v: Option<impl std::fmt::Display>) -> std::io::Result<()> {
+    match v {
+        Some(x) => write!(w, "{x}"),
+        None => write!(w, "unavailable"),
+    }
+}
+
+/// The counter lines of the culprit log, after its first (decision) line, each prefixed `alcore: {prefix} —`.
+/// Shared by the commit-cap diagnostic (prefix "RSS HARD CAP", output byte-identical to before) and the
+/// footprint-backstop diagnostic (prefix "FOOTPRINT BACKSTOP", TRDD-12FGMAEP) so both logs name the same
+/// culprit counters and cannot drift apart.
+fn write_counter_lines<W: std::io::Write>(
+    w: &mut W,
+    prefix: &str,
+    metric_name: &str,
+    metric_bytes: u64,
+    mi: &MimallocInfo,
+    s: &CulpritSnapshot,
+) -> std::io::Result<()> {
     writeln!(
         w,
-        "alcore: RSS HARD CAP — process RSS {} MB (macOS: whole-process resident; other OS: commit-derived), mimalloc commit {} MB (Rust allocator's committed pages), process peak {} MB, page faults {}",
+        "alcore: {prefix} — process RSS {} MB (macOS: whole-process resident; other OS: commit-derived), mimalloc commit {} MB (Rust allocator's committed pages), process peak {} MB, page faults {}",
         mi.current_rss_bytes / 1024 / 1024,
         mi.current_commit_bytes / 1024 / 1024,
         mi.peak_rss_bytes / 1024 / 1024,
@@ -549,29 +572,53 @@ pub fn write_diagnostic<W: std::io::Write>(
     let footprint_minus_commit = metric_bytes.saturating_sub(mi.current_commit_bytes) / 1024 / 1024;
     writeln!(
         w,
-        "alcore: RSS HARD CAP — non-mimalloc-dirty floor (= {metric_name} minus mimalloc commit; footprint-style metrics charge dirty+compressed, commit counts mimalloc committed incl. freed-undecommitted): {footprint_minus_commit} MB",
+        "alcore: {prefix} — non-mimalloc-dirty floor (= {metric_name} minus mimalloc commit; footprint-style metrics charge dirty+compressed, commit counts mimalloc committed incl. freed-undecommitted): {footprint_minus_commit} MB",
     )?;
-    write!(w, "alcore: RSS HARD CAP — resident spans: ")?;
+    write!(w, "alcore: {prefix} — resident spans: ")?;
     opt(w, s.resident_spans)?;
     writeln!(w)?;
-    write!(w, "alcore: RSS HARD CAP — summarization window: effective ")?;
+    write!(w, "alcore: {prefix} — summarization window: effective ")?;
     opt(w, s.window_effective_ms)?;
     write!(w, " ms / configured ")?;
     opt(w, s.window_configured_ms)?;
     writeln!(w, " ms")?;
-    write!(w, "alcore: RSS HARD CAP — card store rows: ")?;
+    write!(w, "alcore: {prefix} — card store rows: ")?;
     opt(w, s.card_count)?;
     writeln!(w)?;
-    write!(w, "alcore: RSS HARD CAP — span store: ")?;
+    write!(w, "alcore: {prefix} — span store: ")?;
     opt(w, s.span_store_segments)?;
     write!(w, " segments, ")?;
     opt(w, s.span_store_total_spans)?;
     write!(w, " spans, ")?;
     opt(w, s.span_store_total_bytes)?;
     writeln!(w, " bytes")?;
-    write!(w, "alcore: RSS HARD CAP — uptime: ")?;
+    write!(w, "alcore: {prefix} — uptime: ")?;
     opt(w, s.uptime_ms)?;
     writeln!(w, " ms")
+}
+
+/// The footprint-backstop diagnostic (TRDD-12FGMAEP): a first line that names the footprint, the backstop
+/// and how much of the footprint lies outside mimalloc, then the same counter lines as the commit-cap
+/// diagnostic with the prefix FOOTPRINT BACKSTOP. It exists because the commit cap does not charge memory
+/// outside mimalloc, so a runaway there would end in an OS kill with no log. Like `write_diagnostic` it
+/// writes straight into the sink and builds no intermediate String, because it runs on the exit path.
+fn write_footprint_diagnostic<W: std::io::Write>(
+    w: &mut W,
+    footprint_bytes: u64,
+    backstop_bytes: u64,
+    mi: &MimallocInfo,
+    s: &CulpritSnapshot,
+) -> std::io::Result<()> {
+    writeln!(
+        w,
+        "alcore: FOOTPRINT BACKSTOP — {FOOTPRINT_METRIC_NAME} {} MB > backstop {} MB, exiting (mimalloc commit {} MB is at or under the cap {} MB; outside mimalloc commit: {} MB)",
+        footprint_bytes / 1024 / 1024,
+        backstop_bytes / 1024 / 1024,
+        mi.current_commit_bytes / 1024 / 1024,
+        s.cap_bytes / 1024 / 1024,
+        footprint_bytes.saturating_sub(mi.current_commit_bytes) / 1024 / 1024,
+    )?;
+    write_counter_lines(w, "FOOTPRINT BACKSTOP", FOOTPRINT_METRIC_NAME, footprint_bytes, mi, s)
 }
 
 /// Test/reporting convenience — allocates, so ONLY for callers that already accept an
@@ -591,31 +638,72 @@ pub fn format_diagnostic(metric_name: &str, metric_bytes: u64, mi: &MimallocInfo
 /// write the file must not stop the exit (the process is over its memory cap either way), but it
 /// is reported on stderr so the omission itself is visible.
 fn write_log_file(log_path: &Path, metric_name: &str, metric_bytes: u64, mi: &MimallocInfo, s: &CulpritSnapshot) {
+    append_to_log_file(log_path, "RSS HARD CAP", |f| write_diagnostic(f, metric_name, metric_bytes, mi, s));
+}
+
+/// Append what `write` produces to the log file at `log_path`, then flush and fsync. Shared by the
+/// commit-cap log and the footprint-backstop log (TRDD-12FGMAEP) so both get the same durability, and
+/// both report a failed write on stderr under their own `label` instead of hiding it.
+fn append_to_log_file(log_path: &Path, label: &str, write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>) {
     let result = (|| -> std::io::Result<()> {
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(log_path)?;
-        write_diagnostic(&mut f, metric_name, metric_bytes, mi, s)?;
+        write(&mut f)?;
         f.flush()?;
         f.sync_all()
     })();
     if let Err(e) = result {
-        eprintln!("{} alcore: RSS HARD CAP — could NOT write diagnostic to {}: {e}", crate::log_ts(), log_path.display());
+        eprintln!("{} alcore: {label} — could NOT write diagnostic to {}: {e}", crate::log_ts(), log_path.display());
     }
 }
 
-/// Check mimalloc's committed bytes against the hard cap and, on breach, write + print the
-/// diagnostic and exit(1). No-op at or under the cap. This is the production entry point: it reads
-/// `mi_commit_bytes`. See `check_and_enforce_with` for the logic and the reason it is not footprint.
+/// The commit-cap boundary, in one place: a commit is over the cap only when it is strictly above it, so a
+/// commit equal to the cap is not a breach. `check_and_enforce_with` and `check_and_enforce_both_with` both
+/// call it, so the cap check and the choice of branch (commit cap or footprint backstop) cannot drift apart.
+fn over_cap(commit: u64, cap_bytes: u64) -> bool {
+    commit > cap_bytes
+}
+
+/// Check mimalloc committed bytes against the hard cap and, on breach, write + print the
+/// diagnostic and exit(1). At or under the cap it then runs the footprint backstop (TRDD-12FGMAEP,
+/// `enforce_footprint_backstop_with`): the commit cap does not charge memory outside mimalloc, so a
+/// runaway there would end in an OS kill with no log. This is the production entry point: it reads
+/// `mi_commit_bytes` once. See `check_and_enforce_with` for the commit-cap logic and the reason it is
+/// not footprint.
 pub fn check_and_enforce(
     fallback_rss: impl FnOnce() -> u64,
     flush_before_exit: impl FnOnce(),
     log_path: &Path,
     snapshot: CulpritSnapshot,
 ) {
-    check_and_enforce_with(mi_commit_bytes, fallback_rss, flush_before_exit, log_path, snapshot);
+    let backstop = footprint_backstop_bytes(snapshot.cap_bytes);
+    check_and_enforce_both_with(mi_commit_bytes, phys_footprint_bytes, backstop, fallback_rss, flush_before_exit, log_path, snapshot);
 }
 
-/// The hard-cap check with the commit reading injected. Production passes `mi_commit_bytes` (via
-/// `check_and_enforce`); the injection exists because test binaries do not run mimalloc as their
+/// The two guards wired together, with both readers injected (TRDD-12FGMAEP). The real readers cannot stage
+/// a breach in a test (a test binary does not run mimalloc as its allocator, and a test cannot hold a real
+/// multi-GB footprint), so the wiring of the commit cap and the footprint backstop is driven through this
+/// function. It reads the commit once. Over the cap it runs `check_and_enforce_with`, so the commit cap wins
+/// when both limits are exceeded; otherwise it runs `enforce_footprint_backstop_with` with that same commit.
+pub fn check_and_enforce_both_with(
+    read_commit: impl FnOnce() -> u64,
+    read_footprint: impl FnOnce() -> Option<u64>,
+    backstop_bytes: u64,
+    fallback_rss: impl FnOnce() -> u64,
+    flush_before_exit: impl FnOnce(),
+    log_path: &Path,
+    snapshot: CulpritSnapshot,
+) {
+    let commit = read_commit();
+    if over_cap(commit, snapshot.cap_bytes) {
+        // The same value that decided the breach is passed on, so the log prints it and not a second read.
+        check_and_enforce_with(|| commit, fallback_rss, flush_before_exit, log_path, snapshot);
+    } else {
+        enforce_footprint_backstop_with(read_footprint, backstop_bytes, commit, flush_before_exit, log_path, &snapshot);
+    }
+}
+
+/// The hard-cap check with the commit reading injected. Production reaches it through `check_and_enforce_both_with`,
+/// which passes the commit it already read; the injection exists because test binaries do not run mimalloc as their
 /// global allocator, so their real commit reads ~0 and a breach can only be staged this way.
 ///
 /// WHY the decision is mimalloc commit and not physical footprint or RSS — owner directive
@@ -640,7 +728,7 @@ pub fn check_and_enforce_with(
     snapshot: CulpritSnapshot,
 ) {
     let commit = read_commit();
-    if commit <= snapshot.cap_bytes {
+    if !over_cap(commit, snapshot.cap_bytes) {
         return;
     }
     let (metric_name, metric_bytes) = primary_metric(fallback_rss);
@@ -652,6 +740,83 @@ pub fn check_and_enforce_with(
     let mut stderr = std::io::stderr();
     let _ = write_diagnostic(&mut stderr, metric_name, metric_bytes, &mi, &snapshot);
     std::process::exit(1);
+}
+
+/// Environment variable that overrides the footprint backstop, in MB.
+const FOOTPRINT_BACKSTOP_ENV: &str = "AGENTLENS_FOOTPRINT_BACKSTOP_MB";
+
+/// Name under which the footprint reading appears in the backstop log.
+const FOOTPRINT_METRIC_NAME: &str = "phys_footprint";
+
+/// Pure rule for the footprint backstop in bytes (TRDD-12FGMAEP). The commit cap does not charge memory
+/// outside mimalloc (DuckDB, the system malloc), so a runaway there would end in an OS kill with no log;
+/// the backstop exits with a culprit log instead. `raw` is the override in MB: it wins only when it
+/// parses, is positive and is above `cap_bytes`. Otherwise the value is 3 x `cap_bytes` (saturating),
+/// lowered to half of `total_memory_bytes` when that is known (non-zero), smaller, and still above
+/// `cap_bytes`. Never at or below the cap: a backstop under the commit cap would fire first and mask it.
+pub fn resolve_footprint_backstop(raw: Option<&str>, cap_bytes: u64, total_memory_bytes: u64) -> u64 {
+    let override_bytes = raw
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|mb| *mb > 0)
+        .map(|mb| mb.saturating_mul(1024 * 1024))
+        .filter(|bytes| *bytes > cap_bytes);
+    if let Some(bytes) = override_bytes {
+        return bytes;
+    }
+    let default = cap_bytes.saturating_mul(3);
+    let half_memory = total_memory_bytes / 2;
+    if total_memory_bytes > 0 && half_memory < default && half_memory > cap_bytes {
+        half_memory
+    } else {
+        default
+    }
+}
+
+/// The footprint backstop in bytes for `cap_bytes`, from `AGENTLENS_FOOTPRINT_BACKSTOP_MB` and the host
+/// physical memory (`resolve_footprint_backstop` holds the rule). It exists so the production entry
+/// `check_and_enforce` and `describe_limits` read one value (TRDD-12FGMAEP).
+pub fn footprint_backstop_bytes(cap_bytes: u64) -> u64 {
+    resolve_footprint_backstop(std::env::var(FOOTPRINT_BACKSTOP_ENV).ok().as_deref(), cap_bytes, crate::server_stats::total_memory_bytes())
+}
+
+/// The footprint backstop (TRDD-12FGMAEP), with the footprint reading injected like `check_and_enforce_with`.
+/// The commit cap does not charge memory outside mimalloc, so a runaway there would end in an OS kill with
+/// no log; this exits with a culprit log instead. A footprint of `None` (not macOS, or the syscall failed)
+/// or one at or under `backstop_bytes` returns with no effect (the bound is inclusive, like the cap).
+/// Above it: flush, append the diagnostic to `log_path`, print it to stderr, `exit(1)`. `commit_bytes` is
+/// the mimalloc commit the caller already read, printed as is. `flush_before_exit` runs only on breach.
+pub fn enforce_footprint_backstop_with(
+    read_footprint: impl FnOnce() -> Option<u64>,
+    backstop_bytes: u64,
+    commit_bytes: u64,
+    flush_before_exit: impl FnOnce(),
+    log_path: &Path,
+    snapshot: &CulpritSnapshot,
+) {
+    let footprint = match read_footprint() {
+        Some(fp) if fp > backstop_bytes => fp,
+        _ => return,
+    };
+    flush_before_exit();
+    let mut mi = mimalloc_info();
+    mi.current_commit_bytes = commit_bytes;
+    append_to_log_file(log_path, "FOOTPRINT BACKSTOP", |f| write_footprint_diagnostic(f, footprint, backstop_bytes, &mi, snapshot));
+    let mut stderr = std::io::stderr();
+    let _ = write_footprint_diagnostic(&mut stderr, footprint, backstop_bytes, &mi, snapshot);
+    std::process::exit(1);
+}
+
+/// One line for the boot log: the effective commit cap and footprint backstop in MB, and whether the
+/// footprint can be read on this platform (without it the backstop never fires). It exists so an operator
+/// can see which limits a process runs under without reproducing the environment (TRDD-12FGMAEP).
+pub fn describe_limits() -> String {
+    let cap = rss_hard_cap_bytes();
+    let footprint_readable = if phys_footprint_bytes().is_some() { "yes" } else { "no (the backstop is inactive)" };
+    format!(
+        "memory guard: mimalloc commit cap {} MB, footprint backstop {} MB, footprint readable: {footprint_readable}",
+        cap / 1024 / 1024,
+        footprint_backstop_bytes(cap) / 1024 / 1024,
+    )
 }
 
 #[cfg(test)]

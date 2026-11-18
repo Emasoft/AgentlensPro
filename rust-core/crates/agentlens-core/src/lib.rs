@@ -1002,6 +1002,10 @@ impl CoreState {
         // `check_and_enforce` reads `mi_commit_bytes` at breach-check time, after the valve has run. Its
         // fallback closure is evidence only, read on breach; on macOS the footprint syscall answers first,
         // so it is never called there.
+        // TRDD-12FGMAEP: when commit is at or under the cap, `check_and_enforce` also compares the physical
+        // footprint with a backstop (3 x the cap by default; AGENTLENS_FOOTPRINT_BACKSTOP_MB overrides) and
+        // exits with its own log above it. The commit cap does not charge memory outside mimalloc (DuckDB,
+        // the system malloc), so without the backstop a runaway there would end in an OS kill with no log.
         // Snapshot fields are read into owned locals BEFORE the flush closure below, so the
         // closure's `&mut self.writer` capture (Rust 2021 disjoint field capture) never overlaps
         // an outstanding `&self.writer`/`&self.window`/`&self.cards` borrow from building the

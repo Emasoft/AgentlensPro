@@ -164,6 +164,8 @@ fn main() {
     if args.first().map(String::as_str) != Some("serve") {
         usage("command required (serve or statusline-seal)");
     }
+    // statusline-seal runs no guard, so it must not print a guard line; only `serve` reaches this point.
+    println!("{} alcore: {}", agentlens_core::log_ts(), agentlens_core::rss_guard::describe_limits());
     let mut data_dir = String::new();
     // REQUIRED, never guessed from the exe location: the binary reaches this process through three
     // layouts (bin-native/<plat>/ in the tarball, <dataDir>/bin/ as a dev copy, target/debug/ under
