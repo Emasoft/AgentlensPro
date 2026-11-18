@@ -4,7 +4,7 @@ title: The status line is stored with no server - hook appends to the write-ahea
 column: dev
 status: tasked
 created: 2026-11-18T02:15:01+0100
-updated: 2026-11-18T02:15:01+0100
+updated: 2026-11-18T02:47:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-18T02:15:01+0100
+implementation-commits: [b78fee7e]
 ---
 
 # The status line is stored with no server - hook appends to the write-ahead file and alcore statusline-seal compacts
@@ -66,3 +67,17 @@ On branch `feat/rbbex59r-c2` (TRDD-RBBEX59R step d3) the status-line hook only P
 ## Approval log
 
 - 2026-11-18T02:15:01+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Progress 2026-11-18
+
+- Implemented in the worktree, commit b78fee7e on feat/rbbex59r-c2 (not on the main tree, not deployed). Checks, raw output read by the main agent under reports_dev/VS1FCUMU: statusline_seal_cli 8 passed, statusline_parity 3 passed, lib statusline_store 1 passed, clippy -p agentlens-core --all-targets -D warnings clean, check-types rc 0, statuslineDiskFallback 11 passing, statuslineCapture 24 passing. The full suite was not run.
+- Three design points were decided AFTER the advisor consult and were not reviewed by it: (a) today's wal-cli.ndjson is sealed at a byte threshold, not at seal_rows (a size test is O(1) on the render path); (b) the file that is off limits is the one of the pidfile owner of the data dir, not of any live pid (statusline_parity.rs uses wal-1.ndjson and pid 1 is always alive); (c) the standalone command never purges.
+- Effects on the SERVER's own 60 s seal chore, which runs the same maybe_seal: it now takes .seal.lock, starts no new seal after 20 s per tick, seals wal-cli.ndjson, and counts lines by streaming bytes (a file holding an invalid UTF-8 byte counted 0 before, and a past-day file with that count was removed as empty).
+- Late-append loss, found by the harness review and fixed in b78fee7e: a hook process that opened wal-cli.ndjson before the rename can append after the COPY read the file, and the line was then deleted with the file. seal_one now takes the file length at its start and compares it again right before the delete; on a difference it removes the part and keeps the file. Red run without the check: 'sealed 1 WAL' with the late line lost. Test: a_line_appended_after_the_part_was_written_is_not_deleted_with_the_file. STILL OPEN: an append between the check and the delete (two syscalls apart) is not covered. The test uses the knob AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS in seal_one.
+- Before the statusline-seal dispatch alcore runs install_exit_on_panic, install_open_phase_probe and log_boot_phase. Read whole by the main agent: they set the panic hook and the probe slot and write one line to stderr, nothing under the data dir.
+- rustfmt was not applied: the tree has no fmt gate (.github/workflows/ci.yml:297 says it is 3564 hunks away from rustfmt output).
+- Correction: the message of commit ca9447ca says 'Card diff read back whole'. At that time only the removed lines, the count of added lines and lines 1-22 of this card had been read. This card was read whole afterwards, on 2026-11-18.
+- Doc scope (the checklist line names operations.md): the file is skills/agentlenspro-diagnostics/references/operations.md. A name search also lists CHANGELOG.md, src/cli/cacheExpiredCli.ts and .claude/project/memory/statusline-capture-and-store.md as holding status-line loss wording; their lines are not read yet.
+- Commit b78fee7e holds the test knob AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS UNGATED in seal_one: any environment that sets it makes every seal wait while it holds the heavy-DuckDB slot and the seal lock. A follow-up commit limits it to debug builds (cfg!(debug_assertions)); the branch must not be merged before that commit.
+- Caveats on the lines above. (1) statuslineDiskFallback 11 passing and statuslineCapture 24 passing were run BEFORE the removal of one blank line in statuslineCapture.ts and before the late-append change. (2) The red run shows only 'sealed 1 WAL(s)' at the first failed assertion, that is the sealer sealed a file that had grown; the row count after it was not observed. (3) Source of the count_lines statement: at 1196a88c the function was std::fs::read_to_string(file)...unwrap_or(0), and read_to_string fails on invalid UTF-8. (4) clippy rc 0 and check-types rc 0 were read from the worker report reports_dev/VS1FCUMU/20261118_032000+0100-rust-seal-late-append.md and from the two raw files, after b78fee7e was committed. (5) The late-append test passed 5 of 5 repeat runs by the worker's report; it is timing-based (append during a 3 s hold).
+- Not applied, proposal: close the remaining gap by renaming the sealed file to a tombstone that records its sealed length and deleting it on a later call after copying any bytes beyond that length into a new write-ahead file. Judged not worth its extra states now: the gap needs a hook process stalled between its open and its write for longer than the settle wait plus the seal, landing between two adjacent syscalls.
