@@ -3,7 +3,7 @@ trdd-id: MVR6PXC0
 title: Three MCP tool handlers hold the state lock for one to four seconds inside their per-candidate resolve_session_card closure
 column: human_review
 created: 2026-09-05T12:33:51+0200
-updated: 2026-11-19T00:53:41+0100
+updated: 2026-11-19T00:56:58+0100
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -163,6 +163,7 @@ three tools.
 - 2026-11-19T00:50:29+0100 — COMPLETE by main-agent@agentlenspro. all Acceptance boxes ticked; the owed test landed in ea9882c9 and passed on the combined tree.
 - 2026-11-19T00:53:29+0100 — column → human_review by main-agent@agentlenspro. reverting my own 7f549882 close: the owner moves human_review to complete per this card; box 2 was measured only on the live collector
 2026-11-19T00:53:39+0100 — main-agent: REVERTED my own close in 7f549882 (todo to complete, which skipped dev through human_review). The card's own record says the owner moves human_review to complete, and box 2 (no hold >= 1000 ms over 24 invocations) was only measured on the live collector. Back in human_review: the owed test has landed (ea9882c9); the owner closes the card after the next deploy.
+2026-11-19T00:56+0100 — main-agent, precision on the line above: before my close the column was todo, not human_review. 98225151 (2026-10-05, the review in the owner's stead) sent it back from human_review to todo pending the owed test. That test landed in ea9882c9, so the card returns to human_review per the 2026-09-24 entries.
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-23T12:55:59+0200 — APPROVE
 
