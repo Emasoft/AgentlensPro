@@ -4,7 +4,7 @@ title: alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and
 column: dev
 status: tasked
 created: 2026-10-23T04:39:08+0200
-updated: 2026-11-18T07:01:01+0100
+updated: 2026-11-18T07:12:27+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -203,3 +203,4 @@ CORRECTION 2026-11-18 (after review of the final message): the 1883 MB figure is
 ## Notes 2026-11-18
 
 FROM TRDD-12FGMAEP (commit 73211a46): the footprint backstop is committed and unit-tested with injected readers only; it is not deployed and not validated live. Owed here, once a server can stay up on the live data: read the line «memory guard: mimalloc commit cap N MB, footprint backstop M MB, footprint readable: yes» in the server log after a start, and confirm no exit with the label FOOTPRINT BACKSTOP in rss-hard-cap.log during the run. Open gap relevant to this card: no cap is checked during the store open and the boot sweep (the guard tick starts in chores::spawn_all, bin/alcore.rs line 578).
+CORRECTIONS after review to the note FROM TRDD-12FGMAEP above and to the archived card (frozen, so recorded here). (a) Real-binary evidence, read by the main agent: line 1 of reports_dev/sonnet-worker/20261118_064500+0100-12fgmaep-serve-stdout.out (debug build, the 6 s run of the worker on its own data dir) is «2026-11-18T06:48:51+0100 alcore: memory guard: mimalloc commit cap 2048 MB, footprint backstop 6144 MB, footprint readable: yes». So the serve line and the readable footprint on this Mac are observed once, on a debug build with an empty store; the release binary and the live data are still owed. (b) After commit 73211a46 the call chores::spawn_all sits at bin/alcore.rs line 580 (578 before; the commit added 2 lines above it). (c) The archived card says both /tmp directories of the worker are left in place. Checked: /tmp/12fgmaep-serve-data exists; /tmp/12fgmaep-home does not (ls rc 2). The serve command appears twice in the extraction of the worker transcript, once with no timestamp; it was treated as one run and that was not checked further. (d) The archived card says the main agent read line 18 of tests/rss_hard_cap.rs; that read was made only after the close (the import line, it names check_and_enforce_both_with). (e) Checked after the close: the CHANGELOG entry of TRDD-12FGMAEP (line 23) is under ### Added (line 21) of ## [Unreleased] (line 7); trddgrep validate names none of 12FGMAEP, HSPUF5XH, 735Q3JF4, RTHA7EWK.

@@ -1,8 +1,8 @@
 ---
 name: statusline-capture-and-store
-description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke / Could not convert string to INT128 / failed to cast column session_id from VARCHAR to UUID / one row blinds every view / Could not find key effort in struct / a struct field missing from one parquet file / subagents view binder error / Referenced column not found in FROM clause / an older payload without rate_limits crashes the query / all five views died at once / the query says BLIND but the data is there / a record is missing from its own day's window / how big can this store get before queries slow down / the status line freezes for ten seconds / the hook is slow when the server is down / AbortSignal timeout did not bound the command / process exit truncated stdout / the gate verdict was cut off / fixing the hang broke the output — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
+description: "how do I get rate_limits without hitting the usage endpoint / why is session_id coming back as hugeint / JSON.stringify throws Do not know how to serialize a BigInt / why did lifecycle-events go empty / can I add a second statusLine / does Claude Code send the 5h 7d windows on stdin / should I pack N samples per row in parquet / how big should a parquet chunk be / get_account_status shows another account's window / was that turn actually a cache miss / how do I verify a claimed cold cache write in one command / is the 1-hour write tier real on this machine / why does the same turn show up twelve times / why is the burn monitor reporting far more cost than was really spent / the statusline burn path over-counts / I raised a feed's sample rate and its deltas broke / Could not convert string to INT128 / failed to cast column session_id from VARCHAR to UUID / one row blinds every view / Could not find key effort in struct / a struct field missing from one parquet file / subagents view binder error / Referenced column not found in FROM clause / an older payload without rate_limits crashes the query / all five views died at once / the query says BLIND but the data is there / a record is missing from its own day's window / how big can this store get before queries slow down / the status line freezes for ten seconds / the hook is slow when the server is down / AbortSignal timeout did not bound the command / process exit truncated stdout / the gate verdict was cut off / fixing the hang broke the output / are status line samples lost when the server is down / where do samples go with no server / wal-cli.ndjson / alcore statusline-seal — the statusline sample store, its measured format choices, the cache/peaks query views, the one-event-per-turn billing rule, and the DuckDB traps that shipped bugs"
 ocd: 2026-08-01
-lmd: 2026-09-01
+lmd: 2026-11-18
 metadata:
   node_type: memory
   type: project
@@ -174,7 +174,9 @@ GB/day raw** at 20 instances. Landing these in `hook-events` was measurably dest
 `readHookEvents(limit:1000)` with **no `ev` filter** — had their whole budget eaten, silently
 truncating the timeline. They POST to `/api/statusline-samples` now.
 
-Samples also deliberately **do not spool** when the server is down: at this rate they would fill the
+Samples deliberately **never enter the shared hook-spool** when the server is down (they were dropped
+until 2026-11; since TRDD-VS1FCUMU the hook appends them to the write-ahead file of the store itself,
+see the no-server atom below): at this rate they would fill the
 shared 20k hook-spool within the hour and evict its OLDEST entries — the lifecycle events (StopFailure,
 PreCompact) that exist because nothing else records them.
 
@@ -228,6 +230,45 @@ The statusline wrapper ingests the JSON payload from ITS OWN stdin and is INDEPE
 ^ATOM-SKNW-E15W [desc: "CC 2.1.252 prompt_cache block: authoritative per-turn cache verdict (ttl, expires_at, misses) captured in the statusline store; guaranteed columns, consumers, and the two historical data-quality cavea", keywords: prompt_cache_fields cache_expired_from_statusline expires_at_epoch_seconds harness_reports_the_cache_ttl is_the_ttl_5m_or_1h cache-expired_without_server stale_rate_limits_after_reset pre-2.1.243_rate_limit_percentage_wrong spend_limit_column_missing prompt_cache_warm prompt_cache_misses 5m_1h_cost_bracket_resolved, ocd: 2026-09-01, lmd: 2026-09-01]
 
 Since Claude Code 2.1.252 the statusline payload carries the harness's OWN cache verdict as a prompt_cache block: warm, caching_observed, ttl ('5m'/'1h'), expires_at (epoch SECONDS, ts is ms), requests, misses, expected_rebuilds, hit_ratio, cache_write_tokens, miss_recache_tokens, last_miss_at (nullable), recache_tokens_if_cold. All 12 flattened prompt_cache_* columns are in GUARANTEED_COLUMNS (pre-2.1.252 samples lack the whole block — the trap-5 shape). Consumers: cache-expired answers from expires_at off disk with no server and no inference; the cache view resolves its 5m/1h cost bracket to ONE figure from prompt_cache_ttl and shows the harness misses counter. Field names were taken from a LIVE captured row (2026-09-01), never the docs. Two data-quality caveats for historical queries: samples written by CC < 2.1.243 can carry a STALE pre-reset rate_limits percentage after an idle window reset (harness bug, fixed 2.1.243), and rate_limits.spend_limit (2.1.251, gateway-only) is deliberately NOT guaranteed until a real captured row shows its flattened shape.
+
+
+^ATOM-YUXH-NZJW [desc: "With no server the statusline hook appends the sample to <dataDir>/statusline/<stream>/<day>/wal-cli.ndjson; alcore statusline-seal compacts it into parquet parts with no server.", keywords: status_line_samples_lost_when_the_server_is_down statusline_with_no_server where_do_samples_go_with_no_server wal-cli.ndjson alcore_statusline-seal AGENTLENS_STATUSLINE_CLI_SEAL_BYTES AGENTLENS_STATUSLINE_SEAL_BUDGET_MS seal_lock_one_sealer_per_store statusline-history_works_with_the_server_down cache-state_exit_2_with_no_server sample_stored_twice_by_hook_and_server hook_appends_the_write-ahead_file status_line_still_stored_under_DISABLED, type: project, trdd: TRDD-VS1FCUMU, ocd: 2026-11-18, lmd: 2026-11-18]
+
+## With no server, the hook stores the sample itself (TRDD-VS1FCUMU, 2026-11)
+
+When no server takes a status-line sample (connection refused, an error, a non-2xx answer, or no
+answer 50 ms after the render) the hook appends it to the write-ahead file of the store itself,
+`<dataDir>/statusline/<stream>/<UTC day>/wal-cli.ndjson`: one append, no child process. This is not
+the shared hook-spool, which samples still never enter. `statusline-history`, `cache-state` and
+`cache-expired` read that file at once, off disk.
+
+`alcore statusline-seal --data-dir DIR` turns full (16 MiB, `AGENTLENS_STATUSLINE_CLI_SEAL_BYTES`)
+and past-day write-ahead files into parquet parts with no server: it binds no port, takes no
+pidfile, runs at nice 15 and never purges a day. The hook starts it detached at most once per 30 s,
+never under `AGENTLENS_NO_REVIVE=1` and never while a live server owns the data dir (the 60 s chore
+of the server seals the same files). One sealer runs per store at a time (`.seal.lock`), and one
+call starts no new seal after 20 s (`AGENTLENS_STATUSLINE_SEAL_BUDGET_MS`).
+
+The known limits are in the next atom. Source: the CHANGELOG entry of TRDD-VS1FCUMU and joint test
+leg 10 in `src/test/noCollectionJoint.test.ts`.
+
+
+^ATOM-XXPX-7BYT [desc: "Limits of the no-server statusline store: a sample can be stored twice, one can be lost during a seal, cache verbs exit 2 after a seal, a refused WAL is retried with no bound.", keywords: status_line_sample_counted_twice duplicate_statusline_rows sum_of_raw_rows_double_counts sample_lost_during_a_seal cache-state_exit_2_after_a_seal cache-expired_cannot_answer_with_no_server sealer_retries_forever unsealable_write-ahead_file no-server_store_known_limits wal-cli.ndjson_race statusline-seal_known_limits, type: project, trdd: TRDD-VS1FCUMU, ocd: 2026-11-18, lmd: 2026-11-18]
+
+## Known limits of the no-server status-line store (as of 2026-11-18)
+
+- A sample whose POST had not settled 50 ms after the render can be stored twice, once by the hook
+  and once by the server. The `sessions`, `peaks` and `cache` views of `statusline-history` show the
+  copy as one more render of the same turn; SQL of your own that sums raw rows counts it twice.
+- A hook write that lands between the length check of the sealer and its delete of a sealed file
+  loses that one sample.
+- With no server, `cache-expired` and `cache-state` exit 2 (cannot answer) once the newest sample of
+  a session is only in a sealed part; `statusline-history` still lists the session (TRDD-ETFX9JFM).
+- A write-ahead file that the sealer refuses is retried with no bound and nobody is told
+  (TRDD-RTHA7EWK item 5, open on 2026-11-18).
+
+Source: the CHANGELOG entries of TRDD-VS1FCUMU and TRDD-ETFX9JFM for the first three; the card
+TRDD-RTHA7EWK for the fourth.
 
 ## Notes and lessons learned
 
