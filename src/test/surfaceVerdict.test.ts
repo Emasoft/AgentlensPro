@@ -6,7 +6,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { detectDrift } from '../cli/autoSetup'
-import { AGENT_NAMES, announceKeptSurfaces, installAgents, installSkill, installSkills, KeptSurface, skillFiles, SKILL_NAME, SKILL_NAMES } from '../cli/hookInstall'
+import { AGENT_NAMES, announceKeptSurfaces, installAgents, installSkill, installSkills, KeptSurface, skillFiles, skillTreeHash, SKILL_NAME, SKILL_NAMES } from '../cli/hookInstall'
 import { REPAIR_STEPS, resolveCtx } from '../cli/setup'
 import { compareStampVersions, readSurfaceStamp, surfaceVerdict } from '../cli/surfaceStamp'
 
@@ -176,6 +176,47 @@ suite('item 4: installAgents', () => {
     assert.throws(() => installAgents({ repoRoot: root, agentsDir, log: quiet }), /no backupRoot/)
     assert.strictEqual(fs.readFileSync(path.join(agentsDir, 'lean-worker.md'), 'utf8'), old)
   })
+
+  test('an installed agent file that is a symlink is replaced through the link: the link stays a link and the target holds the new bytes', () => {
+    const root = makeRoot('2.0.0', false)
+    const agentsDir = tmp('al-verdict-agents-')
+    const backupRoot = path.join(tmp('al-verdict-bak-'), 'surface-backups')
+    const target = path.join(tmp('al-verdict-link-target-'), 'lean-worker.md')
+    fs.writeFileSync(target, surface('1.0.0', 'old via link'))
+    const link = path.join(agentsDir, 'lean-worker.md')
+    fs.symlinkSync(target, link)
+    const results = installAgents({ repoRoot: root, agentsDir, backupRoot, log: quiet })
+    assert.strictEqual(results.find(r => r.name === 'lean-worker')?.outcome, 'updated')
+    assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link is still a link')
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), surface('2.0.0', 'shipped lean-worker'))
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(target)), ['lean-worker.md'], 'no temp file is left in the target folder')
+  })
+
+  test('an installed agent file with mode 0o600 keeps 0o600 after an update', () => {
+    const root = makeRoot('2.0.0', false)
+    const agentsDir = tmp('al-verdict-agents-')
+    const backupRoot = path.join(tmp('al-verdict-bak-'), 'surface-backups')
+    const file = path.join(agentsDir, 'lean-worker.md')
+    fs.writeFileSync(file, surface('1.0.0', 'old private'))
+    fs.chmodSync(file, 0o600)
+    const results = installAgents({ repoRoot: root, agentsDir, backupRoot, log: quiet })
+    assert.strictEqual(results.find(r => r.name === 'lean-worker')?.outcome, 'updated')
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), surface('2.0.0', 'shipped lean-worker'))
+    assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600)
+  })
+
+  test('an installed agent file that is a dangling symlink is written at the link target, and the link stays a link', () => {
+    const root = makeRoot('2.0.0', false)
+    const agentsDir = tmp('al-verdict-agents-')
+    const backupRoot = path.join(tmp('al-verdict-bak-'), 'surface-backups')
+    const target = path.join(tmp('al-verdict-link-target-'), 'lean-worker.md')
+    const link = path.join(agentsDir, 'lean-worker.md')
+    fs.symlinkSync(target, link)
+    const results = installAgents({ repoRoot: root, agentsDir, backupRoot, log: quiet })
+    assert.strictEqual(results.find(r => r.name === 'lean-worker')?.outcome, 'installed')
+    assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link is still a link')
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), surface('2.0.0', 'shipped lean-worker'))
+  })
 })
 
 suite('item 4: installSkill', () => {
@@ -188,6 +229,26 @@ suite('item 4: installSkill', () => {
     fs.writeFileSync(path.join(dir, 'my-note.md'), 'user note\n')
     return dir
   }
+
+  test('an install that fails after the first write leaves the old SKILL.md stamp, and the next run repairs the tree', function () {
+    // The failure is injected with a read-only folder: root and Windows do not enforce it, so the test cannot fail there.
+    if (process.platform === 'win32' || process.getuid?.() === 0) return this.skip()
+    const root = makeRoot('2.0.0', false)
+    const skillsDir = tmp('al-verdict-skills-')
+    const backupRoot = path.join(tmp('al-verdict-bak-'), 'surface-backups')
+    const dir = installedTree(skillsDir, '1.0.0')
+    fs.rmSync(path.join(dir, 'templates', 'b.txt'))
+    fs.chmodSync(path.join(dir, 'templates'), 0o555)
+    try {
+      assert.throws(() => installSkill({ repoRoot: root, skillsDir, backupRoot, log: quiet }))
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'), surface('1.0.0', 'old skill'), 'a failed install must not leave the new stamp over an old payload')
+    } finally {
+      fs.chmodSync(path.join(dir, 'templates'), 0o755)
+    }
+    assert.strictEqual(installSkill({ repoRoot: root, skillsDir, backupRoot, log: quiet }), 'updated')
+    const shippedDir = path.join(root, 'skills', SKILL_NAME)
+    assert.strictEqual(skillTreeHash(dir, skillFiles(shippedDir)), skillTreeHash(shippedDir))
+  })
 
   test('an older-stamp tree is replaced, the backup holds only the replaced files, an unshipped extra stays', () => {
     const root = makeRoot('2.0.0', false)

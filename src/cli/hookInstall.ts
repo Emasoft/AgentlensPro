@@ -840,6 +840,36 @@ function backupFile(backupRoot: string | undefined, rel: string, file: string): 
   fs.copyFileSync(file, target)
 }
 
+/** Write `bytes` to `dst` through a temporary file in the same folder and a rename. A write that is torn in place
+ *  keeps the stamp line at the top of the file while the rest is half old, half new, and that reads as an edit
+ *  (TRDD-YL3EWT6N item 4); a rename leaves either the old file or the whole new one.
+ *  When `dst` is a symlink the write goes to the link's TARGET, with the temp file in the target's folder: renaming
+ *  over the link itself would replace the link with a file, where the old in-place write kept it. The temp file takes
+ *  the existing file's mode before the rename, as the old in-place write kept it too. A temp file left by a killed
+ *  process is not cleaned up. */
+function writeFileAtomic(dst: string, bytes: Buffer): void {
+  let real = dst
+  if (fs.lstatSync(dst, { throwIfNoEntry: false }) !== undefined) {
+    try {
+      real = fs.realpathSync(dst)
+    } catch (e) {
+// A dangling link: the old in-place write created the link's target, so the target is where the bytes go.
+      // One hop only: a chain of links that ends in a dangling one is not followed and its last link would be replaced.
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+      real = path.resolve(path.dirname(dst), fs.readlinkSync(dst))
+    }
+  }
+  const tmp = `${real}.${process.pid}.tmp`
+  try {
+    fs.writeFileSync(tmp, bytes)
+    if (fs.existsSync(real)) fs.chmodSync(tmp, fs.statSync(real).mode & 0o777)
+    fs.renameSync(tmp, real)
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }) } catch { /* the original error is the one that matters */ }
+    throw e
+  }
+}
+
 /** (Re)install one shipped skill into the user scope. The repo copy is the single source of
  *  truth; ~/.claude/skills/ is a managed installation target. Idempotent by content comparison —
  *  safe to run on every install / update, and the way to recover the skill if it was deleted.
@@ -892,10 +922,12 @@ export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'upd
   // Every backup is taken BEFORE the first write: a failed copy (or a missing backupRoot) throws with the tree untouched.
   for (const p of plan) if (p.present && !p.same) backupFile(opts.backupRoot, path.join('skills', name, p.rel), p.dst)
   let changed = 0
-  for (const p of plan) {
+  // SKILL.md goes LAST: it carries the version stamp, and a stamp that reaches disk before the payload would let
+  // an install that fails part way read as "same stamp, different content" = an edit, kept forever (TRDD-YL3EWT6N item 4).
+  for (const p of [...plan.filter(q => q.rel !== 'SKILL.md'), ...plan.filter(q => q.rel === 'SKILL.md')]) {
     if (!p.same) {
       fs.mkdirSync(path.dirname(p.dst), { recursive: true })
-      fs.writeFileSync(p.dst, p.bytes)
+      writeFileAtomic(p.dst, p.bytes)
       changed++
     }
     if ((fs.statSync(p.dst).mode & 0o777) !== p.mode) { fs.chmodSync(p.dst, p.mode); changed++ }
@@ -970,7 +1002,7 @@ export function installAgents(opts: InstallSkillOptions = {}): Array<{ name: str
       // Backup BEFORE the write: a failed copy (or a missing backupRoot) throws and the file is not touched.
       if (existed) backupFile(opts.backupRoot, path.join('agents', `${name}.md`), dst)
       fs.mkdirSync(dstDir, { recursive: true })
-      fs.writeFileSync(dst, bytes)
+      writeFileAtomic(dst, bytes)
       log(`agent ${name}: ${existed ? 'updated' : 'installed'} -> ${dst}`)
       results.push({ name, outcome: existed ? 'updated' : 'installed' })
     } catch (e) {
