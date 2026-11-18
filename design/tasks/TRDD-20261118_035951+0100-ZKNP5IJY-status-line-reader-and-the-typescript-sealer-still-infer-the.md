@@ -27,7 +27,7 @@ Split out of the sealer fix of TRDD-VS1FCUMU on 2026-11-18 (harness review: the 
 - read_json_auto infers a schema from the first rows of a file unless sample_size=-1 is passed. Measured with the worktree alcore: on a 30,000-line file a key first seen in the last line was not a column of the sealed part and a later 1.5 in an integer column was stored as 2; on a live 291,970-line file keys first seen at lines 30,078 and 115,204 were not columns (reports_dev/VS1FCUMU/seal-proof/proof2-20261118_033742+0100/ and synth-prefix-20261118_035403+0100/).
 - The sealer of the Rust core is fixed in TRDD-VS1FCUMU. Three call sites keep the default sample: the Rust reader (rust-core/crates/agentlens-core/src/statusline_store.rs, the read_json_auto call of the relation over write-ahead files, line 297 before the fix), the TypeScript reader (src/statuslineStore.ts 285) and the TypeScript sealOne (src/statuslineStore.ts 514 and 529).
 - Effect of the two readers: a view over an UNSEALED write-ahead file longer than the sample does not see a key first seen later, and may read a rounded number. Nothing is lost on disk: the file is intact and its part is complete once sealed.
-- The TypeScript sealOne is on no shipped path: grep for 'new StatuslineStore(' outside src/test in src and standalone returns 0 lines. It is a parity oracle.
+- The TypeScript sealOne is not known to be on a shipped path: grep for 'new StatuslineStore(' outside src/test in src and standalone returns 0 lines. This is one pattern only: tldr references for StatuslineStore, sealOne and maybeSeal is owed before the claim is relied on.
 
 ## Owed before any change
 
