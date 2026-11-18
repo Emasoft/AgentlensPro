@@ -282,7 +282,9 @@ export function relationFor(
   // Cheap — the file list is already bounded by the query window, and DuckDB still scans in parallel.
   const rels = [
     ...parts.map(p => varcharSessionId(`SELECT * FROM read_parquet(${q(p)})`)),
-    ...wals.map(w => varcharSessionId(`SELECT * FROM read_json_auto(${q(w)}, ignore_errors=true)`)),
+    // TRDD-ZKNP5IJY: sample_size=-1 makes read_json_auto infer the schema from the WHOLE file. The default sample is the
+    // first 20,480 rows: a key first sent after them was no column at all.
+    ...wals.map(w => varcharSessionId(`SELECT * FROM read_json_auto(${q(w)}, sample_size=-1, ignore_errors=true)`)),
   ]
   if (rels.length === 0) return null
   return `(${rels.join(' UNION ALL BY NAME ')})`
@@ -510,8 +512,10 @@ export class StatuslineStore {
       duck = await openDuck()
       // Refuse a file whose record structure the reader could not infer — see inferenceCollapsed.
       // Metadata-only, and only on the seal path (a 60 s timer), never on the append path.
+      // TRDD-ZKNP5IJY: sample_size=-1 here and in the COPY below, so the sealed part holds every key of the file and
+      // the type each column needs (see relationFor).
       const cols = (await duck.con.runAndReadAll(
-        `SELECT column_name FROM (DESCRIBE SELECT * FROM read_json_auto(${q(wal)}, union_by_name=true, ignore_errors=true))`,
+        `SELECT column_name FROM (DESCRIBE SELECT * FROM read_json_auto(${q(wal)}, sample_size=-1, union_by_name=true, ignore_errors=true))`,
       )).getRowObjects().map(r => String(r.column_name))
       if (this.inferenceCollapsed(cols)) {
         this.corruptWals += 1
@@ -526,7 +530,7 @@ export class StatuslineStore {
       // parts need no repair at all. Costs nothing — measured, UUID typing saved exactly 0 bytes,
       // because ZSTD already compresses the text to a UUID's 122-bit entropy.
       await duck.con.run(
-        `COPY (SELECT * FROM (${varcharSessionId(`SELECT * FROM read_json_auto(${q(wal)}, union_by_name=true, ignore_errors=true)`)}) ORDER BY session_id, ts)`
+        `COPY (SELECT * FROM (${varcharSessionId(`SELECT * FROM read_json_auto(${q(wal)}, sample_size=-1, union_by_name=true, ignore_errors=true)`)}) ORDER BY session_id, ts)`
         + ` TO ${q(out)} (FORMAT PARQUET, COMPRESSION ZSTD)`,
       )
       const got = Number((await duck.con.runAndReadAll(`SELECT count(*) c FROM read_parquet(${q(out)})`)).getRowObjects()[0].c)
