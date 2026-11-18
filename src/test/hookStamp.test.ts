@@ -244,4 +244,20 @@ suite('hook stamp (item 5B) — the strip needle still removes a stamped entry',
       assert.deepStrictEqual(left, [FOREIGN], 'every stamped entry of ours is gone, the foreign hook stays')
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
+  test('a foreign hook that shares ONE matcher with stamped entries of ours survives the strip (mixed matcher)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'al-hookstamp-mixed-'))
+    try {
+      const FOREIGN = 'some-other-tool --watch'
+      const file = path.join(dir, 'settings.json')
+      // One matcher holds both tools' entries: remove_by_substring must filter INSIDE the matcher (nested_key 'hooks'),
+      // never drop the whole matcher because one of its entries is ours.
+      const ours = hooksAt(NEWER).Stop.flatMap(m => m.hooks)
+      assert.ok(ours.length > 0, 'the fixture holds at least one entry of ours')
+      const stop: HookMatcher[] = [{ hooks: [...ours, { type: 'command', command: FOREIGN }] }]
+      fs.writeFileSync(file, JSON.stringify({ hooks: { Stop: stop } }, null, 2))
+      await safeConfigEdit(file, 'json', buildEventOps('Stop', stop, true, RUN))
+      const after = (JSON.parse(fs.readFileSync(file, 'utf8')) as { hooks: HooksMap }).hooks.Stop
+      assert.deepStrictEqual(after.flatMap(m => m.hooks).map(h => h.command), [FOREIGN], 'only our entries leave the shared matcher')
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
 })
