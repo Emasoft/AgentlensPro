@@ -25,6 +25,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import type { DuckDBConnection, DuckDBInstance } from '@duckdb/node-api'
 import { claudeProjectsDirs } from '../logReader'
+import { sq, sqPath } from '../duckPath'
 import { MAX_OBJECT_SIZE } from '../ndjsonDuck'
 import { resolveProjectSlugs } from '../projectSlug'
 import { EXIT, UsageError } from './cliErrors'
@@ -169,21 +170,6 @@ const SMALL_SCAN_THREADS = 4
 // passed 10 of 10 (peaks 1.11 to 1.36 GB); with 1 thread all six passed 60 of 60 (peaks 0.89 to 1.22 GB). The root cause of the memory growth
 // was not found (see TRDD-OIMXULDJ); the limit and the thread count are measured values, not derived ones.
 const ELEMENT_SCAN_THREADS = 1
-
-/** SQL single-quoted literal — the codebase queries by interpolation, so quoting is load-bearing. */
-function sq(s: string): string {
-  return `'${s.replace(/'/g, "''")}'`
-}
-
-/** A transcript path as a DuckDB string literal that names exactly that file (TRDD-E3Y37BU8). read_ndjson_objects expands * ? and [ in a path as a file
- *  pattern: a folder named star*dir read the files of starXdir too, and br[ac]ket read only the file under braket, with no error (measured 2026-11-17 and
- *  2026-11-18, DuckDB 1.5.4, reports_dev/sonnet-worker/20261118_search-fixes/). A backslash as an escape does NOT work (no files found). A bracket class
- *  does: [*] [?] [[] each match the character itself, and a lone ] is already literal. But a path holding a backslash is not expanded at all (12 of 12 reads,
- *  pattern characters in the same path included; measured on macOS only, where a backslash is an ordinary file-name character; on Windows it is a separator and
- *  this was not measured), and a bracket class in it is misread, so it is passed as it is. */
-function sqPath(p: string): string {
-  return sq(p.includes("\\") ? p : p.replace(/[*?[]/g, "[$&]"))
-}
 
 /** The DuckDB memory limit in force: the env var, else 2GB. One source for the connection and for the out-of-memory message. */
 function duckMemoryLimit(): string {

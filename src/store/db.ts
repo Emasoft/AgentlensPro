@@ -23,6 +23,7 @@ import type { DuckDBConnection } from '@duckdb/node-api'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { sqPath } from '../duckPath'
 
 export interface StoreOptions {
   /** Where the immutable Parquet parts live (usually <dataDir>/store). */
@@ -105,7 +106,7 @@ function partFiles(dir: string, sub: string): string[] {
   } catch { return [] }
 }
 
-/** SQL-quote a path for a COPY/read_parquet literal. */
+/** SQL-quote a path for a COPY TO target. Read sites use sqPath (src/duckPath.ts), TRDD-CXNUWXX7. */
 function q(p: string): string { return `'${p.replace(/'/g, "''")}'` }
 
 /** Every Parquet part in a sub-dir as a readable relation, or null when none exist yet (a bare glob
@@ -127,7 +128,8 @@ export function parquetScan(dir: string, sub: string): string | null {
   // INFERRED per file by read_json_auto (which can also collapse), so only a per-file relation is
   // safe. Parquet carries an explicit schema, so name-reconciliation is sufficient here — and a
   // 2,610-way UNION would be the slower answer to a problem this store does not have.
-  return `read_parquet([${files.map(q).join(',')}], union_by_name := true)`
+  // TRDD-CXNUWXX7: sqPath, not plain quoting: a read function expands * ? [ in a quote-doubled path as a file pattern.
+  return `read_parquet([${files.map(sqPath).join(',')}], union_by_name := true)`
 }
 
 export async function openStore(opts: StoreOptions): Promise<Store> {
