@@ -28,9 +28,10 @@ import { runEnvCli } from './envCli'
 import { runDisableCli, runEnableCli } from './disableCli'
 import { ensureServer, openDashboard, serverCommand, daemonCommand } from './serverControl'
 import { runSetupCli } from './setup'
-import { autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
+import { AUTOSETUP_EXCLUDED_VERBS, autoSetupOnServerStart, forceInstallTelemetry, maybeAutoSetup } from './autoSetup'
 import { isAllAccountsStatus } from './foreignTelemetry'
 import { beginLaunchNotices, endLaunchNotices, flushNoticesToStderr } from './launchNotices'
+import { runVersionCheck } from './versionRestart'
 import { runBudgetCli } from './budgetCli'
 import { runWatchCli } from './watchCli'
 import { runCtxmapCli } from './ctxmapCli'
@@ -162,6 +163,8 @@ export interface CliMainDeps {
   serverStartCheck?: (argv: string[]) => Promise<void>
   launchCheck?: (argv: string[]) => Promise<number | null>
   diagnostics?: (argv: string[]) => Promise<void>
+  /** The post-verb server version check (versionRestart.ts, TRDD-YL3EWT6N item 10); a test injects it to prove WHEN it runs. */
+  versionCheck?: () => Promise<unknown>
 }
 
 /** Every verb the dispatch switch in cliMainBody handles itself; any other name falls to its `default`, the
@@ -182,6 +185,14 @@ function reachesDiagnosticsSurface(cmd: string | undefined, argv: string[]): boo
   return !DISPATCHED_VERBS.has(cmd)
 }
 
+/** Is this invocation one the post-verb server version check may follow (TRDD-YL3EWT6N item 10)? The verbs the launch install
+ *  check skips (hook-path, read-only, server, daemon, setup, disable, enable, telemetry, help) never reach it, and neither does
+ *  `get_account_status --all`, the one read-only form of an otherwise ordinary verb: a hook must stay fast and a read-only verb
+ *  must not stop or start a server as a side effect. */
+export function versionCheckEligible(argv: string[]): boolean {
+  return !AUTOSETUP_EXCLUDED_VERBS.has(argv[0] ?? '') && !isAllAccountsStatus(argv)
+}
+
 // The CLI dispatcher. `deps` is a test seam only (CliMainDeps); production calls it with two arguments.
 export async function cliMain(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps = {}): Promise<number> {
   // The launch install check's notices belong to THIS invocation only (launchNotices.ts, TRDD-YL3EWT6N item 7):
@@ -190,14 +201,24 @@ export async function cliMain(rawArgv: string[], startServer: () => Promise<unkn
   // invocation ends: a notice pushed outside it prints at once instead of waiting in a buffer nobody flushes.
   beginLaunchNotices()
   try {
-    return await cliMainBody(rawArgv, startServer, deps)
+    const run = { versionCheckDue: false }
+    const code = await cliMainBody(rawArgv, startServer, deps, run)
+    // AFTER the verb (the restart wait is unmeasured, and the verb the user typed must not wait for it), before the finally
+    // flushes the notices, so its lines print after the verb's own output. Only when no refusal was signalled: a refused tool call
+    // leaves process.exitCode set and stderr must then be exactly ONE JSON object (the exit-2 contract, launchNotices.ts), so a
+    // notice pushed now would break it. The two env switches are the same opt-outs the launch check honours. The exit code is
+    // the verb's own: the check never changes it.
+    if (run.versionCheckDue && !process.exitCode && process.env.AGENTLENS_NO_AUTOSETUP !== '1' && process.env.AGENTLENS_NO_REVIVE !== '1') {
+      await (deps.versionCheck ?? runVersionCheck)()
+    }
+    return code
   } finally {
     flushNoticesToStderr()
     endLaunchNotices()
   }
 }
 
-async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps): Promise<number> {
+async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown>, deps: CliMainDeps, run: { versionCheckDue: boolean }): Promise<number> {
   // `--force-install-telemetry` is a GLOBAL, per-invocation flag (owner order 2026-10-02): consumed here, before
   // any verb parses its own flags, so no verb ever sees it and nothing persists it.
   const forceInstall = rawArgv.includes('--force-install-telemetry')
@@ -283,6 +304,9 @@ async function cliMainBody(rawArgv: string[], startServer: () => Promise<unknown
     // A non-null code means the check STOPPED the verb (another telemetry setup is in place): its held lines are the
     // reason, and the finally in cliMain prints them on the way out — no verb output can come before them.
     if (blocked !== null) return blocked
+    // The launch check ran and let the verb through: the post-verb version check is due, unless this verb is one the launch check
+    // skips (versionCheckEligible). Not set on the force-install path above: that one is an explicit repair, not an ordinary launch.
+    run.versionCheckDue = versionCheckEligible(argv)
   }
 
   // ONE decision for the launch notices (launchNotices.ts, TRDD-YL3EWT6N item 7): only the diagnostics surface can end

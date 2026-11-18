@@ -97,6 +97,7 @@ fn usage(msg: &str) -> ! {
     eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
     eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--no-collection] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
     eprintln!("       alcore statusline-seal --data-dir DIR");
+    eprintln!("       alcore version");
     exit(64);
 }
 
@@ -157,6 +158,13 @@ fn statusline_seal(args: &[String]) -> ! {
     exit(0);
 }
 fn main() {
+    // TRDD-YL3EWT6N item 10: `alcore version` prints the build's package.json version and exits. It is the FIRST statement, ahead of
+    // install_exit_on_panic and log_boot_phase, because those write to stderr: the CLI's post-verb version check (src/cli/versionRestart.ts)
+    // needs stdout to be exactly the version and stderr to be empty, and it must never reach the boot probe or a pidfile.
+    if std::env::args().nth(1).as_deref() == Some("version") {
+        println!("{}", agentlens_core::server_stats::package_version());
+        exit(0);
+    }
     install_exit_on_panic();
     // TRDD-2HRA270Y: permanent boot diagnostic — the probe slot logs mimalloc commit at each open_store phase;
     // boot_start seeds the `up=` clock of every boot-phase line.
