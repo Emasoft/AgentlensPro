@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-18T19:58:40+0100
+updated: 2026-11-18T20:01:46+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -163,3 +163,4 @@ CORRECTION of the NOT COVERED sentence above about published versions (main agen
 - Deferred, tracked here: add a mixed-matcher case (a foreign hook and one of ours in ONE matcher) to src/test/hookStamp.test.ts, applied through the real safeConfigEdit, asserting the foreign entry survives.
 - Rebuild 2026-11-18 19:58: node esbuild.js rc 0; AGENTLENS_NO_AUTOSETUP=1 agentlenspro --help rc 0 and its line 175 names '<command> --stamp <version>', so the --install-hooks help text ships.
 - Live settings.json at 19:58 (jq counts only): 17 agentlenspro hook entries, 0 stamped, 17 bare. The rewrite waits on the first launch of a verb that is not excluded from auto-setup; the coordinator does not trigger one.
+- Correction to the 19:58 note (harness review): AGENTLENS_NO_AUTOSETUP=1 agentlenspro setup --dry-run --json at 20:0x reports hooks 'needs converge (registration drift: stamp, timeout or shape)', would register via safeConfigEdit, and skill '0/5 current' (content drift on all five). So the drift IS detected. That a launch runs the rewrite on its own is INFERRED from code read, not observed: maybeAutoSetup (src/cli/autoSetup.ts:223-233) calls ensureInstalled('launch') for every verb outside AUTOSETUP_EXCLUDED_VERBS (autoSetup.ts:59-66: hook-path verbs, READ_ONLY_VERBS incl. search and statusline-history, server, daemon, setup, disable, enable, telemetry, help), so a tool verb such as get_recent_sessions qualifies; the status line's verb does not.
