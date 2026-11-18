@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: todo
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-18T11:07:41+0100
+updated: 2026-11-18T11:53:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -77,6 +77,7 @@ NOT decided, left for the owner: whether agentlenspro ships the review part of ~
 ## Progress
 
 2026-11-18 main agent: item 9 DONE, commit 7a279550: scripts/check-no-lifecycle-scripts.js (6-case self-test) fails the build when package.json declares preinstall, install, postinstall or prepare; wired into compile and package as check-lifecycle-scripts; PRRD G1.1 is the rule. Items 4, 5, 8, 10: facts gathered (reports_dev/cheap-worker/20261118_w15-yl3ewt6n-install-facts.md, read whole by the main agent); plan not yet written on this card.
+2026-11-18 main agent: item 11 DONE, commit 875aca58: verifyHooksState wants 0 review-gate and 0 supervisor entries while reviewModInstalled() is true and 1 otherwise. Three tests in src/test/autoSetup.test.ts run the real hooks step in a scratch HOME; by worker runs of that file, 1 failing before the fix and 128 passing after the last edit; one run under host load in between had 2 failing in earlier suites, not reproduced on one rerun, cause unread; the pre-seeded case was not run red; check-types was not rerun after the third test. READ by the worker: a failed verify has no rollback and no marker, and the next launch re-checks hooksConverged, which is mod-aware, so there was no rewrite loop, only the failure line. NOT done: the bundle is not rebuilt, so the linked CLI still prints the old failure line; the execution check of the hooks step still runs the review-gate command when that hook is not registered.
 
 ## Incident 2026-11-18
 
