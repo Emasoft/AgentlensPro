@@ -35,6 +35,7 @@ description: >-
   uninstall/upgrade; env var > file > default) and `agentlenspro env` (detect the runtime
   environment — terminal kind by process ancestry, OS, Claude Code / ai-maestro / CI / container /
   worktree context, user, network + VPN, cloud, tooling, MCP servers — one facet or one big JSON report).
+# agentlenspro-version: 2.34.0
 ---
 
 # AgentlensPro diagnostics via the global CLI

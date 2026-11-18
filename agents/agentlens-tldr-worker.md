@@ -7,6 +7,7 @@ tools: Bash, Read, Write, Edit
 # Keeps CLAUDE.md (unlike the minimal-footprint worker): it edits code in whatever project it is dispatched into,
 # and that project's own conventions (tests, safety, style) must reach it.
 permissionMode: auto
+# agentlenspro-version: 2.34.0
 ---
 
 # Execute the task in your prompt

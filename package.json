@@ -53,7 +53,7 @@
   ],
   "scripts": {
     "prepublishOnly": "pnpm run package",
-    "compile": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-single-expansion && pnpm run check-duckdb-only && pnpm run check-test-cap && pnpm run check-pricing-export && pnpm run check-identities && pnpm run check-guards && pnpm run check-dist-contents && pnpm run check-lifecycle-scripts && node esbuild.js",
+    "compile": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-single-expansion && pnpm run check-duckdb-only && pnpm run check-test-cap && pnpm run check-pricing-export && pnpm run check-identities && pnpm run check-guards && pnpm run check-stamps && pnpm run check-dist-contents && pnpm run check-lifecycle-scripts && node esbuild.js",
     "local": "node esbuild.js && node standalone/cli.js server start",
     "up": "node esbuild.js && node standalone/cli.js dashboard",
     "up:supervised": "node esbuild.js && node standalone/cli.js server start --supervise",
@@ -73,7 +73,7 @@
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-single-expansion && pnpm run check-duckdb-only && pnpm run check-test-cap && pnpm run check-pricing-export && pnpm run check-identities && pnpm run check-guards && pnpm run check-dist-contents && pnpm run check-lifecycle-scripts && node esbuild.js --production",
+    "package": "pnpm run check-types && pnpm run lint && pnpm run check-mirrors && pnpm run check-single-expansion && pnpm run check-duckdb-only && pnpm run check-test-cap && pnpm run check-pricing-export && pnpm run check-identities && pnpm run check-guards && pnpm run check-stamps && pnpm run check-dist-contents && pnpm run check-lifecycle-scripts && node esbuild.js --production",
     "deploy:safe": "bash scripts/safe-deploy.sh",
     "compile-tests": "tsc -p tsconfig.test.json",
     "watch-tests": "tsc -p tsconfig.test.json -w",

@@ -1,6 +1,7 @@
 ---
 name: agentlenspro-scan-and-fix
 description: Scan a codebase for errors and fix them with a token-calibrated agent fleet. Covers the DYNAMIC half that linters cannot see — failing tests, CI failures, flakes — with a flake gate that classifies before diagnosing, signature clustering so one root cause is one worker, and a serial fix lane because test verifiers are global. Ships a Workflow template to customize. Use when asked to scan and fix errors, fix failing tests, fix a red CI, or hunt flaky tests.
+# agentlenspro-version: 2.34.0
 ---
 
 # Scan and fix errors — the dynamic lane

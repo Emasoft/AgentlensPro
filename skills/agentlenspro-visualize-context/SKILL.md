@@ -11,6 +11,7 @@ description: >-
   predicted from the request bytes and then checked against what the API actually billed. Every
   number comes from count_tokens; nothing is estimated. Invoked as
   /agentlenspro-visualize-context <agent-name> [<agent-name> ...].
+# agentlenspro-version: 2.34.0
 ---
 
 # Visualize an agent's context — and what its second turn costs

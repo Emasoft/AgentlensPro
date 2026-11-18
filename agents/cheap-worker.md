@@ -5,6 +5,7 @@ model: haiku[1m]
 effort: xhigh
 tools: Bash, Read, Write, Edit, Grep
 permissionMode: auto
+# agentlenspro-version: 2.34.0
 ---
 
 You are a cheap worker for one well-scoped task. You start from a fresh context — everything you

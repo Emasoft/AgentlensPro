@@ -9,6 +9,7 @@ description: >-
   (cost = turns x per-turn-context), batching image reads into one turn, delegating vision to an
   isolated-context subagent, writing findings down instead of re-reading, and keeping large tool
   output out of the transcript. Verification uses agentlenspro's own measurements, not estimates.
+# agentlenspro-version: 2.34.0
 ---
 
 # Cache guard — why one screenshot keeps charging you
