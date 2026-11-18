@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-17T23:52:22+0100
+updated: 2026-11-18T01:20:35+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -295,3 +295,8 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 - TESTED-STATE: CI publishes from the committed tree, so the release tree is the committed tree. While the owner-pending change in src/cli/hookInstall.ts (AGENT_NAMES gains cheap-worker, fast-worker, smart-worker), the untracked agents/cheap-worker.md, agents/fast-worker.md, agents/smart-worker.md, and the `skills: [ultimate-bug-scanner]` line in agents/agentlens-tldr-worker.md and agents/micro-worker.md stay uncommitted, a pair run on the working tree counts only if the release commits all of them unchanged (snapshot sha256 values: TRDD-CS2W7E77 Notes, "TESTED-STATE SNAPSHOT"), and only if those five hashes, re-taken after each run, all match the snapshot. Any other owner decision on them requires one more pair on the committed tree.
 - Do not run the pair until the owner pending decisions are made and every other id in blocked-by is terminal.
 - These runs are local only: CI has not run on this branch since 2026-09-02 (see Notes).
+
+## Owner directive 2026-11-18
+
+2026-11-18T01:20:09+0100 — OWNER, 2026-11-18 (verbatim): «i remember telling to publish whenever you want, and to deploy the most up to date version so it can be used. also the updates must trigger the updates of all installed extensions and hooks in claude.» This is newer than the order recorded on this card («just bump and publish a new version. but do that only after you completed all TRDDs and fixed all issues.») and governs the timing. READING of the main agent (not the owner words): publish when the local deploy of the merge of feat/rbbex59r-c2 is observed clean and the full suite has run once before the push; the never-push rule is lifted for the release only. OPEN before tagging: the waiver of TRDD-12FGMAEP on TRDD-RBBEX59R was read as given for this machine, while a publish ships that alcore to every install; the owner is told in the status so a veto is possible.
+2026-11-18T01:20:35+0100 — OWNER, 2026-11-18 (verbatim): «remember to update the changelog, the readme, and any documentation or --help page before publishing.» Gate for the publish: CHANGELOG.md, README.md, the documentation and every --help text are brought up to date first.
