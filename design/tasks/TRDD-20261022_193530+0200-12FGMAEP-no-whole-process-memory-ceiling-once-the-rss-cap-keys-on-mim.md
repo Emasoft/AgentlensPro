@@ -4,7 +4,7 @@ title: No whole-process memory ceiling once the RSS cap keys on mimalloc commit
 column: todo
 status: tasked
 created: 2026-10-22T19:35:30+0200
-updated: 2026-10-23T04:39:39+0200
+updated: 2026-11-18T02:25:57+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -34,3 +34,7 @@ alstore open on the clone store peaks at 2.94 GB (2944614400 bytes) whole-proces
 Production-cap clone run 2026-10-23 (cap unset = 2048 MB, ladder on by default; docs_dev/20261023-prodcap-run-report.md): server SURVIVED open + cold/warm 50-body exports + 120 s idle, exit=0 on SIGTERM. Peak RSS 4,613,376 KB (4.6 GB), constant through idle. Only mimalloc commit figures are the 60 s composition lines: 655 MB (up 0 s), 1964 MB (up 60 s), 1964 MB (up 120 s); the guard reads the commit every ~5 s tick and exits only above 2048 MB, so the intermediate peak is unmeasured (survival shows it never crossed). Pressure ladder reached stage 3 (metric 2051407872 B, ~96 MB under the cap), shrinking the summarization window to 6 h. phys_footprint 2100 MB at idle (peak 3132 MB) vs RSS 4.6 GB.
 alcore's seed took 15.0 s vs 8.7-10 s in alstore; a cold first request pays ~30 s of open; with open-once-per-process that is paid once per start.
 The production-cap run says deploy is BLOCKED, not merely thin: the heap reached 2.05 GB with log scan off and bodies parked, both of which production has on. See TRDD-735Q3JF4.
+
+## Decision 2026-11-18
+
+- Owner, 2026-11-18, asked whether to publish without the backstop or to hold the publish (verbatim): «1. no idea what are you talking about. probably i forgot. decide yourself. solve the matter yourself if necessary.» Decision (main agent): the ceiling is implemented and tested before the publish tag. The unblock condition «owner backstop value or waiver» is met by this delegation; the value and the code steps are still to be written here after the main agent has read rss_guard.rs (map by a worker: reports_dev/12FGMAEP/20261118_015500+0100-memory-guard-map-v3.md, not yet verified against the source).
