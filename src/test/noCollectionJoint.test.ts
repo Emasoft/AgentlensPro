@@ -522,4 +522,30 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
     assert.ok(rows !== null, 'the part is readable')
     assert.deepStrictEqual(rows.map(r => [r.session_id, Number(r.cost)]), [['joint-noserver', 2]], 'the sealed row is the sample the hook stored')
   })
+
+  test('leg 11 — TRDD-RBBEX59R box 2: a BARE launch (no verb) under a DISABLED file runs the foreground server in no-collection mode', async () => {
+    const leg = await makeLeg('bare'); legs.push(leg)
+    fs.writeFileSync(path.join(leg.data, 'DISABLED'), 'joint test leg 11\n')
+    // No verb: standalone/cli.ts runServerForeground spawns alcore with alcoreServeArgs() and stays in the foreground.
+    const bare = cp.spawn(process.execPath, [CLI], { env: legEnv(leg), stdio: 'ignore' })
+    let stop: Run = { code: null, stdout: '', stderr: 'server stop never ran' }
+    try {
+      const s = await waitStats(leg, () => true, 60_000)
+      assert.ok(s !== null, 'the bare launch answers /api/server-stats within 60 s')
+      assert.strictEqual(s.collection, 'off', 'the bare launch runs in no-collection mode under the DISABLED file')
+      // Box 2 is a claim about the argv: alcoreServeArgs pushed --no-collection for this data dir.
+      const lines = psLines().filter(l => alcoreDataDir(l) === leg.data)
+      assert.strictEqual(lines.length, 1, `one alcore on the leg data dir, got ${JSON.stringify(lines)}`)
+      assert.ok(lines[0].trim().split(/\s+/).includes('--no-collection'), `--no-collection is in the argv: ${lines[0]}`)
+      assert.strictEqual(await postJson(leg.ports.otlp, '/v1/traces', span('joint-leg11')), 200, 'OTLP is answered (and dropped)')
+      await assertNothingStored(leg, 0, 0, 'after a bare launch in no-collection mode')
+    } finally {
+      stop = cli(leg, ['server', 'stop'], { timeoutMs: 60_000 })
+      if (bare.exitCode === null) {
+        await new Promise<void>(r => { const t = setTimeout(() => { bare.kill('SIGTERM'); r() }, 15_000); bare.once('exit', () => { clearTimeout(t); r() }) })
+      }
+    }
+    assert.strictEqual(stop.code, 0, stop.stderr + stop.stdout)
+    assert.deepStrictEqual(alcoresFor(leg.data), [], 'the stop left no alcore on the leg data dir')
+  })
 })
