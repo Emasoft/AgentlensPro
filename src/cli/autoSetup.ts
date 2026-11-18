@@ -38,7 +38,7 @@
 // `agentlenspro disable` is never lifted here (its reason is kept, and so is its collection-off effect).
 
 import * as path from "path"
-import { AGENT_NAMES, SKILL_NAMES, resolveOnPath, skillFiles, skillTreeHash } from "./hookInstall"
+import { AGENT_NAMES, KeptSurface, SKILL_NAMES, agentSurfaceState, announceKeptSurfaces, resolveOnPath, skillFiles, skillSurfaceState, skillTreeHash } from "./hookInstall"
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
 import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from "./foreignTelemetry"
@@ -78,6 +78,8 @@ export interface Detection {
   drifts: Drift[]; conflicts: TelemetryConflict[]; nothingInstalled: boolean
   /** the full per-key telemetry verdict, user keys that will be converged, and Claude Code stale-snapshot rows */
   rows: TelemetryVerdictRow[]; converge: string[]; staleEnv: TelemetryVerdictRow[]
+  /** installed skills and agents the shipped copy does not overwrite (item 4): not drift, announced once */
+  kept: KeptSurface[]
 }
 export interface RepairOutcome { ok: boolean; detail: string }
 
@@ -132,6 +134,7 @@ export function detectDrift(ctx: Ctx): Detection {
   }
 
   const skillDrift: string[] = []
+  const kept: KeptSurface[] = []
   let skillsPresent = 0
   for (const name of SKILL_NAMES) {
     const shippedDir = path.join(ctx.repoRoot, "skills", name)
@@ -141,7 +144,15 @@ export function detectDrift(ctx: Ctx): Detection {
     // place, and hashing them made every launch re-run a repair that could never converge (see skillTreeHash).
     const installed = skillTreeHash(path.join(ctx.skillsDir, name), skillFiles(shippedDir))
     if (installed !== null) skillsPresent++
-    if (installed !== shipped) skillDrift.push(`${name} ${installed === null ? "missing" : "stale"}`)
+    if (installed === shipped) continue
+    // Item 4: a skill the verdict keeps (newer stamp, or edited in a release) is not drift: installSkill would leave it alone,
+    // so counting it would re-run the repair on every launch and never converge.
+    const state = skillSurfaceState(ctx.repoRoot, ctx.skillsDir, name)
+    if (state.verdict === "keep-newer" || state.verdict === "keep-edited") {
+      kept.push({ kind: "skill", name, verdict: state.verdict, installedStamp: state.installedStamp, shippedStamp: state.shippedStamp, path: path.join(ctx.skillsDir, name) })
+      continue
+    }
+    skillDrift.push(`${name} ${installed === null ? "missing" : "stale"}`)
   }
   if (skillDrift.length > 0) drifts.push({ piece: "skills", step: "skill", reason: skillDrift.join(", ") })
 
@@ -153,11 +164,17 @@ export function detectDrift(ctx: Ctx): Detection {
     if (!fs.existsSync(src)) continue
     if (fs.existsSync(dst)) agentsPresent++
     if (!fs.existsSync(dst)) agentDrift.push(`${name} missing`)
-    else if (!sameBytes(src, dst)) agentDrift.push(`${name} stale`)
+    else if (!sameBytes(src, dst)) {
+      // Same reason as for the skills: a kept agent is no drift.
+      const state = agentSurfaceState(ctx.repoRoot, ctx.agentsDir, name)
+      if (state.verdict === "keep-newer" || state.verdict === "keep-edited") {
+        kept.push({ kind: "agent", name, verdict: state.verdict, installedStamp: state.installedStamp, shippedStamp: state.shippedStamp, path: dst })
+      } else agentDrift.push(`${name} stale`)
+    }
   }
   if (agentDrift.length > 0) drifts.push({ piece: "agents", step: "skill", reason: agentDrift.join(", ") })
 
-  return { drifts, conflicts, rows, converge, staleEnv, nothingInstalled: skillsPresent === 0 && agentsPresent === 0 && settings === "absent" }
+  return { drifts, conflicts, rows, converge, staleEnv, kept, nothingInstalled: skillsPresent === 0 && agentsPresent === 0 && settings === "absent" }
 }
 
 /** Exclusive-create lock; the loser skips (the winner repairs). Stale after LOCK_STALE_MS by mtime. */
@@ -227,8 +244,9 @@ const SERVER_START_SUBVERBS: ReadonlySet<string> = new Set(["start", "restart"])
  *  `server|daemon start|restart` only, and main.ts runs it AFTER the verb resolves (once the server answers, or once
  *  the `--supervise` child is spawned), so it never delays the start. Same gates as a launch — AGENTLENS_NO_AUTOSETUP,
  *  a switch armed for a foreign setup (an operator switch no longer gates it: it stops only collection), and here also "Claude Code absent". Never throws and never blocks, delays or fails the start:
- *  it reports on stderr, in this order (the third and fourth items repeat for each repaired piece, in repair order, so the converged lines come immediately before their own otel-env step line, not before every other piece's line):
+ *  it reports on stderr, in this order (the fourth and fifth items repeat for each repaired piece, in repair order, so the converged lines come immediately before their own otel-env step line, not before every other piece's line):
  *  - the stale-env warning, once, first: under Claude Code (CLAUDECODE=1) the shell value of a key whose settings.json value is ours differs from it (not gated on the trigger, so it fires for trigger "server"; it follows the D13 foreign-armed skip, so a server start under a foreign-armed flag never prints it);
+ *  - one line per kept skill or agent (TRDD-YL3EWT6N item 4: the installed copy is newer than the shipped one, or an edited copy of the same version), only the first time for a given kind, name, installed stamp and shipped stamp (announceKeptSurfaces, hookInstall.ts);
  *  - the put-back line: ONE line for all parked skills it put back, carrying the switch clause (and the left-parked clause when only some are blocked); with nothing restored, ONE "left parked" line
  *    covering every skill a blocker holds back (a file or a non-directory symlink, dangling included);
  *  - for a repaired otel-env step, BEFORE its step line, one line per CHANGED key in `converged` (detectDrift().converge, read under the lock; the loop `for (const key of converged)` is not gated on the trigger):
@@ -277,6 +295,9 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
     if (first.staleEnv.length > 0) {
       say(`agentlenspro: stale session env (restart Claude Code to pick up the new settings): ${first.staleEnv.map(r => r.key).join(", ")}`)
     }
+    // A kept surface (item 4) is no drift, so the fast path below would never mention it: the notice is announced here, once per kind,
+    // name, installed stamp and shipped stamp, before any branch can return and after the stale-env line (the order autoSetupOnServerStart documents).
+    announceKeptSurfaces(ctx.dataDir, first.kept, say)
     if (first.conflicts.length > 0) {
       // A server start never blocks, never disables and never writes over another telemetry setup: it is not the
       // place to arm the kill-switch (that would refuse the very start the operator asked for). One line, then the

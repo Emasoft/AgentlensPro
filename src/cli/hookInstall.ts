@@ -16,6 +16,7 @@ import * as path from 'path'
 import { safeConfigEdit, SafeEditOp } from '../safeConfigEdit'
 import { ensureTelemetryConfig, removeTelemetryConfig } from '../telemetryConfig'
 import { claudeSettingsPath } from './cliCore'
+import { SurfaceVerdict, readSurfaceStamp, surfaceVerdict } from './surfaceStamp'
 
 // Lifecycle events worth hooking — they carry signals the JSONL transcripts and OTEL bodies
 // LACK (exact rate-limit turn deaths, compaction boundaries + trigger, session lifecycle).
@@ -693,6 +694,10 @@ export interface InstallSkillOptions {
   log?: (line: string) => void
   /** Which shipped skill to install. Default SKILL_NAME. */
   name?: string
+  /** Where a file about to be replaced is copied first (<backupRoot>/<UTC time>-<pid>/agents|skills/...). NO default
+   *  on purpose (TRDD-YL3EWT6N item 4): a default taken from the data dir would let a test write into the real one.
+   *  Replacing an existing file without it throws. */
+  backupRoot?: string
 }
 
 export const SKILL_NAME = 'agentlenspro-diagnostics'
@@ -773,6 +778,68 @@ export function skillTreeHash(dir: string, files?: readonly string[]): string | 
   return h.digest('hex')
 }
 
+export interface SurfaceState {
+  verdict: SurfaceVerdict
+  /** The stamps the verdict was based on; null when the file is absent, unstamped or unreadable. */
+  installedStamp: string | null
+  shippedStamp: string | null
+}
+
+/** A git checkout has a src folder beside the package root; a release tarball never ships one (the `files`
+ *  allowlist and check-dist-contents). A checkout is the developer's own tree, so a same-stamp difference there is
+ *  a rebuild in progress and the shipped file wins; in a release it is an edit and the installed copy wins. */
+export function isCheckoutRoot(root: string): boolean {
+  return fs.existsSync(path.join(root, 'src'))
+}
+
+function surfaceState(installed: string | null, shipped: string, sameContent: boolean, checkout: boolean): SurfaceState {
+  return {
+    verdict: surfaceVerdict({ installed, shipped, sameContent, checkout }),
+    installedStamp: installed === null ? null : readSurfaceStamp(installed),
+    shippedStamp: readSurfaceStamp(shipped),
+  }
+}
+
+/** The verdict for one shipped agent file against its installed copy. The shipped file must exist. */
+export function agentSurfaceState(root: string, agentsDir: string, name: string): SurfaceState {
+  const shipped = fs.readFileSync(path.join(root, 'agents', `${name}.md`))
+  const dst = path.join(agentsDir, `${name}.md`)
+  const installed = fs.existsSync(dst) ? fs.readFileSync(dst) : null
+  return surfaceState(installed === null ? null : installed.toString('utf8'), shipped.toString('utf8'), installed !== null && installed.equals(shipped), isCheckoutRoot(root))
+}
+
+/** The verdict for one shipped skill tree against its installed tree, read from the two SKILL.md files; the
+ *  same-content test is the tree hash over the SHIPPED file list (extras the user added do not count). The shipped
+ *  SKILL.md must exist. An installed tree with no SKILL.md reads as absent: it is installed over, file by file. */
+export function skillSurfaceState(root: string, skillsDir: string, name: string): SurfaceState {
+  const srcDir = path.join(root, 'skills', name)
+  const dstDir = path.join(skillsDir, name)
+  const dstSkillMd = path.join(dstDir, 'SKILL.md')
+  const installed = fs.existsSync(dstSkillMd) ? fs.readFileSync(dstSkillMd, 'utf8') : null
+  const same = skillTreeHash(dstDir, skillFiles(srcDir)) === skillTreeHash(srcDir)
+  return surfaceState(installed, fs.readFileSync(path.join(srcDir, 'SKILL.md'), 'utf8'), same, isCheckoutRoot(root))
+}
+
+// One backup folder per process run and backupRoot, created at the first backup (TRDD-YL3EWT6N item 4).
+const backupSessions = new Map<string, string>()
+
+/** Copy `file`, about to be replaced, to <backupRoot>/<UTC time>-<pid>/<rel>. Throws when backupRoot is missing or
+ *  the copy fails: the caller writes only after this returns, so a replaced file always has its old bytes kept.
+ *  No default backupRoot on purpose: one taken from the data dir would let a test write into the real data dir. */
+function backupFile(backupRoot: string | undefined, rel: string, file: string): void {
+  if (backupRoot === undefined) throw new Error(`refusing to replace ${file}: no backupRoot given, so its old bytes would be lost`)
+  let session = backupSessions.get(backupRoot)
+  if (session === undefined) {
+    session = path.join(backupRoot, `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`)
+    backupSessions.set(backupRoot, session)
+  }
+  const target = path.join(session, rel)
+  // A second replace of the same file in this run keeps the FIRST copy: the second copy would be the bytes this run wrote.
+  if (fs.existsSync(target)) return
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.copyFileSync(file, target)
+}
+
 /** (Re)install one shipped skill into the user scope. The repo copy is the single source of
  *  truth; ~/.claude/skills/ is a managed installation target. Idempotent by content comparison —
  *  safe to run on every install / update, and the way to recover the skill if it was deleted.
@@ -786,8 +853,15 @@ export function skillTreeHash(dir: string, files?: readonly string[]): string | 
  *
  *  Files present at the destination but NOT shipped by this version are LEFT IN PLACE and
  *  reported, never deleted: this function cannot tell a stale file from one the user wrote, and
- *  silently deleting the latter is not a trade an installer gets to make. */
-export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'updated' | 'current' {
+ *  silently deleting the latter is not a trade an installer gets to make.
+ *
+ *  One surfaceVerdict (surfaceStamp.ts) covers the whole tree, read from the two SKILL.md files (TRDD-YL3EWT6N
+ *  item 4): a skill stamped NEWER than the shipped one, or an edited one with the same stamp in a release, is
+ *  not written and returns `kept-newer` / `kept-edited`. Every existing file about to be replaced is copied under
+ *  `opts.backupRoot` first, whatever the verdict (so a partial tree keeps its old bytes too); replacing without a
+ *  backupRoot throws. The backup is a COPY of the replaced files, never a move of the tree: a move would remove
+ *  the files the user added, which this function promises to leave. */
+export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'updated' | 'current' | 'kept-newer' | 'kept-edited' {
   const log = opts.log ?? ((line: string) => console.log(line))
   const name = opts.name ?? SKILL_NAME
   const root = opts.repoRoot ?? findPackageRoot(__dirname)
@@ -797,23 +871,34 @@ export function installSkill(opts: InstallSkillOptions = {}): 'installed' | 'upd
   if (!root) throw new Error(`skill source missing — no skills/${SKILL_NAME}/SKILL.md (the package-root anchor) above ${__dirname}; wanted to install "${name}"`)
   const srcDir = path.join(root, 'skills', name)
   if (!fs.existsSync(path.join(srcDir, 'SKILL.md'))) throw new Error(`skill source missing at ${path.join(srcDir, 'SKILL.md')} — is the package intact?`)
-  const dstDir = path.join(opts.skillsDir ?? path.join(os.homedir(), '.claude', 'skills'), name)
+  const skillsDir = opts.skillsDir ?? path.join(os.homedir(), '.claude', 'skills')
+  const dstDir = path.join(skillsDir, name)
   const existed = fs.existsSync(path.join(dstDir, 'SKILL.md'))
 
+  // Asked before any write: a kept skill must not be touched at all, not even its modes.
+  const verdict = skillSurfaceState(root, skillsDir, name).verdict
+  if (verdict === 'keep-newer' || verdict === 'keep-edited') {
+    log(`skill ${name}: ${verdict === 'keep-newer' ? 'installed copy is newer than the shipped one' : 'installed copy was edited'} — left in place at ${dstDir}`)
+    return verdict === 'keep-newer' ? 'kept-newer' : 'kept-edited'
+  }
+
   const shipped = skillFiles(srcDir)
-  let changed = 0
-  for (const rel of shipped) {
+  const plan = shipped.map(rel => {
     const src = path.join(srcDir, rel)
     const dst = path.join(dstDir, rel)
     const bytes = fs.readFileSync(src)
-    const mode = fs.statSync(src).mode & 0o777
-    const same = fs.existsSync(dst) && fs.readFileSync(dst).equals(bytes)
-    if (!same) {
-      fs.mkdirSync(path.dirname(dst), { recursive: true })
-      fs.writeFileSync(dst, bytes)
+    return { rel, src, dst, bytes, mode: fs.statSync(src).mode & 0o777, present: fs.existsSync(dst), same: fs.existsSync(dst) && fs.readFileSync(dst).equals(bytes) }
+  })
+  // Every backup is taken BEFORE the first write: a failed copy (or a missing backupRoot) throws with the tree untouched.
+  for (const p of plan) if (p.present && !p.same) backupFile(opts.backupRoot, path.join('skills', name, p.rel), p.dst)
+  let changed = 0
+  for (const p of plan) {
+    if (!p.same) {
+      fs.mkdirSync(path.dirname(p.dst), { recursive: true })
+      fs.writeFileSync(p.dst, p.bytes)
       changed++
     }
-    if ((fs.statSync(dst).mode & 0o777) !== mode) { fs.chmodSync(dst, mode); changed++ }
+    if ((fs.statSync(p.dst).mode & 0o777) !== p.mode) { fs.chmodSync(p.dst, p.mode); changed++ }
   }
 
   const extras = fs.existsSync(dstDir) ? skillFiles(dstDir).filter(rel => !shipped.includes(rel)) : []
@@ -849,8 +934,13 @@ export const AGENT_NAMES: readonly string[] = [
  *  Deliberately no "extras" report here, unlike installSkill: `~/.claude/agents/` is a SHARED
  *  directory holding every agent the user has from every source, so listing the files we did not
  *  ship would report the user's own library back to them as debris. We own our names, nothing
- *  else. An existing file with one of our names IS overwritten — that is what makes an upgrade
- *  work — so a user who wants to customize one should copy it under a different name. */
+ *  else.
+ *
+ *  An existing file with one of our names is replaced or kept by surfaceVerdict (surfaceStamp.ts), never
+ *  by content alone (TRDD-YL3EWT6N item 4): an older or unstamped copy is replaced, a copy stamped NEWER
+ *  than the shipped file is kept (outcome `kept-newer`), and an edited copy with the same stamp is kept
+ *  in a release (`kept-edited`) and replaced in a git checkout. Every replaced file is copied under
+ *  `opts.backupRoot` first; replacing without a backupRoot throws. */
 export function installAgents(opts: InstallSkillOptions = {}): Array<{ name: string; outcome: string }> {
   const log = opts.log ?? ((line: string) => console.log(line))
   const root = opts.repoRoot ?? findPackageRoot(__dirname)
@@ -869,6 +959,16 @@ export function installAgents(opts: InstallSkillOptions = {}): Array<{ name: str
         results.push({ name, outcome: 'current' })
         continue
       }
+      // The verdict is asked only for a file that differs: before item 4 any difference was overwritten, which
+      // replaced a NEWER or hand-edited copy with no way back.
+      const verdict = agentSurfaceState(root, dstDir, name).verdict
+      if (verdict === 'keep-newer' || verdict === 'keep-edited') {
+        log(`agent ${name}: ${verdict === 'keep-newer' ? 'installed copy is newer than the shipped file' : 'installed copy was edited'} — left in place at ${dst}`)
+        results.push({ name, outcome: verdict === 'keep-newer' ? 'kept-newer' : 'kept-edited' })
+        continue
+      }
+      // Backup BEFORE the write: a failed copy (or a missing backupRoot) throws and the file is not touched.
+      if (existed) backupFile(opts.backupRoot, path.join('agents', `${name}.md`), dst)
       fs.mkdirSync(dstDir, { recursive: true })
       fs.writeFileSync(dst, bytes)
       log(`agent ${name}: ${existed ? 'updated' : 'installed'} -> ${dst}`)
@@ -896,4 +996,48 @@ export function installSkills(opts: InstallSkillOptions = {}): Array<{ name: str
   }
   if (failures.length > 0) throw new Error(`skill install failed — ${failures.join('; ')}`)
   return results
+}
+
+/** One installed skill or agent that the shipped copy did NOT overwrite (TRDD-YL3EWT6N item 4). Its notice store lives in this file and not in
+ *  autoSetup.ts because the source guard of autoSetup.test.ts forbids a file write (or JSON.stringify) in autoSetup.ts. */
+export interface KeptSurface {
+  kind: 'agent' | 'skill'
+  name: string
+  verdict: 'keep-newer' | 'keep-edited'
+  installedStamp: string | null
+  shippedStamp: string | null
+  /** The installed file (agent) or directory (skill) the notice names. */
+  path: string
+}
+
+const KEPT_FILE = 'surface-kept.json'
+
+/** Announce each kept surface ONCE (item 4, P5): the keys already announced are in <dataDir>/surface-kept.json, written atomically
+ *  (temporary file in the same folder, then rename). A key is kind, name, installed stamp and shipped stamp, so the notice returns
+ *  when either side changes. A failed read or write only makes a notice repeat: it never throws, because a notice must not block a verb. */
+export function announceKeptSurfaces(dataDir: string, kept: readonly KeptSurface[], say: (line: string) => void): void {
+  if (kept.length === 0) return
+  const file = path.join(dataDir, KEPT_FILE)
+  let seen: string[] = []
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (Array.isArray(parsed)) seen = parsed.filter((k): k is string => typeof k === 'string')
+  } catch { /* absent or unreadable: every notice is new */ }
+  const fresh = kept.filter(k => !seen.includes(keptKey(k)))
+  if (fresh.length === 0) return
+  for (const k of fresh) {
+    say(k.verdict === 'keep-newer'
+      ? `agentlenspro: ${k.kind} ${k.name}: the installed copy is version ${k.installedStamp}, newer than the shipped ${k.shippedStamp}, left in place`
+      : `agentlenspro: ${k.kind} ${k.name}: the installed copy differs from the shipped file of the same version (${k.installedStamp}), left in place; to restore it delete ${k.path} and run agentlenspro setup`)
+  }
+  try {
+    fs.mkdirSync(dataDir, { recursive: true })
+    const tmp = path.join(dataDir, `${KEPT_FILE}.${process.pid}.tmp`)
+    fs.writeFileSync(tmp, JSON.stringify([...seen, ...fresh.map(keptKey)]))
+    fs.renameSync(tmp, file)
+  } catch { /* the notice repeats next launch; never block the verb */ }
+}
+
+function keptKey(k: KeptSurface): string {
+  return [k.kind, k.name, k.installedStamp ?? '', k.shippedStamp ?? ''].join('|')
 }

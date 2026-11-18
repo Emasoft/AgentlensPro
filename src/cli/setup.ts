@@ -45,7 +45,7 @@ import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
   INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration, reviewModInstalled,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
-  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES,
+  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES, agentSurfaceState, skillSurfaceState,
 } from './hookInstall'
 import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir, statsOwnership } from './serverControl'
 
@@ -1115,17 +1115,24 @@ const stepSkill: StepDef = {
         name, src: path.join(src, 'SKILL.md'), dst, srcExists: srcHash !== null,
         srcHash, srcFiles,
         dstHash: skillTreeHash(dst, srcFiles),
+        // The item-4 verdict, asked only for a skill that exists on both sides and differs.
+        state: srcHash !== null && skillTreeHash(dst, srcFiles) !== srcHash ? skillSurfaceState(ctx.repoRoot, ctx.skillsDir, name) : null,
       }
     })
     const missing = skills.filter(s => !s.srcExists)
     if (missing.length > 0) {
       return { result: { step: this.name, found: `shipped skill missing at ${missing.map(s => s.src).join(', ')}`, action: 'refused', verify: 'FAIL', detail: 'package is incomplete' }, acted: false }
     }
-    const stale = skills.filter(s => s.dstHash !== s.srcHash)
+    // Item 4: a skill the verdict keeps (newer stamp, or edited in a release) is listed, not repaired and not a verify failure.
+    const keptSkills = skills.filter(s => s.dstHash !== s.srcHash && (s.state?.verdict === 'keep-newer' || s.state?.verdict === 'keep-edited'))
+    const stale = skills.filter(s => s.dstHash !== s.srcHash && !keptSkills.includes(s))
+    // Replaced files are copied here first; ctx.dataDir (never the real home) so a fixture's backups stay in the fixture.
+    const backupRoot = path.join(ctx.dataDir, 'surface-backups')
     const supersededDir = path.join(ctx.skillsDir, 'agentlens-diagnostics')
     const hasSuperseded = fs.existsSync(supersededDir)
-    const found = `${skills.length - stale.length}/${skills.length} current` +
+    const found = `${skills.length - stale.length - keptSkills.length}/${skills.length} current` +
       (stale.length > 0 ? ` (${stale.map(s => `${s.name}: ${s.dstHash === null ? 'not installed' : 'content drift'}`).join(', ')})` : '') +
+      (keptSkills.length > 0 ? ` (kept: ${keptSkills.map(s => `${s.name}: ${s.state?.verdict === 'keep-newer' ? 'newer than shipped' : 'edited'}`).join(', ')})` : '') +
       (hasSuperseded ? ' + superseded agentlens-diagnostics present' : '')
 
     if (ctx.dryRun) {
@@ -1137,7 +1144,7 @@ const stepSkill: StepDef = {
 
     let acted = false
     for (const s of stale) {
-      installSkill({ repoRoot: ctx.repoRoot, skillsDir: ctx.skillsDir, log: ctx.log, name: s.name })
+      installSkill({ repoRoot: ctx.repoRoot, skillsDir: ctx.skillsDir, log: ctx.log, name: s.name, backupRoot })
       acted = true
     }
     let supersededNote = ''
@@ -1159,33 +1166,48 @@ const stepSkill: StepDef = {
     // The AGENT definitions converge with the skills, in this same step: a skill that dispatches
     // `agentlens-tldr-worker` is inert on a machine without that agent file, so a run that
     // refreshed the skills and skipped the agents would report PASS on a half-installed feature.
+    // Item 4: an installed agent the verdict keeps (newer stamp, or edited in a release) is neither stale nor a verify failure:
+    // installAgents leaves it alone, so counting it would fail this step on every run and never converge.
+    const agentKeepsOf = (name: string): 'keep-newer' | 'keep-edited' | null => {
+      const v = agentSurfaceState(ctx.repoRoot, ctx.agentsDir, name).verdict
+      return v === 'keep-newer' || v === 'keep-edited' ? v : null
+    }
+    const agentsKept = AGENT_NAMES.filter(name => {
+      const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
+      const dst = path.join(ctx.agentsDir, `${name}.md`)
+      return fs.existsSync(src) && fs.existsSync(dst) && sha256File(dst) !== sha256File(src) && agentKeepsOf(name) !== null
+    })
     const agentsStale = AGENT_NAMES.filter(name => {
       const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
       const dst = path.join(ctx.agentsDir, `${name}.md`)
-      return fs.existsSync(src) && (!fs.existsSync(dst) || sha256File(dst) !== sha256File(src))
+      return fs.existsSync(src) && (!fs.existsSync(dst) || sha256File(dst) !== sha256File(src)) && !agentsKept.includes(name)
     })
     if (agentsStale.length > 0) {
-      installAgents({ repoRoot: ctx.repoRoot, agentsDir: ctx.agentsDir, log: ctx.log })
+      installAgents({ repoRoot: ctx.repoRoot, agentsDir: ctx.agentsDir, log: ctx.log, backupRoot })
       acted = true
     }
 
     // VERIFY — hash compare on a FRESH read of both trees (not the writer's buffer), for EVERY
     // skill and agent. One bad apple fails the step and is named, so "PASS" can never mean "the
-    // first one was fine and the rest were not looked at".
-    const bad = skills.filter(s => skillTreeHash(s.dst, s.srcFiles) !== s.srcHash)
+    // first one was fine and the rest were not looked at". A kept surface is not an apple: it is listed in the detail instead.
+    const bad = skills.filter(s => !keptSkills.includes(s) && skillTreeHash(s.dst, s.srcFiles) !== s.srcHash)
     const badAgents = AGENT_NAMES.filter(name => {
       const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
       const dst = path.join(ctx.agentsDir, `${name}.md`)
-      return !(fs.existsSync(src) && fs.existsSync(dst) && sha256File(dst) === sha256File(src))
+      return !agentsKept.includes(name) && !(fs.existsSync(src) && fs.existsSync(dst) && sha256File(dst) === sha256File(src))
     })
+    const keptNote = keptSkills.length + agentsKept.length === 0 ? '' : `; kept, not overwritten: ${[
+      ...keptSkills.map(s => `skill ${s.name} (${s.state?.verdict === 'keep-newer' ? `installed ${s.state.installedStamp} is newer than shipped ${s.state.shippedStamp}` : `edited, same version ${s.state?.installedStamp}`})`),
+      ...agentsKept.map(name => `agent ${name} (${agentKeepsOf(name) === 'keep-newer' ? 'newer than shipped' : 'edited, same version'})`),
+    ].join(', ')}`
     return {
       result: {
-        step: this.name, found: `${found}; agents ${AGENT_NAMES.length - agentsStale.length}/${AGENT_NAMES.length} current`,
+        step: this.name, found: `${found}; agents ${AGENT_NAMES.length - agentsStale.length - agentsKept.length}/${AGENT_NAMES.length} current`,
         action: acted ? 'installed/refreshed' : 'none',
         verify: bad.length === 0 && badAgents.length === 0 ? 'PASS' : 'FAIL',
         detail: (bad.length === 0 && badAgents.length === 0
-          ? `sha256 match on ${skills.length} skill tree(s) + ${AGENT_NAMES.length} agent(s)${supersededNote}${putBackNote}`
-          : `installed hash differs from shipped hash: ${[...bad.map(s => s.name), ...badAgents].join(', ')}${putBackNote}`),
+          ? `sha256 match on ${skills.length - keptSkills.length} skill tree(s) + ${AGENT_NAMES.length - agentsKept.length} agent(s)${supersededNote}${putBackNote}${keptNote}`
+          : `installed hash differs from shipped hash: ${[...bad.map(s => s.name), ...badAgents].join(', ')}${putBackNote}${keptNote}`),
       },
       acted,
     }

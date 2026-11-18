@@ -672,7 +672,14 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   // Skill install is standalone too — pure file copy, no server, no settings mutation. The AGENT
   // definitions install with them: a skill that dispatches `agentlens-tldr-worker` is broken on a
   // machine where that agent file is absent, so shipping one without the other is a half install.
-  if (ops.installSkill) { installSkills(); installAgents(); return }
+  // The backup folder is under the data dir (item 4): a skill or agent this run replaces is copied there first, so an
+  // overwrite of an edited or newer copy never loses the old bytes; installSkill/installAgents throw without a backupRoot.
+  if (ops.installSkill) {
+    const backupRoot = path.join(dataDir(), 'surface-backups')
+    installSkills({ backupRoot })
+    installAgents({ backupRoot })
+    return
+  }
 
   // One-shot realtime culprit check — REST fast path, ~50ms end-to-end incl. node boot.
   if (ops.risk) { await runRisk(); return }

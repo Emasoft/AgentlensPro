@@ -32,6 +32,8 @@ suite('shipped skill payloads install whole, agents ride along', () => {
 
   test('a second install is a no-op, and a payload edit is detected as drift — not just a SKILL.md edit', () => {
     const dir = tmp('al-skill-')
+    // The repair below replaces a tampered file, so it needs a scratch backupRoot (TRDD-YL3EWT6N item 4: no default, never the real data dir).
+    const backupRoot = tmp('al-skill-bak-')
     try {
       installSkill({ repoRoot, skillsDir: dir, name: 'agentlenspro-scan-and-fix', log: () => {} })
       assert.strictEqual(installSkill({ repoRoot, skillsDir: dir, name: 'agentlenspro-scan-and-fix', log: () => {} }), 'current')
@@ -46,9 +48,9 @@ suite('shipped skill payloads install whole, agents ride along', () => {
       const srcHash = skillTreeHash(path.join(repoRoot, 'skills', 'agentlenspro-scan-and-fix'))
       assert.notStrictEqual(skillTreeHash(path.join(dir, 'agentlenspro-scan-and-fix')), srcHash,
         'tree hash must see payload drift')
-      assert.strictEqual(installSkill({ repoRoot, skillsDir: dir, name: 'agentlenspro-scan-and-fix', log: () => {} }), 'updated')
+      assert.strictEqual(installSkill({ repoRoot, skillsDir: dir, name: 'agentlenspro-scan-and-fix', backupRoot, log: () => {} }), 'updated')
       assert.strictEqual(skillTreeHash(path.join(dir, 'agentlenspro-scan-and-fix')), srcHash, 'repair must restore the tree')
-    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(backupRoot, { recursive: true, force: true }) }
   })
 
   test('an unshipped file at the destination is reported but NEVER deleted', () => {
