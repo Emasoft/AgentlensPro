@@ -80,6 +80,10 @@ Claude Code CLI uses Anthropic API token-based pricing only — no request-multi
 
 **Source:** <https://platform.claude.com/docs/en/about-claude/pricing> (verified 2026-06-08; sonnet-5/mythos-5 added 2026-07-07)
 
+> **claude-sonnet-5-5 is $2/$10 per MTok** (5m write $2.50, 1h write $4, cache read **$0.10**) — from the pricing page row
+> "Claude Sonnet 5.5", fetched 2026-11-15. Its cache read is half of claude-sonnet-5's $0.20; before it had its own row it
+> prefix-fell to claude-sonnet-5 and read 2x high.
+
 > **claude-sonnet-5 is $2/$10 per MTok** (cache read $0.20, cache write $2.50) — **MEASURED**
 > 2026-09-04 against Claude Code's own reported `costUSD` over 7 real post-2026-09-01 sessions,
 > median implied $1.956/MTok. This paragraph used to announce a reversion to a $3/$15 "sticker"

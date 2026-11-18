@@ -1,5 +1,6 @@
 ---
 trdd-id: 768NEX6E
+status: tasked
 title: What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
 column: blocked
 created: 2026-09-02T09:31:25+0200

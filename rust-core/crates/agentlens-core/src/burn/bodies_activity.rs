@@ -363,6 +363,10 @@ pub fn run_bodies_scan_with(state: &Arc<Mutex<CoreState>>, scan_now: f64, merge_
     // A panic inside a previous scan poisons this mutex; that is safe to ignore because `scan`
     // is `&self` and `seen` changes only in `commit`, so a poisoned poller is still consistent.
     let mut poller = poller.lock().unwrap_or_else(|p| p.into_inner());
+    // TRDD-2HRA270Y: opens the burn bodies scan window (list + parse of the unseen body names), taken
+    // after the poller lock is held and before the scan reads the directory.
+    static BURN_SCAN_START: std::sync::Once = std::sync::Once::new();
+    BURN_SCAN_START.call_once(|| crate::rss_guard::log_boot_phase("burn_scan_start", None));
     let t0 = std::time::Instant::now();
     let mut d = poller.scan_with(scan_now, on_entry);
     if !d.listed {
@@ -384,6 +388,12 @@ pub fn run_bodies_scan_with(state: &Arc<Mutex<CoreState>>, scan_now: f64, merge_
     if scan_ms >= 1000 {
         eprintln!("{} alcore: burn bodies scan {scan_ms} ms, merge {merge_ms} ms, new {new_names}", crate::log_ts());
     }
+    // TRDD-2HRA270Y: taken after the scan, merge and commit, whether or not the line above printed (it
+    // prints only at >= 1000 ms); with `burn_scan_start` it splits the one burn bodies scan window. NOT reached on the
+    // `!d.listed` early return above (the scan listed nothing), so a later scan can pair this reading with an earlier
+    // `burn_scan_start`: a `burn_scan_start` with no `burn_scan_done` after it means that scan returned early.
+    static BURN_SCAN_DONE: std::sync::Once = std::sync::Once::new();
+    BURN_SCAN_DONE.call_once(|| crate::rss_guard::log_boot_phase("burn_scan_done", None));
 }
 
 impl BodiesPoller {

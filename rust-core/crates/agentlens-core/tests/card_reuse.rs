@@ -760,3 +760,133 @@ fn a_refused_reuse_rebuilds_current_snapshot_cards_without_double_counting() {
     b.durable.run_1h_backfill(&b.st);
     check(&live(&b), "after the 1h backfill");
 }
+
+/// TRDD-JDQR0HDT: the card whose transcript the previous run knew and the test then deletes.
+const GONE_ID: &str = "ffffffff-1111-2222-3333-444444444444";
+
+fn delete_gone_transcript(env: &Env) {
+    std::fs::remove_file(env.home.join(".codex/sessions/2026/08/01").join(format!("{GONE_ID}.jsonl"))).unwrap();
+}
+
+fn has_card(b: &Boot, id: &str) -> bool {
+    b.st.lock().unwrap().cards.parsed_cards().iter().any(|c| c["sessionId"].as_str() == Some(id))
+}
+
+/// TRDD-JDQR0HDT: a store flagged `clear_in_progress` (the previous run died between `/api/clear` and the
+/// end of its rescan) next to a snapshot that still holds a card whose transcript is gone. The restore must
+/// take the stale-version branch: restore 0 cards, tombstone both logs, stamp the version, and a rescan then
+/// serves no card for the deleted transcript. Mutation: drop `clear_interrupted ||` in
+/// `restore_from_snapshot` and this test fails (the snapshot cards come back).
+#[test]
+fn an_interrupted_clear_restores_no_snapshot_card_and_tombstones_both_logs() {
+    let (data, env, now) = previous_run("jdqr-clear");
+    let before = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    assert!(before.len() == 7 && before.contains_key(GONE_ID), "precondition: the previous run saved the card of the transcript to be deleted");
+
+    // The `/api/clear` DELETE (flag set with the delete in one transaction), then death before any card save.
+    {
+        let mut s = CardStore::open(&data.join("a"));
+        assert!(s.reused(), "precondition: the previous run left a reusable store");
+        s.clear();
+    }
+    delete_gone_transcript(&env);
+
+    let (mut b, r) = boot(&data.join("a"), &data, &env);
+    {
+        let st = b.st.lock().unwrap();
+        assert!(!st.cards.reused(), "a clear in progress refuses the reuse");
+        assert!(st.cards.clear_was_interrupted(), "and the store keeps the reason");
+    }
+    assert_eq!(r, (0, 0, 0), "an interrupted clear restores nothing");
+    assert!(b.st.lock().unwrap().cards.is_empty(), "no snapshot card is in the store");
+    assert!(stamp_is_current(&data), "the version is stamped before the rescan, as on the stale-version branch");
+    assert!(DeltaLog::new(&data, "log-sessions").load().unwrap().is_empty(), "log-sessions is tombstoned");
+    assert!(DeltaLog::new(&data, "log-offsets").load().unwrap().is_empty(), "log-offsets is tombstoned");
+
+    let (scanned, _) = b.tailer.sweep(&env, now as i64, None);
+    b.st.lock().unwrap().ingest_scanned(scanned);
+    assert!(!has_card(&b, GONE_ID), "the rescan does not bring back the card of the deleted transcript");
+    assert!(!b.st.lock().unwrap().cards.is_empty(), "the rescan rebuilt the cards whose files still exist");
+}
+
+/// TRDD-JDQR0HDT, the other half of the decision: a `CARD_SCHEMA_VERSION` refusal is a layout change, not a
+/// change of what a card means, so the restore still puts every snapshot card back, including the card of a
+/// transcript that no longer exists (its only copy). Guards against widening the clear branch to every refusal.
+#[test]
+fn a_schema_version_refusal_still_restores_the_card_of_a_deleted_transcript() {
+    let (data, env, _now) = previous_run("jdqr-schema");
+    let before = DeltaLog::new(&data, "log-sessions").load().unwrap();
+    assert!(before.len() == 7 && before.contains_key(GONE_ID), "precondition: the previous run saved the card of the transcript to be deleted");
+    meta_sql(&data.join("a"), "UPDATE meta SET value = '0' WHERE key = 'card_schema_version'");
+    delete_gone_transcript(&env);
+
+    let (b, r) = boot(&data.join("a"), &data, &env);
+    {
+        let st = b.st.lock().unwrap();
+        assert!(!st.cards.reused(), "a schema-version mismatch refuses the reuse");
+        assert!(!st.cards.clear_was_interrupted(), "and it is not a clear");
+    }
+    assert_eq!(r.0, 7, "every snapshot card is restored");
+    assert!(has_card(&b, GONE_ID), "the card of the deleted transcript is kept");
+    assert_eq!(DeltaLog::new(&data, "log-sessions").load().unwrap().len(), 7, "log-sessions is not tombstoned");
+}
+
+/// TRDD-JDQR0HDT: the window between the refused open and the tombstone write. The process dies after
+/// `CardStore::open` rebuilt the store but before `restore_from_snapshot` tombstoned the snapshot (or loading
+/// the snapshot failed): the rebuilt store must STILL say "clear in progress", so the next start discards the
+/// snapshot too instead of restoring it. Once a start completes, the flag is cleared and the store is reusable.
+/// Mutation: write `clear_in_progress` as 0 in the rebuilt store and this test fails at the second boot.
+#[test]
+fn a_death_before_the_tombstones_are_written_still_discards_the_snapshot_at_the_next_start() {
+    let (data, env, _now) = previous_run("jdqr-death");
+    {
+        let mut s = CardStore::open(&data.join("a"));
+        assert!(s.reused(), "precondition: the previous run left a reusable store");
+        s.clear();
+    }
+    delete_gone_transcript(&env);
+
+    // First start after the killed clear: the store is rebuilt, then the process dies before any tombstone.
+    {
+        let s = CardStore::open(&data.join("a"));
+        assert!(s.clear_was_interrupted(), "the refusal is a clear in progress");
+    }
+    assert_eq!(DeltaLog::new(&data, "log-sessions").load().unwrap().len(), 7, "precondition: the snapshot is still on disk");
+    let flag: String = Connection::open(data.join("a").join(CARD_DB_FILE))
+        .unwrap()
+        .query_row("SELECT value FROM meta WHERE key = 'clear_in_progress'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(flag, "1", "the rebuilt store keeps the clear flag until the tombstones are written");
+
+    // Second start: still the discard branch.
+    let (b, r) = boot(&data.join("a"), &data, &env);
+    assert!(b.st.lock().unwrap().cards.clear_was_interrupted(), "the second start still sees a clear in progress");
+    assert_eq!(r, (0, 0, 0), "no snapshot card is restored");
+    assert!(!has_card(&b, GONE_ID), "the card of the deleted transcript stays gone");
+    assert!(DeltaLog::new(&data, "log-sessions").load().unwrap().is_empty(), "log-sessions is tombstoned");
+    assert!(DeltaLog::new(&data, "log-offsets").load().unwrap().is_empty(), "log-offsets is tombstoned");
+    drop(b);
+
+    // The completed start cleared the flag: a third start reuses the (empty) store.
+    let s = CardStore::open(&data.join("a"));
+    assert!(s.reused(), "after the tombstones the flag is cleared and the store is reusable");
+}
+
+/// TRDD-JDQR0HDT: a store that carries BOTH `clear_in_progress` = 1 and a stale `card_schema_version` is a clear:
+/// `check_meta` tests the clear flag before the version checks, so the snapshot is discarded. Intended: the clear
+/// meant to drop those cards, and the schema bump alone would not have dropped them but does not undo the clear.
+#[test]
+fn a_clear_in_progress_wins_over_a_schema_version_mismatch() {
+    let (data, env, _now) = previous_run("jdqr-both");
+    {
+        let mut s = CardStore::open(&data.join("a"));
+        s.clear();
+    }
+    meta_sql(&data.join("a"), "UPDATE meta SET value = '0' WHERE key = 'card_schema_version'");
+    delete_gone_transcript(&env);
+
+    let (b, r) = boot(&data.join("a"), &data, &env);
+    assert!(b.st.lock().unwrap().cards.clear_was_interrupted(), "the clear flag decides, not the schema version");
+    assert_eq!(r, (0, 0, 0), "no snapshot card is restored");
+    assert!(!has_card(&b, GONE_ID), "the card of the deleted transcript stays gone");
+}

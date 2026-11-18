@@ -28,8 +28,15 @@ export const HOOK_PATH_VERBS: ReadonlySet<string> = new Set([
  *  WHY cache-expired is here (TRDD-CS2W7E77): 896be44a excluded this class because a read must never write
  *  settings.json, and cache-expired was missed. So on a fresh machine a polled `agentlenspro cache-expired` ran a
  *  full first-run setup that wrote settings, hooks and telemetry env and could start a server. Found by the CLI
- *  hot-path latency guard in gate run B2. */
-export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history"])
+ *  hot-path latency guard in gate run B2.
+ *
+ *  The disk monitor (TRDD-HTARKH87) is exempt as a whole, BY OWNER DECISIONS 2026-11-16 ("Exempt the sampler"; "Install, even when
+ *  DISABLED (Recommended)"): disk-sample, disk, disk-watch and disk-monitor (install, uninstall, status). A filling disk is exactly
+ *  when everything else is switched off. All of them also skip the launch self-heal: the sampler fires every 5 minutes and must never
+ *  write settings.json. */
+// `search` (owner, 2026-11-18: «disable must disable only telemetry and event hooks logs, not jsonl parsing by duckdb»): it reads the
+// project transcripts off disk with DuckDB, needs no server and writes no user config, so the launch self-heal never runs for it.
+export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history", "disk-sample", "disk", "disk-watch", "disk-monitor", "search"])
 
 /** `get_account_status --all` — the PLURAL form, assembled from files (account-state timeline + per-account
  *  usage archive) plus one probe per owner-supplied long-lived key (src/longOAuthKeys.ts); it needs no server and writes no user config (main.ts case get_account_status). ONE rule shared by the dispatcher (no server proxy)

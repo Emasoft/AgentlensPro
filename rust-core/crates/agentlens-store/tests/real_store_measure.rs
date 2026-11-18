@@ -145,9 +145,10 @@ fn measure_open_on_a_real_store_copy() {
     // 1536MB limit (measured: Out of Memory, 1.4/1.4 GiB used) because known_blob + its index already
     // hold most of it.
     // Bounded and dropped right after: unbounded, this side query took the process to ~25 GB RSS.
-    let side = agentlens_store::duckdb::Connection::open_in_memory().expect("side con");
-    side.execute_batch("SET memory_limit = \x272GB\x27; SET threads = 1;").expect("side limits");
-    let max_shas: i64 = side
+    let side_dir = std::env::temp_dir().join(format!("real-store-measure-side-{}", std::process::id()));
+    // Opened through open_store, not Connection::open_in_memory, so the test does not add a direct DuckDB opener (scripts/check-duckdb-only.js test cap).
+    let side = agentlens_store::open_store(&side_dir, "2GB", 1).expect("side store");
+    let max_shas: i64 = side.con
         .query_row(
             &format!("SELECT max(c) FROM (SELECT count(DISTINCT sha) c FROM {parts} WHERE kind = \x27blob\x27 GROUP BY body_id)"),
             [],
@@ -155,6 +156,7 @@ fn measure_open_on_a_real_store_copy() {
         )
         .expect("max shas");
     drop(side);
+    let _ = std::fs::remove_dir_all(&side_dir);
     println!("max distinct span shas in one body: {max_shas}");
     let big: Vec<String> = {
         let mut stmt = store.con.prepare(&format!("SELECT lower(hex(sha)) FROM known_blob USING SAMPLE {max_shas} ROWS")).expect("p");

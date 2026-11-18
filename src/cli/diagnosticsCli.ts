@@ -77,6 +77,21 @@ usage:
                                               from the PreCompact hook, off disk (server may be
                                               down). No compaction on record = exit 2, stdout EMPTY
                                               (never "0s ago", which is the opposite claim)
+  agentlenspro disk now|history|changes|top-change|trees|sql [--volume V] [--since 6h] [--json]
+                                              the disk-space history the monitor records every 5 minutes: used/free/avail
+                                              per volume, with and without the trash, and the exact sample time and size
+                                              of every change; 'disk sql "<SELECT>"' queries the tables directly.
+                                              Read-only, off disk, works with the server down and while DISABLED.
+                                              'agentlenspro disk' with no argument lists the views, flags and tables
+  agentlenspro disk-sample [--volumes-only [--resident] | --walks-only] [--quiet]
+                                              one run into disk.duckdb: volume rows and/or due folder walks (no flag = both;
+                                              --resident, with --volumes-only, never exits: one volume row per wall-clock 5-minute boundary;
+                                              the two jobs below each run one half; runs even while DISABLED)
+  agentlenspro disk-watch add <path> [--kind folder|trash] | remove <path> | list
+                                              the folders whose size (apparent/allocated, with/without symlinks) is measured
+  agentlenspro disk-monitor install|uninstall|status
+                                              two launchd jobs (macOS): a resident disk-sample --volumes-only --resident (kept alive) and --walks-only
+                                              every 300 s, even with no Claude session. Opt-in: setup prints the command, never installs it
   agentlenspro search <pattern> --session ID [--role R] [--type T] [--regex] [--limit N] [--json]
                                               search one session's transcript .jsonl (tool outputs,
                                               agent responses, prompts) with DuckDB's streaming NDJSON

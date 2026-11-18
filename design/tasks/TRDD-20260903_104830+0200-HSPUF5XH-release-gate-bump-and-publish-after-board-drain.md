@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-10-17T10:33:28+0200
+updated: 2026-11-18T01:20:35+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,10 +12,12 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, 9SYRK6SW, QE114936, 768NEX6E, 7YPQWKPG, 7NHUU6GK, ZSX34J8F, 2R0AXCKL, 2TQHNMEC, H3D5ZBO1, WCENKH6T, WCG7I5D8, WBYDQH8K, ATXO2E1J, OLKITCS7, JDQR0HDT]
+blocked-by: [2R36W8Q1, N60JUWU3, CAJ5RCP9, QE114936, 768NEX6E, 7YPQWKPG, H3D5ZBO1, WCENKH6T, WBYDQH8K, ATXO2E1J, OLKITCS7, PGMMB2QG, QXODI7TR, JKVUBKLR, AXJH3WTU, MUZ04JYU, ASXUW08U, M62ZBT7E, ISEF8YO7]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
+assignee: main-agent@agentlenspro
+status: tasked
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -100,8 +102,10 @@ this card can close.
 ## Approval log
 
 - 2026-09-03T10:48:30+0200 — APPROVED by USER (verbatim order above).
+- 2026-11-15 — blocked-by pruned per this card's own STATE rule (ids outside dev|testing|todo|blocked|plan|dispatch): removed 7NHUU6GK (backburner), ZSX34J8F (backburner), 2R0AXCKL (backburner), 2TQHNMEC (backburner), 9SYRK6SW (deploy); 13 remain.
 
 ## Blocking cards (must reach a terminal column before this gate opens)
+> SUPERSEDED 2026-11-15: this list is historical; the live gate is the frontmatter blocked-by field (13 ids after the 2026-11-15 prune).
 
 | id | column | title (file) |
 |---|---|---|
@@ -163,6 +167,8 @@ unless the user says otherwise:
       9SYRK6SW's own acceptance recipe).
 - [ ] Upgrade boot from a v2.33.1 data dir on a full corpus with the release alcore: record peak RSS against the cap and confirm the boot finishes its cold rescan (B' crash-loop check from 6B7VV2Z7; see Notes 2026-10-16).
 - [ ] Two consecutive `pnpm run test:unit` runs, exit 0 and 0 failing, on the release tree as defined in the section "Release full-suite pair — gate rules" below, each following every rule there; record each run line under that section. Moved here from TRDD-CS2W7E77 on 2026-10-17.
+- NOTE 2026-11-17T19:04:05+0100 (from the closing entry of TRDD-WCG7I5D8): before the first start of the new build on the live folder, confirm that log-delta-version.json is present and current there. A start whose version stamp is missing or stale refuses the store and tombstones the card log (log_reader.rs:975-977), which drops every card that has no transcript. A gate copy without that file did exactly this (74,730 cards discarded and rescanned); a later copy with a reused store kept them.
+- BASIS of the note above (2026-11-17T19:06:03+0100): the copy lists of scripts_dev/wcg-gate4.py:30-31 and wcg-gate4b.py:38-39 hold six files and not log-delta-version.json; scripts_dev/yr6-gate-live.py:16 adds that file, and its run LV1 printed 'reusing cards.duckdb: 74730 cards'. The two copies were never compared in one controlled run, so 'the missing file caused the refusal' is INFERRED from those reads. Also: TRDD-WCG7I5D8 was moved to complete without a harness review of the close itself (two blocked rounds, then the advisor); corrections to it go to TRDD-PGMMB2QG.
 
 ## Release recipe (run only after every box above is checked)
 
@@ -221,6 +227,8 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 - TRDD-0BDOV3WC (when fixed): an out-of-memory read at boot no longer deletes cards.duckdb.
 - TRDD-3RVTC1HY (when fixed): any panic exits the server so the hook revive restarts it.
 - TRDD-6B7VV2Z7 (3a5874a5): when the card database is missing, unreadable or refused at startup, the server no longer trusts saved read positions that ran ahead of the card snapshot; it re-reads every log file, so missing or stale session cards are rebuilt. After an ingest-version upgrade, a deleted transcript's stale card no longer comes back.
+- 2026-11-17T17:09+0100 FOR THE RELEASE THAT SHIPS e9782faf (TRDD-JDQR0HDT) and eef01b1d (TRDD-YR6WX7VQ), destructive on upgrade in one case: at the first start of the new build, a data folder whose card store ALREADY carries clear_in_progress = 1 (an interrupted clear) has its card snapshot tombstoned, cards of deleted transcripts included (their only copy), where the old build restored them. The CHANGELOG entry must say so. THIS MACHINE, read today: copies of the live card store report 'no clear in progress' (74,730 cards; reports_dev/YR6WX7VQ/gate/prep.log:5, gate-load/prep.log:5). Those copies ALSO printed 'card store reuse refused, the offsets log is stamped with another ingest version; discarding the cards and cold-rescanning': that refusal is an artefact of the gate script, which copies the card and offsets files but not log-delta-version.json (scripts_dev/wcg-gate4b.py:38-39), and version_is_current (log_reader.rs:908-913) refuses a folder with no stamp. The live folder's stamp reads {"v":7} and LOG_INGEST_VERSION is 7 (log_reader.rs:751), so by that check the live folder's first start reuses the store; not run on the live folder (the collector belongs to the owner and is taken as stopped from earlier in the session, not re-observed now). Before the first live start of a new build: read the stamp and the flag again.
+- From TRDD-YR6WX7VQ (2026-11-17 17:51, commit eef01b1d, not yet pushed or deployed): (1) the full test suite is owed before the push; no full run has covered this commit. (2) The first start of the new binary on the live data folder appends the cards the files are missing in one save: on a copy of the live files that was 43,569 keys and 63,345,885 bytes; no tombstone, no compaction. (3) While the store is ahead of the card files a start holds the state lock about 4.5 s in the sweeper's restore (control binary 4,494 and 4,543 ms, patched first start 4,216 ms, at 74,730 to 75,106 cards); after the gap is closed the patched restart held it 614 ms (one run each). (4) Once per reused start the sweeper spends one file pass before its next loop: 0.34 s on the live copy on a quiet host, 32.9 s at 1.69 times the keys under host load rising to about 100, and on the smaller gate copies 10.5 to 113.4 s under load 23 to 215 against 1.9 s quiet; a stop that lands inside the pass exits without the sweeper's forced save, as a kill would (TRDD-QXODI7TR).
 
 ## Notes
 
@@ -287,3 +295,8 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 - TESTED-STATE: CI publishes from the committed tree, so the release tree is the committed tree. While the owner-pending change in src/cli/hookInstall.ts (AGENT_NAMES gains cheap-worker, fast-worker, smart-worker), the untracked agents/cheap-worker.md, agents/fast-worker.md, agents/smart-worker.md, and the `skills: [ultimate-bug-scanner]` line in agents/agentlens-tldr-worker.md and agents/micro-worker.md stay uncommitted, a pair run on the working tree counts only if the release commits all of them unchanged (snapshot sha256 values: TRDD-CS2W7E77 Notes, "TESTED-STATE SNAPSHOT"), and only if those five hashes, re-taken after each run, all match the snapshot. Any other owner decision on them requires one more pair on the committed tree.
 - Do not run the pair until the owner pending decisions are made and every other id in blocked-by is terminal.
 - These runs are local only: CI has not run on this branch since 2026-09-02 (see Notes).
+
+## Owner directive 2026-11-18
+
+2026-11-18T01:20:09+0100 — OWNER, 2026-11-18 (verbatim): «i remember telling to publish whenever you want, and to deploy the most up to date version so it can be used. also the updates must trigger the updates of all installed extensions and hooks in claude.» This is newer than the order recorded on this card («just bump and publish a new version. but do that only after you completed all TRDDs and fixed all issues.») and governs the timing. READING of the main agent (not the owner words): publish when the local deploy of the merge of feat/rbbex59r-c2 is observed clean and the full suite has run once before the push; the never-push rule is lifted for the release only. OPEN before tagging: the waiver of TRDD-12FGMAEP on TRDD-RBBEX59R was read as given for this machine, while a publish ships that alcore to every install; the owner is told in the status so a veto is possible.
+2026-11-18T01:20:35+0100 — OWNER, 2026-11-18 (verbatim): «remember to update the changelog, the readme, and any documentation or --help page before publishing.» Gate for the publish: CHANGELOG.md, README.md, the documentation and every --help text are brought up to date first.

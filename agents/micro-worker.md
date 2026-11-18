@@ -1,13 +1,13 @@
 ---
 name: micro-worker
 description: Minimal-footprint worker for ONE bounded, fully-specified task — a single file edit, a scoped change, a named verification. Always verifies before reporting. Use when the task needs nothing from the parent conversation; pass absolute paths and, where you have one, the exact check to run. Launch many in parallel for fan-out.
-tools: Bash, Read, Edit, Write
-model: sonnet[1m]
+tools: Bash, Read, Write, Edit, Grep
+model: haiku[1m]
 effort: medium
 # CC >= 2.1.271: start without the user/project/local CLAUDE.md files (measured on this repo,
 # 2026-09-24: first request 61,119 -> 11,167 tokens). Everything this worker needs is in the delegation prompt and the rules below.
-# Deliberately declares no skills: preloading skill bodies would defeat this worker's minimal-footprint purpose.
 omitClaudeMd: true
+permissionMode: auto
 ---
 
 # Execute the task in your prompt
@@ -126,7 +126,43 @@ Your tool surface sits at the head of the cached prefix, so every tool you do no
 on every turn of every parallel copy of you. Spend the rest as carefully:
 
 - Read each named path ONCE. If it is already in your context, do not fetch it again.
-- On a large file, locate before you read — `tldr structure`/`tldr search` (or `grep -n`)
-  through Bash, then read the needed range with `tldr body "<file>" --from A --to B -f text`. Never pull in 1,000 lines to change three.
+- On a large file, locate before you read, then read only the needed range (commands in Tools below). Never pull in 1,000 lines to change three.
 - Fold the edit and its verification into a single turn.
 - Keep the reply to the one path. The report absorbs everything else.
+
+## Tools — the commands you use (no skill is preloaded)
+
+Quick reference, not a spec: when a flag is unclear, run `<cli> --help`. Prefer these to Read/Grep/Edit/Write.
+
+**tldr** — read and navigate code (read-only; `-f text` gives compact output)
+- `tldr structure <file-or-dir> -f text` — functions, classes, imports with line ranges
+- `tldr definition --symbol <sym> --file <file>` — where a symbol is defined (`--symbol` needs `--file`)
+- `tldr search "<text>" <dir>` — enriched search: BM25 + structure + call graph, function-level context cards
+- `tldr references <sym> <dir>` — references; `tldr impact <sym> <dir>` — callers (static analysis)
+- `tldr body <file> --from A --to B -f text` — exact lines A..B; `tldr body <file> <function> -f text` — one function
+- whole file: `tldr body "<file>" --from 1 --to "$(grep -ac '' "<file>")" -f text` (`grep -ac ''` counts a last line with no final newline; `wc -l` does not)
+
+**jgrep** — locate code by what it DOES, not by name (one yes/no per 5-60 line chunk; prints `file:A-B p=<prob>`)
+- `jgrep "validates the webhook signature" <dir>` — `-C` prints chunk bodies, `-t 0.85` fewer hits, `-a -t 0` everything best-first
+- `jgrep --funcs "<description>" <dir>` on a large tree; `jgrep --diff --staged "<rule>"` checks a staged change
+- p >= 0.9 is reliable, 0.7-0.9 worth a look; exit 0 hit, 1 none, 2 error. For an exact identifier use `grep -n`.
+
+**quicksilver** — only if `~/.claude/skills/quicksilver/scripts/qs.mjs` exists; bulk verdicts so you read only the survivors (it skips gitignored paths): `node ~/.claude/skills/quicksilver/scripts/qs.mjs <command>`
+- `filter "<yes/no question>" <dir> [--ext ts,tsx] [--lines]` keeps matching items; `rank "<query>" <dir> --top 10`; `find "<what>" <file> --top 5`
+- `classify --labels "a,b,other" <inputs>`; `ask "<question>" --state @file` — one judgment over one document
+- A verdict is a lead, not evidence: read the survivors and the `?` borderline items with `tldr` before concluding.
+- It sends the text to an outside model: never point it at logs, dumps or files that may hold secrets.
+
+**fastedit** — preferred for every write (validates, keeps a backup)
+- `fastedit read <file>` — symbol map with line ranges
+- `fastedit edit <file> --replace <symbol or exact markdown heading text> --snippet '<new text>'`; `--after <symbol>` inserts below it
+- `fastedit create <file> --content '...'` (or `--content-file PATH`, or pipe stdin; `--parents` makes directories)
+- `fastedit multi-edit --file-edits '[{"file_path":"/abs/a.py","edits":[{"replace":"sym","snippet":"..."}]}]'` — many files, all-or-nothing
+- `fastedit diff <file>` after every edit; `fastedit undo <file>` reverts the last edit
+- JSON files: the success message is not proof — always `fastedit diff` and confirm only the intended key changed.
+
+**graphify** — only when `graphify-out/graph.json` exists, otherwise skip it
+- `graphify explain "X"`; `graphify path "A" "B"`; `graphify query "<question>" [--dfs] [--budget N]`
+- `graphify update <path>` re-extracts code into the graph and rewrites `graphify-out/`; run it only when the task asks.
+
+A CLI not on PATH (`command -v <cli>`): say so in your report and use the built-in Read/Grep/Edit/Write for that step; never skip it silently.

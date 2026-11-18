@@ -313,7 +313,21 @@ pub fn all_of(store: &Store, table: &str) -> String {
     }
 }
 
+/// Boot-phase probe slot (TRDD-2HRA270Y): called by `open_store` with a phase name and the seconds since
+/// the open began, so the host binary can log net mimalloc commit per open window. WHY a slot: this
+/// crate cannot depend on agentlens-core (which owns the mimalloc counters and depends on this crate), and
+/// the 7 `open_store` callers stay unchanged. Unset (tests, the alstore CLI) = `phase` is a no-op. It stays
+/// as a permanent, cheap boot diagnostic (up to six calls per open; open_known_part fires only when the parts dir has files).
+pub static OPEN_PHASE_PROBE: std::sync::OnceLock<fn(&str, f64)> = std::sync::OnceLock::new();
+
+fn phase(name: &str, t_open: f64) {
+    if let Some(probe) = OPEN_PHASE_PROBE.get() {
+        probe(name, t_open);
+    }
+}
+
 pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Result<Store> {
+    let open_began = std::time::Instant::now();
     for sub in [BLOBS_DIR, BODIES_DIR, PARTS_DIR, API_CALLS_DIR] {
         let _ = fs::create_dir_all(dir.join(sub));
     }
@@ -374,6 +388,7 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
            raw_facts_v INTEGER, workspace VARCHAR, fp_2600 VARCHAR, image_bytes BIGINT
          );"
     ))?;
+    phase("open_schema", open_began.elapsed().as_secs_f64());
     // `part_file` + `known_blob` replace the old Rust `known` set and `blob_files` map (measured
     // ~4 GB heap growth + SipHash CPU on the real store). The instance stays FILELESS
     // (open_in_memory): these tables are rebuilt from the immutable parquet parts at every open and
@@ -398,6 +413,7 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     let blob_parts = listed(BLOBS_DIR);
     let body_parts = listed(BODIES_DIR);
     seed_blob_index(&con, 0, &blob_parts, &blob_parts)?;
+    phase("open_blob_seed", open_began.elapsed().as_secs_f64());
     let mut next_file_id = blob_parts.len() as i32;
     for (sub, files) in [(PARTS_DIR, listed(PARTS_DIR)), (BODIES_DIR, body_parts.clone()), (API_CALLS_DIR, listed(API_CALLS_DIR))] {
         register_part_files(&con, next_file_id, sub, &files)?;
@@ -409,6 +425,7 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
             let started = std::time::Instant::now();
             let rows = index_part_bodies(&con, &files)?;
             eprintln!("[info] known_part seeded: {rows} rows from {} parts files in {:.1}s", files.len(), started.elapsed().as_secs_f64());
+            phase("open_known_part", open_began.elapsed().as_secs_f64());
         }
         next_file_id += files.len() as i32;
     }
@@ -443,12 +460,15 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
             )))));
         }
     }
+    phase("open_body_durable", open_began.elapsed().as_secs_f64());
     // ART indexes, built AFTER the bulk load (one build, not millions of incremental inserts). They
     // make the per-body probes in ingest_body_with point lookups instead of full table scans.
     con.execute_batch(
         "CREATE INDEX known_blob_sha ON known_blob (sha);
          CREATE INDEX body_durable_id ON body_durable (body_id);",
     )?;
+    phase("open_index", open_began.elapsed().as_secs_f64());
+    phase("open_done", open_began.elapsed().as_secs_f64());
     Ok(Store {
         con,
         dir: dir.to_path_buf(),

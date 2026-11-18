@@ -637,7 +637,7 @@ export function buildAdvisory(state: AgentGateState): { code: string; text: stri
     return {
       code: 'FANOUT_HEADSUP',
       text: `⚠ AgentlensPro: ${ownStarts} agent launches from this project in the last 2min` +
-        `${kinds ? ` (${kinds})` : ''}.${premium} Check headroom before widening the fan-out: agentlenspro-cli --risk.`,
+        `${kinds ? ` (${kinds})` : ''}.${premium} Check headroom before widening the fan-out: agentlenspro --risk.`,
     }
   }
   return null

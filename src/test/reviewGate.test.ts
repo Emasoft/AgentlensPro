@@ -10,7 +10,7 @@ import {
   REVIEW_GATE_DIRECTIVE, REVIEW_ROLE_RULE, MEASURE_ROLE_RULE, declaredRole, declaredRoleOwnTranscript,
   runMainGate, runReviewGate, agentCannotSpawn, declaredToolsHaveAgent,
   NO_REVIEW_SENTINEL, NO_REVIEW_SENTINEL_EXAMPLES, workerReturnId, workerWriteDetail, workerDeclaredRole,
-  isTurnStart, readCurrentTurn, isCreditedFork,
+  isTurnStart, readCurrentTurn, isCreditedFork, computeVerdict,
 } from '../cli/reviewGate'
 import { PROPOSAL_MARKER, commandWriteReasons } from '../cli/reviewGateTriggers'
 import { runSubagentGate } from '../cli/reviewGate'
@@ -1058,15 +1058,15 @@ suite('reviewGate — decideGate', () => {
 
 // ── subagentExempt ────────────────────────────────────────────────────────────────────────────────
 suite('reviewGate — demandText is short enough to read inside a block (C)', () => {
-  test('the demandText for a review spawn is under 1200 characters and says a write after the spawn re-arms the gate', () => {
+  test('the demandText for a review spawn is under 1500 characters and says a write after the spawn re-arms the gate', () => {
     const t = demandText('review')
-    assert.ok(t.length < 1200, 'demandText review is ' + t.length + ' characters')
+    assert.ok(t.length < 1500, 'demandText review is ' + t.length + ' characters')
     assert.ok(t.includes('re-arms'))
   })
 
-  test('the demandText for a both spawn is under 2700 characters', () => {
+  test('the demandText for a both spawn is under 3000 characters', () => {
     const t = demandText('both')
-    assert.ok(t.length < 2700, 'demandText both is ' + t.length + ' characters')
+    assert.ok(t.length < 3000, 'demandText both is ' + t.length + ' characters')
   })
 })
 suite('reviewGate — subagentExempt', () => {
@@ -1773,4 +1773,216 @@ suite('reviewGate — scanTranscriptLines: a delegate-gate-denied edit does not 
 
   })
 
+})
+
+// ── `--json-verdict`: the read-only verdict a mod calls (TRDD-KZCSO0R2 Phase 0) ───────────────────
+suite('reviewGate — --json-verdict: the read-only verdict mode', () => {
+  const turnStart = JSON.stringify({
+    type: 'user', isSidechain: false, message: { role: 'user', content: 'make the change' },
+    turnOrigin: 'human', turnPosition: { promptIndex: 1, turnIndex: 1 }, userType: 'external',
+  })
+  type Verdict = { demands: boolean; reasons: string[]; scan: { kind: string; lines: number } }
+  // Runs runReviewGate with the payload on a replaced stdin, capturing stdout and restoring both.
+  const run = async (argv: string[], lines: string[]): Promise<{ code: number; stdout: string }> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-verdict-'))
+    const transcript = path.join(dir, 'transcript.jsonl')
+    fs.writeFileSync(transcript, [turnStart, ...lines].join('\n') + '\n')
+    const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin')
+    const realStdout = process.stdout.write
+    const stdout: string[] = []
+    try {
+      const payload = JSON.stringify({ hook_event_name: 'Stop', transcript_path: transcript, cwd: CWD })
+      Object.defineProperty(process, 'stdin', { configurable: true, value: Readable.from([Buffer.from(payload)]) })
+      process.stdout.write = ((chunk: unknown): boolean => { stdout.push(String(chunk)); return true }) as typeof process.stdout.write
+      const code = await runReviewGate(argv)
+      return { code, stdout: stdout.join('') }
+    } finally {
+      process.stdout.write = realStdout
+      if (realStdin !== undefined) Object.defineProperty(process, 'stdin', realStdin)
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const firstJson = (stdout: string): string => {
+    const line = stdout.split('\n').find((l) => l.startsWith('{'))
+    assert.ok(line !== undefined, `no JSON on stdout: ${JSON.stringify(stdout)}`)
+    return line
+  }
+
+  test('an armed turn yields demands=true with a non-empty reason and NO hook block JSON', async () => {
+    const r = await run(['--json-verdict'], [assistantLine([editBlock])])
+    assert.strictEqual(r.code, 0, 'read-only: always exits 0, even when it demands a review')
+    const v = JSON.parse(firstJson(r.stdout)) as Verdict
+    assert.strictEqual(v.demands, true)
+    assert.ok(v.reasons.length > 0 && v.reasons[0].includes('edited a file'), v.reasons.join(' '))
+    assert.strictEqual(v.scan.kind, 'main')
+    assert.ok(!r.stdout.includes('"decision":"block"'), 'the verdict mode must never emit the Stop-hook block shape')
+  })
+
+  test('a clean turn yields demands=false with no reasons', async () => {
+    const r = await run(['--json-verdict'], [assistantLine([{ type: 'text', text: 'nothing to do' }])])
+    assert.strictEqual(r.code, 0)
+    const v = JSON.parse(firstJson(r.stdout)) as Verdict
+    assert.strictEqual(v.demands, false)
+    assert.deepStrictEqual(v.reasons, [])
+  })
+
+  test('no flag: the hook-mode block is unchanged (decision block, suppressOutput, reason)', async () => {
+    const r = await run([], [assistantLine([editBlock])])
+    const parsed = JSON.parse(firstJson(r.stdout)) as { decision: string; suppressOutput: boolean; reason: string }
+    assert.strictEqual(parsed.decision, 'block')
+    assert.strictEqual(parsed.suppressOutput, true)
+    assert.ok(parsed.reason.includes('edited a file'))
+    assert.ok(!('demands' in parsed), 'hook mode must not print the verdict shape')
+  })
+
+  test('computeVerdict directly: an unreviewed edit demands, a credited fork releases', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-verdict-'))
+    try {
+      const t = path.join(dir, 't.jsonl')
+      fs.writeFileSync(t, [assistantLine([editBlock])].join('\n') + '\n')
+      assert.strictEqual(computeVerdict({ transcript_path: t, cwd: CWD }).demands, true)
+      fs.writeFileSync(t, [assistantLine([editBlock]), assistantLine([agentBlock('fork', 'ROLE: REVIEW\nattack it')])].join('\n') + '\n')
+      assert.strictEqual(computeVerdict({ transcript_path: t, cwd: CWD }).demands, false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── ignoreInterruptFloor and the verdict command line: the review mod's opt-ins (TRDD-KZCSO0R2) ─────
+// A Stop/SubagentStop hook never fires on an Esc, so the mod is the only net for an interrupted turn;
+// it needs the interrupt entry to NOT clear the turn's work. The default stays as the hooks need it.
+suite('reviewGate — ignoreInterruptFloor and the --json-verdict command line', () => {
+  // The shapes the harness writes: the turn start has an object turnPosition; the interrupt entry is a
+  // `user` entry with one text block and NO turnPosition (measured 2026-11-12: 48 interrupt entries, 0 with one).
+  const turnStartAt = (promptIndex: number, text: string): string => JSON.stringify({
+    type: 'user', isSidechain: false, message: { role: 'user', content: text },
+    turnOrigin: 'human', turnPosition: { promptIndex, turnIndex: 1 }, userType: 'external',
+  })
+  const turnStart = turnStartAt(1, 'make the change')
+  const interrupt = userTextLine('[Request interrupted by user]')
+  type Verdict = { demands: boolean; reasons: string[]; scan: { transcript: string | null; kind: string; lines: number; readable: boolean }; options: { ignoreInterruptFloor: boolean } }
+  // Awaits an async callback BEFORE the temp directory goes: a sync-only helper removed it under the callback.
+  const withTranscript = async <T>(lines: string[], run: (file: string) => T | Promise<T>): Promise<T> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rg-intr-'))
+    try {
+      const file = path.join(dir, 'main.jsonl')
+      fs.writeFileSync(file, lines.join('\n') + '\n')
+      return await run(file)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const demands = (lines: string[], ignoreInterruptFloor: boolean): Promise<boolean> =>
+    withTranscript(lines, (file) => computeVerdict({ hook_event_name: 'Stop', transcript_path: file, cwd: CWD }, { ignoreInterruptFloor }).demands)
+  // Runs runReviewGate with `argv(file)` and both output streams captured and restored.
+  const cli = (lines: string[], argv: (file: string) => string[]): Promise<{ code: number; stdout: string; stderr: string }> =>
+    withTranscript(lines, async (file) => {
+      const realStdout = process.stdout.write
+      const realStderr = process.stderr.write
+      const out: string[] = []
+      const err: string[] = []
+      try {
+        process.stdout.write = ((chunk: unknown): boolean => { out.push(String(chunk)); return true }) as typeof process.stdout.write
+        process.stderr.write = ((chunk: unknown): boolean => { err.push(String(chunk)); return true }) as typeof process.stderr.write
+        const code = await runReviewGate(argv(file))
+        return { code, stdout: out.join(''), stderr: err.join('') }
+      } finally {
+        process.stdout.write = realStdout
+        process.stderr.write = realStderr
+      }
+    })
+  const editInReports = assistantLine([{ type: 'tool_use', name: 'Edit', input: { file_path: '/repo/reports/x.md' } }])
+
+  test('default options: a write then an interrupt entry gives demands false (the interrupt is a floor)', async () => {
+    assert.strictEqual(await demands([turnStart, assistantLine([editBlock]), interrupt], false), false)
+  })
+
+  test('ignoreInterruptFloor: the same transcript gives demands true, so the turn reader keeps the writes before the interrupt', async () => {
+    assert.strictEqual(await demands([turnStart, assistantLine([editBlock]), interrupt], true), true)
+  })
+
+  test('ignoreInterruptFloor: a credited REVIEW fork spawn before the interrupt still releases the turn', async () => {
+    const fork = assistantLine([agentBlock('fork', 'ROLE: REVIEW\nattack it')])
+    assert.strictEqual(await demands([turnStart, assistantLine([editBlock]), fork, interrupt], true), false)
+  })
+
+  test('ignoreInterruptFloor: a [janitor-heartbeat] entry is still a floor, so a write before it is released', async () => {
+    const heartbeat = userTextLine('[janitor-heartbeat]\nuv run dispatcher-stub.py')
+    assert.strictEqual(await demands([turnStart, assistantLine([editBlock]), heartbeat], true), false)
+  })
+
+  test('ignoreInterruptFloor: a new prompt typed right after Esc does not hide the interrupted turn', async () => {
+    const lines = [turnStart, assistantLine([editBlock]), interrupt, turnStartAt(2, 'new prompt, no answer yet')]
+    assert.strictEqual(await demands(lines, true), true, 'the turn before the unanswered one is the interrupted turn')
+    assert.strictEqual(await demands(lines, false), false, 'without the option the unanswered newest turn is the one judged')
+  })
+
+  test('the CLI: --json-verdict --transcript --cwd --ignore-interrupt-floor prints demands true, echoes the option, exits 0', async () => {
+    const r = await cli([turnStart, assistantLine([editBlock]), interrupt], (file) => ['--json-verdict', '--transcript', file, '--cwd', CWD, '--ignore-interrupt-floor'])
+    assert.strictEqual(r.code, 0)
+    const v = JSON.parse(r.stdout.trim()) as Verdict
+    assert.strictEqual(v.demands, true)
+    assert.deepStrictEqual(v.options, { ignoreInterruptFloor: true })
+    assert.strictEqual(v.scan.readable, true)
+  })
+
+  test('the CLI: without --ignore-interrupt-floor the verdict echoes ignoreInterruptFloor false', async () => {
+    const r = await cli([turnStart, assistantLine([editBlock]), interrupt], (file) => ['--json-verdict', '--transcript', file, '--cwd', CWD])
+    const v = JSON.parse(r.stdout.trim()) as Verdict
+    assert.strictEqual(v.demands, false)
+    assert.deepStrictEqual(v.options, { ignoreInterruptFloor: false })
+  })
+
+  test('--cwd changes the verdict: the same absolute write target is scratch under cwd /repo and a real edit under another cwd', async () => {
+    const lines = [turnStart, editInReports]
+    const inRepo = JSON.parse((await cli(lines, (file) => ['--json-verdict', '--transcript', file, '--cwd', '/repo'])).stdout.trim()) as Verdict
+    const elsewhere = JSON.parse((await cli(lines, (file) => ['--json-verdict', '--transcript', file, '--cwd', '/elsewhere'])).stdout.trim()) as Verdict
+    assert.strictEqual(inRepo.demands, false, 'reports/ under the session cwd is gitignored scratch')
+    assert.strictEqual(elsewhere.demands, true, 'the same file is outside that cwd\'s reports/ and arms the gate')
+  })
+
+  test('scan.readable is false for a missing transcript and for one that cannot be read, true for a clean scan', async () => {
+    await withTranscript([turnStart], (file) => {
+      const dir = path.dirname(file)
+      const clean = computeVerdict({ hook_event_name: 'Stop', transcript_path: file, cwd: CWD })
+      assert.strictEqual(clean.scan.readable, true)
+      assert.strictEqual(clean.demands, false)
+      const missing = computeVerdict({ hook_event_name: 'Stop', transcript_path: path.join(dir, 'absent.jsonl'), cwd: CWD })
+      assert.deepStrictEqual([missing.scan.readable, missing.scan.transcript], [false, null])
+      // A directory exists but cannot be read as a transcript: the path is echoed with lines 0, which `readable` tells apart from a clean scan.
+      const unreadable = computeVerdict({ hook_event_name: 'Stop', transcript_path: dir, cwd: CWD })
+      assert.deepStrictEqual([unreadable.scan.readable, unreadable.scan.transcript, unreadable.scan.lines], [false, dir, 0])
+    })
+  })
+
+  test('--event Foo returns 2 with one stderr line and prints no verdict', async () => {
+    const r = await cli([turnStart], (file) => ['--json-verdict', '--transcript', file, '--event', 'Foo'])
+    assert.strictEqual(r.code, 2)
+    assert.strictEqual(r.stdout, '')
+    assert.ok(r.stderr.includes('--event must be Stop or SubagentStop'), r.stderr)
+    assert.strictEqual(r.stderr.trim().split('\n').length, 1)
+  })
+
+  test('--cwd or --ignore-interrupt-floor without --transcript returns 2 with one stderr line', async () => {
+    for (const argv of [['--json-verdict', '--cwd', '/repo'], ['--json-verdict', '--ignore-interrupt-floor']]) {
+      const r = await cli([turnStart], () => argv)
+      assert.strictEqual(r.code, 2, argv.join(' '))
+      assert.strictEqual(r.stdout, '')
+      assert.ok(r.stderr.includes('need --transcript'), r.stderr)
+      assert.strictEqual(r.stderr.trim().split('\n').length, 1)
+    }
+  })
+
+  test('a --transcript, --cwd or --event value that starts with -- returns 2', async () => {
+    for (const argv of [
+      ['--json-verdict', '--transcript', '--cwd', '/repo'],
+      ['--json-verdict', '--transcript', '/x/t.jsonl', '--cwd', '--ignore-interrupt-floor'],
+      ['--json-verdict', '--transcript', '/x/t.jsonl', '--event', '--cwd'],
+    ]) {
+      const r = await cli([turnStart], () => argv)
+      assert.strictEqual(r.code, 2, argv.join(' '))
+      assert.ok(r.stderr.includes('needs a value'), r.stderr)
+    }
+  })
 })

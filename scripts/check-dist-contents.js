@@ -47,7 +47,11 @@ function readAgentNames() {
   const src = path.join(__dirname, '..', 'src', 'cli', 'hookInstall.ts')
   const out = esbuild.buildSync({
     entryPoints: [src], bundle: true, write: false, platform: 'node', format: 'cjs',
-    external: ['@duckdb/node-api', 'duckdb', 'sql.js', '@modelcontextprotocol/sdk'],
+    // No sql.js entry: this in-memory bundle of src/cli/hookInstall.ts never reaches it
+    // (output byte-identical without it, measured 2026-11-04), and naming it here trips
+    // check-duckdb-only (TRDD-8GXG3SGV). The other three stay external so a future import
+    // of a native or heavy package stays a runtime require instead of being inlined.
+    external: ['@duckdb/node-api', 'duckdb', '@modelcontextprotocol/sdk'],
   })
   const m = new Module(src, module)
   m.filename = src

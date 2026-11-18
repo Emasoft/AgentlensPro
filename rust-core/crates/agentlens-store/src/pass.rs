@@ -835,42 +835,323 @@ pub fn prune_pass_names(
     stranded_names: &mut HashSet<String>,
 ) -> Option<String> {
     if dirs.is_empty() {
-        return Some("no bodies dir given; prune skipped".to_owned());
+        return Some(NO_DIRS_LINE.to_owned());
     }
-    let mut present: HashSet<String> = HashSet::new();
-    let mut complete = true;
-    let mut problems = 0usize;
-    let mut sample: Option<String> = None;
+    let present = present_names(dirs);
+    if present.complete {
+        skip_names.retain(|n| present.names.contains(n));
+        stranded_names.retain(|n| present.names.contains(n));
+    }
+    listing_summary(&present)
+}
+
+const NO_DIRS_LINE: &str = "no bodies dir given; prune skipped";
+
+/// The union of the body names present as directory entries across the bodies dirs of a tick (TRDD-2HRA270Y).
+/// `complete` is false when a dir (NotFound included: no dir in the list is optional) or a directory entry
+/// could not be read: such a listing could hide a live name, so nothing may be pruned against it. A name that
+/// exists but cannot be statted is still in `names`. `problems` counts every listing problem met; `sample` is
+/// the first one. An empty `dirs` yields an empty, complete listing: the caller decides what that means.
+pub struct PresentNames {
+    pub names: HashSet<String>,
+    pub complete: bool,
+    pub problems: usize,
+    pub sample: Option<String>,
+}
+
+/// List every dir in `dirs` and collect the names present (see [`PresentNames`]).
+pub fn present_names(dirs: &[PathBuf]) -> PresentNames {
+    let mut present = PresentNames {
+        names: HashSet::new(),
+        complete: true,
+        problems: 0,
+        sample: None,
+    };
     for dir in dirs {
         match body_files(dir) {
             Ok(listing) => {
-                present.extend(listing.names);
+                present.names.extend(listing.names);
                 for (name, err) in listing.unstatable {
-                    problems += 1;
-                    sample.get_or_insert_with(|| format!("{name}: {err}"));
+                    present.problems += 1;
+                    present
+                        .sample
+                        .get_or_insert_with(|| format!("{name}: {err}"));
                 }
                 for err in listing.unreadable_entries {
-                    complete = false;
-                    problems += 1;
-                    sample.get_or_insert_with(|| format!("an entry of {}: {err}", dir.display()));
+                    present.complete = false;
+                    present.problems += 1;
+                    present
+                        .sample
+                        .get_or_insert_with(|| format!("an entry of {}: {err}", dir.display()));
                 }
             }
             Err(e) => {
-                complete = false;
-                problems += 1;
-                sample.get_or_insert_with(|| format!("{}: {e}", dir.display()));
+                present.complete = false;
+                present.problems += 1;
+                present
+                    .sample
+                    .get_or_insert_with(|| format!("{}: {e}", dir.display()));
             }
         }
     }
-    if complete {
-        skip_names.retain(|n| present.contains(n));
-        stranded_names.retain(|n| present.contains(n));
-    }
-    if problems == 0 {
+    present
+}
+
+/// One summary line when any listing problem was met, None when the listings were clean.
+fn listing_summary(present: &PresentNames) -> Option<String> {
+    if present.problems == 0 {
         return None;
     }
-    let outcome = if complete { "prune ran" } else { "prune skipped" };
-    Some(format!("listing problems: {problems} (e.g. {}); {outcome}", sample.unwrap_or_default()))
+    let outcome = if present.complete {
+        "prune ran"
+    } else {
+        "prune skipped"
+    };
+    Some(format!(
+        "listing problems: {} (e.g. {}); {outcome}",
+        present.problems,
+        present.sample.as_deref().unwrap_or_default()
+    ))
+}
+
+/// What [`load_pass_state_pruned`] returns. `total_*` count the string entries READ from the file; the names
+/// kept are the sets themselves (`skip.len()`, `stranded.len()`). `listing_complete` is false when the
+/// state was NOT filtered (an incomplete listing, or no dirs given).
+pub struct PrunedLoad {
+    pub skip: HashSet<String>,
+    pub stranded: HashSet<String>,
+    pub summary: Option<String>,
+    pub total_skip: usize,
+    pub total_stranded: usize,
+    pub listing_complete: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Which {
+    Skip,
+    Stranded,
+}
+
+#[derive(Clone, Copy)]
+enum Node {
+    Top,
+    List(Which),
+    Name(Which),
+}
+
+/// The streaming accumulator: `present` is the filter (None keeps every name).
+struct Acc<'a> {
+    present: Option<&'a HashSet<String>>,
+    skip: HashSet<String>,
+    stranded: HashSet<String>,
+    total_skip: usize,
+    total_stranded: usize,
+}
+
+impl Acc<'_> {
+    /// A repeated key replaces the earlier value, as it does in a parsed `Value` tree.
+    fn reset(&mut self, w: Which) {
+        match w {
+            Which::Skip => {
+                self.skip.clear();
+                self.total_skip = 0;
+            }
+            Which::Stranded => {
+                self.stranded.clear();
+                self.total_stranded = 0;
+            }
+        }
+    }
+
+    fn take(&mut self, w: Which, name: &str) {
+        let (set, total) = match w {
+            Which::Skip => (&mut self.skip, &mut self.total_skip),
+            Which::Stranded => (&mut self.stranded, &mut self.total_stranded),
+        };
+        *total += 1;
+        let keep = match self.present {
+            Some(present) => present.contains(name),
+            None => true,
+        };
+        if keep {
+            set.insert(name.to_owned());
+        }
+    }
+}
+
+/// One seed and visitor for the whole document, by role: the top-level object picks out the two name
+/// arrays, an array under one of those keys feeds its string entries to the accumulator, and every other
+/// value is read and dropped. Everything is consumed even when ignored, so malformed JSON anywhere is an
+/// Err, exactly as a full parse would be.
+struct NodeSeed<'a, 'b> {
+    acc: &'b mut Acc<'a>,
+    node: Node,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for NodeSeed<'_, '_> {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for NodeSeed<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("any JSON value")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        use serde::de::IgnoredAny;
+        if let Node::Top = self.node {
+            while let Some(key) = map.next_key::<String>()? {
+                let which = match key.as_str() {
+                    "skipNames" => Some(Which::Skip),
+                    "strandedNames" => Some(Which::Stranded),
+                    _ => None,
+                };
+                match which {
+                    Some(w) => {
+                        self.acc.reset(w);
+                        map.next_value_seed(NodeSeed {
+                            acc: &mut *self.acc,
+                            node: Node::List(w),
+                        })?;
+                    }
+                    None => {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+            }
+        } else {
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        }
+        Ok(())
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        if let Node::List(w) = self.node {
+            while seq
+                .next_element_seed(NodeSeed {
+                    acc: &mut *self.acc,
+                    node: Node::Name(w),
+                })?
+                .is_some()
+            {}
+        } else {
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+        }
+        Ok(())
+    }
+
+    fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<(), E> {
+        if let Node::Name(w) = self.node {
+            self.acc.take(w, s);
+        }
+        Ok(())
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        Ok(())
+    }
+}
+
+/// The same errors `load_pass_state` returns, from a streaming parse: an I/O failure keeps its kind, anything
+/// the parser rejects (syntax, a truncated file, bad UTF-8, trailing characters) is InvalidData.
+fn pass_state_read_err(p: &Path, e: serde_json::Error) -> std::io::Error {
+    if e.is_io() {
+        std::io::Error::new(
+            e.io_error_kind().unwrap_or(std::io::ErrorKind::Other),
+            format!("{}: {e}", p.display()),
+        )
+    } else {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: not valid JSON: {e}", p.display()),
+        )
+    }
+}
+
+/// [`load_pass_state`] and [`prune_pass_names`] in one step, without ever holding the unpruned state
+/// (TRDD-2HRA270Y). WHY: the live `.pass-state.json` is ~75 MB (~1.49M names) and is never pruned in
+/// practice because no pass completes, so `load_pass_state` (whole file as a String, then a `Value` tree, then
+/// two full sets) raised the process net commit by ~465 MB at boot and the allocator never returned it. This
+/// streams the file through a deserializer that keeps a name only when it is in the bodies-dir listing, so the
+/// full file, the tree and the full sets never exist.
+///
+/// The listing is taken FIRST. When `dirs` is empty or the listing is not complete (an unreadable dir or
+/// directory entry) nothing is filtered and every name is kept, exactly as `load_pass_state` would return it:
+/// an incomplete listing could hide a live name, and a dropped stranded name loses data. `summary` is the
+/// line `prune_pass_names` would return for the same dirs. The error contract is `load_pass_state`'s: a
+/// missing file is empty and Ok; a file that cannot be read or is not valid JSON is an Err; valid JSON with a
+/// missing key, a non-array value, non-string entries or a top level that is not an object reads as empty.
+/// Callers that must keep every name (alstore, `unpark_names`) keep using `load_pass_state`.
+pub fn load_pass_state_pruned(p: &Path, dirs: &[PathBuf]) -> std::io::Result<PrunedLoad> {
+    let present = if dirs.is_empty() {
+        None
+    } else {
+        Some(present_names(dirs))
+    };
+    let (filter, summary, listing_complete) = match &present {
+        None => (None, Some(NO_DIRS_LINE.to_owned()), false),
+        Some(pn) => (
+            pn.complete.then_some(&pn.names),
+            listing_summary(pn),
+            pn.complete,
+        ),
+    };
+    let mut acc = Acc {
+        present: filter,
+        skip: HashSet::new(),
+        stranded: HashSet::new(),
+        total_skip: 0,
+        total_stranded: 0,
+    };
+    match fs::File::open(p) {
+        Ok(file) => {
+            let mut de = serde_json::Deserializer::from_reader(std::io::BufReader::with_capacity(
+                1 << 20,
+                file,
+            ));
+            serde::de::DeserializeSeed::deserialize(
+                NodeSeed {
+                    acc: &mut acc,
+                    node: Node::Top,
+                },
+                &mut de,
+            )
+            .map_err(|e| pass_state_read_err(p, e))?;
+            de.end().map_err(|e| pass_state_read_err(p, e))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("{}: {e}", p.display()),
+            ))
+        }
+    }
+    Ok(PrunedLoad {
+        skip: acc.skip,
+        stranded: acc.stranded,
+        summary,
+        total_skip: acc.total_skip,
+        total_stranded: acc.total_stranded,
+        listing_complete,
+    })
 }
 
 #[cfg(test)]
@@ -1043,6 +1324,210 @@ mod tests {
         assert!(unpark_names(&state, &["a.request.json".to_string()]).is_err(), "unpark over a corrupt file must be an Err");
         assert_eq!(fs::read(&state).unwrap(), original, "the corrupt state file must not be overwritten");
         assert!(!state.with_extension("json.tmp").exists(), "a refused unpark must not leave a temp file");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A fresh scratch dir with a bodies dir holding the named body files and the state file written from
+    /// `state` (None writes no state file).
+    fn pruned_fixture(
+        tag: &str,
+        bodies: &[&str],
+        state: Option<&str>,
+    ) -> (PathBuf, PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("al-pruned-{tag}-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok(); // robust to a leftover from a crashed earlier run
+        let bodies_dir = dir.join("bodies");
+        fs::create_dir_all(&bodies_dir).unwrap();
+        for b in bodies {
+            fs::write(bodies_dir.join(b), b"x").unwrap();
+        }
+        let state_file = dir.join(PASS_STATE_FILE);
+        if let Some(s) = state {
+            fs::write(&state_file, s).unwrap();
+        }
+        (dir, bodies_dir, state_file)
+    }
+
+    /// The two-step path the streaming load replaces.
+    fn load_then_prune(
+        state: &Path,
+        dirs: &[PathBuf],
+    ) -> (HashSet<String>, HashSet<String>, Option<String>) {
+        let (mut skip, mut stranded) = load_pass_state(state).unwrap();
+        let line = prune_pass_names(dirs, &mut skip, &mut stranded);
+        (skip, stranded, line)
+    }
+
+    const PRUNED_STATE: &str = r#"{"skipNames":["a.request.json","gone1.request.json","b.response.json"],"strandedNames":["b.response.json","gone2.response.json","c.request.json"]}"#;
+
+    /// TRDD-2HRA270Y: with a complete listing the streaming load keeps exactly what load + prune keeps, the
+    /// same summary line, and counts what it read.
+    #[test]
+    fn load_pass_state_pruned_equals_load_then_prune_on_a_complete_listing() {
+        let (dir, bodies, state) = pruned_fixture(
+            "equal",
+            &["a.request.json", "b.response.json", "c.request.json"],
+            Some(PRUNED_STATE),
+        );
+        let dirs = [bodies];
+        let (skip, stranded, line) = load_then_prune(&state, &dirs);
+        let got = load_pass_state_pruned(&state, &dirs).unwrap();
+        assert_eq!(
+            (&got.skip, &got.stranded, &got.summary),
+            (&skip, &stranded, &line)
+        );
+        assert!(got.listing_complete);
+        assert_eq!((got.total_skip, got.total_stranded), (3, 3));
+        assert_eq!(
+            (got.skip.len(), got.stranded.len()),
+            (2, 2),
+            "the two absent names are dropped from each set"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-2HRA270Y: an incomplete listing (one dir cannot be read) filters nothing: a dropped stranded name
+    /// loses data. The result equals `load_pass_state` and the summary equals prune_pass_names's.
+    #[test]
+    fn load_pass_state_pruned_keeps_everything_on_an_incomplete_listing() {
+        let (dir, bodies, state) =
+            pruned_fixture("incomplete", &["a.request.json"], Some(PRUNED_STATE));
+        let dirs = [bodies, dir.join("no-such-bodies-dir")];
+        let (skip, stranded) = load_pass_state(&state).unwrap();
+        let (_, _, line) = load_then_prune(&state, &dirs);
+        let got = load_pass_state_pruned(&state, &dirs).unwrap();
+        assert_eq!((&got.skip, &got.stranded), (&skip, &stranded));
+        assert_eq!(got.summary, line);
+        assert!(
+            got.summary
+                .as_deref()
+                .is_some_and(|l| l.contains("prune skipped")),
+            "{:?}",
+            got.summary
+        );
+        assert!(!got.listing_complete);
+        assert_eq!((got.skip.len(), got.stranded.len()), (3, 3));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-2HRA270Y: no dirs given filters nothing and reports it, as prune_pass_names does.
+    #[test]
+    fn load_pass_state_pruned_with_no_dirs_keeps_everything() {
+        let (dir, _bodies, state) = pruned_fixture("nodirs", &[], Some(PRUNED_STATE));
+        let (skip, stranded) = load_pass_state(&state).unwrap();
+        let got = load_pass_state_pruned(&state, &[]).unwrap();
+        assert_eq!((&got.skip, &got.stranded), (&skip, &stranded));
+        assert_eq!(
+            got.summary.as_deref(),
+            Some("no bodies dir given; prune skipped")
+        );
+        assert!(!got.listing_complete);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TRDD-2HRA270Y: every shape `load_pass_state` accepts reads the same through the streaming load (after the
+    /// same prune), and every shape it rejects is an Err naming the path.
+    #[test]
+    fn load_pass_state_pruned_follows_the_load_pass_state_error_contract() {
+        let ok_cases: [(&str, Option<&str>); 13] = [
+            ("absent", None),
+            (
+                "missing-key",
+                Some(r#"{"strandedNames":["a.request.json"]}"#),
+            ),
+            (
+                "non-array",
+                Some(r#"{"skipNames":5,"strandedNames":"a.request.json"}"#),
+            ),
+            (
+                "null-and-object",
+                Some(r#"{"skipNames":null,"strandedNames":{"a.request.json":[1,2]}}"#),
+            ),
+            (
+                "non-string-entries",
+                Some(
+                    r#"{"skipNames":[1,null,["a.request.json"],{"k":1},true,2.5,"a.request.json"]}"#,
+                ),
+            ),
+            (
+                "extra-keys",
+                Some(r#"{"x":{"deep":[1,{"y":null}]},"skipNames":["a.request.json"],"z":"s"}"#),
+            ),
+            (
+                "duplicate-key-last-wins",
+                Some(r#"{"skipNames":["a.request.json"],"skipNames":["b.response.json"]}"#),
+            ),
+            ("top-array", Some("[]")),
+            ("top-array-with-items", Some(r#"[1,{"a":[]},"s"]"#)),
+            ("top-number", Some("42")),
+            ("top-string", Some(r#""s""#)),
+            ("top-null", Some("null")),
+            (
+                "whitespace-around",
+                Some(" \n{\"skipNames\":[\"a.request.json\"]}\n "),
+            ),
+        ];
+        for (tag, state_text) in ok_cases {
+            let (dir, bodies, state) =
+                pruned_fixture(tag, &["a.request.json", "b.response.json"], state_text);
+            let dirs = [bodies];
+            let (skip, stranded, line) = load_then_prune(&state, &dirs);
+            let got =
+                load_pass_state_pruned(&state, &dirs).unwrap_or_else(|e| panic!("{tag}: {e}"));
+            assert_eq!(
+                (&got.skip, &got.stranded, &got.summary),
+                (&skip, &stranded, &line),
+                "{tag}"
+            );
+            fs::remove_dir_all(&dir).ok();
+        }
+        let err_cases: [(&str, &str); 6] = [
+            ("not-json", "{not json"),
+            ("empty-file", ""),
+            ("truncated", r#"{"skipNames":["a.request.json""#),
+            ("trailing-garbage", r#"{"skipNames":[]} x"#),
+            (
+                "bad-inside-ignored-value",
+                r#"{"other":[1,,2],"skipNames":[]}"#,
+            ),
+            ("control-char-in-string", "{\"skipNames\":[\"\u{1}\"]}"),
+        ];
+        for (tag, state_text) in err_cases {
+            let (dir, bodies, state) = pruned_fixture(tag, &["a.request.json"], Some(state_text));
+            assert!(
+                load_pass_state(&state).is_err(),
+                "{tag}: load_pass_state must reject it too"
+            );
+            let err = load_pass_state_pruned(&state, &[bodies])
+                .err()
+                .unwrap_or_else(|| panic!("{tag}: must be an Err"));
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{tag}: {err}");
+            assert!(
+                err.to_string().contains(&state.display().to_string()),
+                "{tag}: the error must name the path: {err}"
+            );
+            fs::remove_dir_all(&dir).ok();
+        }
+        // Invalid UTF-8 bytes: an Err in both loads.
+        let (dir, bodies, state) = pruned_fixture("raw-bad-utf8", &["a.request.json"], None);
+        fs::write(&state, b"{\"skipNames\":[\"\xff\xfe\"]}").unwrap();
+        assert!(load_pass_state(&state).is_err());
+        assert!(
+            load_pass_state_pruned(&state, &[bodies]).is_err(),
+            "invalid UTF-8 must be an Err"
+        );
+        fs::remove_dir_all(&dir).ok();
+        // A state path that cannot be read (a directory) is an Err naming the path.
+        let (dir, bodies, state) = pruned_fixture("unreadable", &["a.request.json"], None);
+        fs::create_dir_all(&state).unwrap();
+        assert!(load_pass_state(&state).is_err());
+        let err = load_pass_state_pruned(&state, &[bodies])
+            .err()
+            .expect("an unreadable state file must be an Err");
+        assert!(
+            err.to_string().contains(&state.display().to_string()),
+            "{err}"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }

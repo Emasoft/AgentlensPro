@@ -20,6 +20,8 @@ All notable changes to AgentlensPro are documented here.
 
 ### Added
 
+- **`agentlenspro search <pattern>` — grep every transcript of the current project.** Reads the project's Claude transcripts (main and sub-agent, every session) off disk with DuckDB, with no server. Match modes: literal, `--regex`, `--mask`, `--word`, `--fuzzy`. Element mode (`--kind`, `--tool`, `--file`, `--commit`) matches prompts, responses, tool calls and outputs, diffs, sub-agent results and hooks as readable text, and `--kind model-change` lists where the model changed; `--show SESSION:LINE` prints one entry. Scope, filter and output flags are listed by `agentlenspro search --help`.
+
 - **get_account_status --all reads the owner's long-lived OAuth keys.** Set CLAUDE_CODE_LONG_OAUTH_KEY_01 through _10 to '<email>|<token>' in the environment. Each valid key is probed with a max_tokens 0 claude-fable-5-1 message (about 33 input tokens, no output), at most once per 10 minutes per key; that message is billed, and on an idle account it probably opens a new 5-hour window. The reply's anthropic-ratelimit-unified headers become the 5-hour, 7-day and Fable windows, filed under the account whose email matches and cross-checked against the 7-day reset within 60 seconds (refused on a mismatch). The usage endpoint answers 403 oauth_scope_insufficient to these keys, which is why this path exists. --no-refresh reads the files only. Tokens are read only from the environment and are never printed or stored (TRDD-HO94JMKD, increment 2).
 
 - **A long-lived key whose check failed inside the 10-minute wait now shows its error with no figures and when it was checked, instead of an old archived reading.** (TRDD-HO94JMKD)
@@ -36,9 +38,9 @@ All notable changes to AgentlensPro are documented here.
   same `Bash, Read, Write, Edit, Grep` surface, and their bodies teach the four binding CLIs — a worker
   reads with `tldr`, locates with `jgrep`, triages with `qs.mjs` when quicksilver is installed, writes
   with `fastedit`, and reports (then falls back to the built-in tools) when a CLI is missing.
-  Nothing is preloaded: the skills are not shipped, so the recipes live in the bodies. Pick
+  The skills are not shipped, so the recipes also live in the bodies. Pick
   `cheap-worker` when the prompt already carries every fact the task needs; pick `lean-worker`
-  (Sonnet 5.5) when the task needs real judgement; pick
+  (Haiku 5.5 at `high`) when the task needs real judgement; pick
   `fast-worker` when the task is mechanical and latency matters more than the last bit of depth. Both
   install into `~/.claude/agents/` alongside the existing three.
 - **The shipped worker bodies now teach the four binding CLIs.** `lean-worker`, `cheap-worker` and
@@ -46,8 +48,21 @@ All notable changes to AgentlensPro are documented here.
   whole file into context, and write with `fastedit` rather than `Edit`/`Write`/`sed -i`/a heredoc —
   `fastedit` validates every write and keeps a backup, and `fastedit diff <file>` then confirms that
   exactly the intended change landed. `micro-worker` gets the same `tldr body` reading recipe while
-  keeping its zero-skill, no-CLAUDE.md footprint (measured 2026-09-24: first request 61,119 -> 11,167
-  tokens).
+  keeping its no-CLAUDE.md footprint (measured 2026-09-24, before the workers preloaded skills: first
+  request 61,119 -> 11,167 tokens).
+- **The shipped workers move to Haiku 5.5, set `permissionMode: auto`, and carry their tool commands inline instead of preloading skills.** `lean-worker`
+  (was `sonnet[1m]`/`medium`, now `haiku[1m]`/`high`), `micro-worker` (was `sonnet[1m]`, now
+  `haiku[1m]`, effort unchanged) and `agentlens-tldr-worker` (was `sonnet[1m]`/`low`, now
+  `haiku[1m]`/`medium`) leave Sonnet. Every shipped worker sets `permissionMode: auto`.
+  `micro-worker` gains `Grep` and keeps `omitClaudeMd: true`; `agentlens-tldr-worker` gains `Write`.
+  `cheap-worker`, `fast-worker`, `lean-worker` and `micro-worker` do not preload skills: each carries one
+  identical `## Tools` section with the basic `tldr`, `jgrep`, `qs.mjs`, `fastedit` and `graphify`
+  commands inline, as `agentlens-tldr-worker` already does. AgentlensPro does not ship those CLIs.
+  Basis: the Claude Code docs say a `skills:` preload injects the full skill content at spawn, and the
+  five `SKILL.md` files measured 2026-11-04 total 126,557 bytes (a documentation-sourced byte count, not
+  a measured per-spawn token count). `agentlens-tldr-worker`'s `tldr definition` example is corrected to `--symbol`/`--file` (the positional form exits 2).
+- **`sonnet-worker` and `smart-worker` now ship and install with agentlenspro.** `sonnet-worker` is `sonnet[1m]` at `high` effort (judgement tasks), `smart-worker` is `opus[1m]` at `medium`; both take the same `Bash, Read, Write, Edit, Grep` surface with `permissionMode: auto`. Neither preloads skills: each carries the same inline `## Tools` section as the other four workers, byte-identical (the shipped-agent test now checks all six).
+- **`js-test-writer` and `python-test-writer` now ship and install with agentlenspro.** Both are `opus[1m]` at `high` effort with large bodies (48.4 and 50.3 KB measured) read on every spawn, so spawn them for real test-writing work only. They preload no skills and carry the same inline `## Tools` section as the other workers, byte-identical (the shipped-agent test now checks all eight agents).
 - **A test pins the shipped-agent set.** Every file in `agents/` must be listed in `AGENT_NAMES` (so it
   actually installs), its frontmatter `name:` must match its filename, and its body must not name a
   sibling worker (a body that tells the model to dispatch a different worker is the defect this

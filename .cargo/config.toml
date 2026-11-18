@@ -1,0 +1,12 @@
+# 4 GB test-data cap for EVERY `cargo test` run (scripts/test-data-cap.sh; CLAUDE.md "Test data is capped").
+# Lives at the repo ROOT, not in rust-core/: cargo discovers config by walking up from the CURRENT
+# DIRECTORY, not from --manifest-path, and the documented invocation runs from the repo root.
+# The runner wraps each test binary in the cap script (own TMPDIR, 5 s size sampling, kill above the cap);
+# an outer wrapper that already set AGENTLENS_TEST_CAP_DIR is joined, not nested (see the script).
+# `relative = true` makes the path resolve against the directory that contains `.cargo/`.
+# NOTE: a cargo runner also wraps `cargo run`, so `cargo run` of a binary goes through the wrapper too.
+[env]
+AGENTLENS_TEST_CAP_SCRIPT = { value = "scripts/test-data-cap.sh", relative = true }
+
+[target.'cfg(all())']
+runner = ["sh", "-c", "exec bash \"$AGENTLENS_TEST_CAP_SCRIPT\" \"$@\"", "test-data-cap"]

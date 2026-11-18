@@ -3,7 +3,7 @@ trdd-id: EJDNNDY3
 title: CI unit and browser-smoke jobs never see the alcore binary
 column: human_review
 created: 2026-09-02T21:31:43+0200
-updated: 2026-10-16T11:13:19+0200
+updated: 2026-11-16T23:00:28+0100
 implementation-commits: [48e8193a]
 current-owner: main-session
 task-type: infra
@@ -95,3 +95,7 @@ gh run view <run-id> --repo Emasoft/AgentlensPro --json jobs --jq '.jobs[] | {na
   (min-approval-requirement: manager). Failure reconfirmed live on CI run 33667160582 (main
   red since f8b7560e); diagnosis verified line-by-line in the review sweep.
 - 2026-10-16T11:13:19+0200 — column → human_review by main-agent@agentlenspro. waits on the owner's push to main and a green CI run; row 7
+
+## Owner-stead review
+
+2026-11-16 23:00 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): NOT CLOSED, stays in human_review. All 5 acceptance boxes are unticked and each needs a CI run on main. This is an act the main agent does not take: pushing to the remote. Read from the card's own state and acceptance list on 2026-11-16; no test was run for this note.

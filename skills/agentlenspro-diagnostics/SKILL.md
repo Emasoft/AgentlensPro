@@ -53,7 +53,7 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 installs the server itself; the CLI starts it on demand.
 
 The kill-switch (`agentlenspro disable`, or AGENTLENS_DISABLED=1) stops only collection (telemetry logs, raw bodies, the hook event log); it refuses no command, so every verb runs while it is armed, and the status line keeps POSTing to the server, which stores it. To lift it: `agentlenspro enable` clears the flag file; for AGENTLENS_DISABLED=1, unset the variable (`enable` cannot clear an environment variable).
-Reads that need no server: `get_account_status --all` (every account's status; it also sends one billed probe per CLAUDE_CODE_LONG_OAUTH_KEY_* key, unless `--no-refresh`), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`. Server-backed verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) need the running server.
+Reads that need no server: `get_account_status --all` (every account's status; it also sends one billed probe per CLAUDE_CODE_LONG_OAUTH_KEY_* key, unless `--no-refresh`), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`, `search`, and the disk monitor, all four verbs (owner decision 2026-11-16): `disk`, `disk-sample`, `disk-watch`, `disk-monitor install|uninstall|status`. Server-backed verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) need the running server.
 `server|daemon start|restart` self-heal the install once the server is up (`autoSetupOnServerStart`, under an operator `disable` too: the switch stops only collection). They skip it under a switch armed for a foreign telemetry setup, with `AGENTLENS_NO_AUTOSETUP=1`, or where Claude Code is absent. With a foreign setup in place and no switch armed for it, the check still runs: it is the one-line no-write path (one line says so, nothing is written, nothing is armed), not a skip.
 
 ## Version floor — check this FIRST if a command is "unknown"
@@ -180,12 +180,32 @@ text refers to in **bold** are listed here with the file that holds them.
 | the full `budget` flag surface and the abort recipe | [references/budget.md](references/budget.md) — **Budgeting a timed run** |
 | the full `watch` flag surface, metrics, and durable logging | [references/watch.md](references/watch.md) — **Watching ANY metric for peaks** |
 | why a 20-minute gap is NOT a cold cache; `cache-expired`, `cache-state`, `last-compact` | [references/cache-ttl.md](references/cache-ttl.md) — **Cache TTL tracking** |
+| disk space over time: free/used per volume, when exactly it changed, the trash, folder sizes; `disk`, `disk-sample`, `disk-watch`, `disk-monitor` | [references/disk-monitor.md](references/disk-monitor.md) — **Disk-space monitor** |
 | the per-call cache ledger, Anthropic's own window usage, every account's headroom | [references/windows-and-ledger.md](references/windows-and-ledger.md) — **The per-call ledger**, **Authoritative window usage**, **Every account** |
 | what is running in THIS project and what it cost; per-subagent context fill | [references/statusline-history.md](references/statusline-history.md) — **Per-project and per-subagent history** |
 | every tool, by the question it answers | [references/tool-cheat-sheet.md](references/tool-cheat-sheet.md) — **High-value tools (cheat-sheet)**, **Context-composition & session-drill tools** |
 
 The four rules that keep a diagnosis cheap (batch, `--out`, never paste JSON) are **Rules for
 agents**, at the end of this file.
+
+## Search past transcripts with `agentlenspro search` — do not read them by hand
+
+To find what an earlier session or sub-agent did, said or got back, search the project's transcripts
+instead of opening `.jsonl` files by hand. It needs no server, reads
+every session of the current project (main and sub-agent) and prints one line per hit plus a stderr summary:
+
+```bash
+agentlenspro search "ENOENT" --since 2d                                 # an error anywhere in the project, last 2 days
+agentlenspro search "finished" --kind subagent --since 1d --limit 5     # what sub-agents reported
+agentlenspro search --show aaaaaaaa:12 --agent bbbb2222                 # one hit in full: <session>:<line> from the hit line
+agentlenspro search --kind model-change --session aaaaaaaa              # when did the model change (from -> to)
+```
+
+Narrow first with `--since`, `--session`, `--agent`, `--kind`, `--tool`, `--file`, `--commit`; use `--count` or
+`--files` first when you only need where it is. Match modes: literal (default), `--regex`, `--mask`, `--word`,
+`--fuzzy`. The cost grows with the size of the project and the load of the machine; element mode (`--kind`) and `--fuzzy`
+cost more than a plain search. `agentlenspro search --help` lists every flag. The ids above are made up; use the
+session and `#line` that a hit printed.
 
 ## Commands
 

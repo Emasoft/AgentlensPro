@@ -228,7 +228,11 @@ const isTestPath = (rel) =>
 // need a handle with duplicated settings. They are reducible only by a data-returning gateway, owed to the
 // follow-up card named on TRDD-4BZPAQWM. Deduplicating them into a helper that returns a Connection lowers
 // no count honestly: any such helper's call sites must be counted.
-const MAX_NON_TEST_OPENERS = 26
+// 2026-11-16 (TRDD-HTARKH87): 26 -> 27 for src/cli/diskStore.ts. The owner ordered the disk-space monitor to record into "a new dedicated duckdb table"; it
+// runs every minute from launchd and must not share cards.duckdb (one DuckDB writer lock: the sampler would contend with the collector), so it
+// needs its own handle on its own file, opened READ_WRITE by the sampler and READ_ONLY by the query verbs. No gateway exists for a persistent
+// TS-side DuckDB file (store/db.ts only builds :memory: views over parquet), and one new file is the whole of the addition: every disk verb goes through diskStore.ts.
+const MAX_NON_TEST_OPENERS = 27
 // 2026-09-24: lowered to the measured count (raised again 2026-10-17, see above) after TRDD-4BZPAQWM
 // deleted src/database/* and sessionRepository.ts (a81972f9).
 const MAX_TEST_OPENERS = 11

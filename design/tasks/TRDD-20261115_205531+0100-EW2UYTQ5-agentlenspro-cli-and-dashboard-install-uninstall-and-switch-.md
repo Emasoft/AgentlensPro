@@ -1,0 +1,69 @@
+---
+trdd-id: EW2UYTQ5
+title: agentlenspro CLI and dashboard install, uninstall and switch each extension it ships one by one in realtime
+column: design
+status: tasked
+created: 2026-11-15T20:55:31+0100
+updated: 2026-11-16T01:05:11+0100
+current-owner: main-agent@agentlenspro
+created-by: main-agent@agentlenspro
+task-type: refactor
+min-approval-requirement: none
+assignee: main-agent@agentlenspro
+mandate: true
+mandated-by: none
+approved: false
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-15T20:55:31+0100
+---
+
+# agentlenspro CLI and dashboard install, uninstall and switch each extension it ships one by one in realtime
+
+## Owner decision (verbatim, 2026-11-15)
+> agentlenspro should not be a plugin. all components should be installed as standalone user scoped elements. each one indipendently. skill, hooks, agents, mods, etc. no plugin.
+> the reason for this is that all the extensions must be dynamically switcheable on and off at any time and at runtime.
+
+(Orchestrator paraphrase, not owner text:) Asked whether a mod can exist only as a plugin (mod docs: "A mod is a plugin of JavaScript/TypeScript event handlers") and whether standalone skills, agents and settings hooks have no runtime switch, the owner chose: "One plugin per part (Recommended)" — split into small single-part plugins, each switched on or off separately with `/plugin enable|disable` plus `/reload-plugins`; no bundle.
+
+## Owner directive (verbatim, 2026-11-15, later)
+> every skill, every hook, every agent, every mod, every rule: each one of them must be installable and uninstallable atomically via the agentlenspro cli. or using the dashboard right panel. all in realtime. including all changes to the settings.json file (maybe aggregated per functionality to make easier for the user to switch them on or off). disable as an option should be a similar realtime change. not only it must uninstall the hooks (except those of the statusline and the adversarial and measurer reviews) but it must change the settings.json to remove or switch off the telemetry options so that claude will not keep saving logs or raw bodies that nobody is collecting.
+> packaging? what packaging? agentlenspro it its a tool installed via npm. it installs extensions only after being installed.
+Resolution (orchestrator reading of the line above): no repackaging of agentlenspro itself. The npm-installed CLI stays the installer and manager; each extension it installs (skill, agent, hook group, rule, settings.json telemetry group) is a standalone user-scoped element switched one by one from the CLI and the dashboard's right panel. The review mod stays the one plugin, because a mod loads only from a plugin. The per-part-plugins plan below is superseded.
+> packaging? what packaging? agentlenspro is a tool installed via npm. it installs extensions into claude (at user scope) only after being installed.
+> packaging? what packaging? agentlenspro is a tool installed via npm. it installs extensions into claude (at user scope) only after being installed, and it does interactively via a cli command or via a dashboard.
+> i already explained to you that the readme must explicitly tell to run `agentlenspro setup` the first time to install the default components into claude. then the user can switch them on or off individually via the cli or the dashboard.
+> actually i don't remember if it was setup or install. but the opposite command should also exist: `uninstall` should remove all extensions from claude, reverting also the settings.json to the settings (removing the lines that were added, keeping those that were already present at setup time, settings the values that agentlenspro changed back to the values originally found at install time, but leaving the others intact, since they may have been edited by the user for other purpouses)
+> yes, all those install and uninstall commands are good. the more the better. the user must be able to install/uninstall the extensions totaly, by function, by type, one by one, etc. so multiple ovenrlapping install/uninstall commands must be included in the cli. the dashboard should also include a profile saver/reloader to quickly load presets. remember that enable/disable is a sepaarate independent switch. no matter the profile, disable will prevent the collection (except for statusline hook and review/measure hooks). All alerts and warnings or hooks blocking should be configurable in the dashboard side panel as well, with the option to be only warnings or to block, and the option to set tresholds for warnings and tresholds for blocking of all tracked parameters and events. the cli won't allow to create profiles but it should have an option to load a profile dynamically by its name.
+> as i said the profile and the enable/disable switch are completely independent. no matter what the profile include as collectors hooks or telemetry, if in disabled state, those will not run (with the exception i said), if in enabled, those that are included in the profile will run. any change of the profile will not affect the enable disable state, and any change to the enable/disable state will not affect the profile. The profile setup the installed elements. the enable/disable switch turn them on or off. but only the installed ones can be turned one or off. the enable/disable state cannot install anything. (by install i mean also the entries and values configured in the settings.json. profile can add/remove those. enable/disable can only change their values from false to true or similar. and only if they were not preeexisting to the first install). profiles add and remove hooks from the settings.json and scripts from the hooks folder. enable/disable will only change a file-flag that tell the hook to exit without executing anything or to execute normally. but the hook is there and won't be removed when disable is used. the same for all the other extensions.
+
+## Superseded plan (one plugin per part — replaced by the resolution above; kept as the parts inventory)
+Parts inventory (2026-11-15):
+- mod: agentlenspro-review-mod (register.js + show.py command hook), already a plugin
+- skills (repo skills/): agentlenspro-diagnostics, agentlenspro-cache-guard, agentlenspro-scan-and-fix, agentlenspro-visualize-context, verification-before-completion
+- agents (repo agents/): agentlens-tldr-worker, cheap-worker, fast-worker, js-test-writer, lean-worker, micro-worker, python-test-writer, smart-worker, sonnet-worker
+- settings.json hooks written by `agentlenspro --install-hooks` (src/cli/hookInstall.ts:400): `agentlenspro hook` (lifecycle capture), `agentlenspro gate` (burn gate), the Read cache-guard
+- stays in settings.json (not plugin components): OTEL env, status line
+- rules (~/.claude/rules files agentlenspro ships, if any)
+
+## Step 0 (gate, before any build; the plugin-per-part checks are superseded, the realtime checks still apply)
+Measure that `/plugin disable` + `/reload-plugins` mid-session stops a plugin's hooks, skills and agents with no restart, and enable brings them back. Not yet verified.
+Also verify (docs found 2026-11-15): plugin skills and agents are renamed `plugin-name:name` (skills reference chapter line 469), which would break every bare-name reference; standalone skills can be hidden with the settings key `skillOverrides` ("off"). On that basis the main agent now recommends standalone elements switched by the agentlenspro CLI and dashboard, with only the mod kept as a plugin; this awaits the owner's answer. Also measure whether settings.json hooks and env telemetry changes apply to a running session or only after restart.
+Found 2026-11-15 (read, not yet traced end to end): README install block (README.md:52-60) says `npm install -g agentlenspro` then `agentlenspro`, with no first-run `agentlenspro setup` step; add it right after the install line.
+Found 2026-11-15: an all-or-nothing `agentlenspro disable` already exists (src/cli/disableCli.ts: flag-file kill switch read by every hook, moves skills/rules aside, removes OTEL_LOG_RAW_API_BODIES, stops the server; `--keep-statusline`). Build per-component switches on it, not beside it.
+Found 2026-11-15: src/cli/autoSetup.ts heals the install at every CLI launch (TRDD-AGZ0XZKW). Check whether it respects a switched-off component; if not, it would undo a per-component off. README.md:334 says the bodies key has 'no switch' and the tool is 'non-functional without it' — each switch must say which features stop with it.
+Found 2026-11-15: no `agentlenspro uninstall` verb exists; the pieces do — `--uninstall-hooks`, `--uninstall-statusline`, `--uninstall-otel` (src/telemetryConfig.ts records each env key's prior state in a marker and restores it: deletes what it added, re-sets what it changed). Open question for the plan: a key agentlenspro set that the user later edited — restore, or leave and report? Proposed: leave it and report it.
+Derived requirement 2026-11-15: autoSetup heals the install at every CLI launch and skips only when the disable flag is set (src/cli/autoSetup.ts:248, agentlensDisabled). uninstall and every per-component off must leave a state autoSetup respects, or the next agentlenspro command re-installs what was removed. Also decide in the plan: how uninstall relates to `agentlenspro disable`, and whether it removes the review-mod plugin. The only existing install/uninstall verbs are `agentlenspro daemon install|uninstall` (src/cli/serverControl.ts:1174-1180, the background service), plus the `--install-*`/`--uninstall-*` flags.
+Conflict found 2026-11-15: today's `agentlenspro disable` (src/cli/disableCli.ts) violates the owner's model above — it moves skills and rules aside and removes OTEL_LOG_RAW_API_BODIES from settings.json, i.e. it uninstalls. Under the model, disable only flips the flag file (and values agentlenspro itself added, never pre-existing ones); removal belongs to profiles and uninstall.
+> also stop assuming where exactly the settings are placed in the settings.json. you must use jq to navigate the settings.json and change the values. lines numbers are not constants. (owner, verbatim, 2026-11-15)
+Limits of the flag-file model, to settle in Step 0: (1) hooks can check a flag file; skills have a documented in-place switch (settings key skillOverrides = off); no in-place switch is known for agents or rules — Claude reads those files directly. (2) A settings.json value flip reaches only NEW sessions — disableCli.ts records that editing settings.json stopped 0 of 13 running sessions (2026-07-14) — so disable must keep stopping the server, and the dashboard must say running sessions keep exporting until restarted. (3) disableCli.ts calls removeRawBodiesKey() (read 2026-11-15); under the owner's model this becomes a value flip of an agentlenspro-added entry, or stays a removal only via profile/uninstall.
+Correction 2026-11-15 to limit (1): agents DO have a settings switch — permissions.deny with Agent(<name>) disables a specific subagent (subagents reference, 'Disable specific subagents'). Rules: only claudeMdExcludes found, documented for CLAUDE.md files; whether it covers ~/.claude/rules/*.md is not established. Limit (2) is scoped to env telemetry variables (one recorded incident); whether other keys (hooks, permissions, skillOverrides) are re-read live is unmeasured.
+
+## Approval log
+
+- 2026-11-15T20:55:31+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-15T21:03:25+0100 — column → backburner. plan awaits the owner's answer on standalone vs per-part plugins
+- 2026-11-15T21:05:49+0100 — column → design. owner resolved the packaging question
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-16
+
+- 2026-11-16 — build plan revision 2 written to design/specs/EW2UYTQ5-build-plan.md (PROPOSED, not approved; 13 child cards; open owner questions in its section 7, which supersedes section 6 Q1 jq, Q2 statusline, Q10 delegate-gate). Owner defaults pending: uninstall keeps and lists edited items; dashboard stays up while disabled. No code started.

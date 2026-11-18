@@ -1,9 +1,9 @@
 ---
 trdd-id: QSFYIHUO
 title: Migrate cache-history consumers off raw-body scanning onto api_calls/cache_turns
-column: human_review
+column: todo
 created: 2026-09-03T04:47:31+0200
-updated: 2026-10-19T00:57:57+0200
+updated: 2026-11-16T23:06:26+0100
 current-owner: main-session
 task-type: refactor
 priority: high
@@ -16,7 +16,11 @@ blocked-by: []
 status: tasked
 implementation-commits: cc49a819, d74c74dd, cbe06222, 5577ce98, 7c40d383
 unblock-when: []
-derived: false
+derived: true
+derived-kind: eht
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-16T23:06:26+0100
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -45,6 +49,11 @@ STEP 3 FOLLOW-UPS (2026-10-10, 7c40d383) after the post-commit review of 5577ce9
 FULL SUITE ON THE FINAL TREE + REVIEW OF 7c40d383 (2026-10-10 04:2x): cargo test -p agentlens-core run to completion on HEAD c92a8539 (code = 7c40d383; HEAD and rust-core tracked status re-checked identical AFTER the run, only an untracked agentlens-prompts-claude.md present): exit 0, 123 of 123 'test result' lines ok, 0 failed; burnscan_store_parity 8/8 (proves the tree is 7c40d383 or later - cbe06222 has 3, 5577ce98 has 6), burnscan_parity 9/9, spool_tap 24/24. An earlier full run (also exit 0, 123 ok) had tested cbe06222. No process snapshot was taken before launch, so a spool_tap collision would have needed a rerun to classify; none occurred. POST-COMMIT REVIEW OF 7c40d383 (fork, transcript-bound): no blockers. Its points, NOT fixed: (1) under a capped listing 'up to N' is true but may be mostly noise on a real backlog; the commit message's 'cannot be made exact without an uncapped listing' was NOT established; (2) the capped test pins 'Up to 1' to how the cap clamps and splits, found by the worker by experiment - brittle; (3) the note prints '(SQL, no file cap)' next to 'the file listing was capped' (store vs spool) and reads as a contradiction; (4) process: the orchestrator asked the USER whether to do the follow-ups and then did them one heartbeat later. This card is PAST the two-review-round limit on the step-3 fix: NO further code changes until the USER answers. OPEN, USER: (a) should 'complete' turn false when storeRequestsWithoutFacts > 0 (currently no); (b) reword acceptance box 5 (the body walk stays as fallback by design); (c) keep, revise or revert cbe06222 + 5577ce98 + 7c40d383. OPEN, work (after the answers): review points 1-3 above, F10, F7, F6, F9, older completeness-flag follow-up, F4 has no test, rate-limit arm live check, deploy. NOT pushed, NOT deployed. NEXT ACTION: wait for the USER's three answers.
 CORRECTIONS to the entry above (2026-10-10T04:21+0200, after its adversarial review, fork, transcript-bound, no blockers): (1) the entry's time '04:2x' is 04:17; (2) the per-commit burnscan_store_parity counts are now RE-COUNTED from git (cbe06222 3, 5577ce98 6, 7c40d383 8), so 8/8 does identify the final tree; HEAD equality was checked at launch and after the run, not during; (3) 'exit 0' is the harness task notification's exit code - the output file carries no exit marker; '0 failed' leans on that exit code, since a binary that failed to compile prints no result line; (4) 'none occurred' means no spool_tap FAILURE occurred - a harmless collision would be invisible; (5) 'An earlier full run had tested cbe06222' restores a hedge it should not have dropped: that run ran 3 store-parity tests, so it tested cbe06222's test file, tree otherwise not proven; (6) the four 7c40d383 review points were copied from the orchestrator's own summary in the cleared session's compacted context, NOT from the review's output - a point may be missing or softened; (7) the full suite covers agentlens-core only; the agentlens-store suite was last run at cbe06222 and the two fix commits touch only agentlens-core/src/burn/investigator_scan.rs and tests/burnscan_store_parity.rs (git diff --stat cbe06222 7c40d383); (8) the fail-when-reverted results remain workers' reports. COLUMN: the move todo -> human_review in af95f587 overstated (all 5 acceptance boxes unticked, open work, one open decision is revert); the card is BLOCKED on owner decisions, not awaiting sign-off.
 COLUMN STAYS human_review (2026-10-10T04:23+0200): trddgrep refused the move to blocked (3P-KAN-06: blocked-by is empty and no card blocks this one; a decision-only wait has no park form the tool accepts), and no blocker card was invented to satisfy it. Read human_review here as 'stopped on three owner decisions', NOT as 'finished, awaiting sign-off': all 5 acceptance boxes are unticked.
+2026-11-16 23:06 — THE THREE ANSWERS, GIVEN IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."). The owner can overrule them. The card is NOT review-ready: all 5 acceptance boxes are unticked and the open work list below the questions stands.
+(c) KEEP cbe06222, 5577ce98 and 7c40d383. All three are ancestors of HEAD (checked today); the card records a full agentlens-core run with 123 of 123 result lines ok on that tree; no defect that a revert would cure is recorded.
+(b) Box 5 is REWORDED IN MEANING, its text is left as written above: it is met when the raw-body scan is no longer the primary path of the three consumers and remains only as the fallback for requests that have no stored facts and as the fail-open path. Removing that fallback is not asked.
+(a) RULE: complete must be false when at least one request in the window was answered by NEITHER its stored facts NOR a successful body walk, and true otherwise. A request without facts that the body walk did read does not make the result incomplete. NOT CHECKED: whether today's code already follows this rule; that check, and the fix if it does not, is the first work item.
+NEXT ACTION: check rule (a) against investigator_scan.rs, then review points 1 to 3, F10, F7, F6, F9, the F4 test. Deploy and the live rate-limit check need the collector, which the owner disabled.
 
 ## WHY
 
@@ -99,6 +108,7 @@ between capture and re-run to prove the ZERO-bodies claim.
 ## Approval log
 - 2026-10-09T00:25:02+0200 — column → todo by main-agent@agentlenspro. both blockers' CODE landed (9SYRK6SW committed + was deployed 2026-09-05; GVA8TTJF fb09facf) — schema and views are stable and proven by tests; migration work needs no live collector, its acceptance does
 - 2026-10-10T04:20:08+0200 — column → human_review. three implementation commits landed and reviewed; work is stopped on three USER decisions (complete flag, box-5 wording, keep/revise/revert)
+- 2026-11-16T23:06:26+0100 — column → todo by main-agent@agentlenspro. the three questions are answered in the owner's stead; open work remains, so the card is not in review
 
 ## Notes and lessons learned
 

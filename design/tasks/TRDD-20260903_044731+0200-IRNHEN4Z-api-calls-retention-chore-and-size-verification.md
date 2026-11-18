@@ -1,5 +1,6 @@
 ---
 trdd-id: IRNHEN4Z
+status: tasked
 title: api_calls part compaction by count, retention chore, and 24h-survives-restart verification
 column: planned
 created: 2026-09-03T04:47:31+0200
@@ -9,6 +10,8 @@ task-type: feature
 priority: high
 min-approval-requirement: none
 parent-trdd: CAJ5RCP9
+derived: true
+derived-kind: eht
 created-by: main-session
 npt: []
 eht: []

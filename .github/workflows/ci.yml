@@ -200,7 +200,7 @@ jobs:
         env:
           AGENTLENSPRO_BROWSER_TESTS: '1'
           AGENTLENS_ALCORE: ${{ github.workspace }}/rust-core/target/release/alcore
-        run: npx mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js
+        run: bash scripts/test-data-cap.sh npx mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js
 
   # ── alcore release build for the unit suite (TRDD-1B98LCVR box 4 prerequisite) ──
   # Separate from the `rust` job below (clippy + full workspace tests, up to 40min):

@@ -9,7 +9,7 @@
 //   Request multipliers (pre Jun 1, 2026): https://docs.github.com/en/copilot/concepts/billing/copilot-requests
 //   Annual-plan multipliers (post Jun 1):  https://docs.github.com/en/copilot/reference/copilot-billing/model-multipliers-for-annual-plans
 //   Per-provider rate URLs: PRICING_SOURCES.md
-export const PRICING_LAST_UPDATED = '2026-11-01'
+export const PRICING_LAST_UPDATED = '2026-11-15'
 
 // Three Copilot billing modes (webview cost toggle):
 //   'token'          — new token-based AI Credits billing, effective Jun 1, 2026
@@ -171,6 +171,11 @@ export const RATES: Record<string, ModelRates> = {
   // returned null and 14 real sessions silently billed $0 (the exact failure the unpriced flag now
   // surfaces). Not yet in Copilot billing docs.
   'claude-sonnet-5':    { inputPerMTok:  2.00, cacheReadPerMTok: 0.20,  cacheWritePerMTok:  2.50, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0 },
+  // Sonnet 5.5 — https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-11-15): input $2, 5m write $2.50,
+  // 1h write $4, cache read $0.10, output $10 per MTok. Before this row existed, claude-sonnet-5-5 prefix-fell to the
+  // claude-sonnet-5 row above and priced cache reads at $0.20, 2x too high. Only the 5m write is stored; cacheWrite1hRate derives
+  // the 1h write as 2x input = $4, which equals the page's 1h figure.
+  'claude-sonnet-5-5':  { inputPerMTok:  2.00, cacheReadPerMTok: 0.10,  cacheWritePerMTok:  2.50, outputPerMTok: 10.00, contextWindowTokens: 1_000_000, multiplier: 0,    multiplierAnnualPostJun1: 0 },
   // Mythos 5 (Project Glasswing) — same pricing/limits as Fable 5. Not yet in Copilot billing docs.
   'claude-mythos-5':    { inputPerMTok: 10.00, cacheReadPerMTok: 1.00,  cacheWritePerMTok: 12.50, outputPerMTok:  50.00, contextWindowTokens: 1_000_000, multiplier: 0,   multiplierAnnualPostJun1: 0 },
   'claude-opus-4-5':    { inputPerMTok:  5.00, cacheReadPerMTok: 0.50,  cacheWritePerMTok:  6.25, outputPerMTok: 25.00, contextWindowTokens: 1_000_000, multiplier: 3,    multiplierAnnualPostJun1: 15 },
