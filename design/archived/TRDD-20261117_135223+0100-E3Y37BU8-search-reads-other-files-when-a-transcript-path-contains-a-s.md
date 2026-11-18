@@ -1,10 +1,10 @@
 ---
 trdd-id: E3Y37BU8
 title: search reads other files when a transcript path contains a star, a question mark or a bracket
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-17T13:52:23+0100
-updated: 2026-11-17T13:58:47+0100
+updated: 2026-11-18T11:02:58+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -35,10 +35,15 @@ PRECISION added 2026-11-17 13:58+0100: the experiment called read_ndjson_objects
 Escape pattern characters in every path handed to DuckDB, in ONE helper used by all seven sites, or pass paths in a way that is not pattern-expanded. Which escape DuckDB 1.5.4 honours is to be measured first (a bracket class around the character, or a backslash), with the three folder pairs above as the test.
 
 ## Acceptance
-- [ ] It is measured which escape makes DuckDB read exactly the named file for star, question mark, and both brackets.
-- [ ] All seven read sites go through one helper; a committed test with the three folder pairs fails on the old code and passes on the new.
-- [ ] It is read whether the project slug or the sub-agent file names can contain these characters, and the result is written here.
+- [x] It is measured which escape makes DuckDB read exactly the named file for star, question mark, and both brackets.
+- [x] All seven read sites go through one helper; a committed test with the three folder pairs fails on the old code and passes on the new.
+- [x] It is read whether the project slug or the sub-agent file names can contain these characters, and the result is written here.
 
 ## Approval log
 
 - 2026-11-17T13:52:23+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T11:02:58+0100 — COMPLETE by main-agent@agentlenspro. all three acceptance boxes met by commit a6ea815a, evidence on the card.
+
+## Outcome
+
+2026-11-18, commit a6ea815a. MEASURED by a worker (DuckDB 1.5.4, macOS, report reports_dev/sonnet-worker/20261118_search-fixes.md): a backslash escape gives No files found; a bracket class around star, question mark and open bracket reads exactly the named file; a path that holds a backslash is not expanded at all (12 of 12 reads) and a bracket class in it is misread, so it is passed as it is. Mechanism of the backslash case not found; Windows not measured, so a Windows path with a backslash and a bracket or star is not fixed. One helper sqPath at every read_ndjson_objects site of src/cli/searchCli.ts (main agent ran: grep of the reader call minus sqPath prints no line). Test: 9 folder pairs in src/test/searchCli.test.ts; before the fix 5 of the 11 new tests failed (star, question mark and bracket pair read the decoy), after it searchCli.test.js gave 86 passing, by the worker report. READ by the worker: the project slug is the path with every non-alphanumeric replaced by a dash (src/projectSlug.ts line 33), so a derived slug cannot hold these characters; the config or projects folder and session or sub-agent file names can. Not examined: the other modules that call read_json or read_ndjson (src/ndjsonDuck.ts, src/statuslineStore.ts, src/causingToolCall.ts, src/store/db.ts). The linked bundle was not rebuilt by this commit.

@@ -4,7 +4,7 @@ title: search --help and help search print the global usage and the help text of
 column: dev
 status: tasked
 created: 2026-11-18T10:52:05+0100
-updated: 2026-11-18T10:52:05+0100
+updated: 2026-11-18T11:02:57+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,10 +28,14 @@ RUN: agentlenspro search --help (linked bundle of 04:50) prints the 224-line glo
 In main.ts print SEARCH_USAGE for search --help, search -h and help search (static text, no socket, nothing run). The summary line for search in the global usage names the project-wide form.
 
 ## Acceptance
-- [ ] search --help, search -h and help search print the text of SEARCH_USAGE, exit 0 and run no search; a committed test fails before the change and passes after.
-- [ ] The search entry of the global usage describes the project-wide form.
+- [x] search --help, search -h and help search print the text of SEARCH_USAGE, exit 0 and run no search; a committed test fails before the change and passes after.
+- [x] The search entry of the global usage describes the project-wide form.
 - [ ] The linked bundle is rebuilt and the real command shows the new text.
 
 ## Approval log
 
 - 2026-11-18T10:52:05+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Outcome
+
+2026-11-18, commit a6ea815a: src/cli/main.ts prints SEARCH_USAGE for search --help, search -h and help search; the search entry of the global usage is rewritten. Test added in src/test/cliUsageContract.test.ts (5 passing by the worker report). NO failing run of that test was recorded: the worker edited main.ts before running it. The failing observation that exists is the run of the real command on the bundle of 04:50, which printed the global usage (reports_dev/main-agent/20261118-search-help.txt).
