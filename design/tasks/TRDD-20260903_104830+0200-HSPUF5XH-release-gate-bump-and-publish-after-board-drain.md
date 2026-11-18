@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T00:19:01+0100
+updated: 2026-11-19T00:50:22+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -324,3 +324,7 @@ FROM TRDD-12FGMAEP (commit 73211a46, footprint backstop in the memory guard of a
 
 - From TRDD-YL3EWT6N card line 164: move the parenthesis 'its launch wiring was not checked' out of CHANGELOG.md:25 (method detail), keeping 'is expected to'. Add the item 8 CHANGELOG bullet with the live effect: the first launch after the update rewrites statusLine and subagentStatusLine once through safeConfigEdit, with a backup. Item 4 docs owed (TRDD-YL3EWT6N STATE line 72).
 - 2026-11-19T00:19+0100: the YL3EWT6N items of line 325 are done in bcc2e9ed (CHANGELOG.md:25 clause, item 8 bullet, item 4 docs as a README paragraph). Still owed before the publish: the item 10 bullet once item 10 lands, and the four review mod cards' change notes (mod changelog, by the mods agent).
+
+## Release order after item 10 (2026-11-19)
+
+2026-11-19T00:50+0100 main agent, from the advisor pass: (1) rebuild and codesign alcore AFTER the version bump: alcore embeds package.json's version at compile time (server_stats.rs include_str!), and a binary built before the bump makes the item 10 check print the 'different installs' notice on this machine. (2) A pre-item-10 alcore answers 'alcore version' with exit 64 (usage), which shows as one probe-failed notice: expected once. (3) The live check of item 10 cannot run in the safe form used so far: AGENTLENS_NO_AUTOSETUP=1 and the NO_REVIVE brake both skip it. It needs an isolated HOME, DATA_DIR and free ports (OTLP not 4318) with auto-setup on, an old server running and a newer binary on disk; then one ordinary verb must print the 'restarted the server' line.
