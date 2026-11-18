@@ -1,10 +1,10 @@
 ---
 trdd-id: ISEF8YO7
 title: The report of a review of an interrupted turn was not shown in the four Stop displays that followed
-column: dev
+column: blocked
 status: tasked
 created: 2026-11-17T23:34:06+0100
-updated: 2026-11-18T05:47:21+0100
+updated: 2026-11-18T11:37:22+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,6 +16,12 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-17T23:34:06+0100
 implementation-commits: [44f31935]
+blocked-by: [0IFG1B11]
+pre-block-column: dev
+blocker-probe: trddgrep --design-dir design --porcelain 0IFG1B11
+blocker-holds-if: match:md.0IFG1B11.[a-z_]+.tasks.
+unblock-when: [trdd:0IFG1B11]
+blocker-probe-canary: match:0IFG1B11
 ---
 
 # The report of a review of an interrupted turn was not shown in the four Stop displays that followed
@@ -33,15 +39,16 @@ Found while checking TRDD-M62ZBT7E against a harness review. In another session 
 - Whether the report was shown under another heading. The search was for the text "interrupted turn " followed by a time.
 
 ## Acceptance
-- [ ] The path of a held report from reviewInterrupted to the Stop display is traced in the INSTALLED copy, with file and line, including what a compaction and a session start do to it.
+- [x] The path of a held report from reviewInterrupted to the Stop display is traced in the INSTALLED copy, with file and line, including what a compaction and a session start do to it.
 - [x] The cause of the missing box for the 23:07 row is named, or the limit of what the transcript can show is stated.
 - [ ] A held report is shown at the next Stop, or the user gets one line that says it was dropped and why.
-- [ ] A probe shows it, and the mod version is bumped.
+- [x] A probe shows it, and the mod version is bumped.
 
 ## Approval log
 
 - 2026-11-17T23:34:06+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-18T00:07:03+0100 — column → dev by main-agent@agentlenspro. the mods-expert-developer agent is working on it (owner directive 2026-11-18)
+- 2026-11-18T11:36:16+0100 — column → blocked by main-agent@agentlenspro. box 3 waits for TRDD-0IFG1B11 (three cases with neither box nor line)
 
 ## Notes
 
@@ -51,3 +58,4 @@ OWNER DIRECTIVE 2026-11-18 00:00 (verbatim): «mods are too complex. only the mo
 FACTS READ 2026-11-17 23:50 to 23:57 by the main agent, before the directive above (mods documentation on disk: mods-expert-developer-plugin 0.6.2, skill mods-doc-mods-interfaces, references/chapter.md lines 734 to 874; source agentlenspro-review-mod/hooks/register.js 0.7.11). (1) An atom is $.state: it lasts until the session ends or the user runs /clear, /resume or /branch, and it survives a module reload; a module-level variable lasts only until the module reloads. (2) Chapter line 824: classic.SessionStart also fires at startup and after compaction, and compaction does not reset $.state. (3) The handler of classic.SessionStart in the mod (register.js:1258) has no filter on source and runs heldInterrupted.length = 0 (:1260). CAUSE WORDING: candidate (a) is sufficient by code plus documentation (unfiltered handler; the event fires after compaction; the compaction of 22:11:10 UTC sat between the hold of 22:07:27 UTC and the next Stop). It was not observed running, and candidate (b), the module loaded again, is not excluded. FIX DIRECTION, SUPERSEDES the earlier note that asked for a session id per item and a debug log of both ids: both are dropped, since state is already per session. LEADS for the mods agent, not decisions: hold the boxes in a $.state atom declared in types/index.d.ts; remove the clear at :1260; store rendered lines, not the table object (what $.state accepts beyond JSON was not read); a test run with «claude plugin test» (Claude Code 2.1.326 has the command; help text saved at reports_dev/M62ZBT7E/20261117_2356-plugin-test-help.txt) that is red on 0.7.11 and green on the fix would separate cause (a). After /clear, /resume or a fork the state is already at its default when SessionStart fires, so the mod cannot count dropped boxes from the atom: the «dropped line» branch of box 3 needs a decision (a stated limit in the README, or a count kept elsewhere). NOT FOLDED IN, not checked: stepUsage.clear() sits in the same unfiltered handler; whether a compaction in the middle of a turn drops the usage of the turn under review is unknown.
 - 2026-11-18: mod 0.7.12 committed as 44f31935 (plugin.json, README.md, hooks/register.js, types/index.d.ts, tests/held-interrupted.test.ts; tsconfig.json left out, owner file). The five files are sha256-equal to the last tested set (reports_dev/ISEF8YO7/raw/76-FINAL3-sha256.txt); 12 pass, 0 fail; validate exit 0; validate --strict exit 1 as on 0.7.11, with one more warning for an untracked .DS_Store. NOT installed, so the seen-live boxes stay open.
 - 2026-11-18 correction to the message of 44f31935: the diff between the strict validation of 0.7.11 and 0.7.12 was read for 30 of its 32 lines, and that file 71-FINAL3-validate is the output of claude plugin validate was assumed from its text, not read from the command.
+- 2026-11-18 BOXES 1 AND 4 TICKED, BOX 3 LEFT OPEN (main agent), from the report of the mods agent reports_dev/mods-expert-developer-agent/20261118_isef8yo7-boxes.md (read whole by the main agent; raw files reports_dev/ISEF8YO7/raw/80-*). CHECKED BY THE MAIN AGENT: installed 0.7.10 register.js lines 430, 818, 1250 and 1320 hold the text the report quotes; source 0.7.12 lines 456, 458 and 471 hold the leaving-command map and the dropped row; plugin.json says 0.7.12; the heading-count files say probe 1 (0.7.12, manual /compact) heading shown once, probe 2 (scratch copy of 0.7.10, manual /compact) heading 0, probe 3 (0.7.12, /clear) heading 0 and one dropped row (pane line 209); the events file of probe 2 holds the row of the finished interrupted review at 11:10:48 and its key-entries file holds one compact_boundary. NOT CHECKED BY THE MAIN AGENT: the probe transcripts, the other times, the residual cases, fit() in show.py, the test file. BOX 1 (ticked): path traced in the installed 0.7.10 with file and line; a SessionStart of any source empties the hold at :1250, so a compaction, /clear, /resume or /branch between the row and the next Stop drops the box with no line. Whether :1250 or a module reload emptied it in the original live case is not separated. BOX 4 (ticked): shown by a scripted Esc, not by the probe tool alone: probes 1 and 3 ran 0.7.12 (Claude Code 2.1.327, sonnet, terminal) and the Esc was sent into the tmux pane of the probe by a script of the mods agent, plus one Escape and one Enter sent by hand; version 0.7.12 is committed as 44f31935. Probe 2 was a deviation from the brief (it loaded a scratch copy of 0.7.10, left in place at reports_dev/ISEF8YO7/raw/80-0710-copy/). NOT SEEN: automatic compaction, a BLOCK verdict, two held boxes, /resume, /branch, Desktop, VS Code, any live session. BOX 3 (open): on 0.7.12 the box survives a compaction (probe 1) and /clear prints one dropped row (probe 3), but three cases by code leave neither box nor line (a module reload then a leaving command; a failed drop; a display file older than 120 s). They are TRDD-0IFG1B11, and this card is blocked by it. NEW DEFECT F1, TRDD-IT5KUORN: with a held box prepended the Stop display cuts the report of the CURRENT turn (seen once, probe 1; cut path in show.py by the report only). 0.7.12 is NOT installed: live sessions run 0.7.10 and keep the loss until the install, which is recorded on TRDD-HSPUF5XH. Loading the mod folder in a probe rewrote two generated, gitignored files under agentlenspro-review-mod/.claude-plugin/types/. The untracked agentlenspro-review-mod/tsconfig.json is, by the report, byte-equal to the file the engine writes into a fresh mod folder at load; it stays untracked. The probe transcripts under reports_dev/ISEF8YO7/raw hold account data: never commit or share them.
