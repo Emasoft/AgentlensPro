@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-18T02:25:56+0100
+updated: 2026-11-18T07:00:59+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -302,3 +302,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-11-18T01:20:35+0100 — OWNER, 2026-11-18 (verbatim): «remember to update the changelog, the readme, and any documentation or --help page before publishing.» Gate for the publish: CHANGELOG.md, README.md, the documentation and every --help text are brought up to date first.
 2026-11-18T01:38:43+0100 — Question 1 of the main agent was: a publish ships the new alcore, without the whole-process memory ceiling of TRDD-12FGMAEP, to every install; publish, or hold. OWNER, verbatim: «no idea what are you talking about. probably i forgot. decide yourself. solve the matter yourself if necessary.» The point OPEN before tagging above no longer waits for the owner: the main agent decides it on verified facts and records the decision in this section. Fact read on 2026-11-18: commit 567fc5c2 (the retirement of the TypeScript server) is NOT an ancestor of tag v2.33.1, and npm view printed 2.33.1 as the published version, so the next publish is the first one where alcore is the only backend.
 - Decision (main agent, 2026-11-18, on the owner's «decide yourself. solve the matter yourself if necessary.»): the next publish is the first release whose only server is alcore (commit 567fc5c2, the retirement of the TypeScript server, is not an ancestor of v2.33.1, and npm serves 2.33.1). A whole-process memory ceiling (TRDD-12FGMAEP) is therefore added and tested before the tag. Its value is chosen on that card.
+
+## Notes 2026-11-18
+
+FROM TRDD-12FGMAEP (commit 73211a46, footprint backstop in the memory guard of alcore): owed before the tag. (1) Deploy: release build of alcore, copy into bin-native/darwin-arm64, codesign, --version check; the running binary predates the commit. (2) Text: README, the diagnostics skill and every --help or reference that lists environment variables must name AGENTLENS_FOOTPRINT_BACKSTOP_MB (default 3 x the commit cap, lowered to half of the physical memory when smaller and above the cap; an override counts only above the cap) and the exit 1 with the label FOOTPRINT BACKSTOP in rss-hard-cap.log. The CHANGELOG entry exists (Unreleased). (3) The CHANGELOG still owes one line for commit abe31c03 (TRDD-RTHA7EWK item 4).

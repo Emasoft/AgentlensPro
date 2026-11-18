@@ -1,10 +1,10 @@
 ---
 trdd-id: 12FGMAEP
 title: No whole-process memory ceiling once the RSS cap keys on mimalloc commit
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-10-22T19:35:30+0200
-updated: 2026-11-18T06:33:16+0100
+updated: 2026-11-18T07:01:44+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -16,7 +16,8 @@ approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-10-22T19:35:30+0200
 parent-trdd: 
-unblock-when: [decision:owner gives the whole-process backstop value or records a waiver]
+unblock-when: []
+implementation-commits: [73211a46]
 ---
 
 # No whole-process memory ceiling once the RSS cap keys on mimalloc commit
@@ -27,6 +28,7 @@ Step 4 of TRDD-2HRA270Y moves the hard cap from phys_footprint to mimalloc commi
 
 - 2026-10-22T19:35:30+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 2026-10-22 review-2 notes: the RSS figures above are whole-process RSS (the 512MB figure was a Python host running DuckDB), not an isolated DuckDB measurement; the jetsam-with-no-log outcome is inferred, not observed. The session summary records an earlier owner answer on a 6 GB cap question; the search for it is incomplete (this session's transcript and the cards were grepped; the only 6 GB cap hits are archived 2026-08 cards 34B9JAZK and QK3L5QAS, a different context), so find it before choosing the backstop value. Moved to todo: this gates the 2HRA270Y deploy.
+- 2026-11-18T07:01:44+0100 — COMPLETE by main-agent@agentlenspro. Scope set by the Decision of 2026-11-18 (ceiling implemented and tested before the publish tag) is met by commit 73211a46; deploy and user-facing text handed to TRDD-HSPUF5XH, live validation to TRDD-735Q3JF4.
 
 ## Open question 2026-10-23
 
@@ -52,3 +54,22 @@ The production-cap run says deploy is BLOCKED, not merely thin: the heap reached
 - 2026-11-18T06:32:58+0100 NOT COVERED. The store open and the synchronous boot sweep (the guard tick starts at bin/alcore.rs:578). The time between two 5 s ticks and any time the tick waits for the state lock (run live-n2 breached at 2334 MB against 2048 MB during a 28 s summary build). alsummarize, alstore, aldigest and the status-line sealer. Hosts where the footprint cannot be read (not macOS). Hosts whose half of physical memory is at or below the commit cap. A slow-growth exit: the crash-loop backoff of the hook revive counts only a death within 5 minutes of the spawn (REVIVE_CRASH_WINDOW_MS in src/cli/hookHandlers.ts, read by the main agent), so a server that lives longer and then exits on the backstop is restarted by the next hook at once, as it is today after a commit-cap exit. Live validation: not possible while TRDD-735Q3JF4 keeps the server from staying up.
 - 2026-11-18T06:32:58+0100 6 GB ANSWER SEARCH: not located. Read by the main agent: the kept part (about 4 KB each) of the twelve candidate entries of session 223e9535 the worker left unopened, all compaction summaries, review notifications, tool output or diffs; compaction summary #30151 whole (reports_dev/main-agent/12fgmaep-show-30151-whole.txt): the owner messages it quotes verbatim hold no 6 GB answer, and it carries the bare line Do not re-ask the 6 GB cap question next to the backstop question as put to the user and unanswered; entries 25889-25898, after the unanswered question #25888, are attachments, hooks and commands. Worker report, inconclusive by its own words: reports_dev/cheap-worker/20261118_062045+0100-12fgmaep-owner-6gb-search-v2.md. The owner delegation of 2026-11-18 decides the value.
 - 2026-11-18T06:32:58+0100 CORRECTION to the Facts section: the log of run live-n2 shows no-collection mode; it does not show that the log scan was off, and that wording is withdrawn. For the October run, log scan off comes from the Open question section of this card, not from the report, which records only the parked body folder. The numbers were re-read by the main agent from server.log and rss-hard-cap.log of reports_dev/735Q3JF4/live-n2-20261118_052847+0100 and from report line 34: all match. REVIEW of the proposal (harness, 12 findings): 1 applied (clone report read, weakness recorded above); 2 applied (worded not located); 3 checked (the one no-op test on the production entry uses a 2048 MB cap, so its backstop is 6144 MB); 4 checked (the log file is read only by tests/rss_hard_cap.rs and named in src/lib.rs; no reader in src, skills or standalone/cli.ts); 5 applied (the backoff claim is replaced by the 5-minute rule above); 6 applied; 7 applied (half of physical memory); 8 applied (boot line); 9, 10 and 11 accepted as wording; 12 applied in the worker brief.
+
+## Implementation 2026-11-18
+
+- CODE, commit 73211a46 (sonnet-worker, three rounds). Read by the main agent: the round-two diff whole; the difference between that diff and the final tree outside the test file whole; the test file hunks (line 18 and lines 367-581) whole. Files: CHANGELOG.md, rust-core/crates/agentlens-core/src/bin/alcore.rs, src/lib.rs (comment only), src/rss_guard.rs, tests/rss_hard_cap.rs; 412 insertions, 23 deletions.
+- SHAPE: check_and_enforce computes the backstop and calls the new pub fn check_and_enforce_both_with(read_commit, read_footprint, backstop_bytes, fallback_rss, flush_before_exit, log_path, snapshot). It reads the commit once. Strictly above the cap (fn over_cap) it runs check_and_enforce_with with that commit, so the commit cap wins when both limits are exceeded; otherwise it runs enforce_footprint_backstop_with (footprint unreadable or at or under the backstop: return). DEVIATION from design bullet (3), which said check_and_enforce_with stays untouched: one line of its body changed (the cap comparison goes through over_cap, same result) and the first sentence of its doc comment. Reason: the boundary that picks the branch lives in one function.
+- PRINT: alcore serve prints describe_limits() once, after the check that the command is serve and before the serve arguments are parsed, so a serve call that then fails its arguments has printed the line too. statusline-seal does not print it (by the worker report: its stdout was only the no-store line).
+- CHECKS run by the main agent, 20261118_065002+0100, 1-min load 8.30: cargo test --test rss_hard_cap rc 0, 16 passed, 0 failed (the 7 new tests ok); cargo test --lib rss_guard rc 0, 9 passed, 211 filtered out; cargo clippy -p agentlens-core --lib --bin alcore --test rss_hard_cap -- -D warnings rc 0, 0 warning lines. Outputs: reports_dev/main-agent/20261118_065002+0100-12fgmaep-*.out. Not run: the whole crate suite, clippy --all-targets (both wait for the pre-push run).
+- NOT DONE: not deployed (the running binary is unchanged; a deploy is a release build, a copy and a codesign). Not validated live (TRDD-735Q3JF4 keeps the server down). No test drives the real footprint reader or the environment read to a breach (injected readers only). The gaps listed under Design, Not covered, stay open; the first one (no cap during the store open and the boot sweep) is the phase where TRDD-735Q3JF4 measured the growth.
+- WORKER SIDE EFFECT: it ran the debug alcore serve for 6 s (timeout 6) with its own data dir /tmp/12fgmaep-serve-data, HOME /tmp/12fgmaep-home, bind 127.0.0.1, ports 49711 (UI), 49712 (MCP), 49713 (OTLP), --no-log-scan (command read from its transcript). Both /tmp directories are left in place.
+- CORRECTION to the NOT DONE bullet above (same day, after review): the clause «is the phase where TRDD-735Q3JF4 measured the growth» is not supported by the figures on this card. In run live-n2 the commit was 1051.3 MB after the open and the breach at 2334 MB was caught by the guard tick, so the tick was already running. Whether first_summary_build runs before or after spawn_all was not checked. What holds: no cap is checked during the store open and the boot sweep; nothing more.
+- HANDED OVER before this card closes: the deploy of the new alcore (release build, copy, codesign) and the user-facing text (README, the diagnostics skill, every --help that lists environment variables) for AGENTLENS_FOOTPRINT_BACKSTOP_MB and for the FOOTPRINT BACKSTOP exit go to TRDD-HSPUF5XH; the live validation (the serve line with both limits in the server log, no false backstop exit) goes to TRDD-735Q3JF4. Both cards carry a note dated 2026-11-18. The search for the earlier owner answer on a 6 GB cap stays NOT LOCATED (Design section); the owner delegation of 2026-11-18 decided the value.
+
+## Checklist
+
+- [x] Backstop value decided under the owner delegation of 2026-11-18 and recorded here (Design 2026-11-18): 3 x the commit cap, lowered to half of the physical memory when smaller and above the cap; override by environment only above the cap.
+- [x] Footprint backstop implemented (commit 73211a46): with the commit at or under the cap and the footprint strictly above the backstop, alcore flushes, appends a culprit log labelled FOOTPRINT BACKSTOP to rss-hard-cap.log and exits 1; the commit cap wins when both limits are exceeded.
+- [x] Tests for the breach, the boundary, the unreadable footprint, the value rule and the wiring of both guards pass with injected readers (main agent run 20261118_065002+0100: rss_hard_cap 16 passed, lib rss_guard 9 passed, clippy -D warnings rc 0).
+- [x] CHANGELOG entry (Unreleased) names the backstop, the override and the Not covered list.
+- [x] What this card does not deliver is handed over in writing: deploy and user-facing text to TRDD-HSPUF5XH, live validation to TRDD-735Q3JF4 (notes dated 2026-11-18 on both). This checklist was written at close, from the Needed sentence of the card body and the Decision of 2026-11-18.

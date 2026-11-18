@@ -4,7 +4,7 @@ title: alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and
 column: dev
 status: tasked
 created: 2026-10-23T04:39:08+0200
-updated: 2026-11-18T05:52:44+0100
+updated: 2026-11-18T07:01:01+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -199,3 +199,7 @@ Order of runs, after the same-binary log-scan-off control (STATE NEXT ACTION): o
 - CONSTRAINTS for the window candidate, read in code 2026-11-18: (1) the Rust heap per card right after the card store opens is about 9.5 KB in both runs (737.4 MB at 74730 cards in the live boot, 1051.3 MB at 110619 in live-n2), so the base is set by the resident layer, not by the log scan. (2) DurableState::save_cards (log_reader.rs:1363-1377) saves the card log from st.cards.persist_snapshot(), the resident layer, through DeltaLog::save_from, where a key missing from the records is a deletion (TRDD-PGMMB2QG). A resident layer that holds only a window of cards would therefore tombstone the older cards in the card log unless that contract changes first. (3) Related open cards: TRDD-AJGTQ007 (DeltaLog load takes about 7 times its size on disk; log-sessions.snapshot.ndjson is 167 MB), TRDD-2JOIAH2G, TRDD-2HRA270Y. DONE this session and still owed: the scratch copy /tmp/claude-501/cards-copy-735 (577 MB) may be removed; scripts are in scripts_dev/735q3jf4-live/ (run-n2.sh, q.cjs).
 - CORRECTIONS 2026-11-18 after review: (1) the pre-warm of ui.rs:1600-1609 does not apply to POST, but a StopFailure hook event still builds a full summary (hook_events.rs:330); burn/agent_gate.rs holds no direct call of summary_now, build_session_summary or burn_summary_now (grep), and what build_gate_state calls further down was not read. (2) What is measured is that ONE GET /api/summary ends the server. A GET to another /api route builds the summary through the pre-warm (commit about 1883 MB at the end of that build in live-n2, under the cap); whether that alone crosses the cap is NOT measured. (3) The 9.5 KB figure is the commit at card-store open divided by the card count, not a measured cost per card, and length(card) counts characters, not bytes. (4) The scratch copy /tmp/claude-501/cards-copy-735 is removed; scripts_dev/735q3jf4-live/q.cjs opens its copy read-write although its header says read-only.
 CORRECTION 2026-11-18 (after review of the final message): the 1883 MB figure is the end of the first summary build in the ONE run that requested GET /api/summary, and the ladder stages fired during that build. No run requested a non-summary GET, so the cost of the pre-warm alone on another /api route is NOT measured.
+
+## Notes 2026-11-18
+
+FROM TRDD-12FGMAEP (commit 73211a46): the footprint backstop is committed and unit-tested with injected readers only; it is not deployed and not validated live. Owed here, once a server can stay up on the live data: read the line «memory guard: mimalloc commit cap N MB, footprint backstop M MB, footprint readable: yes» in the server log after a start, and confirm no exit with the label FOOTPRINT BACKSTOP in rss-hard-cap.log during the run. Open gap relevant to this card: no cap is checked during the store open and the boot sweep (the guard tick starts in chores::spawn_all, bin/alcore.rs line 578).
