@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-18T07:00:59+0100
+updated: 2026-11-18T08:58:03+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -267,6 +267,7 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-10-17: owed, not done: TRDD-AVUGZV1K STATE still lists "CS2W7E77 full-suite runs" as release work; retarget it to this card's box under "Definition of done — gates green" once the other session's uncommitted edits to that file are committed. TRDD-4BZPAQWM also lists CS2W7E77 in blocked-by; drop it there when CS2W7E77 closes.
 2026-10-17: CS2W7E77 complete (fix c7c540c8, mutation-verified 2026-10-17); removed from blocked-by and from TRDD-4BZPAQWM blocked-by. Its tests 2 to 5 are order-dependent on test 1: TRDD-A77UKLVI. The TRDD-AVUGZV1K STATE retarget is still owed.
 2026-10-17: A77UKLVI closed (c65252c3, 1e22ca29). Its evidence line "Runs at HEAD 1efc0d24" means 1efc0d24 plus the test change committed as c65252c3: reproduce at c65252c3. Per-run load was not logged (runs were gated on a 1-minute load at or below 20).
+FROM TRDD-RTHA7EWK item 5 (commit 69caf856, 2026-11-18), owed in the publish pass: (1) README, the agentlenspro-diagnostics skill and every --help page name the view agentlenspro statusline-history refused, the sealer log <dataDir>/statusline-seal.log and the variable AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS (the usage text of statusline-history and of alcore statusline-seal already do, in source); (2) the bundle and the release alcore must be rebuilt and deployed before the installed CLI has the view, the log or the markers: only the debug build and the compiled test output were run; (3) rustfmt was not run on the Rust changes of this item.
 
 ## Notes and lessons learned
 
