@@ -1,10 +1,10 @@
 ---
 trdd-id: AVUGZV1K
 title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work in waves
-column: dev
+column: todo
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-10-14T15:38:11+0200
+updated: 2026-11-18T14:04:03+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -47,6 +47,7 @@ Board at start: todo 53, human_review 32, backburner 32, dev 22, testing 11, blo
 ## Approval log
 
 - 2026-10-04T12:48:47+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T14:04:03+0100 — column → todo by main-agent@agentlenspro. no work since 2026-10-19; its NOT DONE list of 2026-10-14 stays open and is not being worked; dev must mean someone is on it
 
 ## Cards that need the owner, grouped by the act that unblocks them (first triage 2026-10-04, unverified leads)
 
