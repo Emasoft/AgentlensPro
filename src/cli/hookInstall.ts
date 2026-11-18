@@ -588,34 +588,97 @@ export function parseSingleQuoted(s: string): string | null {
   return null // unterminated
 }
 
-/** Is this command string our capture wrapper? */
+/** Is this command string our capture wrapper? A token-boundary test: the base `agentlenspro statusline` followed by the end of the string or a space.
+ *  WHY not startsWith (item 8a): a prefix test also accepted `agentlenspro statusline-history x`, which is another verb of this CLI and not a wrapper,
+ *  so an install would have refused to wrap it and an uninstall would have rewritten it. */
 export function isOurStatuslineCommand(command: unknown): boolean {
-  return typeof command === 'string' && command.trimStart().startsWith(STATUSLINE_CMD)
+  if (typeof command !== 'string') return false
+  const c = command.trimStart()
+  // A whitespace boundary, not only a space: the old startsWith accepted a capture-only wrapper followed by a newline or a tab, so it must stay ours.
+  return c === STATUSLINE_CMD || (c.startsWith(STATUSLINE_CMD) && /\s/.test(c[STATUSLINE_CMD.length]))
+}
+
+/** A status line command of ours split into its parts. `inner` is '' for a capture-only wrapper. */
+export interface ParsedStatusline {
+  subagent: boolean
+  stamp: string | null
+  inner: string
+}
+
+/** ONE parser for every generation of our status line command: the base, an optional `--subagent`, an optional `--stamp V`, then nothing or
+ *  `--inner` and ONE single-quoted word that ends the string. A malformed V counts as unstamped (the entry is still read, so it is repaired to a stamp
+ *  and not refused). Anything else after the base, a stamp after the inner word, trailing text, an unterminated quote, is null: a partial read
+ *  would hand the uninstall or the refresh a truncated command and permanently damage the user's status line. Never throws: settings.json is user-editable. */
+export function parseOurStatusline(command: unknown): ParsedStatusline | null {
+  if (!isOurStatuslineCommand(command)) return null
+  // trim, not trimStart: the old reader trimmed the remainder, so a legacy wrapper with trailing whitespace must still parse and uninstall cleanly.
+  let rest = (command as string).trim().slice(STATUSLINE_CMD.length)
+  const subagentFlag = ' --subagent'
+  const subagent = rest === subagentFlag || rest.startsWith(subagentFlag + ' ')
+  if (subagent) rest = rest.slice(subagentFlag.length)
+  let stamp: string | null = null
+  if (rest.startsWith(STAMP_FLAG)) {
+    const m = /^ --stamp (\S+)/.exec(rest)
+    if (!m) return null
+    stamp = isStampVersion(m[1]) ? m[1] : null
+    rest = rest.slice(m[0].length)
+  }
+  if (rest === '') return { subagent, stamp, inner: '' }
+  const innerFlag = ' --inner '
+  if (!rest.startsWith(innerFlag)) return null
+  const inner = parseSingleQuoted(rest.slice(innerFlag.length))
+  return inner === null ? null : { subagent, stamp, inner }
 }
 
 /** Recover the command our wrapper was wrapped AROUND. Returns '' for a capture-only wrapper (no
  *  inner command), or null when `command` is not ours / not parseable. */
 export function unwrapStatuslineCommand(command: string): string | null {
-  if (!isOurStatuslineCommand(command)) return null
-  const marker = '--inner '
-  const at = command.indexOf(marker)
-  if (at < 0) return '' // capture-only wrapper — there was no status line to restore
-  return parseSingleQuoted(command.slice(at + marker.length).trim())
+  return parseOurStatusline(command)?.inner ?? null
+}
+
+/** The ONE writer of a status line command: the surface command, the stamp flag and version, then `--inner` and the single-quoted inner command when
+ *  there is one. WHY the stamp sits BEFORE `--inner`: parseStatuslineArgs takes the word after `--inner` as the inner command, so a stamp after
+ *  it would be read as that command, and a stamp between `--inner` and its word would turn the inner command into capture-only (blank status line). */
+export function statuslineCommand(cmd: string, version: string, inner: string): string {
+  return cmd + STAMP_FLAG + version + (inner === '' ? '' : ' --inner ' + shSingleQuote(inner))
+}
+
+export type StatuslineVerdict =
+  | { kind: 'absent' | 'unparseable' }
+  | { kind: 'foreign'; command: string }
+  | { kind: 'current' | 'older' | 'newer'; parsed: ParsedStatusline }
+
+/** The verdict of the value of one status line settings key against the running version. absent: no command (null or blank). foreign: a command that
+ *  is not ours (it gets wrapped). unparseable: ours by its base but the remainder does not parse. Otherwise the stamp against the running version
+ *  (compareStampVersions): current (same), older (older, or none or malformed), newer. */
+export function statuslineVerdict(current: string | null, running: string): StatuslineVerdict {
+  if (current === null || current.trim() === '') return { kind: 'absent' }
+  if (!isOurStatuslineCommand(current)) return { kind: 'foreign', command: current }
+  const parsed = parseOurStatusline(current)
+  if (parsed === null) return { kind: 'unparseable' }
+  if (parsed.stamp === null) return { kind: 'older', parsed }
+  const c = compareStampVersions(parsed.stamp, running)
+  return { kind: c < 0 ? 'older' : c === 0 ? 'current' : 'newer', parsed }
 }
 
 export interface InstallStatuslineOptions {
   settingsPath?: string
   pathEnv?: string
   log?: (line: string) => void
+  /** The launch repair of 8b: refresh a stale stamp of ours only. A missing key is not created, a foreign command is not wrapped, a newer stamp is
+   *  kept (one notice) and an unparseable entry is skipped (one warning). The explicit verb leaves it unset. */
+  repairOnly?: boolean
 }
 
-export type StatuslineAction = 'wrapped' | 'capture-only' | 'unchanged' | 'restored' | 'removed' | 'absent'
+export type StatuslineAction = 'wrapped' | 'capture-only' | 'unchanged' | 'refreshed' | 'kept-newer' | 'skipped' | 'restored' | 'removed' | 'absent'
 
 export interface StatuslineSurfaceResult {
   key: string
   action: StatuslineAction
   /** The user's own command we wrapped (install) or restored (uninstall); null when there is none. */
   inner: string | null
+  /** The stamp the entry carried before this run (refreshed, kept-newer, unchanged); null when it had none or the action does not read one. */
+  stamp: string | null
 }
 
 export interface InstallStatuslineResult {
@@ -625,19 +688,27 @@ export interface InstallStatuslineResult {
 }
 
 /** Plan the ops for ONE status-line surface. Split out from the transaction so the decision table
- *  (wrap / capture-only / leave alone / restore / remove) is testable without touching a settings
- *  file, and so both surfaces provably go through the same rules. */
+ *  (create / wrap / refresh the stamp / leave alone / refuse / restore / remove) is testable without touching a settings
+ *  file, and so both surfaces provably go through the same rules.
+ *
+ *  WHY the verdict comes from statuslineVerdict and every written command from statuslineCommand (item 8a): the status line command is a single
+ *  string with no room for a second registration, so the stamp is the only way an older CLI can tell a newer CLI's wrapper from a stale one,
+ *  and a writer and a reader that disagree on the shape would rewrite a good entry on every run. `running` defaults to the running package version;
+ *  `repairOnly` is the launch repair of 8b: it never creates a missing key (that would re-create a status line the user removed on every launch),
+ *  never wraps a foreign command, keeps a newer stamp and skips an entry it cannot parse. */
 export function planStatuslineSurface(
   surface: { key: string; cmd: string; blanksWhenEmpty: boolean },
   current: string | null,
   uninstall: boolean,
   settingsFile: string,
+  running: string = packageVersion(),
+  repairOnly = false,
 ): { ops: SafeEditOp[]; result: StatuslineSurfaceResult } {
   const { key, cmd } = surface
-  const mine = current !== null && isOurStatuslineCommand(current)
 
   if (uninstall) {
-    if (!mine) return { ops: [], result: { key, action: 'absent', inner: null } }
+    const mine = current !== null && isOurStatuslineCommand(current)
+    if (!mine) return { ops: [], result: { key, action: 'absent', inner: null, stamp: null } }
     const inner = unwrapStatuslineCommand(current)
     if (inner === null) {
       // Ours by prefix, but the inner command will not parse. Restoring a truncated command would
@@ -651,21 +722,43 @@ export function planStatuslineSurface(
     // A capture-only wrapper wrapped nothing, so there is nothing to restore: remove the key and
     // leave the user exactly as they were before install.
     return inner === ''
-      ? { ops: [{ op: 'delete', path: [key] }], result: { key, action: 'removed', inner: null } }
-      : { ops: [{ op: 'set', path: [key, 'command'], value: inner }], result: { key, action: 'restored', inner } }
+      ? { ops: [{ op: 'delete', path: [key] }], result: { key, action: 'removed', inner: null, stamp: null } }
+      : { ops: [{ op: 'set', path: [key, 'command'], value: inner }], result: { key, action: 'restored', inner, stamp: null } }
   }
 
-  if (mine) return { ops: [], result: { key, action: 'unchanged', inner: unwrapStatuslineCommand(current) || null } }
-
-  const hasInner = current !== null && current.trim() !== ''
-  const wrapped = hasInner ? `${cmd} --inner ${shSingleQuote(current)}` : cmd
-  const ops: SafeEditOp[] = [
-    // `type` must be present and "command" — set it explicitly so installing onto a settings file
-    // that has no such key yet produces a complete, valid object rather than half of one.
+  const verdict = statuslineVerdict(current, running)
+  // `type` must be present and "command" — set it explicitly so installing onto a settings file
+  // that has no such key yet produces a complete, valid object rather than half of one.
+  const createOps = (command: string): SafeEditOp[] => [
     { op: 'set', path: [key, 'type'], value: 'command' },
-    { op: 'set', path: [key, 'command'], value: wrapped },
+    { op: 'set', path: [key, 'command'], value: command },
   ]
-  return { ops, result: { key, action: hasInner ? 'wrapped' : 'capture-only', inner: hasInner ? current : null } }
+  switch (verdict.kind) {
+    case 'absent':
+      if (repairOnly) return { ops: [], result: { key, action: 'absent', inner: null, stamp: null } }
+      return { ops: createOps(statuslineCommand(cmd, running, '')), result: { key, action: 'capture-only', inner: null, stamp: null } }
+    case 'foreign':
+      if (repairOnly) return { ops: [], result: { key, action: 'absent', inner: null, stamp: null } }
+      return { ops: createOps(statuslineCommand(cmd, running, verdict.command)), result: { key, action: 'wrapped', inner: verdict.command, stamp: null } }
+    case 'unparseable':
+      // Ours by shape but the remainder does not parse: rewriting it would guess at the user's inner command and could destroy it. The explicit verb
+      // refuses BEFORE any op is written (the two keys are one transaction); the launch repair skips this key and still refreshes the other.
+      if (repairOnly) return { ops: [], result: { key, action: 'skipped', inner: null, stamp: null } }
+      throw new Error(
+        `refusing: ${key}.command looks like ours but is not parseable, so it cannot be refreshed safely. `
+        + `Edit ${settingsFile} by hand. Current value: ${current}`
+      )
+    case 'current':
+      return { ops: [], result: { key, action: 'unchanged', inner: verdict.parsed.inner || null, stamp: verdict.parsed.stamp } }
+    case 'newer':
+    case 'older':
+      // The explicit verb overwrites a newer stamp too (as --install-hooks does in 5B); only the launch repair keeps it.
+      if (verdict.kind === 'newer' && repairOnly) return { ops: [], result: { key, action: 'kept-newer', inner: verdict.parsed.inner || null, stamp: verdict.parsed.stamp } }
+      return {
+        ops: [{ op: 'set', path: [key, 'command'], value: statuslineCommand(cmd, running, verdict.parsed.inner) }],
+        result: { key, action: 'refreshed', inner: verdict.parsed.inner || null, stamp: verdict.parsed.stamp },
+      }
+  }
 }
 
 /** Install (or remove) the status-line capture wrappers via the verified transaction engine.
@@ -676,11 +769,16 @@ export function planStatuslineSurface(
  *  file is never left with one surface wired and the other not.
  *
  *  Only each key's `command` (and `type`) is touched, so `refreshInterval`, `padding` and
- *  `hideVimModeIndicator` survive untouched. Idempotent: an already-wrapped command is left alone
- *  rather than double-wrapped. */
+ *  `hideVimModeIndicator` survive untouched. Idempotent: a wrapper stamped with the running version is left alone
+ *  rather than double-wrapped. Every written command carries the running version stamp (item 8a): an entry of ours that is unstamped or older is
+ *  rewritten to the stamp with its inner text kept byte-identical, and the explicit verb overwrites a NEWER stamp too (as --install-hooks does in
+ *  5B). An entry of ours whose remainder does not parse is refused with an error naming its key before anything is written. With `repairOnly`
+ *  (the launch repair, 8b) a missing key is never created, a foreign command is never wrapped, a newer stamp is kept with one notice and an
+ *  unparseable entry is skipped with one warning. */
 export async function installStatusline(uninstall: boolean, opts: InstallStatuslineOptions = {}): Promise<InstallStatuslineResult> {
   const settingsFile = opts.settingsPath ?? claudeSettingsPath()
   const log = opts.log ?? ((line: string) => console.log(line))
+  const running = packageVersion()
 
   if (!uninstall && !resolveOnPath(CLI_BIN, opts.pathEnv)) {
     throw new Error(
@@ -703,13 +801,20 @@ export async function installStatusline(uninstall: boolean, opts: InstallStatusl
     const obj = (settings[surface.key] && typeof settings[surface.key] === 'object' && !Array.isArray(settings[surface.key])
       ? settings[surface.key] : null) as Record<string, unknown> | null
     const current = typeof obj?.command === 'string' ? obj.command : null
-    const planned = planStatuslineSurface(surface, current, uninstall, settingsFile)
+    const planned = planStatuslineSurface(surface, current, uninstall, settingsFile, running, opts.repairOnly === true)
     ops.push(...planned.ops)
     surfaces.push(planned.result)
   }
+  // The notices of the two repair outcomes that write nothing for their key come BEFORE the nothing-to-change return: a kept newer stamp or a skipped
+  // unparseable entry is exactly the case where ops is empty, and without this line the repair would be silent about it.
+  for (const s of surfaces) {
+    if (s.action === 'kept-newer') log(`${s.key}: stamped ${s.stamp}, newer than this CLI's ${running} — kept as it is`)
+    else if (s.action === 'skipped') log(`${s.key}: warning: the command looks like ours but is not parseable — skipped, edit ${settingsFile} by hand`)
+  }
 
   if (ops.length === 0) {
-    log(uninstall ? 'no agentlens status-line wrapper present — nothing to remove' : 'status-line capture already installed — nothing to change')
+    log(uninstall ? 'no agentlens status-line wrapper present — nothing to remove'
+      : opts.repairOnly ? 'status-line capture: nothing to refresh' : 'status-line capture already installed — nothing to change')
     return { changed: false, surfaces, backupPath: null }
   }
 
@@ -717,10 +822,11 @@ export async function installStatusline(uninstall: boolean, opts: InstallStatusl
   for (const s of surfaces) {
     if (s.action === 'wrapped') log(`${s.key}: wrapped for capture\n  inner: ${s.inner}`)
     else if (s.action === 'capture-only') log(`${s.key}: capture installed (nothing existing to wrap — prints nothing)`)
+    else if (s.action === 'refreshed') log(`${s.key}: refreshed the stamp (was ${s.stamp ?? 'none'}, now ${running}); the inner command is unchanged`)
     else if (s.action === 'restored') log(`${s.key}: restored the original command\n  ${s.inner}`)
     else if (s.action === 'removed') log(`${s.key}: removed (it was capture-only — there was no original to restore)`)
     else if (s.action === 'unchanged') log(`${s.key}: already installed`)
-    else log(`${s.key}: no agentlens wrapper present`)
+    else if (s.action === 'absent') log(`${s.key}: no agentlens wrapper present`)
   }
   log(`${settingsFile}: changed=${result.changed}${result.backupPath ? ` backup=${result.backupPath}` : ''} attempts=${result.attempts}`)
   // Unlike hooks, a status-line change needs no session restart: Claude Code re-reads the setting

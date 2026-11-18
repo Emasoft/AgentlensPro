@@ -27,6 +27,7 @@ import {
   shSingleQuote, parseSingleQuoted, isOurStatuslineCommand, unwrapStatuslineCommand,
   planStatuslineSurface, installStatusline, STATUSLINE_CMD, SUBAGENT_STATUSLINE_CMD, STATUSLINE_SURFACES,
 } from '../cli/hookInstall'
+import { packageVersion } from '../packageVersion'
 
 /** A payload shaped like the real thing, including the fields that only appear conditionally. */
 const SAMPLE = {
@@ -225,7 +226,7 @@ suite('statusline install — wrapping and unwrapping must round-trip exactly', 
   })
 
   test('installing over an existing wrapper is a no-op, never a double wrap', () => {
-    const wrapped = `${STATUSLINE_CMD} --inner ${shSingleQuote('x.sh')}`
+    const wrapped = `${STATUSLINE_CMD} --stamp ${packageVersion()} --inner ${shSingleQuote('x.sh')}`
     const p = planStatuslineSurface(STATUSLINE_SURFACES[0], wrapped, false, '/settings.json')
     assert.deepStrictEqual(p.ops, [], 'a second wrap would make uninstall unable to reach the real command')
     assert.strictEqual(p.result.action, 'unchanged')
@@ -264,7 +265,7 @@ suite('statusline install — wrapping and unwrapping must round-trip exactly', 
       assert.strictEqual(mid.statusLine.refreshInterval, 3)
       assert.strictEqual(mid.statusLine.padding, 2)
       // The second surface is wired in the SAME transaction, capture-only (nothing to wrap).
-      assert.strictEqual(mid.subagentStatusLine.command, SUBAGENT_STATUSLINE_CMD)
+      assert.strictEqual(mid.subagentStatusLine.command, `${SUBAGENT_STATUSLINE_CMD} --stamp ${packageVersion()}`)
       assert.strictEqual(mid.subagentStatusLine.type, 'command')
       // Unrelated settings are never touched.
       assert.deepStrictEqual(mid.hooks, before.hooks)
