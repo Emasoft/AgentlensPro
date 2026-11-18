@@ -43,7 +43,7 @@ import { envPort, sleep } from './cliCore'
 import { dataDirFrom } from '../dataDir'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
-  INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
+  INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration, reviewModInstalled,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES,
 } from './hookInstall'
@@ -386,6 +386,13 @@ export function hooksConverged(s: Settings): boolean {
   return true
 }
 
+/** The count message of the review-gate and supervisor checks; the `want === 1` text is the long-standing one. */
+function entryCountMessage(ev: string, cmd: string, want: number, found: number): string {
+  return want === 1
+    ? `${ev}: expected exactly one '${cmd}' entry, found ${found}`
+    : `${ev}: expected no '${cmd}' entry while the review mod is installed, found ${found}`
+}
+
 /** Independent post-install assertion: exactly one v2 entry per event, zero stale entries. */
 /** Independent post-install assertion: exactly one v2 entry per event, zero stale entries, every
  *  agentlenspro entry at HOOK_TIMEOUT_SEC (a command match alone would pass a leftover 30s registration). */
@@ -401,16 +408,21 @@ function verifyHooksState(s: Settings): string | null {
       .flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === GATE_CMD)
     if (gates.length !== 1) return `${ev}: expected exactly one '${GATE_CMD}' gate entry, found ${gates.length}`
   }
+  // WHY: rebuildEventMatchers (hookInstall.ts) registers the review gate and the review supervisor ONLY when the
+  // review mod is NOT installed (the mod runs the review itself; both hooks would give the model contradictory
+  // orders). The verifier must expect the same, or a converge with the mod present reports "expected exactly one
+  // 'agentlenspro review-gate' entry, found 0" on every run.
+  const wantReviewEntries = reviewModInstalled() ? 0 : 1
   for (const ev of REVIEW_EVENTS) {
     const reviews = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === REVIEW_CMD)
-    if (reviews.length !== 1) return `${ev}: expected exactly one '${REVIEW_CMD}' entry, found ${reviews.length}`
+    if (reviews.length !== wantReviewEntries) return entryCountMessage(ev, REVIEW_CMD, wantReviewEntries, reviews.length)
   }
   // The supervisor was registered by the installer but never VERIFIED here, so a converge that
   // silently dropped it still reported "registrations current". The supervisor exists to notice a
   // gate that has stopped firing; an unverified supervisor is a watchdog nobody watches.
   for (const ev of SUPERVISOR_EVENTS) {
     const sups = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === SUPERVISOR_CMD)
-    if (sups.length !== 1) return `${ev}: expected exactly one '${SUPERVISOR_CMD}' entry, found ${sups.length}`
+    if (sups.length !== wantReviewEntries) return entryCountMessage(ev, SUPERVISOR_CMD, wantReviewEntries, sups.length)
   }
   for (const [ev, matchers] of Object.entries(hooks)) {
     for (const m of matchers ?? []) {

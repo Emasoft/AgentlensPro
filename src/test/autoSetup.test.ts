@@ -13,7 +13,7 @@ import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runDisableCli, runEnableCli } from '../cli/disableCli'
 import { FOREIGN_REASON, HOOK_PATH_VERBS, disableForForeignTelemetry, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
-import { AGENT_NAMES, SKILL_NAMES, SUPERVISOR_CMD, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
+import { AGENT_NAMES, REVIEW_CMD, REVIEW_EVENTS, SKILL_NAMES, SUPERVISOR_CMD, SUPERVISOR_EVENTS, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, noRevivePath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
 import { DISPATCHED_VERBS, HOT_PATH_BUDGET_MS, cliMain } from '../cli/main'
@@ -2078,6 +2078,64 @@ suite('ensureServer under DISABLED spawns once, with --no-collection (TRDD-RBBEX
     const argv = fake.calls()[0]
     assert.ok(argv.includes('--no-collection'), argv.join(' '))
     assert.strictEqual(argv[argv.indexOf('--data-dir') + 1], process.env.AGENTLENS_DATA_DIR)
+  })
+})
+
+suite('setup hooks step — the verifier expects exactly what the installer registered under the review mod (TRDD-YL3EWT6N item 11)', () => {
+  type HookMap = Record<string, Array<{ hooks: Array<{ command: string }> }>>
+  const countOf = (hooks: HookMap, ev: string, cmd: string): number =>
+    (hooks[ev] ?? []).flatMap(m => m.hooks.map(h => h.command)).filter(c => c === cmd).length
+
+  /** Run the REAL hooks step in a scratch HOME. reviewModInstalled() reads os.homedir(), which follows $HOME, so $HOME is pointed at the fixture. */
+  async function convergeHooks(withReviewMod: boolean, preSeedReviewEntries = false): Promise<{ verify: string; detail: string; hooks: HookMap }> {
+    const f = makeFx()
+    const savedHome = process.env.HOME
+    process.env.HOME = f.home
+    try {
+      if (withReviewMod) {
+        fs.mkdirSync(path.join(f.home, '.claude', 'plugins'), { recursive: true })
+        fs.writeFileSync(path.join(f.home, '.claude', 'plugins', 'installed_plugins.json'),
+          JSON.stringify({ version: 2, plugins: { 'agentlenspro-review-mod@test-marketplace': [{ scope: 'user' }] } }))
+      }
+      if (preSeedReviewEntries) {
+        // An install made BEFORE the mod: the review gate and supervisor are already registered (the installer strips and re-adds every entry of ours).
+        writeSettings(f, { hooks: {
+          Stop: [{ hooks: [{ type: 'command', command: REVIEW_CMD, timeout: 6 }, { type: 'command', command: SUPERVISOR_CMD, timeout: 6 }] }],
+          SubagentStop: [{ hooks: [{ type: 'command', command: REVIEW_CMD, timeout: 6 }] }],
+          UserPromptSubmit: [{ hooks: [{ type: 'command', command: SUPERVISOR_CMD, timeout: 6 }] }],
+        } })
+      }
+      const { result } = await REPAIR_STEPS.hooks.run(f.ctx)
+      return { verify: result.verify, detail: result.detail ?? '', hooks: (readSettings(f).hooks ?? {}) as HookMap }
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome
+      f.cleanup()
+    }
+  }
+
+  test('review mod installed: the converge passes and settings holds no review-gate or supervisor entry', async function () {
+    this.timeout(60_000)
+    const r = await convergeHooks(true)
+    assert.ok(!r.detail.includes('expected exactly'), r.detail)
+    assert.strictEqual(r.verify, 'PASS', r.detail)
+    for (const ev of REVIEW_EVENTS) assert.strictEqual(countOf(r.hooks, ev, REVIEW_CMD), 0, `${ev}: review-gate entries`)
+    for (const ev of SUPERVISOR_EVENTS) assert.strictEqual(countOf(r.hooks, ev, SUPERVISOR_CMD), 0, `${ev}: supervisor entries`)
+  })
+
+  test('review mod installed over an earlier install that holds review-gate and supervisor entries: the converge removes them and passes', async function () {
+    this.timeout(60_000)
+    const r = await convergeHooks(true, true)
+    assert.strictEqual(r.verify, 'PASS', r.detail)
+    for (const ev of REVIEW_EVENTS) assert.strictEqual(countOf(r.hooks, ev, REVIEW_CMD), 0, `${ev}: review-gate entries`)
+    for (const ev of SUPERVISOR_EVENTS) assert.strictEqual(countOf(r.hooks, ev, SUPERVISOR_CMD), 0, `${ev}: supervisor entries`)
+  })
+
+  test('no review mod: the converge passes and settings holds exactly one review-gate and one supervisor entry per event', async function () {
+    this.timeout(60_000)
+    const r = await convergeHooks(false)
+    assert.strictEqual(r.verify, 'PASS', r.detail)
+    for (const ev of REVIEW_EVENTS) assert.strictEqual(countOf(r.hooks, ev, REVIEW_CMD), 1, `${ev}: review-gate entries`)
+    for (const ev of SUPERVISOR_EVENTS) assert.strictEqual(countOf(r.hooks, ev, SUPERVISOR_CMD), 1, `${ev}: supervisor entries`)
   })
 })
 
