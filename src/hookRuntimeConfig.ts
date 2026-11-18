@@ -14,7 +14,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 
 export interface HookRuntimeConfig {
-  /** Store lifecycle hook events (the `agentlenspro hook` forwarder). Off = accept + drop. */
+  /** Store lifecycle hook events (the `agentlenspro hook` forwarder). Off = not stored, but still pushed to the
+   *  in-memory ring the spawn guards count (TRDD-RBBEX59R c1, B7). */
   captureEnabled: boolean
   /** The PreToolUse burn-gate. Off = every launch allowed silently. */
   gateEnabled: boolean

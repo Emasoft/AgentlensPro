@@ -123,8 +123,9 @@ A non-image read is answered locally with no network call, so ordinary file read
 ```bash
 agentlenspro --hooks                       # show the switches
 agentlenspro --hooks cacheguard=off        # silence just this guard, instantly, all sessions
+                                           # (or the dashboard Settings panel, Hook switches: "Image cache-guard")
 AGENTLENS_CACHE_GUARD=off                  # per-process env equivalent
 ```
 
 Turning the guard off leaves the agent-launch burn gate armed; the two switches are deliberately
-separate.
+separate: the dashboard Burn gate switch and `--hooks gate=off` leave this guard on, while the env `AGENTLENS_GATE=off` still silences every guard, images included.

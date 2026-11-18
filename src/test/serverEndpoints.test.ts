@@ -154,16 +154,18 @@ suite('standalone server — hook/gate/burn endpoints (real boot)', () => {
     assert.strictEqual((get.json as { config: { captureEnabled: boolean } }).config.captureEnabled, false)
   })
 
-  test('with capture OFF, POST /api/hook-events is accepted (2xx) but dropped (counter unchanged)', async () => {
-    // A disabled forwarder must still ACK 2xx (never look like an outage) yet store nothing.
+  test('with capture OFF, POST /api/hook-events is accepted (2xx), not stored, and still COUNTED (ring-only, TRDD-RBBEX59R D4)', async () => {
+    // A disabled forwarder must still ACK 2xx (never look like an outage) yet store nothing. Since TRDD-RBBEX59R c1
+    // (B7) the event still reaches the in-memory ring the spawn guards count, and receivedSinceBoot counts ACCEPTED
+    // events on both paths (D4) — so the counter rises for a ring-only event.
     await httpReq(uiPort, 'POST', '/api/hook-config', { captureEnabled: false }) // explicit precondition
     const before = await receivedCounter()
     const r = await httpReq(uiPort, 'POST', '/api/hook-events', { hook_event_name: 'SessionStart', session_id: 'ep-drop' })
     assert.ok(r.status >= 200 && r.status < 300, `dropped events are still ACKed 2xx, got ${r.status}`)
     const j = r.json as { ok?: boolean; dropped?: string }
     assert.strictEqual(j.ok, true)
-    assert.ok(typeof j.dropped === 'string', 'response notes the drop')
-    assert.strictEqual(await receivedCounter(), before, 'a dropped event must not be counted')
+    assert.ok(typeof j.dropped === 'string', 'response notes that the event was not stored')
+    assert.strictEqual(await receivedCounter(), before + 1, 'a ring-only event is counted as accepted')
   })
 
   test('POST /api/agent-gate returns 204 (allow) for a benign Task launch', async () => {

@@ -13,15 +13,16 @@
 
 import * as assert from 'assert'
 import * as fs from 'fs'
+import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
 import { spawnSync } from 'child_process'
-import { disarmKillSwitch, killSwitchPath, keepStatuslinePath } from '../cli/killSwitch'
-import { statuslineRoot } from '../cli/statuslineHistoryCli'
-import { queryStatusline } from '../statuslineStore'
+import { agentlensDisabled, armKillSwitch } from '../cli/killSwitch'
+import { REVIVE_LOCK_TTL_MS } from '../cli/hookHandlers'
 import {
-  parseStatuslineArgs, toStatuslineRecord, captureStatusline, STATUSLINE_EV, SUBAGENT_STATUSLINE_EV,
+  parseStatuslineArgs, toStatuslineRecord, captureStatusline, STATUSLINE_EV, SUBAGENT_STATUSLINE_EV, STATUSLINE_ENDPOINT,
 } from '../cli/statuslineCapture'
+import { freePort } from './helpers/freePort'
 import {
   shSingleQuote, parseSingleQuoted, isOurStatuslineCommand, unwrapStatuslineCommand,
   planStatuslineSurface, installStatusline, STATUSLINE_CMD, SUBAGENT_STATUSLINE_CMD, STATUSLINE_SURFACES,
@@ -294,63 +295,121 @@ suite('statusline install — wrapping and unwrapping must round-trip exactly', 
   })
 })
 
-// Owner request 2026-10-27, verbatim: "stop everything except the statusline data collection, so the
-// agentlenspro cli can still answer the basic questions about the session". Disabled + the
-// DISABLED-KEEP-STATUSLINE marker => captureStatusline appends straight to the store's WAL layout.
-suite('statusline capture — disabled with --keep-statusline writes straight to disk', () => {
+// TRDD-RBBEX59R d3 (B11, D5, D6): the kill switch stops only the COLLECTION of telemetry and raw bodies, so the status
+// line always POSTs and the no-collection server stores the sample. When no server takes it, the hook appends
+// it to the store's write-ahead file (TRDD-VS1FCUMU; statuslineDiskFallback.test.ts pins that path).
+suite('statusline capture — POSTs under an armed kill switch', () => {
   let dir: string
-  let savedDataDir: string | undefined
-  let savedGeneric: string | undefined
+  let server: http.Server | undefined
+  const received: Array<{ url: string; body: string }> = []
+  const saved: Record<string, string | undefined> = {}
+  const setEnv = (k: string, v: string): void => { saved[k] = process.env[k]; process.env[k] = v }
+
   setup(() => {
-    savedDataDir = process.env.AGENTLENS_DATA_DIR
-    savedGeneric = process.env.DATA_DIR
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-keep-'))
-    process.env.AGENTLENS_DATA_DIR = dir
-    delete process.env.DATA_DIR
-    fs.writeFileSync(killSwitchPath(), 'disabled')
+    // Isolation: HOME and the data dir are a fixture; the switch is armed IN that dir because captureStatusline reads
+    // the ENV-default data dir (rule R2). setup.js already pins AGENTLENS_NO_REVIVE=1, so a failed POST spawns nothing.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-post-'))
+    received.length = 0
+    setEnv('HOME', dir)
+    setEnv('AGENTLENS_DATA_DIR', dir)
+    setEnv('AGENTLENS_STATUSLINE_TIMEOUT_MS', '500')
+    armKillSwitch('statusline capture test')
   })
-  teardown(() => {
-    if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR; else process.env.AGENTLENS_DATA_DIR = savedDataDir
-    if (savedGeneric === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = savedGeneric
+  teardown(async () => {
+    if (server) {
+      server.closeAllConnections()
+      await new Promise<void>(resolve => server!.close(() => resolve()))
+      server = undefined
+    }
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
     fs.rmSync(dir, { recursive: true, force: true })
   })
-  const walFile = (): string => path.join(dir, 'statusline', 'main', new Date().toISOString().slice(0, 10), 'wal-cli.ndjson')
 
-  test('(a) marker present: one flattened line with ts lands in wal-cli.ndjson', async () => {
-    fs.writeFileSync(keepStatuslinePath(), 'keep')
-    const before = Date.now()
+  test('(a) the switch is armed and a server answers: the record is POSTed to the status-line endpoint', async () => {
+    assert.strictEqual(agentlensDisabled(), true, 'precondition: the switch is armed where captureStatusline reads it')
+    const port = await freePort()
+    server = http.createServer((req, res) => {
+      let body = ''
+      req.on('data', (c: Buffer) => { body += c.toString() })
+      req.on('end', () => { received.push({ url: req.url ?? '', body }); res.writeHead(200); res.end('{}') })
+    })
+    await new Promise<void>(resolve => server!.listen(port, '127.0.0.1', resolve))
+    setEnv('AGENTLENS_UI_URL', `http://127.0.0.1:${port}`)
     await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
-    const lines = fs.readFileSync(walFile(), 'utf8').trim().split('\n')
-    assert.strictEqual(lines.length, 1)
-    const row = JSON.parse(lines[0]) as Record<string, unknown>
-    assert.strictEqual(row.rate_limits_five_hour_used_percentage, 23.5)
-    assert.strictEqual(row.context_window_current_usage_cache_read_input_tokens, 2000)
-    assert.deepStrictEqual(row.workspace_added_dirs, [], 'arrays stay untouched')
-    assert.strictEqual(row.statusline_stream, 'main')
-    assert.ok(typeof row.ts === 'number' && row.ts >= before)
-    assert.strictEqual(row.model, undefined, 'nested objects are flattened, not kept')
+    assert.strictEqual(received.length, 1, 'exactly one POST')
+    assert.strictEqual(received[0].url, STATUSLINE_ENDPOINT)
+    const sent = JSON.parse(received[0].body) as Record<string, unknown>
+    assert.strictEqual(sent.session_id, SAMPLE.session_id)
+    assert.strictEqual(sent.hook_event_name, STATUSLINE_EV)
+    assert.strictEqual(sent.statusline_stream, 'main')
   })
 
-  test('(b) no marker: nothing is written', async () => {
+  test('(b) the switch is armed and the server is down: the sample goes to the local write-ahead file and nothing is spooled', async () => {
+    assert.strictEqual(agentlensDisabled(), true, 'precondition: the switch is armed')
+    // A port that was free a moment ago and has no listener: the POST is refused at once.
+    setEnv('AGENTLENS_UI_URL', `http://127.0.0.1:${await freePort()}`)
     await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
-    assert.ok(!fs.existsSync(path.join(dir, 'statusline')))
+    assert.ok(fs.existsSync(path.join(dir, 'statusline')), 'the sample is stored locally when no server answers (statuslineDiskFallback.test.ts pins the row)')
+    // 'hook-spool' is the directory name hookSpoolDirPath() builds in src/cli/serverControl.ts (not exported, so the name is repeated here).
+    assert.ok(!fs.existsSync(path.join(dir, 'hook-spool')), 'spool false: a status-line sample never enters the hook spool')
+  })
+})
+
+// A12 (TRDD-RBBEX59R d3, D5): after d3 every status-line refresh POSTs even while the switch is armed, and with the server
+// down each failed POST reaches forwardHookEvent's revive. The revive must stay BOUNDED: N failed POSTs start ONE revive
+// (the lock REVIVE_LOCK_TTL_MS collapses a burst, reviveBackoffGate bounds a crash loop), and none under NO_REVIVE.
+// The spawn is observed at its seam: hookHandlers calls child_process.spawn through the module object, so the test replaces
+// that one property with a counter. No real child is ever started (a real revive is `node cli.js server revive`, which would
+// start a server), and everything before the spawn is real: the lock file, the pidfile check, alcoreBin, the backoff state
+// file, the failed fetch. AGENTLENS_ALCORE=/usr/bin/false makes alcoreBin resolve without touching any installed binary.
+suite('statusline capture — N failed POSTs under the armed switch start exactly ONE revive (A12)', () => {
+  const cp = require('child_process') as { spawn: unknown }
+  const realSpawn = cp.spawn
+  let dir: string
+  let spawns: string[][] = []
+  const saved: Record<string, string | undefined> = {}
+  const setEnv = (k: string, v: string): void => { saved[k] = process.env[k]; process.env[k] = v }
+
+  setup(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-revive-'))
+    spawns = []
+    setEnv('HOME', dir)
+    setEnv('AGENTLENS_DATA_DIR', dir)
+    setEnv('AGENTLENS_STATUSLINE_TIMEOUT_MS', '100')
+    setEnv('AGENTLENS_ALCORE', '/usr/bin/false')
+    // A port that was free a moment ago and has no listener: every POST is refused at once.
+    setEnv('AGENTLENS_UI_URL', `http://127.0.0.1:${await freePort()}`)
+    // setup.js pins NO_REVIVE=1 for the whole run and fails a test that leaves it unset: it is restored in teardown.
+    saved.AGENTLENS_NO_REVIVE = process.env.AGENTLENS_NO_REVIVE
+    delete process.env.AGENTLENS_NO_REVIVE
+    cp.spawn = (file: string, args: string[]): { unref(): void } => { spawns.push([file, ...args]); return { unref() { /* stub child */ } } }
+    armKillSwitch('revive bound test')
+  })
+  teardown(() => {
+    cp.spawn = realSpawn
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+    fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  test('(c) the statusline-history reader loads a WAL written this way', async function () {
-    this.timeout(60000)
-    fs.writeFileSync(keepStatuslinePath(), 'keep')
-    await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
-    const rows = await queryStatusline(statuslineRoot(), 'main', 'SELECT session_id, rate_limits_five_hour_used_percentage AS p FROM samples')
-    assert.ok(rows, 'reader must find the store')
-    assert.strictEqual(rows.length, 1)
-    assert.strictEqual(rows[0].session_id, 'abc123')
-    assert.strictEqual(Number(rows[0].p), 23.5)
+  test('20 failed POSTs with the switch armed produce exactly one revive spawn', async () => {
+    assert.strictEqual(agentlensDisabled(), true, 'precondition: the switch is armed where captureStatusline reads it')
+    const t0 = Date.now()
+    for (let i = 0; i < 20; i++) await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
+    // The revive lock lasts REVIVE_LOCK_TTL_MS (hookHandlers.ts:31; 15 s unless AGENTLENS_REVIVE_LOCK_TTL_MS overrides it): a loop
+    // slower than that lets the lock expire mid-burst and a second revive is legitimate, so a slow machine must fail as slow,
+    // not as a wrong spawn count.
+    const elapsedMs = Date.now() - t0
+    assert.ok(elapsedMs <= REVIVE_LOCK_TTL_MS - 1_000, `environment too slow for the lock window (${REVIVE_LOCK_TTL_MS} ms TTL): ${elapsedMs} ms`)
+    const revives = spawns.filter(s => s.slice(-2).join(' ') === 'server revive')
+    assert.strictEqual(revives.length, 1, `exactly one revive, got ${JSON.stringify(spawns)}`)
+    // TRDD-VS1FCUMU: the first failed POST also creates today's write-ahead file, which starts the sealer once.
+    assert.strictEqual(spawns.length - revives.length, 1, `exactly one sealer start beside the revive, got ${JSON.stringify(spawns)}`)
   })
 
-  test('(d) disarmKillSwitch() removes both the flag and the marker', () => {
-    fs.writeFileSync(keepStatuslinePath(), 'keep')
-    assert.strictEqual(disarmKillSwitch(), true, 'the flag existed, so disarm reports it removed')
-    assert.ok(!fs.existsSync(killSwitchPath()), 'the flag must be gone')
-    assert.ok(!fs.existsSync(keepStatuslinePath()), 'a stale marker would resurrect status-line-only capture at the next disable')
+  test('with AGENTLENS_NO_REVIVE=1 the same 20 failed POSTs spawn nothing', async () => {
+    process.env.AGENTLENS_NO_REVIVE = '1'
+    assert.strictEqual(agentlensDisabled(), true, 'precondition: the switch is armed')
+    for (let i = 0; i < 20; i++) await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
+    assert.strictEqual(spawns.length, 0, `no revive under NO_REVIVE, got ${JSON.stringify(spawns)}`)
   })
 })

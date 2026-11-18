@@ -172,14 +172,14 @@ Per-process env equivalents: `AGENTLENS_GATE=off`, `AGENTLENS_GATE_MODE=warn`,
 `AGENTLENS_CACHE_GUARD=off` (this one short-circuits before any network call). Thresholds:
 `AGENTLENS_GATE_IMG_WARN_TOKENS` (50k) and `AGENTLENS_GATE_IMG_DENY_TOKENS` (300k, phrasing only).
 The two switches are separate on purpose — finding the image warning chatty must never cost you the
-fork-storm protection.
+fork-storm protection. The same holds the other way round: the dashboard's Burn gate switch and `--hooks gate=off` leave the image guard on (it has its own "Image cache-guard" switch in the Hook switches panel), while the env `AGENTLENS_GATE=off` still silences every guard, images included.
 
 The model-invoked skill **`agentlenspro-cache-guard`** teaches the underlying discipline (batch,
 delegate, write it down, compact after) with this project's verified rates.
 
 #### Emergency stop: `agentlenspro disable` / `enable`
 
-If AgentlensPro (or something it configured) is misbehaving, `agentlenspro disable [reason]` is the global brake: it drops a flag file that turns off server auto-revive, background ingestion, status-line capture (unless `agentlenspro disable --keep-statusline` was used) and every AgentlensPro hook except the review gate and the review supervisor **in every Claude Code session already running**, on that session's very next hook fire — no restart needed. It also stops the running server and removes the mandatory raw-body capture key (see [Raw-body capture](#raw-body-capture--mandatory)), since a kill switch that left either running would still be writing to disk. `agentlenspro enable` clears the flag and restores the key; hooks resume on their next fire.
+If AgentlensPro (or something it configured) is misbehaving, `agentlenspro disable [reason]` is the global brake on what it **stores**: it drops a flag file that stops storing telemetry, raw API bodies and hook events, plus the CLI hook spool (the status line is not collection: it keeps POSTing to the server, which stores it, and when no server takes the sample the hook stores it on disk itself), **in every Claude Code session already running**, on that session's very next hook fire — no restart needed. The server keeps running in **no-collection mode**: it answers the exporters and the hooks but writes no telemetry, raw bodies or hook events. The hooks keep running, so the burn-gate, the image cache-guard, the in-band advisor, the review gate and the review supervisor stay on, and so do the other dashboard right-panel switches as you left them. `disable` also stops a running server (a server reads its mode only at boot), and the next hook revives it in no-collection mode; `agentlenspro server stop --stay-down` keeps it down. It also removes the mandatory raw-body capture key (see [Raw-body capture](#raw-body-capture--mandatory)), since a kill switch that left it in place would still have Claude Code writing to disk. `agentlenspro enable` clears the flag, restores the key and restarts a server that still reports no-collection mode.
 
 A `settings.json` edit cannot do this on its own — a session that already loaded its config at launch keeps using it until it restarts. The flag file is the one channel that reaches every already-running process.
 

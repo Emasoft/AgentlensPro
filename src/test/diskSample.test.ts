@@ -11,7 +11,6 @@ import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
 import { spawn, spawnSync, type ChildProcess } from "child_process"
-import { disabledNotice } from "../cli/foreignTelemetry"
 import { nextSampleBoundary, planWalks, recordVolumeBatch, recordVolumes, runDiskSample, runDiskSampleCli, runResident, storeOutcomes } from "../cli/diskSample"
 import { openReadOnly, openWritable } from "../cli/diskStore"
 import { derivePurgeable, parseMount, parsePlistScalars, realMounts, sampleVolumes, usableImportant, type VolumeSample } from "../cli/diskVolumes"
@@ -178,13 +177,8 @@ suite("diskSample — persistence and the DISABLED exemption", () => {
     const flag = path.join(data, "DISABLED")
     fs.writeFileSync(flag, "Reason: test\n")
     const before = fs.statSync(flag).mtimeMs
-    assert.notStrictEqual(disabledNotice(["budget"]), null, "precondition: the brake is armed for an ordinary verb")
-    assert.strictEqual(disabledNotice(["disk-sample"]), null, "disk-sample is exempt from DISABLED")
-    assert.strictEqual(disabledNotice(["disk", "now"]), null, "disk is exempt from DISABLED")
-    assert.strictEqual(disabledNotice(["disk-watch", "list"]), null, "disk-watch is exempt from DISABLED")
-    assert.strictEqual(disabledNotice(["disk-monitor", "status"]), null, "disk-monitor status is exempt from DISABLED")
-    assert.strictEqual(disabledNotice(["disk-monitor", "install"]), null, "disk-monitor install passes the DISABLED gate")
-    assert.strictEqual(disabledNotice(["disk-monitor", "uninstall"]), null, "disk-monitor uninstall passes the DISABLED gate")
+    // The gate these lines asserted against is gone (TRDD-RBBEX59R d1: the switch refuses no verb). What follows still proves that disk-sample
+    // runs with the flag armed and leaves it untouched.
     fs.mkdirSync(path.join(home, ".Trash"))
     fs.writeFileSync(path.join(home, ".Trash", "junk.bin"), Buffer.alloc(50_000, 1))
 

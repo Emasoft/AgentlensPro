@@ -34,6 +34,7 @@ import {
   formatTelemetryVerdict, ownedTelemetryKeys, rawBodiesHeldAbsent, sameTelemetryValue, shown as shownValue, telemetryVerdict, verdictConflicts as detectConflictsFromRows,
 } from '../telemetryConfig'
 import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
+import { restoreParkedSurfaces } from './surfaces'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
 import { alstoreBin as resolveAlstoreBin, rustIngestPass, type RustPassResult } from '../rustStorePass'
 import { safeConfigEdit, type SafeEditOp } from '../safeConfigEdit'
@@ -239,6 +240,9 @@ export interface StatsShape {
   ports?: { ui: number; mcp: number; otlp: number }
   spans?: { store?: { totalSpans: number }; inMemory?: number }
   hookEvents?: { receivedSinceBoot: number }
+  // TRDD-RBBEX59R c1 item 8: "off" in no-collection mode; absent on a build that predates it.
+  collection?: 'on' | 'off'
+  startedBy?: string | null
 }
 
 async function serverStats(ctx: Ctx): Promise<StatsShape | null> {
@@ -1075,6 +1079,12 @@ const stepHooks: StepDef = {
 const stepSkill: StepDef = {
   name: 'skill',
   async run(ctx) {
+    // P2 (TRDD-RBBEX59R D7, D14): put back the skills a pre-d2 `disable` parked BEFORE judging drift, or this step would install a second copy
+    // beside the parked one. The `setup` verb and --force-install-telemetry reach the skill step without the in-lock restore of
+    // ensureInstalled (P1). It is never reached with a foreign setup present: runSetup is fail-fast, so a refused otel-env stops the later steps.
+    const putBack = ctx.dryRun ? [] : restoreParkedSurfaces({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).restored
+    // The restore moves files and the setup verb has no other line for it, so it goes into the step's detail (ensureInstalled announces its own P1 on stderr).
+    const putBackNote = putBack.length > 0 ? `; ${putBack.length} parked skill(s) put back` : ''
     // EVERY shipped skill, not just the first: a second skill that was shipped in the tarball but
     // never checked here would be installed once and then never repaired or refreshed, and setup's
     // whole contract is "detect → converge → verify" for the things it owns.
@@ -1162,8 +1172,8 @@ const stepSkill: StepDef = {
         action: acted ? 'installed/refreshed' : 'none',
         verify: bad.length === 0 && badAgents.length === 0 ? 'PASS' : 'FAIL',
         detail: (bad.length === 0 && badAgents.length === 0
-          ? `sha256 match on ${skills.length} skill tree(s) + ${AGENT_NAMES.length} agent(s)${supersededNote}`
-          : `installed hash differs from shipped hash: ${[...bad.map(s => s.name), ...badAgents].join(', ')}`),
+          ? `sha256 match on ${skills.length} skill tree(s) + ${AGENT_NAMES.length} agent(s)${supersededNote}${putBackNote}`
+          : `installed hash differs from shipped hash: ${[...bad.map(s => s.name), ...badAgents].join(', ')}${putBackNote}`),
       },
       acted,
     }
@@ -1216,9 +1226,11 @@ const stepOtel: StepDef = {
     // A foreign pipeline (owner order 2026-10-02): refuse and write NOTHING unless --force-install-telemetry
     // was given. A conflicting SHELL export can never be fixed by a settings edit, so it refuses even then.
     if (conflicts.length > 0 && (!ctx.forceInstall || conflicts.some(c => c.scope === 'shell'))) {
-      // Disable again, like the launch path (kill-switch re-armed, skills parked) — but never in a dry run.
-      const note = ctx.dryRun ? '' : `\nagentlenspro has disabled itself: ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}, hooks are no-ops`
-      return { result: { step: this.name, found, action: ctx.dryRun ? 'would: refuse, disable agentlenspro, exit non-zero (dry-run: nothing done)' : 'refused', verify: ctx.dryRun ? 'SKIP' : 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
+      // Park the skills like the launch path (TRDD-RBBEX59R D10, D16) — never in a dry run. The kill-switch is armed only when none stands: it
+      // keeps the reason of an operator `disable` that already stands. No replaceReason: only the operator's `enable` replaces a reason, and a
+      // `setup` run is not that. The skills are parked either way. The message says what is true: collection is off, nothing else is.
+      const note = ctx.dryRun ? '' : `\nagentlenspro has parked its skills while this foreign setup stands: collection is off, ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).moved.length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}`
+      return { result: { step: this.name, found, action: ctx.dryRun ? 'would: refuse, park the skills, arm the kill-switch if none stands, exit non-zero (dry-run: nothing done)' : 'refused', verify: ctx.dryRun ? 'SKIP' : 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
     }
 
     if (ctx.dryRun) {
@@ -1390,20 +1402,16 @@ export const stepServer: StepDef = {
         return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${stopPid} did not stop within 10s` }, acted: true }
       }
     }
-    // The kill-switch gates EVERY spawn path, including setup (TRDD-K3WDPR7M): this was the one
-    // spawn site with no guard, discovered when a server booted minutes after `agentlenspro
-    // disable`. The server now also refuses at its own boot — this check just makes setup report
-    // the refusal honestly instead of spawning a child that immediately exits 78.
-    if (agentlensDisabled(ctx.dataDir)) {
-      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: 'AgentlensPro is DISABLED — run `agentlenspro enable` first' }, acted: false }
-    }
-    // The NO_REVIVE brake refuses this spawn too: `setup` is idempotent and re-run casually, so a
+    // No kill-switch refusal here any more (TRDD-RBBEX59R c2): under the switch setup starts the server in
+    // no-collection mode (alcoreServeArgs, below, adds --no-collection for ctx.dataDir), so the spawn guards
+    // stay fed. It used to refuse here because the server refused at its own boot (exit 78); since c1 it does not.
+    // The NO_REVIVE brake refuses this spawn: `setup` is idempotent and re-run casually, so a
     // silent override here would resurrect a server mid store-swap exactly like the hook path did
     // (TRDD-8VGQK9L9). Reported, not skipped — a setup step that quietly does nothing looks healthy.
-    // Sits BELOW the graceful stop of a mismatched/unresponsive server on purpose, beside the
-    // DISABLED gate: the brake forbids a SPAWN, not a stop, and "braked ⇒ no server" is the state
+    // Sits BELOW the graceful stop of a mismatched/unresponsive server on purpose: the brake forbids a
+    // SPAWN, not a stop, and "braked ⇒ no server" is the state
     // an operator armed it for — leaving a stale server up would be the surprising outcome.
-    // Both flags are read in ctx.dataDir, the dir this step is about to start a server in, not the env-resolved one:
+    // The brake is read in ctx.dataDir, the dir this step is about to start a server in, not the env-resolved one:
     // they differ whenever the data dir comes from options (TRDD-TYOQA14F).
     // DELIBERATE ASYMMETRY (TRDD-TYOQA14F): setup honours the FILE brake but NOT the AGENTLENS_NO_REVIVE env. That
     // env is documented as a brake on AUTOMATIC revives (hookHandlers.ts reviveDaemonDetached, `server revive`),
@@ -1538,28 +1546,62 @@ const stepSelfTest: StepDef = {
     if (post.status !== 200) {
       return { result: { step: this.name, found: 'server up', action: 'OTLP POST', verify: 'FAIL', detail: `OTLP ingest HTTP ${post.status}` }, acted: false }
     }
-    // …2. and back out through the DIAGNOSTICS door (the get_recent_sessions MCP tool):
-    // the round-trip proves collector → span store → summarizer → repository → MCP in one go.
-    let seen = false
-    // 10s of wall clock, not 40 tries: each MCP call can itself take seconds (TRDD-V2HFI30L).
-    const seenBy = Date.now() + 10_000
-    while (!seen && Date.now() < seenBy) {
-      try {
-        // The stateless Streamable-HTTP endpoint still wants the MCP handshake once per
-        // client; it is cheap, so re-issue it per attempt rather than track session state.
-        await mcpCall(ctx.mcpPort, 'initialize', {
-          protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'agentlenspro-setup', version: '2.0.0' },
-        })
-        const r = await mcpCall(ctx.mcpPort, 'tools/call', {
-          name: 'get_recent_sessions',
-          arguments: { limit: 50, verbosity: 'full' },
-        })
-        seen = JSON.stringify(r).includes(marker)
-      } catch { /* MCP may need a beat after boot */ }
-      if (!seen) await sleep(250)
+    // One get_recent_sessions read through the DIAGNOSTICS door (the MCP tool): true when the synthetic span is in
+    // it. Throws when MCP does not answer, so a caller can tell "not visible" from "could not ask".
+    const spanVisible = async (): Promise<boolean> => {
+      // The stateless Streamable-HTTP endpoint still wants the MCP handshake once per
+      // client; it is cheap, so re-issue it per attempt rather than track session state.
+      await mcpCall(ctx.mcpPort, 'initialize', {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'agentlenspro-setup', version: '2.0.0' },
+      })
+      const r = await mcpCall(ctx.mcpPort, 'tools/call', {
+        name: 'get_recent_sessions',
+        arguments: { limit: 50, verbosity: 'full' },
+      })
+      return JSON.stringify(r).includes(marker)
     }
-    if (!seen) {
-      return { result: { step: this.name, found: 'server up', action: 'OTLP→MCP round-trip', verify: 'FAIL', detail: `synthetic span ${marker} not visible via get_recent_sessions within 10s` }, acted: false }
+    // TRDD-RBBEX59R c2 item 6: under the kill-switch the server runs in no-collection mode, which answers the OTLP POST
+    // (200, above) and drops the span. The positive checks there are that 200 and collection "off"; every read for 10 s then
+    // asserts the span is NOT visible. That absence read is unproven here — a broken read path would also pass it; the
+    // proof for the server half is the mutation-recorded c1 test (rust-core no_collection_boot.rs). Outside the mode
+    // the round-trip below is unchanged.
+    const noCollection = agentlensDisabled(ctx.dataDir)
+    if (noCollection) {
+      const stats = await serverStats(ctx)
+      if (stats?.collection !== 'off') {
+        return { result: { step: this.name, found: 'server up', action: 'no-collection check', verify: 'FAIL', detail: `the kill-switch is armed for ${ctx.dataDir} but the server reports collection "${stats?.collection ?? 'unknown'}"` }, acted: false }
+      }
+      // The FULL 10 s of wall clock, every answered read checked (round 2, G): a span the server wrongly stored can
+      // appear a beat after the POST, so stopping at the first answer would read too early. At least one read must
+      // answer, or the check could not ask at all.
+      let answered = 0
+      const watchUntil = Date.now() + 10_000
+      while (Date.now() < watchUntil) {
+        let visible: boolean
+        // 1 s apart (round 3): each read is a full get_recent_sessions call, too heavy to repeat every 250 ms.
+        try { visible = await spanVisible() } catch { await sleep(1_000); continue }
+        answered++
+        if (visible) {
+          return { result: { step: this.name, found: 'server up', action: 'no-collection check', verify: 'FAIL', detail: `synthetic span ${marker} is visible via get_recent_sessions although the server reports collection "off"` }, acted: false }
+        }
+        await sleep(1_000)
+      }
+      if (answered === 0) {
+        return { result: { step: this.name, found: 'server up', action: 'no-collection check', verify: 'FAIL', detail: 'get_recent_sessions did not answer within 10s' }, acted: false }
+      }
+    } else {
+      // …2. and back out through the DIAGNOSTICS door (the get_recent_sessions MCP tool):
+      // the round-trip proves collector → span store → summarizer → repository → MCP in one go.
+      let seen = false
+      // 10s of wall clock, not 40 tries: each MCP call can itself take seconds (TRDD-V2HFI30L).
+      const seenBy = Date.now() + 10_000
+      while (!seen && Date.now() < seenBy) {
+        try { seen = await spanVisible() } catch { /* MCP may need a beat after boot */ }
+        if (!seen) await sleep(250)
+      }
+      if (!seen) {
+        return { result: { step: this.name, found: 'server up', action: 'OTLP→MCP round-trip', verify: 'FAIL', detail: `synthetic span ${marker} not visible via get_recent_sessions within 10s` }, acted: false }
+      }
     }
     // 3. Hook + gate handlers against synthetic stdin payloads, via the REGISTERED strings.
     const preStats = await serverStats(ctx)
@@ -1587,7 +1629,9 @@ const stepSelfTest: StepDef = {
     return {
       result: {
         step: this.name, found: 'server up', action: 'span round-trip + hook/gate exec',
-        verify: 'PASS', detail: `span ${marker} visible via get_recent_sessions; hook event counted`,
+        verify: 'PASS', detail: noCollection
+          ? `no-collection mode: OTLP answered 200, collection "off", span ${marker} not visible via get_recent_sessions; hook event counted`
+          : `span ${marker} visible via get_recent_sessions; hook event counted`,
       },
       acted: false,
     }

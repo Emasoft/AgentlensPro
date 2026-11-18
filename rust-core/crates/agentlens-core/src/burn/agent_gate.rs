@@ -614,7 +614,7 @@ pub fn evaluate_image_read_gate(tool_input: Option<&Value>, state: &Value) -> Va
         ""
     };
     json!({ "decision": "warn", "code": "IMG_RESIDENT", "reason": format!(
-        "[agentlens cache-guard] reading {name} into a ~{}-token session. An image block is RESIDENT: it rides forward in the prefix and is re-billed on EVERY later turn until a compaction evicts it — the cost is not the one read, it is the read times every turn that follows.{dominating} Cheapest first: (1) delegate the look to a subagent — it reads the image in ITS small context and returns a text verdict, so nothing lands here; (2) if you look here, read every image you need in ONE message and draw the conclusions in that same turn — batching costs no more than one; (3) write the verdict down and never re-read the file. Silence: AGENTLENS_CACHE_GUARD=off.",
+        "[agentlens cache-guard] reading {name} into a ~{}-token session. An image block is RESIDENT: it rides forward in the prefix and is re-billed on EVERY later turn until a compaction evicts it — the cost is not the one read, it is the read times every turn that follows.{dominating} Cheapest first: (1) delegate the look to a subagent — it reads the image in ITS small context and returns a text verdict, so nothing lands here; (2) if you look here, read every image you need in ONE message and draw the conclusions in that same turn — batching costs no more than one; (3) write the verdict down and never re-read the file. Silence: the dashboard Image cache-guard switch, or AGENTLENS_CACHE_GUARD=off.",
         k(ctx)) })
 }
 

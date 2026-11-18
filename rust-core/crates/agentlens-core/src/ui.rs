@@ -2126,14 +2126,19 @@ async fn handle(
 
             // PreToolUse (default): decide before the launch happens. SendMessage takes the
             // NARROWER evaluator, and its deny further requires the TARGET to resolve dead.
-            if !st.hook_runtime.gate_enabled {
+            let tool_name = p.get("tool_name").and_then(Value::as_str);
+            // B8 (TRDD-RBBEX59R): `Read` is matched ONLY for the image cache-guard, which is governed by
+            // its OWN switch (cache_guard_enabled), never by the Burn gate. The gate_enabled early return
+            // used to sit above this branch, so turning Burn gate off silently also turned the image
+            // guard off, with no panel switch that named it. Read must therefore be decided BEFORE the
+            // gate_enabled return; every other tool keeps gate_enabled as its default switch.
+            if tool_name != Some("Read") && !st.hook_runtime.gate_enabled {
                 return no_content();
             }
-            let tool_name = p.get("tool_name").and_then(Value::as_str);
             let d = if tool_name == Some("Read") {
-                // Read is matched ONLY for the image cache-guard, which has its own runtime
-                // switch: it rides a hot path, so "the image warning annoys me" must never cost
-                // the user the agent-launch disaster gate. Warn-only by construction.
+                // The guard rides a hot path: "the image warning annoys me" must never cost the user the
+                // agent-launch disaster gate, and (B8) turning the gate off must not cost the image
+                // warning either. Warn-only by construction.
                 if !st.hook_runtime.cache_guard_enabled {
                     return no_content();
                 }

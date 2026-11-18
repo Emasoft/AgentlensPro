@@ -25,8 +25,6 @@ export const EXIT = {
   UNKNOWN: 2,
   /** sysexits EX_USAGE — the command line was wrong. Never emitted by a healthy invocation. */
   USAGE: 64,
-  /** sysexits EX_UNAVAILABLE — agentlenspro is DISABLED (kill-switch); the command did not run. */
-  DISABLED: 69,
   /** sysexits EX_CONFIG — the machine's configuration forbids the run (another telemetry setup is in place). */
   CONFIG: 78,
 } as const

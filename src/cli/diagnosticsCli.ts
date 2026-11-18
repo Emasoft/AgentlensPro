@@ -31,12 +31,11 @@ usage:
                                               (global, per invocation) overwrite an EXISTING telemetry
                                               setup (company gateway, managed settings) with agentlenspro's.
                                               Without it agentlenspro refuses to run beside one: it exits
-                                              non-zero, disables its hooks and skills, and touches nothing.
+                                              78, arms the kill-switch if none stands (collection off), parks its
+                                              skills, and leaves that setup untouched.
                                               Every launch also restores missing/stale skills, agents,
                                               hooks and telemetry env by itself (AGENTLENS_NO_AUTOSETUP=1 off).
-                                              Exit 69 = agentlenspro is DISABLED (the command did not run; the
-                                              message names the reactivation command, usually
-                                              'agentlenspro enable'); exit 78 = another telemetry setup blocks it.
+                                              The kill-switch (agentlenspro disable) stops only collection; it refuses no command.
   agentlenspro setup [--dry-run] [--yes] [--json]  detect → converge → verify: install or repair everything
                                               (server, DB, hooks, skill, telemetry env), then self-test.
                                               Starts with a read-only environment probe (platform,
@@ -114,13 +113,15 @@ usage:
                                               writes are coalesced (--flush-ms, default 1s) to
                                               spare the SSD; run "agentlenspro watch" with no args
                                               for the metric list
-  agentlenspro disable [reason]               GLOBAL BRAKE — turn every AgentlensPro side-effect OFF
-                                              (hooks, burn-gate, auto-revive, background ingestion) in
-                                              EVERY running Claude session, on its next hook fire. Stops
-                                              the server too. Works WITHOUT restarting any session — a
-                                              settings edit does not, because a running agent loaded its
-                                              config at launch.
-  agentlenspro enable                         undo disable — hooks resume on their next fire
+  agentlenspro disable [reason]               GLOBAL SWITCH — store NOTHING (telemetry, raw API bodies,
+                                              hook events) in EVERY running Claude session, from its next
+                                              hook fire; the server runs in no-collection mode, so the
+                                              burn-gate and the image cache-guard keep working. Works
+                                              WITHOUT restarting any session. To keep the server down too:
+                                              agentlenspro server stop --stay-down
+  agentlenspro enable                         undo disable — hooks resume on their next fire; also
+                                              restarts a server for this data dir that still reports
+                                              no-collection mode (re-run it to retry that restart)
   agentlenspro config [list]                  show data-retention knobs: effective value + source
   agentlenspro config get <key>               one retention knob's effective value + where it came from
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json
@@ -173,7 +174,7 @@ operations:
                         the magnitude — or "no active burn risks"
   --hooks [k=v ...]     show or flip the hook switches IN REALTIME for every running session
                         (server-side decision point — no restarts): gate=off|warn|enforce|on,
-                        cacheguard=on|off (image-read resident-cost warnings),
+                        cacheguard=on|off (image-read resident-cost warnings; independent of gate=),
                         capture=on|off (lifecycle event storage), advisor=on|off (in-band
                         PostToolUse warnings). No args = show current config + file path
   --guard [seconds]     realtime burn guard: polls the risk report (default 15s, REST fast path)

@@ -4,11 +4,12 @@ import { dataDir } from './cliCore'
 import { NO_REVIVE_FILE } from '../dataDir'
 
 /**
- * The GLOBAL kill-switch — one flag file that disarms AgentlensPro's side-effects inside every Claude Code
- * session on this machine. Every AgentlensPro hook is OFF except the review gate and the review supervisor,
- * which only read transcripts. Off: lifecycle capture (`agentlenspro hook`), the burn-gate and the image
- * cache-guard (`agentlenspro gate`), server auto-revive, background ingestion, and status-line capture
- * (kept only by `agentlenspro disable --keep-statusline`).
+ * The GLOBAL kill-switch — one flag file that turns AgentlensPro's COLLECTION off inside every Claude Code
+ * session on this machine (TRDD-RBBEX59R): the server runs in no-collection mode — no telemetry, no raw API
+ * bodies, no hook-event log — while `agentlenspro hook` keeps feeding its in-memory ring (never the CLI hook
+ * spool) and `agentlenspro gate` keeps running, so the burn-gate and the image cache-guard stay ON, as do the
+ * review gate and the review supervisor. Status-line capture stays ON: it always POSTs to the server, which stores it
+ * even in no-collection mode. The process itself is kept down only by the NO_REVIVE brake (below).
  *
  * WHY A FILE, AND WHY GLOBAL (this is the lesson of the 2026-07-14 SSD incident, TRDD-K3WDPR7M):
  *
@@ -25,8 +26,10 @@ import { NO_REVIVE_FILE } from '../dataDir'
  * fire — no restart, no env, no session surgery.
  *
  * Two scopes, deliberately separate:
- *   DISABLED   — global: every side-effect off. The "stop everything, now" brake.
- *   NO_REVIVE  — narrow: only stop hooks from auto-spawning the server (keep ingestion otherwise).
+ *   DISABLED   — global: COLLECTION off. Since TRDD-RBBEX59R (c) it no longer means every side effect off: the
+ *                server still runs, in no-collection mode, and the guards keep running.
+ *   NO_REVIVE  — narrow: stop every spawn path from starting the server; the brake that keeps the process
+ *                DOWN, armed by `agentlenspro server stop --stay-down`.
  *
  * FAIL-SAFE DIRECTION: an unreadable flag file reads as NOT disabled (fail-open). A kill-switch that
  * engages on a transient stat error would silently stop a user's observability with no diagnosis.
@@ -40,28 +43,6 @@ import { NO_REVIVE_FILE } from '../dataDir'
  *  start a server in (TRDD-TYOQA14F). */
 export function killSwitchPath(dir: string = dataDir()): string {
   return path.join(dir, 'DISABLED')
-}
-
-/** Marker beside the kill-switch flag: while BOTH exist, status-line capture still appends to disk
- *  (statuslineCapture.ts) — every other surface stays off.
- *  WHY: owner request 2026-10-27, verbatim: "stop everything except the statusline data collection, so the
- *  agentlenspro cli can still answer the basic questions about the session". */
-export function keepStatuslinePath(dir: string = dataDir()): string {
-  return path.join(dir, 'DISABLED-KEEP-STATUSLINE')
-}
-
-/** Is the disabled-but-keep-status-line marker present? Any stat error reads as absent: the failure
- *  direction is then "no capture", i.e. the plain disabled state the operator already had. */
-export function keepStatuslineArmed(dir: string = dataDir()): boolean {
-  try { fs.statSync(keepStatuslinePath(dir)); return true } catch { return false }
-}
-
-/** Arm the keep-status-line marker. Idempotent. Returns its path. */
-export function armKeepStatusline(): string {
-  const p = keepStatuslinePath()
-  fs.mkdirSync(path.dirname(p), { recursive: true })
-  fs.writeFileSync(p, 'Status-line capture stays ON while AgentlensPro is disabled. Removed by `agentlenspro enable`.\n')
-  return p
 }
 
 /** Env var every server spawner stamps on the child, naming the PATH that started it. The server
@@ -82,11 +63,10 @@ export function noRevivePath(dir: string = dataDir()): string {
 }
 
 /** Is the narrow revive brake armed? Checks NO_REVIVE ONLY — deliberately NOT the global DISABLED
- *  switch. The two must not be equal: NO_REVIVE is a PAUSE, DISABLED is TERMINAL, and the
- *  supervisor depends on the difference (under DISABLED its spawn must PROCEED so the child
- *  refuses with EX_CONFIG 78 and the terminal-exit path ends the loop; swallowing that spawn
- *  would make a DISABLED supervisor immortal). Callers that also want to refuse under DISABLED
- *  check `agentlensDisabled()` separately, ahead of this — that ordering is what keeps the split.
+ *  switch. The two must not be equal: NO_REVIVE keeps the server process DOWN, DISABLED only turns
+ *  collection off (TRDD-RBBEX59R c2: under DISABLED every spawn PROCEEDS, in no-collection mode, so
+ *  the burn-gate and the image cache-guard stay fed). Since c2 no spawn path refuses under DISABLED, so
+ *  this is the only brake on a spawn; it is also the precondition `ts-repair` requires (storeAdmin.ts).
  *
  *  THE TWO CALLERS FAIL DIFFERENTLY ON PURPOSE, and nothing else records it: the supervisor
  *  RESCHEDULES on a set brake (a pause self-heals on the next backoff tick), while `ensureServer()`
@@ -110,9 +90,10 @@ export function reviveBraked(dir: string = dataDir()): boolean {
 }
 
 /**
- * WHICH half of the global kill-switch is armed, or `null` if neither is. ONE definition shared by
- * `agentlensDisabled()` and `disabledNotice()` (`foreignTelemetry.ts`): the two cannot disagree about
- * which half is armed, and the notice names the half that fired.
+ * WHICH half of the global kill-switch is armed, or `null` if neither is. ONE definition behind `agentlensDisabled()` and
+ * every reader of the switch except `envHalfSet()`: they cannot disagree about which half is armed. `envHalfSet()` counts the env half
+ * even while `--force-install-telemetry` overrides it in-process, so that `rawBodiesHeldAbsent`
+ * never writes the raw-body key under AGENTLENS_DISABLED=1 (bug B13, TRDD-RBBEX59R).
  *
  * `AGENTLENS_DISABLED=1` is honored too, for the cases where env DOES reach the process (tests,
  * a supervisor that spawns the server directly). The FILE is the one that reaches running agents.
@@ -125,8 +106,18 @@ export function reviveBraked(dir: string = dataDir()): boolean {
 let envHalfOverridden = false
 export function overrideKillSwitchEnv(on = true): void { envHalfOverridden = on }
 
-export function killSwitchHalf(dir: string = dataDir()): 'env' | 'file' | null {
-  if (process.env.AGENTLENS_DISABLED === '1' && !envHalfOverridden) return 'env'
+/** Is AGENTLENS_DISABLED=1 set in this process's environment, whether or not `--force-install-telemetry` overrode it for the
+ *  rest of the run? Callers: killSwitchHalf (which adds the override on top, unless told not to), hookCaptureStop (via killSwitchHalf with
+ *  the override ignored) and rawBodiesHeldAbsent (telemetryConfig.ts), which must NOT honour the override.
+ *  WHY it ignores the override (TRDD-RBBEX59R B13, d2): the override lets a force install repair, restore and lift around the env
+ *  half, but the switch stops COLLECTION (owner rule 2026-11-03) and OTEL_LOG_RAW_API_BODIES makes Claude Code dump every API body
+ *  to disk. With the override honoured, a force install under AGENTLENS_DISABLED=1 and no flag file WROTE that key. */
+export function envHalfSet(): boolean { return process.env.AGENTLENS_DISABLED === '1' }
+
+/** `honourEnvOverride` (default true) lets the `--force-install-telemetry` override hide the env half; `hookCaptureStop` passes false
+ *  because a READER of the hook-event store must see the switch as the hooks of the running sessions see it. */
+export function killSwitchHalf(dir: string = dataDir(), honourEnvOverride = true): 'env' | 'file' | null {
+  if (envHalfSet() && !(honourEnvOverride && envHalfOverridden)) return 'env'
   try { return fs.existsSync(killSwitchPath(dir)) ? 'file' : null } catch { return null }
 }
 
@@ -137,6 +128,21 @@ export function killSwitchHalf(dir: string = dataDir()): 'env' | 'file' | null {
  */
 export function agentlensDisabled(dir: string = dataDir()): boolean {
   return killSwitchHalf(dir) !== null
+}
+
+/** What the kill-switch means for READING the hook-event store: `null` when capture is on; otherwise `armedAtMs`, the flag file's mtime
+ *  (arm time), or `null` there when only the env half is set (no arm time is knowable). TRDD-RBBEX59R (e), bug B6: while the switch is
+ *  armed no hook event is written, so the newest record on disk is merely the last one from BEFORE the switch, and a reader that
+ *  reports it as the latest gives a confident wrong answer. The file is checked first so a file+env pair still yields a usable time.
+ *  Armed regardless of the `--force-install-telemetry` env override (killSwitchHalf with honourEnvOverride=false): that override is an
+ *  in-process flag that stays set for the verb `agentlenspro --force-install-telemetry last-compact` runs right after the force install
+ *  (main.ts), and it changes what the force install may repair — not whether the hooks of the running sessions store events. */
+export interface HookCaptureStop { armedAtMs: number | null }
+export function hookCaptureStop(dir: string = dataDir()): HookCaptureStop | null {
+  // Armed-or-not comes from killSwitchHalf alone (one definition of "armed", so the two cannot diverge); the file is stat-ed ONLY to
+  // read the arm time. File + env both set: the file still supplies the time. Env only (or the file vanished between the two reads): unknowable.
+  if (killSwitchHalf(dir, false) === null) return null
+  try { return { armedAtMs: fs.statSync(killSwitchPath(dir)).mtimeMs } } catch { return { armedAtMs: null } }
 }
 
 /** Arm the global kill-switch. Idempotent. Returns the flag path. */
@@ -150,12 +156,13 @@ export function armKillSwitch(reason?: string, dir: string = dataDir()): string 
   fs.writeFileSync(p, [
     `AgentlensPro is DISABLED.`,
     ``,
-    `Every AgentlensPro hook is OFF while this file exists, except the review gate and the review`,
-    `supervisor, which only read transcripts. Off: lifecycle capture (agentlenspro hook), the burn-gate`,
-    `and the image cache-guard (agentlenspro gate), server auto-revive, background ingestion, and`,
-    `status-line capture (kept only by agentlenspro disable --keep-statusline).`,
-    `It takes effect on the NEXT hook fire in EVERY running Claude session —`,
-    `no restart needed.`,
+    `While this file exists AgentlensPro stores no telemetry, no raw API bodies and no hook-event`,
+    `log: the server runs in no-collection mode. The burn-gate and the image cache-guard stay ON`,
+    `(agentlenspro hook keeps feeding them, in memory only), and so do the review gate and the`,
+    `review supervisor. The status line is still captured: it keeps POSTing to the server.`,
+    `To keep the server process DOWN as well:  agentlenspro server stop --stay-down`,
+    `The hooks change on their NEXT fire in EVERY running Claude session — no restart needed;`,
+    `a server that was already running enters the mode at its next restart.`,
     ``,
     `Armed: ${new Date().toISOString()}`,
     reason ? `Reason: ${reason}` : ``,
@@ -170,21 +177,13 @@ export function armKillSwitch(reason?: string, dir: string = dataDir()): string 
  *  unlink failure (EACCES, EPERM, EBUSY) is thrown: swallowing it let `agentlenspro enable` print
  *  "now ENABLED" while the flag stayed on disk and the hooks kept no-op'ing. */
 export function disarmKillSwitch(dir: string = dataDir()): boolean {
-  // `dir` (TRDD-RBBEX59R): removal must hit the file the foreign check read (ctx.dataDir), never the env default's flag,
-  // and the keep-status-line marker beside it in that same dir.
+  // `dir` (TRDD-RBBEX59R): removal must hit the file the foreign check read (ctx.dataDir), never the env default's flag.
   const p = killSwitchPath(dir)
-  // The FLAG goes first. A marker that cannot be deleted still throws, but only after the flag is already
-  // gone: AgentlensPro is left enabled (the marker is inert without the flag), not disabled with the flag
-  // still on disk. The throw still reaches `enable`, which stops before restoring the parked skills.
+  // A flag that cannot be deleted (anything but ENOENT) throws, so `enable` stops before it restores the parked skills.
   let existed = true
   try { fs.unlinkSync(p) } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
     existed = false
-  }
-  // The keep-status-line marker only means something beside the flag (owner request 2026-10-27), so
-  // it goes with it: a stale marker would resurrect status-line-only capture at the next `disable`.
-  try { fs.unlinkSync(keepStatuslinePath(dir)) } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
   }
   return existed
 }

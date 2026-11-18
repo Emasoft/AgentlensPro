@@ -13,7 +13,6 @@ import { spawn } from "child_process"
 import { assertSingleSelect, formatInterval, parseEvery, parseSince, parseSize, renderTable, runDiskCli, runDiskWatchCli } from "../cli/diskCli"
 import { EXIT, UsageError } from "../cli/cliErrors"
 import { insertRows, openWritable } from "../cli/diskStore"
-import { disabledNotice } from "../cli/foreignTelemetry"
 
 const T0 = Date.parse("2026-11-16T10:00:00.000Z")
 const GIB = 1024 ** 3
@@ -234,7 +233,7 @@ suite("disk family under DISABLED (real CLI)", () => {
       for (const k of Object.keys(env)) if (k.startsWith("AGENTLENS_")) delete env[k]
       delete env.DATA_DIR
       Object.assign(env, { HOME: home, USERPROFILE: home, AGENTLENS_DATA_DIR: data, AGENTLENS_NO_AUTOSETUP: "1" })
-      assert.strictEqual((await runCli(["budget"], env)).code, EXIT.DISABLED, "precondition: the brake is armed for an ordinary verb")
+      // No precondition run of an ordinary verb: since TRDD-RBBEX59R d1 the switch refuses no verb (exit 69 is gone), and a server-backed verb here would start a real server.
       const list = await runCli(["disk-watch", "list"], env)
       assert.strictEqual(list.code, 0, list.stderr + list.stdout)
       if (process.platform === "darwin") { // status asks launchctl, which only exists on macOS
@@ -242,18 +241,8 @@ suite("disk family under DISABLED (real CLI)", () => {
 assert.strictEqual(status.code, EXIT.UNKNOWN, status.stderr + status.stdout) // nothing is installed under the temp HOME: exit 2 is status's own "not installed" answer, never 69 (DISABLED)
         assert.ok(/plist:\s+not installed/.test(status.stdout), status.stdout)
       }
-      // The owner exempted the whole disk monitor (owner decision 2026-11-16). The gate is checked in-process with the switch REALLY armed
-      // (the DISABLED flag above, in AGENTLENS_DATA_DIR), so a null can only come from the exemption. The real install/uninstall are NOT
-      // run: they would load or unload the REAL launchd label com.agentlens.disk-sample on this machine.
-      const savedDataDir = process.env.AGENTLENS_DATA_DIR
-      process.env.AGENTLENS_DATA_DIR = data
-      try {
-        assert.notStrictEqual(disabledNotice(["budget"]), null, "precondition: the switch is armed in this process")
-        for (const sub of ["install", "uninstall"]) assert.strictEqual(disabledNotice(["disk-monitor", sub]), null, `disk-monitor ${sub} passes the DISABLED gate`)
-      } finally {
-        if (savedDataDir === undefined) delete process.env.AGENTLENS_DATA_DIR
-        else process.env.AGENTLENS_DATA_DIR = savedDataDir
-      }
+      // TRDD-RBBEX59R d1: the switch refuses no verb, so no gate is left to check for disk-monitor install and uninstall. They are NOT run
+      // here: they would load or unload the REAL launchd label com.agentlens.disk-sample on this machine.
       assert.strictEqual(fs.statSync(flag).mtimeMs, before, "the exempt verbs must never touch the DISABLED file")
     } finally { fs.rmSync(home, { recursive: true, force: true }) }
   })
