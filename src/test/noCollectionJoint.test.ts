@@ -481,14 +481,14 @@ suite('TRDD-RBBEX59R c2 joint test — the guards keep running in no-collection 
       if (savedUrl === undefined) delete process.env.AGENTLENS_UI_URL; else process.env.AGENTLENS_UI_URL = savedUrl
     }
     const after = await waitStats(leg, x => (x.statusline as { receivedSinceBoot?: unknown } | undefined)?.receivedSinceBoot === 1, CONTROL_WINDOW_MS)
-    assert.ok(after !== null, 'the no-collection server stored the status-line sample (statusline.receivedSinceBoot == 1)')
+    assert.ok(after !== null, `the no-collection server stored the status-line sample (statusline.receivedSinceBoot == 1); see the server log: ${path.join(leg.data, 'server.log')}`)
     const stop = cli(leg, ['server', 'stop'])
     assert.strictEqual(stop.code, 0, stop.stderr)
     // Storage read-back: the counter alone only proves the handler ran. A graceful stop flushes the buffered sample to the
     // statusline WAL (alcore.rs, st.statusline.flush) and every read unions the WALs, so the row is read after the stop.
     const rows = await queryStatusline(path.join(leg.data, 'statusline'), 'main', 'SELECT session_id FROM samples')
-    assert.ok(rows !== null, 'the store holds a statusline WAL for the sample')
-    assert.deepStrictEqual(rows.map(r => r.session_id), ['joint-statusline'], 'the stored sample is the one POSTed')
+    assert.ok(rows !== null, `the store holds a statusline WAL for the sample; see the server log: ${path.join(leg.data, 'server.log')}`)
+    assert.deepStrictEqual(rows.map(r => r.session_id), ['joint-statusline'], `the stored sample is the one POSTed; see the server log: ${path.join(leg.data, 'server.log')}`)
   })
 
   test('leg 10 — TRDD-VS1FCUMU: with NO server the bundled status-line hook stores the sample on disk, statusline-history reads it, and the real alcore statusline-seal turns it into a part', async () => {

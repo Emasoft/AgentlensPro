@@ -8,6 +8,8 @@
 //! Every boot runs with hook capture ON (asserted on its first read: with capture off the hook POST
 //! would take the ring-only path for a different reason and prove nothing about the mode) and gets
 //! the same four POSTs: OTLP traces, OTLP logs, a SubagentStart hook event, a status-line sample.
+//! The status-line sample is asserted two ways: counted (`receivedSinceBoot`), then, after a graceful
+//! SIGTERM stop, read back from the status-line WAL as a row carrying the POSTed session id.
 //! The control proves each read can SEE a present item; the mutation runs recorded in
 //! reports_dev/rbbex59r/ prove each absence assertion can fail:
 //! - drop the `if no_collection` return in `lib.rs` `handle` ⇒ the span and log-event asserts go red;
@@ -92,8 +94,13 @@ impl Server {
                 if file.is_dir() {
                     dirs.push(file);
                 } else if file.extension().is_some_and(|x| x == "ndjson") {
-                    for line in std::fs::read_to_string(&file).unwrap().lines() {
-                        let row: Value = serde_json::from_str(line).unwrap();
+                    let text = std::fs::read_to_string(&file).unwrap();
+                    for (i, line) in text.lines().enumerate() {
+                        // Read after a graceful stop: no write is in progress, so any unparseable line is a defect and fails here with the line and the log.
+                        let row: Value = match serde_json::from_str(line) {
+                            Ok(row) => row,
+                            Err(e) => panic!("{}:{}: unparseable ndjson line ({e}): {line}\nlog:\n{}", file.display(), i + 1, self.log_text()),
+                        };
                         ids.push(row["session_id"].as_str().unwrap_or_default().to_owned());
                     }
                 }
@@ -248,10 +255,10 @@ fn assert_mode_boot(s: &mut Server, started_by: Value) {
     assert_eq!(hook_files(&s.data), 0, "no hook-events file may appear in the mode");
     assert_eq!(hook_body, r#"{"ok":true,"dropped":"collection=off"}"#);
     assert_eq!(v["hookEvents"]["receivedSinceBoot"], 1, "the hook event is accepted (ring-only)");
-    assert_eq!(v["statusline"]["receivedSinceBoot"], 1, "the status-line sample is stored");
+    assert_eq!(v["statusline"]["receivedSinceBoot"], 1, "the status-line sample is stored, log:\n{}", s.log_text());
     assert_eq!(v["bodies"]["captureDownSince"], Value::Null, "no CAPTURE DOWN for capture switched off on purpose");
     // Not just a counter: the sample is really stored, i.e. it survives a graceful stop as a row with the POSTed session id.
-    assert_eq!(s.stop_and_read_statusline_session_ids(), ["aaaaaaaa-sl-1"], "the stored sample is read back from the WAL after a graceful stop");
+    assert_eq!(s.stop_and_read_statusline_session_ids(), ["aaaaaaaa-sl-1"], "the stored sample is read back from the WAL after a graceful stop, log:\n{}", s.log_text());
 }
 
 #[test]
@@ -278,8 +285,8 @@ fn normal_boot_stores_what_the_mode_drops() {
     assert_eq!(hook_body, r#"{"ok":true}"#);
     assert_eq!(v["hookEvents"]["receivedSinceBoot"], 1);
     assert_eq!(hook_files(&s.data), 1, "the hook-events bucket file appears");
-    assert_eq!(v["statusline"]["receivedSinceBoot"], 1);
+    assert_eq!(v["statusline"]["receivedSinceBoot"], 1, "the status-line sample is received, log:\n{}", s.log_text());
     // Status-line activity and no body ever ⇒ capture_down_since returns the boot time at once.
     assert!(v["bodies"]["captureDownSince"].is_i64() || v["bodies"]["captureDownSince"].is_u64(), "control must report CAPTURE DOWN: {}", v["bodies"]);
-    assert_eq!(s.stop_and_read_statusline_session_ids(), ["aaaaaaaa-sl-1"], "the stored sample is read back from the WAL after a graceful stop");
+    assert_eq!(s.stop_and_read_statusline_session_ids(), ["aaaaaaaa-sl-1"], "the stored sample is read back from the WAL after a graceful stop, log:\n{}", s.log_text());
 }
