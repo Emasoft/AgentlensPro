@@ -42,7 +42,7 @@ import { AGENT_NAMES, SKILL_NAMES, resolveOnPath, skillFiles, skillTreeHash } fr
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
 import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from "./foreignTelemetry"
-import { agentlensDisabled, overrideKillSwitchEnv } from "./killSwitch"
+import { agentlensDisabled, killSwitchHalf, overrideKillSwitchEnv } from "./killSwitch"
 import { pushNotice } from "./launchNotices"
 import { SurfaceDirs, formatSkippedSurfaces, restoreParkedSurfaces } from "./surfaces"
 import { Ctx, REPAIR_STEPS, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
@@ -332,10 +332,11 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
           // The clause says what happens to the switch per caller. `enable` gets none: it prints its own switch line (runEnableCli after its
           // disarm, forceInstallTelemetry in its summary), so "stays armed" would be false for the operator enable. A launch over a
           // foreign-armed flag lifts it below once its repairs succeed (a server start never reaches here with that flag: the D13 skip
-          // returned). Any other switch, operator or env, stays armed.
+          // returned). Any other switch, operator or env, stays armed. Under the env half (AGENTLENS_DISABLED=1) lifting the flag does not turn
+          // collection on, so the lift clause says so (TRDD-RTHA7EWK item 4).
           const switchClause = trigger === "enable" ? ""
             : !agentlensDisabled(ctx.dataDir) ? "; no kill-switch is armed"
-            : trigger === "launch" && killSwitchArmedForForeign(ctx.dataDir) ? "; the switch armed for the foreign setup is lifted once this launch's repairs succeed"
+            : trigger === "launch" && killSwitchArmedForForeign(ctx.dataDir) ? `; the switch armed for the foreign setup is lifted once this launch's repairs succeed${killSwitchHalf(ctx.dataDir) === "env" ? "; collection stays off while AGENTLENS_DISABLED=1 is set" : ""}`
             : "; the kill-switch stays armed (collection stays off)"
           // A file or a dangling/non-directory symlink at a live skill path is a LASTING state (the skill stays parked on every launch), so it is
           // announced, never skipped silently. With nothing restored the line must not claim "put back 0", and the switch clause (which

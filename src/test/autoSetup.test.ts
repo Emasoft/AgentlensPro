@@ -907,10 +907,10 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     for (const name of SKILL_NAMES) assert.ok(fs.existsSync(path.join(f.skillsDir, name, 'SKILL.md')), `${name} restored`)
     assert.strictEqual(killSwitchHalf(f.dataDir), 'env', 'collection stays off through the env half')
     // The put-back line under the env half: the flag stood as FOREIGN_REASON, so the launch promises the lift (collection itself stays off through the env half).
-    // PINNED pending the d3 card item on the foreign-lift wording under the env half: a d3 change to this wording is intended, not a regression.
+    // TRDD-RTHA7EWK item 4: under the env half the line also says that collection stays off while AGENTLENS_DISABLED=1 is set (lifting the flag does not turn it on).
     const putBack = l.out.filter(x => x.includes('put back'))
     assert.strictEqual(putBack.length, 1, l.out.join('|'))
-    assert.ok(putBack[0].includes("the switch armed for the foreign setup is lifted once this launch's repairs succeed") && !putBack[0].includes('stays armed'), putBack[0])
+    assert.ok(putBack[0].includes("the switch armed for the foreign setup is lifted once this launch's repairs succeed; collection stays off while AGENTLENS_DISABLED=1 is set") && !putBack[0].includes('stays armed'), putBack[0])
     assert.strictEqual(rawBodiesHeldAbsent(f.dataDir), true)
     assert.ok(!(RAW_BODIES_KEY in readSettings(f).env!), 'the raw-body key is absent under the env half')
   })
@@ -1123,7 +1123,7 @@ suite('the switch stops only collection — repair and restore run under it (TRD
     // The switch clause of the put-back line, launch + foreign-armed flag: the lift is promised, not "stays armed" (false on this path).
     const putBack1 = l1.out.filter(x => x.includes('put back'))
     assert.strictEqual(putBack1.length, 1, l1.out.join('|'))
-    assert.ok(putBack1[0].includes("the switch armed for the foreign setup is lifted once this launch's repairs succeed") && !putBack1[0].includes('stays armed'), putBack1[0])
+    assert.ok(putBack1[0].includes("the switch armed for the foreign setup is lifted once this launch's repairs succeed") && !putBack1[0].includes('stays armed') && !putBack1[0].includes('AGENTLENS_DISABLED'), putBack1[0])
     const r2 = recorder(); const l2 = lines()
     assert.strictEqual(await maybeAutoSetup(['budget'], { ctx: f.ctx, repair: r2.repair, stderr: l2.say }), null)
     assert.ok(!fs.existsSync(killSwitchPath(f.dataDir)), 'the next successful launch lifts the foreign-armed flag')
