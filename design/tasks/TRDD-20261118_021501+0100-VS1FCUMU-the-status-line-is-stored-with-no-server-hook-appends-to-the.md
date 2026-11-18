@@ -4,7 +4,7 @@ title: The status line is stored with no server - hook appends to the write-ahea
 column: dev
 status: tasked
 created: 2026-11-18T02:15:01+0100
-updated: 2026-11-18T03:10:05+0100
+updated: 2026-11-18T03:16:15+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -50,6 +50,7 @@ On branch `feat/rbbex59r-c2` (TRDD-RBBEX59R step d3) the status-line hook only P
 - With no server for longer than the retention window, old days are not purged until a server runs.
 - The sealer is started by the hook only; nothing seals when no status line renders.
 - INFERRED from src/cli/cacheExpiredCli.ts 128-181, not run: once the sealer has turned today's wal-cli.ndjson into a part, cache-expired and cache-state with no server do not see the newest sample of a session until its next render appends a line; and each call of the two verbs reads every write-ahead file of the two newest days whole (up to 16 MiB of wal-cli.ndjson per day, plus any rot file not yet sealed).
+- Draining the live backlog (6.3 GB of wal-cli.ndjson on 2026-11-18) will take about 1 GB of memory for some tens of seconds: one seal call on 1.4 GB peaked at 938 MiB. The first run after deploy does it, either the standalone sealer (nice 15) or the 60 s chore inside the server.
 
 ## Files (worktree `builds_dev/rbbex59r-c2`, branch `feat/rbbex59r-c2`)
 
@@ -63,7 +64,7 @@ On branch `feat/rbbex59r-c2` (TRDD-RBBEX59R step d3) the status-line hook only P
 - [x] TypeScript change + `statuslineDiskFallback.test.ts` and `statuslineCapture.test.ts` green, check-types clean
 - [x] Joint leg 10: no server, sample on disk, `statusline-history` shows it, `alcore statusline-seal` makes a part
 - [x] Docs: operations.md, CHANGELOG, the header comments of the two source files
-- [ ] Sealer proved on a sample of at most 4 GB of the live backlog before the live deploy
+- [x] Sealer proved on a sample of at most 4 GB of the live backlog before the live deploy
 
 ## Approval log
 
@@ -91,6 +92,7 @@ On branch `feat/rbbex59r-c2` (TRDD-RBBEX59R step d3) the status-line hook only P
 - Cap proof: cargo test --manifest-path builds_dev/rbbex59r-c2/rust-core/Cargo.toml -p agentlens-spool --test test_data_cap, run by a worker from the repository root: 'test result: ok. 1 passed' (test cargo_test_runs_inside_a_capped_run_dir_with_temp_dir_redirected_into_it; raw output reports_dev/VS1FCUMU/docs-raw/c3-test-data-cap.txt read whole by the main agent). So a cargo test against the worktree manifest runs through the runner of the root .cargo/config.toml.
 - Correction: the STATE line of 03:12 said the header-comment box was already met by b78fee7e. It was not: the layout comments of rust-core/crates/agentlens-core/src/statusline_store.rs and src/statuslineStore.ts named neither wal-cli.ndjson, the rot file, .seal.lock nor .seal-kick. Added in 278c8a18 (comment lines only; cargo check, clippy and check-types were not rerun after it). Also: the main agent has now read the whole diff of memory commit fe15f2cf (one atom header shortened, one new atom header inserted before an unchanged paragraph, lmd bumped, no body line changed).
 - Box 5 plan (advisor consult 2026-11-18 03:05). (a) Read-only inventory of ~/.agentlens/statusline into a file: per stream and day, each file with its size and kind (wal-cli, wal-<pid>, rot, part); the main agent picks the files. (b) Sample: the single largest write-ahead file, plus one past UTC day that holds several write-ahead files and existing parts; past days only; the copy stays near 3 GB so that copy plus new parts stay under 4194304 KB (du -sk of the selection first); if the largest file alone does not fit, that is the finding. (c) One script run under scripts/test-data-cap.sh with the data dir inside its TMPDIR, an own HOME, AGENTLENS_NO_REVIVE=1 and default thresholds; server.pid, .seal.lock and .seal-kick are not copied; every count is written to reports_dev/VS1FCUMU before the run dir is removed. (d) Pass criteria, fixed before the run: a bounded loop of statusline-seal calls ends with zero write-ahead and rot files; the rows of the new parts equal the line count before (minus at most one per file that did not end in a newline); every pre-existing part has the same sha256 after. (e) Wall time and peak RSS per call (/usr/bin/time -l). (f) A dry run on about 50 MB first.
+- Box 5 DONE, run by the main agent 2026-11-18 03:13 under scripts/test-data-cap.sh with the release alcore of the worktree (build of e5b4af2e), default thresholds, own HOME, no server; the live store was only read. Live inventory: 38 wal-cli.ndjson files with 6,277.0 MiB (largest 592.7 MiB, main/2026-11-11), 12 orphan wal-<pid> files on 2026-10-27, 3,527 parts with 61.8 MiB. Dry run (main/2026-11-13, 47,816 KB): 21,732 lines became 21,732 rows in 1 call, 1.72 s, max RSS 211,550,208 B. Full run (5 day directories, 1,439,560 KB, 17 write-ahead files of which 5 wal-cli of 621.5, 516.2, 150.3, 150.2 and 35.1 MB and 12 orphans, plus 18 existing parts): ONE call printed 'sealed 17 WAL(s), refused 0' in 9.12 s; zero write-ahead files left; 715,149 lines before and 715,149 new rows (rows per day directory equal lines plus old rows in all 5); the 18 old parts have the same sha256. All three pass criteria met. Peak memory of that call: max RSS 983,695,360 B (938 MiB), above the 512 MiB DuckDB memory_limit of the sealer, which covers only the buffer manager. NOT shown by the run: a hook appending during a real-size seal (the copies were static), today's file at the 16 MiB threshold on real data, the server chore path, the whole backlog (4.4 times the sample; about 40 s by proportion, not measured). Report: reports/VS1FCUMU/20261118_031537+0100-sealer-proof-on-live-sample.md (the reports folder is gitignored in this repository, .gitignore line 40, so the report is on disk only); raw results reports_dev/VS1FCUMU/seal-proof/; scripts scripts_dev/slseal/seal-proof.sh and count-rows.js.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-18
 
