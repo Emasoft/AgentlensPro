@@ -1900,3 +1900,45 @@ fn g4_double_underscore_in_source_or_topic_is_a_compile_error() {
     let e = entry(&doc, "hook_x", "a_b", 1, "sp", Value::Null, &fx.root.join("s.schema.json"));
     load_manifest(&write_manifest(&fx.root.join("m"), &[e])).unwrap();
 }
+
+/// H1. TRDD-C6W0SWUT: a spool file whose NAME holds a glob character (`*`, `?`, `[`) loads only its own rows. The bound path is still glob-expanded by `read_ndjson`, so
+/// without `glob_escape` it also read a sibling the pattern matches (DuckDB falls back to the literal path only when the pattern matches nothing, hence the sibling).
+/// One test per character, so each can be shown failing on its own without the fix.
+fn glob_file_name_loads_only_its_own_rows(case: &str, own: &str, sibling: &str) {
+    let fx = session_end_fixture(case);
+    fx.put(SE, own, &lines(&[session_end_payload(0)]));
+    fx.put(SE, sibling, &lines(&[session_end_payload(10), session_end_payload(11), session_end_payload(12)]));
+    let sum = fx.collect();
+    assert_eq!(sum, Summary { files_loaded: 2, rows: 4, files_failed: 0, files_reconciled: 0 }, "{own}");
+    let conn = fx.conn();
+    assert_eq!(count(&conn, &format!("_ingest.files WHERE source_name = '{own}' AND record_count = 1")), 1, "{own}");
+    assert_eq!(count(&conn, &format!("_ingest.files WHERE source_name = '{sibling}' AND record_count = 3")), 1, "{own}");
+    assert_eq!(select(&conn, &["session_id"], &t(SE), "session_id"), vec![vec![s("aaaaaaaa-0")], vec![s("aaaaaaaa-10")], vec![s("aaaaaaaa-11")], vec![s("aaaaaaaa-12")]], "{own}");
+}
+
+#[test]
+fn h1a_star_in_a_spool_file_name_loads_only_its_own_rows() {
+    glob_file_name_loads_only_its_own_rows("h1a", "g*.ndjson", "gz.ndjson");
+}
+
+#[test]
+fn h1b_question_mark_in_a_spool_file_name_loads_only_its_own_rows() {
+    glob_file_name_loads_only_its_own_rows("h1b", "h?.ndjson", "hz.ndjson");
+}
+
+#[test]
+fn h1c_bracket_in_a_spool_file_name_loads_only_its_own_rows() {
+    glob_file_name_loads_only_its_own_rows("h1c", "k[xy].ndjson", "kx.ndjson");
+}
+
+/// H2. TRDD-C6W0SWUT: the same when a DIRECTORY of the path holds a glob character: the ingest root `dirglob*` has the sibling root `dirglobQ` that the pattern also matches.
+#[test]
+fn h2_an_ingest_directory_name_with_a_glob_character_loads_only_its_own_rows() {
+    let fx = Fx::new("dirglob*");
+    register_where(&fx, &only(&[SE]));
+    let sibling = Fx::new("dirglobQ");
+    fx.put(SE, "a.ndjson", &lines(&[session_end_payload(0)]));
+    sibling.put(SE, "a.ndjson", &lines(&[session_end_payload(10), session_end_payload(11), session_end_payload(12)]));
+    assert_eq!(fx.collect(), Summary { files_loaded: 1, rows: 1, files_failed: 0, files_reconciled: 0 });
+    assert_eq!(select(&fx.conn(), &["session_id"], &t(SE), "session_id"), vec![vec![s("aaaaaaaa-0")]]);
+}

@@ -51,6 +51,7 @@ name = "agentlens-digest"
 version = "0.1.0"
 dependencies = [
  "agentlens-digest",
+ "agentlens-store",
  "duckdb",
  "serde",
  "serde_json",
