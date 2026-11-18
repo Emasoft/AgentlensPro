@@ -16,7 +16,8 @@ Pipeline (fail-fast — a FAIL stops the run, remaining steps SKIP, exit non-zer
 **environment** (read-only heuristics: platform/arch + WSL label, Node vs the engines floor,
 native-dep resolvability, foreign-process-on-OTLP-port, `~/.claude` presence, free disk —
 hard-fails on native Windows with WSL2 guidance, on old Node, or on a broken install) →
-data-store (sqlite quick_check; corrupt DB backed ASIDE, never wiped) → hooks → skill →
+data-store (sqlite quick_check; corrupt DB backed ASIDE, never wiped) → hooks → status line
+(refreshes a stale stamp of agentlenspro's own command; never installs or wraps one) → skill →
 otel-env → old-package migration → server → final end-to-end self-test (synthetic span
 round-trip + registered hook/gate execution). A second run over a converged install reports
 **0 actions** — that is the idempotency proof. Data is NEVER deleted by setup.

@@ -80,6 +80,8 @@ agentlenspro setup --dry-run              # print the per-step plan, change noth
 agentlenspro setup --yes                  # non-interactive (accepts e.g. old-package removal)
 ```
 
+After an update, the launch check (most CLI verbs run it first; the hook and status-line verbs never do) and every `agentlenspro setup` compare the version stamp of each installed piece with the running version: the hook registrations, the status line commands, the skills and the agents. An older or unstamped piece is replaced: `~/.claude/settings.json` through the verified settings transaction, which leaves a `settings.json.agentlens-bak-<time>-<pid>` backup, and each skill or agent file after a copy to `<data dir>/surface-backups/<UTC time>-<pid>/`. A piece stamped newer than the running CLI is left in place with one notice. The status line is only refreshed, never installed or wrapped: `agentlenspro --install-statusline` does that. `AGENTLENS_NO_AUTOSETUP=1` turns the launch check off.
+
 The same executable exposes every diagnostic tool (recent sessions, cost, burn budget,
 cache-expiry, workspace patterns, …) against the running server — run `agentlenspro list`
 to see the full set — plus the individual installers:
