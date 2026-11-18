@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-18T19:13:08+0100
+updated: 2026-11-18T19:21:26+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -150,3 +150,8 @@ CORRECTION of the NOT COVERED sentence above about published versions (main agen
 - Deviation accepted: the setup hooks step reports a kept newer stamp in its found text and does not announce it through the once-per-pair store, because ctx.log is a no-op under setup --json (setup.ts:1874, by the worker's report) and the store would mark a notice shown that nobody saw. The launch path announces it (detectDrift kept list to announceKeptSurfaces), tested.
 - NOT verified: that the four hook verbs of a REBUILT bundle accept the --stamp argument when a real session runs them. setupVerb exec'd stamped hook, gate and review-gate through the old bundle (rc 0); review-supervisor was source-read only (main.ts runReviewSupervisor takes no argv). Settle it after the next build with: for v in hook gate review-gate review-supervisor, run the rebuilt standalone/cli.js with '--stamp 9.9.9', stdin '{}', AGENTLENS_NO_AUTOSETUP=1, and read each rc.
 - Deploy effect: the first non-excluded launch after the next node esbuild.js rewrites ~/.claude/settings.json once through safeConfigEdit (backup settings.json.agentlens-bak-<time>). Not yet built.
+- Review finding 3: in the correction above about v2.33.1, the words 'on its launch repair' are INFERRED. hooksConverged and rebuildEventMatchers of that tag were read; the code of that tag that calls them at launch was not.
+- Deployed 2026-11-18 19:19 (node esbuild.js rc 0, two launch-path test files run first: hookInstall.toctou 6 passing, autoSetup 128 passing, by the coordinator). Rebuilt bundle probe in an isolated HOME with '{}' on stdin: review-gate and review-supervisor print byte-identical output with and without --stamp 9.9.9 (exit 0). For hook and gate the probe proves nothing (exit always 0, no output, hookHandlers.ts:481); their tolerance of --stamp rests on reading main.ts (runHookCommand takes no argv).
+- Supervisor detection probe on the old bundle (same reviewSupervisor.ts): settings with Stop and SubagentStop running 'agentlenspro review-gate --stamp 9.9.9' or the bare command give no alarm; a foreign command gives the NOT REGISTERED alarm (reviewSupervisor.ts:111 is a regex).
+- Live rewrite predicted on a scratch COPY of ~/.claude/settings.json through the real path (installHooks from out/, keepNewer, safeConfigEdit ops): changed true, 24 entries before and after, every foreign entry identical, env and non-hook keys identical, verdict converged afterwards. At 19:22 the live file still held 17 unstamped entries and 28 backups: no launch had rewritten it yet.
+- agentlenspro-review-mod/hooks/register.js (repo copy; the installed copy was not read) runs 'agentlenspro review-gate --json-verdict' as a process and reads no hook command from settings.json.
