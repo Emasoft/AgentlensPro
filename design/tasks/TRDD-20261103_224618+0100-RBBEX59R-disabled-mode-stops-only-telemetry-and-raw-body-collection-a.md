@@ -4,7 +4,7 @@ title: Disabled mode stops only telemetry and raw-body collection and nothing el
 column: blocked
 status: tasked
 created: 2026-11-03T22:46:18+0100
-updated: 2026-11-18T05:56:23+0100
+updated: 2026-11-18T06:09:10+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -181,3 +181,4 @@ Scope of the line-45 (i) search, narrowed: .ts and .rs files under src/ and rust
 - CAP VERIFIED 2026-11-18 05:44 to 05:47 (reports_dev/test-data-cap/20261118_054424+0100-cap-verify/, every exit file and output read whole by the main agent, HEAD fb01db05): (1) node scripts/check-test-cap.js exit 0: OK, 283 rust files, 261 test files, package.json and 3 workflows scanned, 1 mkdtemp exemption; (2) testDataCap under the wrapper, 2 passing: mocha runs inside a capped run dir with os.tmpdir() redirected, and the cap TRIPS on a copy of the wrapper with only CAP_KB lowered (exit 3, same-group child killed, run dir removed); (3) the same file started BARE with AGENTLENS_TEST_CAP_DIR unset, 2 passing, so the self-wrap of src/test/setup.js put it under the cap; (4) cargo test -p agentlens-spool --test test_data_cap, 1 passed (coverage of the cargo runner only); (5) the fixed logReader.generatedFiles test under the wrapper, 1 passing; 0 run dirs left under tests_dev/tmp. LIMITS, unchanged: the trip is proved at 10 MiB, not at 4 GiB; the cap is sampled every 5 s; only TMPDIR, TMP and TEMP are counted; a measurement copy made outside a test is not covered by anything (this session made one of 577 MB in /tmp, size-checked by hand, now removed).
 CAP VERIFIED, wording corrected after review 2026-11-18: (1) the bare run passing shows the self-wrap fired because src/test/testDataCap.test.ts lines 12-13 assert that AGENTLENS_TEST_CAP_DIR is set and the bare run started with it unset (read by grep of the test and of src/test/setup.js line 14); (2) the kill of the child and the removal of the run dir are asserted by the test, not observed by the agent; (3) the compiled-JS freshness check was an mtime comparison only; (4) the raw evidence is in gitignored reports_dev, only the card records are committed.
 scripts_dev/735q3jf4-live/q.cjs (gitignored): its header said read-only while DuckDBInstance.create opens the file read-write (line 7, no access_mode). Header corrected 2026-11-18 to say READ-WRITE, scratch copies only, SELECT only; node --check rc 0.
+CORRECTION 2026-11-18 (deferred item 5 of the 01:12 list): an earlier entry of this card says the 00:58 bundle rebuild shipped four comment-only or test-only src commits. A worker counted 14 src commits in main..HEAD, and the bundle was built from the whole working tree. Which commits that rebuild newly shipped was NOT established.
