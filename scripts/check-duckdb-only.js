@@ -235,7 +235,16 @@ const isTestPath = (rel) =>
 const MAX_NON_TEST_OPENERS = 27
 // 2026-09-24: lowered to the measured count (raised again 2026-10-17, see above) after TRDD-4BZPAQWM
 // deleted src/database/* and sessionRepository.ts (a81972f9).
-const MAX_TEST_OPENERS = 11
+// 2026-11-18 (TRDD-CXNUWXX7): DEFENDED RAISE 11 -> 12, and it moves the ratchet the wrong way, for one file:
+//   src/test/duckPathPattern.test.ts (f2374de6): its canary tests prove that a quote-doubled path holding
+//     * ? or [ is read by DuckDB as a file pattern, and its fix tests prove that the repo read sites are not,
+//     so it runs plain SQL on a raw `:memory:` handle with fixed settings. Routing it through `openStore`
+//     would lower the count without lowering the coupling (a helper that hands back a connection, see
+//     above) and would change what the canary runs on (three store sub-directories, the half-of-RAM limit,
+//     a proxied connection). Folding its cases into another opener test file would hide the same construction.
+//     The file became an opener in f2374de6, which landed with no `pnpm run compile`; the cap was first
+//     seen exceeded by the compile of 2026-11-18.
+const MAX_TEST_OPENERS = 12
 
 // WHAT THIS CAP DOES NOT MEASURE — stated here because the commit that added it overclaimed.
 // It counts CONSTRUCTION (`X::open`, `new SQL.Database`, `DuckDBInstance.create`). The card says
