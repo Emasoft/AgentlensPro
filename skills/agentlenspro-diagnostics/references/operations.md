@@ -101,7 +101,7 @@ cases it restarts nothing, the server stays in no-collection mode, and `enable` 
   `agentlenspro server restart` (with `AGENTLENS_DISABLED` unset): it restarts the server in collection mode and deletes the
   brake file itself once the start succeeds.
 - `AGENTLENS_DISABLED=1` stays set in the environment (the verb cannot lift the env half): unset it, then re-run
-  `agentlenspro enable`. With it set, `enable` exits 2 in every case, the exit-0 ones below included.
+  `agentlenspro enable`. With it set, `enable` exits 2 in the exit-0 cases below too.
 - This dir's server is in no-collection mode but the data dir resolved from the environment differs from the enabled one (the
   stop could hit another dir's server): re-run as `AGENTLENS_DATA_DIR=<enabled dir> agentlenspro enable`.
 
