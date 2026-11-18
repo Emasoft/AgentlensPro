@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-18T19:45:56+0100
+updated: 2026-11-18T19:58:40+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -161,3 +161,5 @@ CORRECTION of the NOT COVERED sentence above about published versions (main agen
 - Pending: the help-text change in src/cli/diagnosticsCli.ts reaches users only after another node esbuild.js; then agentlenspro --help must show --stamp.
 - Deferred, tracked here: move the parenthesis 'its launch wiring was not checked' out of CHANGELOG.md:25 (method detail) in the release docs pass, keeping 'is expected to'.
 - Deferred, tracked here: add a mixed-matcher case (a foreign hook and one of ours in ONE matcher) to src/test/hookStamp.test.ts, applied through the real safeConfigEdit, asserting the foreign entry survives.
+- Rebuild 2026-11-18 19:58: node esbuild.js rc 0; AGENTLENS_NO_AUTOSETUP=1 agentlenspro --help rc 0 and its line 175 names '<command> --stamp <version>', so the --install-hooks help text ships.
+- Live settings.json at 19:58 (jq counts only): 17 agentlenspro hook entries, 0 stamped, 17 bare. The rewrite waits on the first launch of a verb that is not excluded from auto-setup; the coordinator does not trigger one.
