@@ -292,13 +292,13 @@ pub fn relation_for(root: &Path, stream: &str, since_ms: Option<f64>, until_ms: 
     let (parts, wals) = files_in_window(root, stream, since_ms, until_ms);
     let rels: Vec<String> = parts
         .iter()
-        .map(|p| varchar_session_id(&format!("SELECT * FROM read_parquet({})", q(&p.to_string_lossy()))))
+        .map(|p| varchar_session_id(&format!("SELECT * FROM read_parquet({})", agentlens_store::sq_path(&p.to_string_lossy()))))
         .chain(
             // WHY (TRDD-ZKNP5IJY): sample_size=-1 infers the schema from the whole file. DuckDB samples only the first
             // 20,480 rows by default, so a key first sent after them was no column and a query naming it failed with a
             // Binder Error. The seal path already does this (TRDD-VS1FCUMU); the reader must match it.
             wals.iter()
-                .map(|w| varchar_session_id(&format!("SELECT * FROM read_json_auto({}, sample_size=-1, ignore_errors=true)", q(&w.to_string_lossy())))),
+                .map(|w| varchar_session_id(&format!("SELECT * FROM read_json_auto({}, sample_size=-1, ignore_errors=true)", agentlens_store::sq_path(&w.to_string_lossy())))),
         )
         .collect();
     if rels.is_empty() {
@@ -745,8 +745,8 @@ fn inference_collapsed(cols: &[String]) -> bool {
 fn keys_missing_from_part(con: &Connection, wal: &Path, part: &Path) -> Result<i64, String> {
     let sql = format!(
         "SELECT count(*) FROM (SELECT DISTINCT lower(k) AS k FROM (SELECT unnest(json_keys(json)) AS k FROM read_ndjson_objects({}, ignore_errors=true))) WHERE k NOT IN (SELECT lower(column_name) FROM (DESCRIBE SELECT * FROM read_parquet({})))",
-        q(&wal.to_string_lossy()),
-        q(&part.to_string_lossy())
+        agentlens_store::sq_path(&wal.to_string_lossy()),
+        agentlens_store::sq_path(&part.to_string_lossy())
     );
     con.query_row(&sql, [], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())
 }
@@ -775,7 +775,7 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
     // bool and the Err text was dropped at the match below, so a refused file could not say why.
     let run = || -> Result<SealOutcome, String> {
         let con = open_duck(root, vars)?;
-        let wal_q = q(&wal.to_string_lossy());
+        let wal_q = agentlens_store::sq_path(&wal.to_string_lossy());
         // TRDD-VS1FCUMU: sample_size=-1 makes read_json_auto infer the schema from the WHOLE file.
         // Its default infers from the first rows only. Measured with this binary on a live
         // 291,970-line file and on a 30,000-line one: a key first seen after that sample was not a
@@ -810,7 +810,7 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         let count = |sql: &str| -> Result<i64, String> {
             con.query_row(sql, [], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())
         };
-        let got = count(&format!("SELECT count(*) FROM read_parquet({})", q(&out.to_string_lossy())))?;
+        let got = count(&format!("SELECT count(*) FROM read_parquet({})", agentlens_store::sq_path(&out.to_string_lossy())))?;
         if got != expect_rows as i64 {
             // Do NOT delete the WAL — remove the untrustworthy part and leave the raw rows. A
             // short part means rows LOST in conversion; count it or the WAL re-fails forever
@@ -831,7 +831,7 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         // ignore_errors lands an unparseable line as an all-NULL row (count still matches):
         // a torn line becomes a NULL row — acceptable, never silent. append() writes ts on
         // every record, so count(ts) < count(*) can only mean broken source lines.
-        let with_ts = count(&format!("SELECT count(ts) FROM read_parquet({})", q(&out.to_string_lossy())))?;
+        let with_ts = count(&format!("SELECT count(ts) FROM read_parquet({})", agentlens_store::sq_path(&out.to_string_lossy())))?;
         if with_ts < got {
             counters.corrupt_wals.fetch_add((got - with_ts) as u64, std::sync::atomic::Ordering::Relaxed);
         }

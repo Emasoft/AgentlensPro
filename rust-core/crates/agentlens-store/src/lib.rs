@@ -238,6 +238,37 @@ fn q(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// Make a literal path safe to hand to a DuckDB `read_*` function, which treats its argument as a glob.
+/// WHY (TRDD-C6W0SWUT): DuckDB expands `*`, `?` and `[` in a read path as a file pattern, so a data dir
+/// holding one of them read the wrong set of files (or none) while the apostrophe doubling of `q` looked
+/// correct. A one-character class (`[*]`, `[?]`, `[[]`) matches the character literally. A path with a
+/// backslash is left as is, the same rule as src/duckPath.ts `sqPath` (a Windows path, whose separator is a
+/// backslash, would not survive the class); it is not measured here. COPY TO targets and
+/// ATTACH paths are write paths, not globs: they keep plain `q`. Keep an intended glob suffix (`/*.parquet`)
+/// OUT of the argument: escape the directory, then append the suffix.
+pub fn glob_escape(p: &str) -> String {
+    if p.contains('\\') {
+        return p.to_owned();
+    }
+    let mut out = String::with_capacity(p.len());
+    for c in p.chars() {
+        match c {
+            '*' | '?' | '[' => {
+                out.push('[');
+                out.push(c);
+                out.push(']');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// A quoted SQL literal for a read path: `glob_escape`, then `q`.
+pub fn sq_path(p: &str) -> String {
+    q(&glob_escape(p))
+}
+
 fn part_files(dir: &Path, sub: &str) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = fs::read_dir(dir.join(sub))
         .map(|rd| {
@@ -283,7 +314,7 @@ pub fn parquet_scan(dir: &Path, sub: &str) -> Option<String> {
     let list = files
         .iter()
         .filter_map(|p| p.to_str())
-        .map(q)
+        .map(sq_path)
         .collect::<Vec<_>>()
         .join(",");
     Some(format!("read_parquet([{list}], union_by_name := true)"))
@@ -443,7 +474,7 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     // listing (TRDD-2HRA270Y step 3, A3): a part landing between two listings would be loaded here
     // but unregistered, and sync_new_parts would then load its rows a second time.
     if !body_parts.is_empty() {
-        let list = body_parts.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+        let list = body_parts.iter().map(|p| sq_path(p)).collect::<Vec<_>>().join(",");
         // The id comes from the part_file row the listing registered (the same path invariant
         // index_blob_shas relies on). EXCLUDE drops the filename column the join needs; BY NAME keeps
         // the load tolerant of older schema generations.
@@ -484,7 +515,7 @@ fn scan_of(files: &[String]) -> Option<String> {
     if files.is_empty() {
         return None;
     }
-    let list = files.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+    let list = files.iter().map(|p| sq_path(p)).collect::<Vec<_>>().join(",");
     Some(format!("read_parquet([{list}], union_by_name := true)"))
 }
 
@@ -521,7 +552,7 @@ fn seed_blob_index(con: &Connection, first_id: i32, listed: &[String], scanned: 
 /// always had, extended across sync_new_parts calls so a sha a second writer re-wrote keeps one
 /// index row (readers tolerate two, see blob_fetch_sql, but one is the invariant we keep).
 fn index_blob_shas(con: &Connection, scanned: &[String]) -> duckdb::Result<usize> {
-    let list = scanned.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+    let list = scanned.iter().map(|p| sq_path(p)).collect::<Vec<_>>().join(",");
     // ONE INSERT ... SELECT: the rows never round-trip through Rust. min(file id) keeps the old
     // first-file-wins rule (a sha lives in one part only; ingest dedups before writing).
     // LEFT JOIN + the check below, never a bare inner join: a scanned file with no matching
@@ -557,7 +588,7 @@ fn index_part_bodies(con: &Connection, scanned: &[String]) -> duckdb::Result<usi
     if scanned.is_empty() {
         return Ok(0);
     }
-    let list = scanned.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+    let list = scanned.iter().map(|p| sq_path(p)).collect::<Vec<_>>().join(",");
     // WHY (TRDD-R36S0PS9): the parts corpus is ~438.8M rows for only ~1.5M distinct (body_id, file) pairs
     // (docs_dev/20261023-seed-spill-measure-report.md), so DISTINCT must run on the raw pair BEFORE the join,
     // and there is NO correlated NOT EXISTS: that anti-join ran per parts row and exhausted the 4GB spill cap
@@ -682,7 +713,7 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
             // sync_new_parts can remove it by id if that file later vanishes.
             "body" => format!(
                 "INSERT INTO body_durable BY NAME SELECT *, {file_id} AS file_id FROM read_parquet([{}], union_by_name := true); ",
-                q(out_str)
+                sq_path(out_str)
             ),
             _ => String::new(),
         };
@@ -1311,7 +1342,7 @@ pub(crate) fn blob_fetch_sql(store: &Store, shas: &[String]) -> Result<String, S
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<String>, _>>()
         .map_err(|e| e.to_string())?;
-    let file_list = files.iter().map(|f| q(f)).collect::<Vec<_>>().join(",");
+    let file_list = files.iter().map(|f| sq_path(f)).collect::<Vec<_>>().join(",");
     Ok(format!("SELECT sha, data FROM read_parquet([{file_list}], union_by_name := true) WHERE sha IN ({list})"))
 }
 
@@ -1364,7 +1395,7 @@ pub fn part_fetch_sql(store: &Store, body_ids: &[&str], cols: &str) -> Result<St
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<String>, _>>()
         .map_err(|e| e.to_string())?;
-    let file_list = files.iter().map(|f| q(f)).collect::<Vec<_>>().join(",");
+    let file_list = files.iter().map(|f| sq_path(f)).collect::<Vec<_>>().join(",");
     Ok(format!("SELECT {cols} FROM read_parquet([{file_list}], union_by_name := true) WHERE body_id IN ({list})"))
 }
 

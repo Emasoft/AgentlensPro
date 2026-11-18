@@ -484,7 +484,7 @@ fn sq(v: &str) -> String {
 /// shared column projection and `filename=true` so a multi-file scan can attribute each row back to
 /// its source session.
 pub fn transcript_read_spec(paths: &[PathBuf]) -> String {
-    let list = paths.iter().map(|p| sq(&p.to_string_lossy())).collect::<Vec<_>>().join(", ");
+    let list = paths.iter().map(|p| agentlens_store::sq_path(&p.to_string_lossy())).collect::<Vec<_>>().join(", ");
     format!(
         "read_json([{list}], format='newline_delimited',\n      columns={{timestamp:'VARCHAR', type:'VARCHAR', message:'JSON'}},\n      maximum_object_size={}, ignore_errors=true, filename=true)",
         agentlens_store::transcript_sql::MAX_OBJECT_SIZE

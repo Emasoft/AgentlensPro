@@ -4,7 +4,7 @@ title: Rust DuckDB readers were not examined for paths with pattern characters
 column: todo
 status: tasked
 created: 2026-11-18T11:52:27+0100
-updated: 2026-11-18T19:21:25+0100
+updated: 2026-11-18T19:45:55+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,6 +29,9 @@ Opened 2026-11-18 by the main agent from TRDD-CXNUWXX7. Measured there (DuckDB v
 - 2026-11-18 wider grep (review finding 1-2): `grep -rnE "FROM \{|FROM '\{|COPY " --include='*.rs' rust-core/crates` gave 86 hits, all read. The `FROM {x}` hits in production take a relation string built elsewhere (all_of, parquet_scan, read_json, a scan variable); they hold no path literal of their own, so the path is escaped (or not) at the builder. INFERRED, not traced: that each builder ({parts}, {scan}, {read_json}, the argument at body_archive.rs:155) is one of the 28 counted sites. The C6 worker reconciles this FIRST, before any edit. Production COPY TO targets: agentlens-store/src/lib.rs:689 and agentlens-core/src/statusline_store.rs:805, both through q (apostrophe doubled). A COPY TO target is a write path, not a read glob, so q is enough there; box 2 keeps q on them. The other COPY hits are in test modules (cache_turns_sql.rs:865 and 1352 after its #[cfg(test)] at 571; lib.rs:1793 after 1751; statusline_store.rs:996-997 after 969) or in tests/. statusline_store.rs:806 is a read site, read_json_auto({wal_q}), site #10 of W47's report rev3 (its table row at line 47, checked 2026-11-18).
 - Review finding 4: the planned evidence for box 2 is a crate test of agentlens-store (tests/duck_path_pattern.rs). It measures the library code that alcore links, not a run of the alcore binary; the box is ticked only with that sentence beside it, or after a binary run is added.
 - Review finding 6: that site 1 (the digest macro, register.rs:149) binds the path as a parameter rests on W47's report (collect.rs:146-149, caller collect.rs:70-77). The coordinator saw only collect.rs:71 in a grep, which has the placeholder ?::VARCHAR; the binding code was not read.
+- 2026-11-18 W48 (report reports_dev/sonnet-worker/20261118_w48-c6-rust-glob-escape/report.md, diff read whole by the coordinator): agentlens-store gains glob_escape and sq_path (lib.rs:241-270); 27 of the 28 sites switched (parquet_scan covers #2,#3,#13-#20; #21-#28 in store lib.rs and transcript_sql.rs; #4,#5,#6-#12 in agentlens-core). COPY TO targets, ATTACH and the part_file value stay on q. Reconcile: no FROM-{x} builder outside the 28 (reconcile.md, by the worker's report).
+- Evidence by the worker's report: tests/duck_path_pattern.rs 5 passed; red-then-green only for the store chain (red4 vs green1); the canary tests document the misread and pass before and after; cargo test -p agentlens-store all ok; cargo check -p agentlens-core --tests ok; statusline_store lib tests 2 passed; clippy no warning. NOT run after their edits: the burn_seismic and session_summary_sql unit tests. No pattern-dir test for the core sites (code read and compile only). Bound-path glob expansion shown with a stand-in macro of the digest shape, not the real macro. Residual: a path holding a backslash is left unescaped (same rule as src/duckPath.ts).
+- OPEN: site #1, the digest macro (agentlens-digest collect.rs:149 binds the path). Decision 2026-11-18: agentlens-digest takes a path dependency on agentlens-store (same duckdb 1.10506.0 bundled, so one DuckDB build) and binds glob_escape(path).
 
 ## Approval log
 

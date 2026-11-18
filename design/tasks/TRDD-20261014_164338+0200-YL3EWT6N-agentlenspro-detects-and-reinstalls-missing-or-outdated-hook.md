@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-18T19:21:26+0100
+updated: 2026-11-18T19:45:56+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -155,3 +155,9 @@ CORRECTION of the NOT COVERED sentence above about published versions (main agen
 - Supervisor detection probe on the old bundle (same reviewSupervisor.ts): settings with Stop and SubagentStop running 'agentlenspro review-gate --stamp 9.9.9' or the bare command give no alarm; a foreign command gives the NOT REGISTERED alarm (reviewSupervisor.ts:111 is a regex).
 - Live rewrite predicted on a scratch COPY of ~/.claude/settings.json through the real path (installHooks from out/, keepNewer, safeConfigEdit ops): changed true, 24 entries before and after, every foreign entry identical, env and non-hook keys identical, verdict converged afterwards. At 19:22 the live file still held 17 unstamped entries and 28 backups: no launch had rewritten it yet.
 - agentlenspro-review-mod/hooks/register.js (repo copy; the installed copy was not read) runs 'agentlenspro review-gate --json-verdict' as a process and reads no hook command from settings.json.
+- Mixed matcher (a foreign hook and one of ours in ONE matcher): the live file holds 0 (jq count), so the scratch-copy run did not exercise it. By code read only: the strip passes nested_key 'hooks' (src/cli/hookInstall.ts:390) and safe_config_edit.py remove_by_substring then filters inside each matcher's hooks list and keeps the foreign entries (drops the matcher only when nothing survives). No test runs a mixed matcher.
+- Version collision checked: npm view agentlenspro version = 2.33.1 and no v2.34* tag exists, so no unstamped 2.34.0 was ever published.
+- Post-deploy check, to run once a session has launched a verb outside AUTOSETUP_EXCLUDED_VERBS: jq count of stamped entries in ~/.claude/settings.json must be 17 and of bare ones 0; find ~/.claude -maxdepth 1 -name 'settings.json.agentlens-bak-*' must count 29 (28 before the deploy); after a second such launch still 29.
+- Pending: the help-text change in src/cli/diagnosticsCli.ts reaches users only after another node esbuild.js; then agentlenspro --help must show --stamp.
+- Deferred, tracked here: move the parenthesis 'its launch wiring was not checked' out of CHANGELOG.md:25 (method detail) in the release docs pass, keeping 'is expected to'.
+- Deferred, tracked here: add a mixed-matcher case (a foreign hook and one of ours in ONE matcher) to src/test/hookStamp.test.ts, applied through the real safeConfigEdit, asserting the foreign entry survives.
