@@ -296,9 +296,9 @@ suite('statusline install — wrapping and unwrapping must round-trip exactly', 
 })
 
 // TRDD-RBBEX59R d3 (B11, D5, D6): the kill switch stops only the COLLECTION of telemetry and raw bodies, so the status
-// line always POSTs and the no-collection server stores the sample. There is no disk fallback any more (the
-// --keep-statusline marker and its direct WAL append are gone).
-suite('statusline capture — POSTs under an armed kill switch, never writes to disk', () => {
+// line always POSTs and the no-collection server stores the sample. When no server takes it, the hook appends
+// it to the store's write-ahead file (TRDD-VS1FCUMU; statuslineDiskFallback.test.ts pins that path).
+suite('statusline capture — POSTs under an armed kill switch', () => {
   let dir: string
   let server: http.Server | undefined
   const received: Array<{ url: string; body: string }> = []
@@ -344,14 +344,14 @@ suite('statusline capture — POSTs under an armed kill switch, never writes to 
     assert.strictEqual(sent.statusline_stream, 'main')
   })
 
-  test('(b) the switch is armed and the server is down: nothing is written to disk and nothing is spooled', async () => {
+  test('(b) the switch is armed and the server is down: the sample goes to the local write-ahead file and nothing is spooled', async () => {
     assert.strictEqual(agentlensDisabled(), true, 'precondition: the switch is armed')
     // A port that was free a moment ago and has no listener: the POST is refused at once.
     setEnv('AGENTLENS_UI_URL', `http://127.0.0.1:${await freePort()}`)
     await captureStatusline(Buffer.from(JSON.stringify(SAMPLE)))
-    assert.ok(!fs.existsSync(path.join(dir, 'statusline')), 'no status-line WAL: the direct-to-disk fallback is gone')
+    assert.ok(fs.existsSync(path.join(dir, 'statusline')), 'the sample is stored locally when no server answers (statuslineDiskFallback.test.ts pins the row)')
     // 'hook-spool' is the directory name hookSpoolDirPath() builds in src/cli/serverControl.ts (not exported, so the name is repeated here).
-    assert.ok(!fs.existsSync(path.join(dir, 'hook-spool')), 'spool false: a sample taken while the server is down is lost, not spooled')
+    assert.ok(!fs.existsSync(path.join(dir, 'hook-spool')), 'spool false: a status-line sample never enters the hook spool')
   })
 })
 
@@ -400,8 +400,10 @@ suite('statusline capture — N failed POSTs under the armed switch start exactl
     // not as a wrong spawn count.
     const elapsedMs = Date.now() - t0
     assert.ok(elapsedMs <= REVIVE_LOCK_TTL_MS - 1_000, `environment too slow for the lock window (${REVIVE_LOCK_TTL_MS} ms TTL): ${elapsedMs} ms`)
-    assert.strictEqual(spawns.length, 1, `exactly one revive, got ${JSON.stringify(spawns)}`)
-    assert.deepStrictEqual(spawns[0].slice(-2), ['server', 'revive'], 'the spawn is the CLI server revive')
+    const revives = spawns.filter(s => s.slice(-2).join(' ') === 'server revive')
+    assert.strictEqual(revives.length, 1, `exactly one revive, got ${JSON.stringify(spawns)}`)
+    // TRDD-VS1FCUMU: the first failed POST also creates today's write-ahead file, which starts the sealer once.
+    assert.strictEqual(spawns.length - revives.length, 1, `exactly one sealer start beside the revive, got ${JSON.stringify(spawns)}`)
   })
 
   test('with AGENTLENS_NO_REVIVE=1 the same 20 failed POSTs spawn nothing', async () => {

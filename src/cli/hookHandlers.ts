@@ -419,11 +419,13 @@ export function readStdin(stream: NodeJS.ReadableStream): Promise<Buffer> {
 /** Forward one lifecycle payload. Never throws — the fire-and-forget contract. On ANY delivery
  *  failure (server down, timeout, or a non-2xx like a 503 shed under load) the event is durably
  *  SPOOLED and a detached daemon revive is fired, so no hook a live Claude instance emits is lost
- *  (D3K7QM2P/1a) — the previous behavior silently dropped it. */
+ *  (D3K7QM2P/1a) — the previous behavior silently dropped it.
+ *  Resolves true only when the server answered 2xx (the event is ingested) and false on every other
+ *  outcome: the status-line capture stores its sample locally on false (TRDD-VS1FCUMU). */
 export async function forwardHookEvent(
   payload: Buffer,
   opts: { baseUrl?: string; timeoutMs?: number; path?: string; spool?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   const base = opts.baseUrl ?? uiBaseUrl()
   const apiPath = opts.path ?? '/api/hook-events'
   // Number(env)||default, NOT Number(env||default): a non-numeric value like "2s" must fall back to
@@ -437,7 +439,7 @@ export async function forwardHookEvent(
       body: new Uint8Array(payload),
       signal: AbortSignal.timeout(timeoutMs),
     })
-    if (res.ok) return // delivered + ingested — nothing to spool
+    if (res.ok) return true // delivered + ingested — nothing to spool
     // A non-2xx means NOT ingested (e.g. admission-control 503 under 20-instance load, or a
     // transient error). Fall through to spool + revive, exactly as for a connection failure.
   } catch { /* server down / timeout — fall through to spool + revive */ }
@@ -449,6 +451,7 @@ export async function forwardHookEvent(
   // cheap loss; a discarded rate-limit turn death is not. The revive still fires either way.
   if (opts.spool !== false) spoolHookEvent(payload)
   reviveDaemonDetached()
+  return false
 }
 
 /** Run one gate check. Returns the server's response body ('' = allow / any failure). */

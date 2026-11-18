@@ -106,6 +106,16 @@ fn pid_alive(pid: u32) -> bool {
     r == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// The pid of the server that owns `data_dir` right now: the pidfile's pid when that process is
+/// alive, else None (no pidfile, an unreadable one, or a dead pid). kill(pid, 0) only, with no
+/// start-time check: a stale pidfile whose pid was reused reads as a live owner, which errs
+/// toward leaving that server's files alone. TRDD-VS1FCUMU: the status-line sealer must never
+/// seal the write-ahead file a live server is still appending to.
+pub fn live_owner_pid(data_dir: &Path) -> Option<u32> {
+    let lock = read_pid_lock(&pidfile_path(data_dir))?;
+    pid_alive(lock.pid).then_some(lock.pid)
+}
+
 pub enum ClaimOutcome {
     Claimed,
     /// pid of the confirmed-live holder — refuse and exit.

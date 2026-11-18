@@ -96,9 +96,59 @@ fn install_exit_on_panic() {
 fn usage(msg: &str) -> ! {
     eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
     eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--no-collection] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
+    eprintln!("       alcore statusline-seal --data-dir DIR");
     exit(64);
 }
 
+fn statusline_seal_usage(msg: &str) -> ! {
+    eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
+    eprintln!("usage: alcore statusline-seal --data-dir DIR");
+    exit(64);
+}
+
+/// `alcore statusline-seal --data-dir DIR` — compact the status-line store WITHOUT a server.
+/// Owner order 2026-11-18 (TRDD-VS1FCUMU): the status line is digested at all times, by "just
+/// calling some fast binary to add the data to the duckdb. no need for the full server to be
+/// online". The status-line hook appends each sample no server took to
+/// `statusline/<stream>/<day>/wal-cli.ndjson`; this command turns full and past-day write-ahead
+/// files into parquet parts. It binds no port and takes no pidfile, and it is safe beside a live
+/// server: maybe_seal holds the store's cross-process seal lock and never touches the live
+/// server's own write-ahead file. It does NOT purge: retention stays with the server, so a
+/// standalone run can never delete a day.
+fn statusline_seal(args: &[String]) -> ! {
+    let mut data_dir = String::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--data-dir" => {
+                i += 1;
+                data_dir = args.get(i).cloned().unwrap_or_default();
+            }
+            other => statusline_seal_usage(&format!("statusline-seal: unknown argument {other}")),
+        }
+        i += 1;
+    }
+    if data_dir.is_empty() {
+        statusline_seal_usage("statusline-seal: --data-dir is required");
+    }
+    // Started detached from a render-path hook: never compete with the foreground.
+    unsafe {
+        libc::nice(15);
+    }
+    let root = std::path::Path::new(&data_dir).join("statusline");
+    if !root.is_dir() {
+        println!("statusline-seal: no store at {}", root.display());
+        exit(0);
+    }
+    let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let counters = agentlens_core::statusline_store::SealCounters::default();
+    let sealed = agentlens_core::statusline_store::maybe_seal(&root, &counters, &vars, agentlens_core::now_ms() as f64);
+    println!(
+        "statusline-seal: sealed {sealed} WAL(s), refused {}",
+        counters.corrupt_wals.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    exit(0);
+}
 fn main() {
     install_exit_on_panic();
     // TRDD-2HRA270Y: permanent boot diagnostic — the probe slot logs mimalloc commit at each open_store phase;
@@ -106,8 +156,13 @@ fn main() {
     agentlens_core::rss_guard::install_open_phase_probe();
     agentlens_core::rss_guard::log_boot_phase("boot_start", None);
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // TRDD-VS1FCUMU: `statusline-seal` compacts the status-line store with no server (it binds no
+    // port and takes no pidfile), so it is dispatched before the `serve` argument parsing.
+    if args.first().map(String::as_str) == Some("statusline-seal") {
+        statusline_seal(&args[1..]);
+    }
     if args.first().map(String::as_str) != Some("serve") {
-        usage("command required (serve)");
+        usage("command required (serve or statusline-seal)");
     }
     let mut data_dir = String::new();
     // REQUIRED, never guessed from the exe location: the binary reaches this process through three
