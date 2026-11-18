@@ -4,7 +4,7 @@ title: Status-line reader and the TypeScript sealer still infer the JSON schema 
 column: todo
 status: tasked
 created: 2026-11-18T03:59:51+0100
-updated: 2026-11-18T03:59:51+0100
+updated: 2026-11-18T11:07:05+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -38,3 +38,7 @@ Split out of the sealer fix of TRDD-VS1FCUMU on 2026-11-18 (harness review: the 
 ## Approval log
 
 - 2026-11-18T03:59:51+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## TypeScript half done 2026-11-18
+
+Commit 3bc89368: sample_size=-1 at the three TypeScript read sites of src/statuslineStore.ts (relationFor, and the DESCRIBE and COPY of the seal path). Worker measurement on a 200,001-line, 96,977,867-byte file: default sample gave no late_key column, sample_size=-1 gave it; CPU about 304 and 253 ms before, about 821 and 793 ms after (wall time not usable, host under load). Test src/test/statuslineLateKey.test.ts: 2 failing before (Binder Error on late_key), 2 passing after, both by worker runs. The claim that a late fraction was rounded was never shown and was removed from the comment. STILL OPEN: the Rust reader rust-core/crates/agentlens-core/src/statusline_store.rs (about line 299) uses the default sample; it needs the same setting and a Rust test, built under the load gate.
