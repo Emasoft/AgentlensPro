@@ -1,10 +1,10 @@
 ---
 trdd-id: ETFX9JFM
 title: cache-expired and cache-state cannot answer with no server once the newest sample is only in a sealed part
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T03:24:59+0100
-updated: 2026-11-18T09:19:14+0100
+updated: 2026-11-18T10:21:54+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,13 +37,24 @@ Second cost of the same reader, from code and the live inventory, not timed: eve
 ## Checklist
 
 - [x] Decide the option on a measured cost (cold start of DuckDB in the CLI against the size of a side file)
-- [ ] Test: sample only in a part, no server, both verbs answer
-- [ ] Bound the read of large write-ahead files (stream from the end, or stop at the first row older than the newest match)
+- [x] Test: sample only in a part, no server, both verbs answer
+- [x] Bound the read of large write-ahead files (stream from the end, or stop at the first row older than the newest match)
 
 ## Approval log
 
 - 2026-11-18T03:24:59+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T10:08:51+0100 — column → dev by main-agent@agentlenspro. implementation in the tree, under review by the main agent
+- 2026-11-18T10:21:54+0100 — COMPLETE by main-agent@agentlenspro. code and tests committed 742bcd0c; three boxes met; deployment belongs to TRDD-HSPUF5XH.
 
 ## Design decided 2026-11-18
 
 2026-11-18 main agent (deciding under the owner order to decide the open matters; overrulable). MEASURED on the live store (55 day folders, 1993 parts, 76 MB, one write-ahead file of 16.5 MB and 7075 rows), no server, 1-minute load 51.8 at the time: agentlenspro statusline-history cache --project <this repo>, which opens DuckDB and reads parts and write-ahead files, took 1.26 s wall, 0.39 s user, 0.08 s sys, 113 MB peak resident memory; agentlenspro cache-state, which reads write-ahead files only, took 1.50 s wall, 0.28 s user, 0.07 s sys, 75 MB. So the DuckDB path costs about 0.1 s more CPU than the verb itself (wall times are inflated by the load). Outputs: reports_dev/main-agent/20261118-etfx-slh-cache.err and 20261118-etfx-cache-state.err. DECISION: option 1. No side file. The write-ahead scan stays first and unchanged in result; ONLY when it finds no row for the filter, one query over the store (queryStatusline, last two days, one newest row per session that carries the prompt_cache block, returned as JSON text) answers. The filter and the verdict shape are shared with the write-ahead scan in one function. prompt_cache_expires_at, prompt_cache_warm and prompt_cache_ttl are in GUARANTEED_COLUMNS of src/statuslineStore.ts (read by the main agent), so a window of old parts binds. cache-state becomes async. BOUND (box 3): a write-ahead file larger than 32 MiB is read from its last 32 MiB only (newest rows are at the end; the first partial line is dropped); a session with no row in that tail is then answered by the store query, which streams the whole file. NOT in scope, filed as its own card: a row sealed by one writer that is NEWER than the newest write-ahead row of the other writer is still missed, because the store is asked only when the write-ahead scan finds nothing.
+
+## Design changed 2026-11-18 (supersedes the two-day, JSON-text-per-row decision above)
+
+Measured on the live store (read-only, under the 4 GB cap wrapper; raw output in reports_dev/main-agent/20261118-etfx-parts-bound*.txt). (1) The all-column form to_json(s) fails on a window with no bound: Conversion Error, Malformed JSON, input "/tmp"; the failing column was not identified. (2) So the part fallback NAMES its columns: ts, session_id, workspace_project_dir, cwd, and to_json(COLUMNS(prompt_cache_ prefix)) as text; newest row per session by QUALIFY row_number. (3) Window is SEVEN days, not two: named-column query, two runs each, 2 days about 0.3 s CPU and 62-66 MB, 7 days about 0.45 s CPU and 77 MB (host load 21-37 at the time); with no bound DuckDB ran out of memory at 1.8 GiB, so a bound is required. (4) Null values ride through on BOTH paths (WAL and part): an existing test asserts a null prompt_cache key is present in the JSON output, so no null-dropping. A part row therefore carries null for a prompt_cache column that only other samples sent; a test pins that. (5) cache-state --json keeps spreading the prompt cache keys at top level; no promptCache key. (6) src/cli/main.ts is not changed. Order of sources: write-ahead files first, parts only when they give no row.
+Check of the measurement basis, same day: the measured query (scripts_dev/etfx9jfm/measure-parts2.cjs, variant narrow, read whole by the main agent) is the shipped SQL text of authoritativeFromParts without the optional session filter, so the figures above describe the shipped query. The shipped function itself was then run read-only on the live store with no server (scripts_dev/etfx9jfm/live-parts-check.cjs on the compiled out/test/cli/cacheExpiredCli.js, under the cap wrapper; output reports_dev/main-agent/20261118-etfx-live-shipped-check.txt): 7 days with the project filter 161 ms wall, 207 ms CPU, 85 MB; with no filter 111 ms wall. Its verdict matched the write-ahead reader on session, ttl and warm; numbers came back as numbers, the causes list as an array, and the part row carried 23 prompt_cache keys against 15 on the write-ahead row (the extra ones null), as designed. Added by the worker beyond the plan: a sixth test (a write-ahead file over 32 MiB is answered from its last 32 MiB), shown to fail when the tail read is replaced by a whole-file read.
+
+## Results 2026-11-18
+
+2026-11-18 main agent: COMMITTED 742bcd0c (src/cli/cacheExpiredCli.ts, src/cli/cacheStateCli.ts, src/test/cacheStateCli.test.ts, src/test/cacheVerbsSealedPart.test.ts, CHANGELOG.md). Box 2: src/test/cacheVerbsSealedPart.test.ts, 6 passing; with the store fallback removed the sealed-part tests fail. Box 3: readWalTail reads the last 32 MiB (WAL_TAIL_BYTES); the sixth test fails when the tail read is replaced by a whole-file read. Also ran: cacheStateCli.test.ts 7 passing, cacheExpiredAuthoritative 7 passing. Not run: the full suite (waits for the push). NOT deployed: the linked bundle standalone/cli.js predates this commit, so the bare agentlenspro command does not have the fix until the publish pass (TRDD-HSPUF5XH) rebuilds it. Still missed, filed as TRDD-NY373D41: a sealed row newer than the newest write-ahead row of the other writer.
