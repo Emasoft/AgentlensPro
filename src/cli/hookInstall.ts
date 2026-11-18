@@ -16,7 +16,8 @@ import * as path from 'path'
 import { safeConfigEdit, SafeEditOp } from '../safeConfigEdit'
 import { ensureTelemetryConfig, removeTelemetryConfig } from '../telemetryConfig'
 import { claudeSettingsPath } from './cliCore'
-import { SurfaceVerdict, readSurfaceStamp, surfaceVerdict } from './surfaceStamp'
+import { SurfaceVerdict, compareStampVersions, isStampVersion, readSurfaceStamp, surfaceVerdict } from './surfaceStamp'
+import { packageVersion } from '../packageVersion'
 
 // Lifecycle events worth hooking — they carry signals the JSONL transcripts and OTEL bodies
 // LACK (exact rate-limit turn deaths, compaction boundaries + trigger, session lifecycle).
@@ -145,8 +146,33 @@ export function reviewModInstalled(home: string = os.homedir()): boolean {
   }
 }
 export const CURRENT_CMDS: readonly string[] = [HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, DELEGATE_CMD]
+// WHY a version stamp on every hook registration (owner order: a version number in every installed extension, and an out-of-date one is
+// overwritten at the first run after an update; TRDD-YL3EWT6N item 5B): without one, an older CLI cannot recognise a newer CLI's registration
+// and overwrites it whenever the two versions register different shapes. ONE writer (stampedCommand) and ONE parser (parseOurCommand).
+const STAMP_FLAG = ' --stamp '
+
+/** The command string registered for a base command by the CLI of `version`: the base, the stamp flag, the version. */
+export function stampedCommand(base: string, version: string): string {
+  return base + STAMP_FLAG + version
+}
+
+/** A current-generation command split into its base and stamp: a CURRENT_CMDS base exactly (stamp null), or a base followed by the stamp
+ *  flag and a version of the stamp shape (isStampVersion). Anything else (legacy bins, a malformed stamp, an extra word, a foreign command)
+ *  is null. Never throws: settings.json is user-editable. */
+export function parseOurCommand(command: unknown): { base: string; stamp: string | null } | null {
+  if (typeof command !== 'string') return null
+  if (CURRENT_CMDS.includes(command)) return { base: command, stamp: null }
+  for (const base of CURRENT_CMDS) {
+    const prefix = base + STAMP_FLAG
+    if (!command.startsWith(prefix)) continue
+    const version = command.slice(prefix.length)
+    return isStampVersion(version) ? { base, stamp: version } : null
+  }
+  return null
+}
+
 export function isStaleGeneration(command: string): boolean {
-  return isOurHookCommand(command) && !CURRENT_CMDS.includes(command)
+  return isOurHookCommand(command) && parseOurCommand(command) === null
 }
 // v1 PATH-bin names — recognised as ours for migration/uninstall, never registered anymore.
 export const LEGACY_HOOK_BIN = 'agentlenspro-hook'
@@ -255,9 +281,9 @@ export function delegateGateMatcher(delegateCmd: string): HookMatcher {
 }
 
 export function rebuildEventMatchers(
-  matchers: HookMatcher[], ev: string, uninstall: boolean, cmd: string, gateCmd: string,
-  reviewCmd: string = REVIEW_CMD
+  matchers: HookMatcher[], ev: string, uninstall: boolean, version: string
 ): RebuildResult {
+  // Every command is built from its base and the running version (stampedCommand): the supervisor included, so no entry of ours is unstamped.
   const out: RebuildResult = { rebuilt: [], removedOurs: 0, removedSpyglass: 0, installed: false, removedCommands: [] }
   for (const m of matchers) {
     const kept = (Array.isArray(m.hooks) ? m.hooks : []).filter(h => {
@@ -268,24 +294,48 @@ export function rebuildEventMatchers(
     if (kept.length > 0) out.rebuilt.push({ ...m, hooks: kept }) // a matcher left empty is dropped
   }
   if (!uninstall && HOOK_EVENTS.includes(ev)) {
-    out.rebuilt.push(lifecycleMatcher(cmd))
+    out.rebuilt.push(lifecycleMatcher(stampedCommand(HOOK_CMD, version)))
     out.installed = true
   }
   if (!uninstall && GATE_EVENTS.includes(ev)) {
-    out.rebuilt.push(gateMatcher(gateCmd))
+    out.rebuilt.push(gateMatcher(stampedCommand(GATE_CMD, version)))
     out.installed = true
   }
   if (!uninstall && REVIEW_EVENTS.includes(ev) && !reviewModInstalled()) {
-    out.rebuilt.push(reviewGateMatcher(reviewCmd))
+    out.rebuilt.push(reviewGateMatcher(stampedCommand(REVIEW_CMD, version)))
     out.installed = true
   }
   if (!uninstall && SUPERVISOR_EVENTS.includes(ev) && !reviewModInstalled()) {
-    out.rebuilt.push(reviewSupervisorMatcher(SUPERVISOR_CMD))
+    out.rebuilt.push(reviewSupervisorMatcher(stampedCommand(SUPERVISOR_CMD, version)))
     out.installed = true
   }
   // delegate-gate registration removed until TRDD-SA99VCPZ closes (six accepted review
   // fixes unapplied; an interim delegation-gate hook enforces this rule today).
   return out
+}
+
+/** The one verdict on a settings file's hook registrations (item 5B). keep-newer: some entry of ours is stamped newer than the running CLI,
+ *  so this CLI writes nothing at all, not even over a stale duplicate beside it: an older CLI never edits a newer CLI's registrations (it
+ *  would flip-flop with that CLI on every launch). Otherwise converged when the rebuild with the running version equals the file, else rewrite. */
+export type HooksVerdict = { kind: 'converged' } | { kind: 'rewrite' } | { kind: 'keep-newer'; newest: string }
+
+export function hooksVerdict(settings: Record<string, unknown>, running: string): HooksVerdict {
+  const hooks = (settings.hooks && typeof settings.hooks === 'object' ? settings.hooks : {}) as Record<string, HookMatcher[]>
+  let newest: string | null = null
+  for (const matchers of Object.values(hooks)) {
+    for (const m of Array.isArray(matchers) ? matchers : []) {
+      for (const h of Array.isArray(m?.hooks) ? m.hooks : []) {
+        const stamp = parseOurCommand(h?.command)?.stamp
+        if (stamp && compareStampVersions(stamp, running) > 0 && (newest === null || compareStampVersions(stamp, newest) > 0)) newest = stamp
+      }
+    }
+  }
+  if (newest !== null) return { kind: 'keep-newer', newest }
+  for (const ev of new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])) {
+    const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
+    if (JSON.stringify(rebuildEventMatchers(matchers, ev, false, running).rebuilt) !== JSON.stringify(matchers)) return { kind: 'rewrite' }
+  }
+  return { kind: 'converged' }
 }
 
 // ── The strip, expressed as a FILTER instead of a result (TRDD-T0CT9U4X) ────────────────────────
@@ -313,16 +363,17 @@ function removalNeedle(command: string): string | null {
  *  a file: the ops are computed from a pre-lock read and applied to whatever the file holds at
  *  commit time, so the test applies them to a tree carrying an entry they never saw. */
 export function buildEventOps(
-  ev: string, matchers: HookMatcher[], uninstall: boolean, cmd = HOOK_CMD, gateCmd = GATE_CMD,
-  reviewCmd = REVIEW_CMD
+  ev: string, matchers: HookMatcher[], uninstall: boolean, version: string
 ): SafeEditOp[] {
-  const r = rebuildEventMatchers(matchers, ev, uninstall, cmd, gateCmd, reviewCmd)
+  const r = rebuildEventMatchers(matchers, ev, uninstall, version)
   if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) return []
 
   const ops: SafeEditOp[] = []
   if (r.removedCommands.length > 0) {
     const needles = new Set<string>()
     for (const c of r.removedCommands) {
+      // The needles stay the BASE strings (GENERATION_NEEDLES): a stamped command contains its base, so one needle strips the entry of
+      // every version (safe_config_edit.py remove_by_substring matches the needle inside the element's JSON).
       const needle = removalNeedle(c)
       if (needle === null) {
         // Inexpressible as a filter. Emitting one anyway would strip NOTHING while reporting a
@@ -341,6 +392,11 @@ export function buildEventOps(
   }
   // Re-add ours AFTER the removals (ops apply in order, so the append is evaluated against the
   // filtered array — which is also what makes append_unique's idempotency check correct here).
+  // append_unique keys on the STAMPED string: the same base at another version is not "already there".
+  const cmd = stampedCommand(HOOK_CMD, version)
+  const gateCmd = stampedCommand(GATE_CMD, version)
+  const reviewCmd = stampedCommand(REVIEW_CMD, version)
+  const supervisorCmd = stampedCommand(SUPERVISOR_CMD, version)
   if (!uninstall && HOOK_EVENTS.includes(ev)) {
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: lifecycleMatcher(cmd), unique_by_substring: cmd })
   }
@@ -351,7 +407,7 @@ export function buildEventOps(
     ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewGateMatcher(reviewCmd), unique_by_substring: reviewCmd })
   }
   if (!uninstall && SUPERVISOR_EVENTS.includes(ev) && !reviewModInstalled()) {
-    ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewSupervisorMatcher(SUPERVISOR_CMD), unique_by_substring: SUPERVISOR_CMD })
+    ops.push({ op: 'append_unique', path: ['hooks', ev], value: reviewSupervisorMatcher(supervisorCmd), unique_by_substring: supervisorCmd })
   }
   // delegate-gate registration removed until TRDD-SA99VCPZ closes (six accepted review
   // fixes unapplied; an interim delegation-gate hook enforces this rule today).
@@ -384,6 +440,11 @@ export interface InstallHooksOptions {
   pathEnv?: string
   /** Collects human-readable progress lines instead of printing (setup reuses this). */
   log?: (line: string) => void
+  /** setup and the launch repair pass true: a newer stamp is kept and nothing is written. The explicit `--install-hooks` verb leaves it unset
+   *  and rewrites to the running version even over a newer stamp, logging one line that names the stamp it replaced. */
+  keepNewer?: boolean
+  /** Where the kept-hooks notice is remembered (announceKeptSurfaces); required with keepNewer. */
+  dataDir?: string
 }
 
 export interface InstallHooksResult {
@@ -392,6 +453,8 @@ export interface InstallHooksResult {
   removedOurs: number
   removedSpyglass: number
   backupPath: string | null
+  /** The newest stamp found when keepNewer left a newer registration in place (nothing written), else null. */
+  keptNewer: string | null
 }
 
 /** Install (or remove) the AgentlensPro hook registrations via the verified transaction
@@ -418,6 +481,20 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   const hooks = (settings && typeof settings === 'object' && settings.hooks && typeof settings.hooks === 'object'
     ? settings.hooks : {}) as Record<string, HookMatcher[]>
 
+  // The registrations are stamped with the running version; a newer stamp in the file is the verdict first (hooksVerdict): an older CLI never
+  // edits a newer CLI's registrations, so setup and the launch repair (keepNewer) write nothing. Only the explicit install verb overrides it.
+  const running = packageVersion()
+  const verdict = uninstall ? null : hooksVerdict(settings, running)
+  if (verdict?.kind === 'keep-newer') {
+    if (opts.keepNewer) {
+      const kept = keptHooksSurface(settingsFile, verdict.newest, running)
+      if (!opts.dataDir) throw new Error('installHooks: keepNewer needs dataDir, the notice store of the kept-hooks announcement')
+      announceKeptSurfaces(opts.dataDir, [kept], log)
+      return { changed: false, addedEvents: 0, removedOurs: 0, removedSpyglass: 0, backupPath: null, keptNewer: verdict.newest }
+    }
+    log(`replacing hook registrations stamped ${verdict.newest} with this CLI's ${running} (explicit install)`)
+  }
+
   const ops: SafeEditOp[] = []
   let removedSpyglass = 0
   let removedOurs = 0
@@ -425,7 +502,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   const events = new Set([...Object.keys(hooks), ...(uninstall ? [] : INSTALLED_EVENTS)])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const r = rebuildEventMatchers(matchers, ev, uninstall, HOOK_CMD, GATE_CMD, REVIEW_CMD)
+    const r = rebuildEventMatchers(matchers, ev, uninstall, running)
     // Counters reflect only events that actually change — an already-current event (ours
     // present, nothing stripped) must not inflate "installed on N events" to a lie.
     if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) continue
@@ -438,7 +515,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
     // another tool appends between that read and the commit would be silently deleted from the
     // user's own settings.json (S3-F5 TOCTOU, TRDD-T0CT9U4X). The one exception is an entry no
     // literal needle can express; buildEventOps says so explicitly rather than stripping nothing.
-    ops.push(...buildEventOps(ev, matchers, uninstall, HOOK_CMD, GATE_CMD, REVIEW_CMD))
+    ops.push(...buildEventOps(ev, matchers, uninstall, running))
   }
   // env.SPYGLASS_DIR only feeds the spyglass hook commands — dead once those are removed.
   const env = settings.env as Record<string, unknown> | undefined
@@ -448,7 +525,7 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
 
   if (ops.length === 0) {
     log(uninstall ? 'no agentlens hooks present — nothing to remove' : 'hooks already installed — nothing to change')
-    return { changed: false, addedEvents: 0, removedOurs: 0, removedSpyglass: 0, backupPath: null }
+    return { changed: false, addedEvents: 0, removedOurs: 0, removedSpyglass: 0, backupPath: null, keptNewer: null }
   }
   const result = await safeConfigEdit(settingsFile, 'json', ops, { createIfMissing: !uninstall })
   if (uninstall) {
@@ -456,13 +533,13 @@ export async function installHooks(uninstall: boolean, opts: InstallHooksOptions
   } else {
     // The supervisor was missing from this line, so the installer's own success message under-reported
     // what it had registered — the kind of gap that makes a later "why is this hook here?" unanswerable.
-    log(`installed agentlens hooks on ${added} event(s) in ${settingsFile} (lifecycle forwarder '${HOOK_CMD}' + burn-gate '${GATE_CMD}' on ${GATE_MATCHER} + review gate '${REVIEW_CMD}' on ${REVIEW_EVENTS.join('/')} + review supervisor '${SUPERVISOR_CMD}' on ${SUPERVISOR_EVENTS.join('/')}, warn-only)`)
+    log(`installed agentlens hooks on ${added} event(s) in ${settingsFile} (lifecycle forwarder '${HOOK_CMD}' + burn-gate '${GATE_CMD}' on ${GATE_MATCHER} + review gate '${REVIEW_CMD}' on ${REVIEW_EVENTS.join('/')} + review supervisor '${SUPERVISOR_CMD}' on ${SUPERVISOR_EVENTS.join('/')}, warn-only; each stamped ${running})`)
     if (removedSpyglass > 0) log(`removed ${removedSpyglass} dead claude-spyglass hook entr${removedSpyglass === 1 ? 'y' : 'ies'} (+ env.SPYGLASS_DIR)`)
     if (removedOurs > 0) log(`migrated ${removedOurs} previous-generation agentlens entr${removedOurs === 1 ? 'y' : 'ies'}`)
   }
   log(`changed=${result.changed}${result.backupPath ? ` backup=${result.backupPath}` : ''} attempts=${result.attempts}`)
   log('hook registrations load at Claude Code session start (restart sessions once); hook behavior is hot via hook-config.json (agentlenspro --hooks gate=warn|enforce|off) and AGENTLENS_GATE, no restart')
-  return { changed: result.changed, addedEvents: added, removedOurs, removedSpyglass, backupPath: result.backupPath }
+  return { changed: result.changed, addedEvents: added, removedOurs, removedSpyglass, backupPath: result.backupPath, keptNewer: null }
 }
 
 /** The status-line capture registration. Unlike `hooks`, `statusLine` is a SINGLE object with one
@@ -1033,13 +1110,19 @@ export function installSkills(opts: InstallSkillOptions = {}): Array<{ name: str
 /** One installed skill or agent that the shipped copy did NOT overwrite (TRDD-YL3EWT6N item 4). Its notice store lives in this file and not in
  *  autoSetup.ts because the source guard of autoSetup.test.ts forbids a file write (or JSON.stringify) in autoSetup.ts. */
 export interface KeptSurface {
-  kind: 'agent' | 'skill'
+  kind: 'agent' | 'skill' | 'hooks'
   name: string
   verdict: 'keep-newer' | 'keep-edited'
   installedStamp: string | null
   shippedStamp: string | null
-  /** The installed file (agent) or directory (skill) the notice names. */
+  /** The installed file (agent), directory (skill) or settings.json (hooks) the notice names. */
   path: string
+}
+
+/** The kept entry for hook registrations stamped newer than the running CLI (item 5B): same notice store, same once-per-pair rule as the
+ *  skills and agents of item 4. */
+export function keptHooksSurface(settingsFile: string, installed: string, running: string): KeptSurface {
+  return { kind: 'hooks', name: 'registrations', verdict: 'keep-newer', installedStamp: installed, shippedStamp: running, path: settingsFile }
 }
 
 const KEPT_FILE = 'surface-kept.json'
@@ -1058,7 +1141,9 @@ export function announceKeptSurfaces(dataDir: string, kept: readonly KeptSurface
   const fresh = kept.filter(k => !seen.includes(keptKey(k)))
   if (fresh.length === 0) return
   for (const k of fresh) {
-    say(k.verdict === 'keep-newer'
+    say(k.kind === 'hooks'
+      ? `agentlenspro: hook registrations in ${k.path} are stamped ${k.installedStamp}, newer than this CLI (${k.shippedStamp}), left in place`
+      : k.verdict === 'keep-newer'
       ? `agentlenspro: ${k.kind} ${k.name}: the installed copy is version ${k.installedStamp}, newer than the shipped ${k.shippedStamp}, left in place`
       : `agentlenspro: ${k.kind} ${k.name}: the installed copy differs from the shipped file of the same version (${k.installedStamp}), left in place; to restore it delete ${k.path} and run agentlenspro setup`)
   }

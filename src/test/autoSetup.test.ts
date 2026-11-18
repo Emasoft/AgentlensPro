@@ -13,7 +13,7 @@ import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runDisableCli, runEnableCli } from '../cli/disableCli'
 import { FOREIGN_REASON, HOOK_PATH_VERBS, disableForForeignTelemetry, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from '../cli/foreignTelemetry'
-import { AGENT_NAMES, REVIEW_CMD, REVIEW_EVENTS, SKILL_NAMES, SUPERVISOR_CMD, SUPERVISOR_EVENTS, installAgents, installHooks, installSkills, skillFiles } from '../cli/hookInstall'
+import { AGENT_NAMES, REVIEW_CMD, REVIEW_EVENTS, SKILL_NAMES, SUPERVISOR_CMD, SUPERVISOR_EVENTS, installAgents, installHooks, installSkills, parseOurCommand, skillFiles } from '../cli/hookInstall'
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, noRevivePath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
 import { DISPATCHED_VERBS, HOT_PATH_BUDGET_MS, cliMain } from '../cli/main'
@@ -2084,7 +2084,7 @@ suite('ensureServer under DISABLED spawns once, with --no-collection (TRDD-RBBEX
 suite('setup hooks step — the verifier expects exactly what the installer registered under the review mod (TRDD-YL3EWT6N item 11)', () => {
   type HookMap = Record<string, Array<{ hooks: Array<{ command: string }> }>>
   const countOf = (hooks: HookMap, ev: string, cmd: string): number =>
-    (hooks[ev] ?? []).flatMap(m => m.hooks.map(h => h.command)).filter(c => c === cmd).length
+    (hooks[ev] ?? []).flatMap(m => m.hooks.map(h => h.command)).filter(c => parseOurCommand(c)?.base === cmd).length
 
   /** Run the REAL hooks step in a scratch HOME. reviewModInstalled() reads os.homedir(), which follows $HOME, so $HOME is pointed at the fixture. */
   async function convergeHooks(withReviewMod: boolean, preSeedReviewEntries = false): Promise<{ verify: string; detail: string; hooks: HookMap }> {

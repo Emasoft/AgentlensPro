@@ -41,9 +41,11 @@ import { safeConfigEdit, type SafeEditOp } from '../safeConfigEdit'
 import { DEFAULT_MAX_BYTES_PER_PASS } from '../store/ingestPass'
 import { envPort, sleep } from './cliCore'
 import { dataDirFrom } from '../dataDir'
+import { packageVersion } from '../packageVersion'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
   INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration, reviewModInstalled,
+  hooksVerdict, parseOurCommand, stampedCommand,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
   HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES, agentSurfaceState, skillSurfaceState,
 } from './hookInstall'
@@ -374,13 +376,11 @@ function settingsHooks(s: Settings): Record<string, HookMatcher[]> {
 
 /** Would installHooks change anything? Mirrors the installer's change detection without writing. */
 export function hooksConverged(s: Settings): boolean {
-  const hooks = settingsHooks(s)
-  const events = new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])
-  for (const ev of events) {
-    const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
-    if (JSON.stringify(r.rebuilt) !== JSON.stringify(matchers)) return false
-  }
+  // The one verdict of hookInstall.ts: a registration stamped newer than this CLI is kept as it is (an older CLI never edits a newer CLI's
+  // entries), so it reads as converged and the launch drift check reports nothing for it.
+  const verdict = hooksVerdict(s, packageVersion())
+  if (verdict.kind === 'keep-newer') return true
+  if (verdict.kind === 'rewrite') return false
   const env = s.env as Record<string, unknown> | undefined
   if (env && env.SPYGLASS_DIR !== undefined) return false
   return true
@@ -396,17 +396,30 @@ function entryCountMessage(ev: string, cmd: string, want: number, found: number)
 /** Independent post-install assertion: exactly one v2 entry per event, zero stale entries. */
 /** Independent post-install assertion: exactly one v2 entry per event, zero stale entries, every
  *  agentlenspro entry at HOOK_TIMEOUT_SEC (a command match alone would pass a leftover 30s registration). */
-function verifyHooksState(s: Settings): string | null {
+export function verifyHooksState(s: Settings, running: string): string | null {
+  // A newer stamp is kept, not verified against the running version (hooksVerdict).
+  if (hooksVerdict(s, running).kind === 'keep-newer') return null
   const hooks = settingsHooks(s)
+  /** The parsed entries of one base command on one event, optionally only on the matchers `onMatcher` accepts. */
+  const entriesOf = (ev: string, base: string, onMatcher: (m: HookMatcher) => boolean = () => true): Array<{ base: string; stamp: string | null }> =>
+    (hooks[ev] ?? []).filter(onMatcher).flatMap(m => m.hooks ?? [])
+      .map(h => parseOurCommand(h.command)).filter((p): p is { base: string; stamp: string | null } => p !== null && p.base === base)
+  /** Every entry of the base must carry the running stamp; names the stamp found otherwise. */
+  const stampProblem = (ev: string, base: string, entries: Array<{ stamp: string | null }>): string | null => {
+    const bad = entries.find(e => e.stamp !== running)
+    return bad ? `${ev}: '${base}' is stamped ${bad.stamp ?? 'nothing'}, expected ${running}` : null
+  }
   for (const ev of HOOK_EVENTS) {
-    const cmds = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command))
-    const ours = cmds.filter(c => c === HOOK_CMD)
+    const ours = entriesOf(ev, HOOK_CMD)
     if (ours.length !== 1) return `${ev}: expected exactly one '${HOOK_CMD}' entry, found ${ours.length}`
+    const bad = stampProblem(ev, HOOK_CMD, ours)
+    if (bad) return bad
   }
   for (const ev of GATE_EVENTS) {
-    const gates = (hooks[ev] ?? []).filter(m => m.matcher === GATE_MATCHER)
-      .flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === GATE_CMD)
+    const gates = entriesOf(ev, GATE_CMD, m => m.matcher === GATE_MATCHER)
     if (gates.length !== 1) return `${ev}: expected exactly one '${GATE_CMD}' gate entry, found ${gates.length}`
+    const bad = stampProblem(ev, GATE_CMD, gates)
+    if (bad) return bad
   }
   // WHY: rebuildEventMatchers (hookInstall.ts) registers the review gate and the review supervisor ONLY when the
   // review mod is NOT installed (the mod runs the review itself; both hooks would give the model contradictory
@@ -414,15 +427,19 @@ function verifyHooksState(s: Settings): string | null {
   // 'agentlenspro review-gate' entry, found 0" on every run.
   const wantReviewEntries = reviewModInstalled() ? 0 : 1
   for (const ev of REVIEW_EVENTS) {
-    const reviews = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === REVIEW_CMD)
+    const reviews = entriesOf(ev, REVIEW_CMD)
     if (reviews.length !== wantReviewEntries) return entryCountMessage(ev, REVIEW_CMD, wantReviewEntries, reviews.length)
+    const bad = stampProblem(ev, REVIEW_CMD, reviews)
+    if (bad) return bad
   }
   // The supervisor was registered by the installer but never VERIFIED here, so a converge that
   // silently dropped it still reported "registrations current". The supervisor exists to notice a
   // gate that has stopped firing; an unverified supervisor is a watchdog nobody watches.
   for (const ev of SUPERVISOR_EVENTS) {
-    const sups = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === SUPERVISOR_CMD)
+    const sups = entriesOf(ev, SUPERVISOR_CMD)
     if (sups.length !== wantReviewEntries) return entryCountMessage(ev, SUPERVISOR_CMD, wantReviewEntries, sups.length)
+    const bad = stampProblem(ev, SUPERVISOR_CMD, sups)
+    if (bad) return bad
   }
   for (const [ev, matchers] of Object.entries(hooks)) {
     for (const m of matchers ?? []) {
@@ -439,6 +456,20 @@ function verifyHooksState(s: Settings): string | null {
   return null
 }
 
+/** The command string of `base` as registered in settings.json, so a verify runs what the hook runner will run (under keep-newer that is the
+ *  newer CLI's stamp, not the running version's). When settings.json holds no entry of that base (the review gate and supervisor are not
+ *  registered while the review mod is installed, a missing or unparseable file) the command is stamped with the running version: the verify
+ *  still proves the binary answers that command. */
+function registeredCommand(state: Settings | 'absent' | 'unparseable', base: string, running: string): string {
+  if (state !== 'absent' && state !== 'unparseable') {
+    for (const matchers of Object.values(settingsHooks(state))) {
+      for (const m of Array.isArray(matchers) ? matchers : []) {
+        for (const h of m.hooks ?? []) if (parseOurCommand(h.command)?.base === base) return h.command
+      }
+    }
+  }
+  return stampedCommand(base, running)
+}
 /** Execute a registered hook command string with a synthetic stdin payload — the strongest
  *  possible verify: the EXACT string the hook runner will exec, resolved through the same
  *  PATH. Returns null on contract compliance (exit 0), else the violation. */
@@ -1026,13 +1057,17 @@ const stepHooks: StepDef = {
       }
     }
     const settings = state === 'absent' ? {} : state
+    const running = packageVersion()
+    const verdict = state === 'absent' ? null : hooksVerdict(settings, running)
+    const keptNewer = verdict?.kind === 'keep-newer' ? verdict.newest : null
     const converged = state !== 'absent' && hooksConverged(settings)
     const staleCount = Object.values(settingsHooks(settings)).flat()
       .flatMap(m => m.hooks ?? [])
       .filter(h => isStaleGeneration(h.command)).length
     const found = state === 'absent'
       ? 'no settings.json'
-      : converged ? 'registrations current' : staleCount === 0 ? 'needs converge (registration drift: timeout or shape)' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
+      : keptNewer !== null ? `registrations stamped ${keptNewer}, newer than this CLI (${running}), kept`
+      : converged ? 'registrations current' : staleCount === 0 ? 'needs converge (registration drift: stamp, timeout or shape)' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
 
     if (ctx.dryRun) {
       return {
@@ -1045,9 +1080,12 @@ const stepHooks: StepDef = {
       }
     }
 
+    // A kept newer stamp is reported in this step's found text. It is NOT announced here: ctx.log is a no-op under setup --json, so announcing
+    // through the once-per-pair store from this step would mark the notice as shown without ever printing it. The launch path announces it (autoSetup.ts).
     let acted = false
     if (!converged) {
-      await installHooks(false, { settingsPath: ctx.settingsPath, pathEnv: ctx.pathEnv, log: ctx.log })
+      // keepNewer: setup never edits a newer CLI's registrations (hooksConverged is already true then, so this is defence in depth).
+      await installHooks(false, { settingsPath: ctx.settingsPath, pathEnv: ctx.pathEnv, log: ctx.log, keepNewer: true, dataDir: ctx.dataDir })
       acted = true
     }
     // VERIFY 1 — independent re-parse (fresh fs read, our own JSON.parse; not the editor).
@@ -1055,25 +1093,25 @@ const stepHooks: StepDef = {
     if (after === 'absent' || after === 'unparseable') {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
     }
-    const bad = verifyHooksState(after)
+    const bad = verifyHooksState(after, running)
     if (bad) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: bad }, acted }
     }
     // VERIFY 2 — execute the REGISTERED commands with synthetic payloads (contract: exit 0;
     // the forwarder prints nothing; both fail-open even while the server is still down).
-    const hookErr = execRegisteredCommand(ctx, HOOK_CMD,
+    const hookErr = execRegisteredCommand(ctx, registeredCommand(after, HOOK_CMD, running),
       JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'setup-verify' }), true)
     if (hookErr) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${HOOK_CMD}' ${hookErr}` }, acted }
     }
-    const gateErr = execRegisteredCommand(ctx, GATE_CMD,
+    const gateErr = execRegisteredCommand(ctx, registeredCommand(after, GATE_CMD, running),
       JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: {} }), false)
     if (gateErr) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${GATE_CMD}' ${gateErr}` }, acted }
     }
     // No transcript_path resolves ⇒ nothing to scan ⇒ allow silently (exit 0, no stdout) — same
     // contract as hook/gate's synthetic-payload check above.
-    const reviewErr = execRegisteredCommand(ctx, REVIEW_CMD,
+    const reviewErr = execRegisteredCommand(ctx, registeredCommand(after, REVIEW_CMD, running),
       JSON.stringify({ hook_event_name: 'Stop', session_id: 'setup-verify', transcript_path: '/nonexistent' }), true)
     if (reviewErr) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${REVIEW_CMD}' ${reviewErr}` }, acted }
@@ -1640,7 +1678,10 @@ const stepSelfTest: StepDef = {
     // 3. Hook + gate handlers against synthetic stdin payloads, via the REGISTERED strings.
     const preStats = await serverStats(ctx)
     const preHookCount = preStats?.hookEvents?.receivedSinceBoot ?? 0
-    const hookErr = execRegisteredCommand(ctx, HOOK_CMD,
+    // The commands as REGISTERED in settings.json (a newer CLI's stamp included), exactly what the hook runner will exec.
+    const running = packageVersion()
+    const registeredState = readSettingsFresh(ctx.settingsPath)
+    const hookErr = execRegisteredCommand(ctx, registeredCommand(registeredState, HOOK_CMD, running),
       JSON.stringify({ hook_event_name: 'SessionStart', session_id: marker }), true)
     if (hookErr) {
       return { result: { step: this.name, found: 'round-trip ok', action: 'hook exec', verify: 'FAIL', detail: `'${HOOK_CMD}' ${hookErr}` }, acted: false }
@@ -1655,7 +1696,7 @@ const stepSelfTest: StepDef = {
     if (!counted) {
       return { result: { step: this.name, found: 'round-trip ok', action: 'hook exec', verify: 'FAIL', detail: 'hook ran but the server never counted the event' }, acted: false }
     }
-    const gateErr = execRegisteredCommand(ctx, GATE_CMD,
+    const gateErr = execRegisteredCommand(ctx, registeredCommand(registeredState, GATE_CMD, running),
       JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: { subagent_type: 'general-purpose' } }), false)
     if (gateErr) {
       return { result: { step: this.name, found: 'round-trip ok', action: 'gate exec', verify: 'FAIL', detail: `'${GATE_CMD}' ${gateErr}` }, acted: false }
@@ -1788,18 +1829,24 @@ export const REPAIR_STEPS = { hooks: stepHooks, skill: stepSkill, 'otel-env': st
 export function hookDriftList(settingsPath: string): Array<{ event: string; problem: string }> {
   const s = readSettingsFresh(settingsPath)
   if (s === 'unparseable') return [{ event: '*', problem: 'settings.json is not parseable' }]
+  const running = packageVersion()
+  // A registration stamped newer than this CLI is kept as it is, so it is no drift (hooksVerdict).
+  if (s !== 'absent' && hooksVerdict(s, running).kind === 'keep-newer') return []
   const hooks = settingsHooks(s === 'absent' ? {} : s)
   const out: Array<{ event: string; problem: string }> = []
   const events = new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
+    const r = rebuildEventMatchers(matchers, ev, false, running)
     if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) continue
     const ours = matchers.flatMap(m => m.hooks ?? []).filter(h => isOurHookCommand(h.command))
     if (ours.length === 0) { out.push({ event: ev, problem: 'missing: no agentlenspro registration' }); continue }
     let any = false
     for (const h of ours) {
       if (h.timeout !== undefined && h.timeout !== HOOK_TIMEOUT_SEC) { out.push({ event: ev, problem: `timeout ${h.timeout} → ${HOOK_TIMEOUT_SEC} (${h.command})` }); any = true }
+      // A current-generation entry whose stamp is not the running version: stamp X -> Y, or unstamped -> Y (never reached for a newer stamp).
+      const parsed = parseOurCommand(h.command)
+      if (parsed !== null && parsed.stamp !== running) { out.push({ event: ev, problem: `${parsed.stamp === null ? 'unstamped' : `stamp ${parsed.stamp}`} -> ${running} (${parsed.base})` }); any = true }
     }
     for (const c of r.removedCommands) if (isStaleGeneration(c)) { out.push({ event: ev, problem: `command form: ${c} → current` }); any = true }
     if (!any) out.push({ event: ev, problem: 'registration shape differs (matcher / duplicates / ordering)' })

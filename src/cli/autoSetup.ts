@@ -38,7 +38,8 @@
 // `agentlenspro disable` is never lifted here (its reason is kept, and so is its collection-off effect).
 
 import * as path from "path"
-import { AGENT_NAMES, KeptSurface, SKILL_NAMES, agentSurfaceState, announceKeptSurfaces, resolveOnPath, skillFiles, skillSurfaceState, skillTreeHash } from "./hookInstall"
+import { AGENT_NAMES, KeptSurface, SKILL_NAMES, agentSurfaceState, announceKeptSurfaces, hooksVerdict, keptHooksSurface, resolveOnPath, skillFiles, skillSurfaceState, skillTreeHash } from "./hookInstall"
+import { packageVersion } from "../packageVersion"
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
 import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from "./foreignTelemetry"
@@ -114,6 +115,7 @@ export function detectDrift(ctx: Ctx): Detection {
   let rows: TelemetryVerdictRow[] = []
   let converge: string[] = []
   let staleEnv: TelemetryVerdictRow[] = []
+  const kept: KeptSurface[] = []
 
   const settings = readSettingsFresh(ctx.settingsPath)
   if (settings === "unparseable") {
@@ -128,13 +130,17 @@ export function detectDrift(ctx: Ctx): Detection {
       staleEnv = otel.staleEnv
       if (!otel.converged) drifts.push({ piece: "telemetry env", step: "otel-env", reason: otel.found })
     }
-    if (settings === "absent" || !hooksConverged(settings)) {
+    // Item 5B: hook registrations stamped newer than this CLI are kept, not drift (the repair would never touch them, so counting them would re-run it on
+    // every launch); they join the kept list that ensureInstalled announces once per (installed, running) pair.
+    const hooksV = settings === "absent" ? null : hooksVerdict(settings, packageVersion())
+    if (hooksV?.kind === "keep-newer") {
+      kept.push(keptHooksSurface(ctx.settingsPath, hooksV.newest, packageVersion()))
+    } else if (settings === "absent" || !hooksConverged(settings)) {
       drifts.push({ piece: "hooks", step: "hooks", reason: settings === "absent" ? "no settings.json" : "registration missing or stale (incl. the 120s timeout)" })
     }
   }
 
   const skillDrift: string[] = []
-  const kept: KeptSurface[] = []
   let skillsPresent = 0
   for (const name of SKILL_NAMES) {
     const shippedDir = path.join(ctx.repoRoot, "skills", name)

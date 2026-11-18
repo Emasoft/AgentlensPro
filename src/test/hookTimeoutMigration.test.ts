@@ -4,12 +4,16 @@ import * as os from 'os'
 import * as path from 'path'
 import { safeConfigEdit } from '../safeConfigEdit'
 import {
-  buildEventOps, isOurHookCommand, rebuildEventMatchers, HOOK_CMD, GATE_CMD, REVIEW_CMD, HOOK_EVENTS, GATE_EVENTS,
+  buildEventOps, isOurHookCommand, rebuildEventMatchers, HOOK_EVENTS, GATE_EVENTS,
   REVIEW_EVENTS, SUPERVISOR_EVENTS, HOOK_TIMEOUT_SEC, type HookMatcher,
 } from '../cli/hookInstall'
+import { packageVersion } from '../packageVersion'
+
+// The registrations are stamped with the running version (TRDD-YL3EWT6N item 5B), so the op lists are built for that version.
+const RUN = packageVersion()
 
 const EVENTS = [...new Set([...HOOK_EVENTS, ...GATE_EVENTS, ...REVIEW_EVENTS, ...SUPERVISOR_EVENTS])]
-const fresh = (ev: string): HookMatcher[] => rebuildEventMatchers([], ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD).rebuilt
+const fresh = (ev: string): HookMatcher[] => rebuildEventMatchers([], ev, false, RUN).rebuilt
 const at = (ms: HookMatcher[], timeout: number): HookMatcher[] =>
   ms.map(m => ({ ...m, hooks: m.hooks.map(h => ({ ...h, timeout })) }))
 
@@ -19,8 +23,8 @@ suite('hook timeout migration — an old registration is rewritten on the next i
     assert.strictEqual(HOOK_TIMEOUT_SEC, 120)
     for (const ev of EVENTS) {
       const stale = at(fresh(ev), 30)
-      assert.ok(buildEventOps(ev, stale, false).length > 0, `${ev}: 30s registration must be treated as drift`)
-      const rebuilt = rebuildEventMatchers(stale, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD).rebuilt
+      assert.ok(buildEventOps(ev, stale, false, RUN).length > 0, `${ev}: 30s registration must be treated as drift`)
+      const rebuilt = rebuildEventMatchers(stale, ev, false, RUN).rebuilt
       assert.ok(rebuilt.length > 0)
       for (const h of rebuilt.flatMap(m => m.hooks)) assert.strictEqual(h.timeout, HOOK_TIMEOUT_SEC, `${ev}: ${h.command}`)
     }
@@ -28,7 +32,7 @@ suite('hook timeout migration — an old registration is rewritten on the next i
 
   // registrations already at HOOK_TIMEOUT_SEC need no change
   test('registrations already at HOOK_TIMEOUT_SEC are idempotent (no ops)', () => {
-    for (const ev of EVENTS) assert.deepStrictEqual(buildEventOps(ev, at(fresh(ev), HOOK_TIMEOUT_SEC), false), [], ev)
+    for (const ev of EVENTS) assert.deepStrictEqual(buildEventOps(ev, at(fresh(ev), HOOK_TIMEOUT_SEC), false, RUN), [], ev)
   })
 })
 suite('hook timeout migration — ops applied through the real safe_config_edit engine', () => {
@@ -44,7 +48,7 @@ suite('hook timeout migration — ops applied through the real safe_config_edit 
       // One engine call for every event (one python spawn, not ~30).
       const before = read()
       const ops = EVENTS.flatMap(ev => {
-        const o = buildEventOps(ev, before[ev] ?? [], false)
+        const o = buildEventOps(ev, before[ev] ?? [], false, RUN)
         assert.ok(o.length > 0, ev)
         return o
       })
@@ -53,7 +57,7 @@ suite('hook timeout migration — ops applied through the real safe_config_edit 
       const entries = Object.values(after).flat().flatMap(m => m.hooks).filter(h => isOurHookCommand(h.command))
       assert.ok(entries.length > 0)
       for (const h of entries) assert.strictEqual(h.timeout, HOOK_TIMEOUT_SEC, h.command)
-      for (const ev of EVENTS) assert.deepStrictEqual(buildEventOps(ev, after[ev] ?? [], false), [], `${ev}: second apply must change nothing`)
+      for (const ev of EVENTS) assert.deepStrictEqual(buildEventOps(ev, after[ev] ?? [], false, RUN), [], `${ev}: second apply must change nothing`)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 })
