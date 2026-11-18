@@ -1,10 +1,10 @@
 ---
 trdd-id: ASXUW08U
 title: A turn review deferred by the round cap is not announced to the model and its proposal is never measured
-column: backburner
+column: dev
 status: tasked
 created: 2026-11-17T20:30:10+0100
-updated: 2026-11-18T00:00:51+0100
+updated: 2026-11-19T00:12:33+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -38,6 +38,7 @@ CAUTION (2026-11-17T20:47:00+0100, main agent, after the harness review of the t
 ## Approval log
 
 - 2026-11-17T20:30:10+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T00:12:33+0100 — column → dev by main-agent@agentlenspro. dispatched 2026-11-19 to the mods-expert-developer agent with M62ZBT7E (owner directive 2026-11-18)
 
 ## Notes
 

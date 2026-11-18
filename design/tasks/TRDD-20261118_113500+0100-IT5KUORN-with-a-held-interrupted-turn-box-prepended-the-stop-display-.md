@@ -1,10 +1,10 @@
 ---
 trdd-id: IT5KUORN
 title: With a held interrupted-turn box prepended the Stop display cuts the report of the current turn
-column: todo
+column: dev
 status: tasked
 created: 2026-11-18T11:35:00+0100
-updated: 2026-11-18T11:35:00+0100
+updated: 2026-11-19T00:12:33+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -43,3 +43,4 @@ Mod work is designed, written and tested by the agent mods-expert-developer-plug
 ## Approval log
 
 - 2026-11-18T11:35:00+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T00:12:33+0100 — column → dev by main-agent@agentlenspro. dispatched 2026-11-19 to the mods-expert-developer agent with M62ZBT7E (owner directive 2026-11-18)
