@@ -294,8 +294,11 @@ pub fn relation_for(root: &Path, stream: &str, since_ms: Option<f64>, until_ms: 
         .iter()
         .map(|p| varchar_session_id(&format!("SELECT * FROM read_parquet({})", q(&p.to_string_lossy()))))
         .chain(
+            // WHY (TRDD-ZKNP5IJY): sample_size=-1 infers the schema from the whole file. DuckDB samples only the first
+            // 20,480 rows by default, so a key first sent after them was no column and a query naming it failed with a
+            // Binder Error. The seal path already does this (TRDD-VS1FCUMU); the reader must match it.
             wals.iter()
-                .map(|w| varchar_session_id(&format!("SELECT * FROM read_json_auto({}, ignore_errors=true)", q(&w.to_string_lossy())))),
+                .map(|w| varchar_session_id(&format!("SELECT * FROM read_json_auto({}, sample_size=-1, ignore_errors=true)", q(&w.to_string_lossy())))),
         )
         .collect();
     if rels.is_empty() {
