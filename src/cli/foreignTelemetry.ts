@@ -38,7 +38,10 @@ export const HOOK_PATH_VERBS: ReadonlySet<string> = new Set([
  *  DISABLED (Recommended)"): disk-sample, disk, disk-watch and disk-monitor (install, uninstall, status). A filling disk is exactly
  *  when everything else is switched off. All of them also skip the launch self-heal: the sampler fires every 5 minutes and must never
  *  write settings.json. */
-export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history", "disk-sample", "disk", "disk-watch", "disk-monitor"])
+// `search` (owner, 2026-11-18: «disable must disable only telemetry and event hooks logs, not jsonl parsing by duckdb»): it reads the
+// project transcripts off disk with DuckDB, needs no server and writes no user config, so neither the DISABLED stop nor the launch
+// self-heal runs for it.
+export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history", "disk-sample", "disk", "disk-watch", "disk-monitor", "search"])
 
 // Verbs that pass the DISABLED gate on purpose; each has its own terminal handling (see above).
 const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", "setup", "server", "daemon"])

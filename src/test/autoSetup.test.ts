@@ -1309,20 +1309,20 @@ suite('round 4 — shell-set pipelines, write ordering, read-only diagnostics', 
     assert.ok(/installOtel[\s\S]*ensureTelemetryConfig\(common\)/.test(src), 'installOtel routes through ensureTelemetryConfig')
   })
 
-  test('read-only diagnostics (cache-state, last-compact, model-headroom, statusline-history) skip the check and the DISABLED stop with a foreign config', async () => {
+  test('read-only diagnostics (cache-state, last-compact, model-headroom, statusline-history, search) skip the check and the DISABLED stop with a foreign config', async () => {
     const f = s.f()
     const cfg = readSettings(f)
     cfg.env!.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otel.corp.example/otlp'
     writeSettings(f, cfg)
     const bytes = fs.readFileSync(f.settingsPath, 'utf8')
-    for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history']) {
+    for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history', 'search']) {
       assert.strictEqual(await maybeAutoSetup([verb], { ctx: f.ctx, repair: recorder().repair, stderr: lines().say }), null, verb)
       assert.strictEqual(disabledNotice([verb]), null, verb)
     }
     assert.strictEqual(fs.readFileSync(f.settingsPath, 'utf8'), bytes)
     assert.ok(!agentlensDisabled())
     armKillSwitch('x')
-    for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history']) assert.strictEqual(disabledNotice([verb]), null, verb)
+    for (const verb of ['cache-state', 'last-compact', 'model-headroom', 'statusline-history', 'search']) assert.strictEqual(disabledNotice([verb]), null, verb)
   })
 })
 
