@@ -4,7 +4,7 @@ title: Disabled mode stops only telemetry and raw-body collection and nothing el
 column: dev
 status: tasked
 created: 2026-11-03T22:46:18+0100
-updated: 2026-11-18T01:38:44+0100
+updated: 2026-11-18T02:25:56+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -15,7 +15,8 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-03T22:46:18+0100
-implementation-commits: [3757f1a5, bf1409ce, 503ad3e0, 7ec4b22c, 2d2dc62b, 544e64c9, b36c4c66, 97eca5b1, 802307ea, fc2225b7, 5e1fbf50, 2a11875b, 44a0ce3a, e1e8802b, 03eef321, 52317d6d, 69bc3270, 06e129cc, 761efb90, 6da53ad0, dff01bf5, 0403080b, 89babc6c, 796a8477]
+implementation-commits: [3757f1a5, bf1409ce, 503ad3e0, 7ec4b22c, 2d2dc62b, 544e64c9, b36c4c66, 97eca5b1, 802307ea, fc2225b7, 5e1fbf50, 2a11875b, 44a0ce3a, e1e8802b, 03eef321, 52317d6d, 69bc3270, 06e129cc, 761efb90, 6da53ad0, dff01bf5, 0403080b, 89babc6c, 796a8477, 1196a88c]
+npt: [VS1FCUMU]
 ---
 
 # Disabled mode stops only telemetry and raw-body collection and nothing else
@@ -162,3 +163,9 @@ Scope of the line-45 (i) search, narrowed: .ts and .rs files under src/ and rust
 2026-11-18T01:20:09+0100 — OWNER, 2026-11-18 (verbatim): «i remember telling to publish whenever you want, and to deploy the most up to date version so it can be used. also the updates must trigger the updates of all installed extensions and hooks in claude.» READING of the main agent (not the owner words): deploy the merged tree on this machine and refresh the installed hooks and skill with it; publishing is allowed at the time the main agent chooses.
 2026-11-18T01:38:43+0100 — OWNER answers, verbatim, to three questions the main agent asked at about 01:35. Question 2 was: after increment d3 a status-line sample is lost whenever no server answers; accept that loss, or keep a path that needs no server. OWNER: «no, status line hook must be digested at all times. disable must never disable the status line hook. just calling some fast binary to add the data to the duckdb. no need for the full server to be online.» Reading of the main agent (not the owner words): the pre-merge gate that asked the owner to accept the loss is answered NO. The branch must not land on the main tree with the status line depending on a running server. A new increment gives the status-line hook a path that hands the sample to a fast binary, which writes it into the DuckDB store with no server online. Design facts are still to be gathered (which DuckDB file, who holds its write lock while a server runs).
 2026-11-18T01:38:43+0100 — OWNER, verbatim, later in the same stretch: «on other things decide yourself, i need to go away. be careful and be sure to delegate to haiku subagents to save tokens.» The main agent decides the open points on verified facts and records each decision on the owning card.
+
+## Progress 2026-11-18
+
+- Branch feat/rbbex59r-c2 (worktree builds_dev/rbbex59r-c2) now holds merge commit 1196a88c (parents 796a8477 and 71bf029c, the fix/setup-agent-preflight tip at that time). Single-file gates on that tree, raw output read by the main agent in reports_dev/RBBEX59R/w-gates/: diskCli 15 passing, noCollectionJoint 10 passing (legs 1, 1b, 2 to 9; leg 9 is the status-line POST stored by the no-collection server), cargo no_collection_boot 3 passed. fix/setup-agent-preflight has moved on since, so a second merge and a re-run of these gates on the final tree are still owed.
+- Pre-merge gate «owner accepts the loss of status-line samples when no server answers»: the owner answered NO on 2026-11-18 (verbatim in the section above). TRDD-VS1FCUMU is therefore a prerequisite of this card: the hook appends a sample the server did not take to the store's write-ahead file and the new command alcore statusline-seal compacts with no server. This branch does not land on the main tree before VS1FCUMU is done.
+- Decision (main agent): the detached revive after a failed status-line POST stays as it is; it serves the spawn guards, and the sample itself is now stored locally.

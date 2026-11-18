@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-18T01:38:44+0100
+updated: 2026-11-18T02:25:56+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -301,3 +301,4 @@ review-gate: the gate no longer demands a review for a declared-role worker's sc
 2026-11-18T01:20:09+0100 — OWNER, 2026-11-18 (verbatim): «i remember telling to publish whenever you want, and to deploy the most up to date version so it can be used. also the updates must trigger the updates of all installed extensions and hooks in claude.» This is newer than the order recorded on this card («just bump and publish a new version. but do that only after you completed all TRDDs and fixed all issues.») and governs the timing. READING of the main agent (not the owner words): publish when the local deploy of the merge of feat/rbbex59r-c2 is observed clean and the full suite has run once before the push; the never-push rule is lifted for the release only. OPEN before tagging: the waiver of TRDD-12FGMAEP on TRDD-RBBEX59R was read as given for this machine, while a publish ships that alcore to every install; the owner is told in the status so a veto is possible.
 2026-11-18T01:20:35+0100 — OWNER, 2026-11-18 (verbatim): «remember to update the changelog, the readme, and any documentation or --help page before publishing.» Gate for the publish: CHANGELOG.md, README.md, the documentation and every --help text are brought up to date first.
 2026-11-18T01:38:43+0100 — Question 1 of the main agent was: a publish ships the new alcore, without the whole-process memory ceiling of TRDD-12FGMAEP, to every install; publish, or hold. OWNER, verbatim: «no idea what are you talking about. probably i forgot. decide yourself. solve the matter yourself if necessary.» The point OPEN before tagging above no longer waits for the owner: the main agent decides it on verified facts and records the decision in this section. Fact read on 2026-11-18: commit 567fc5c2 (the retirement of the TypeScript server) is NOT an ancestor of tag v2.33.1, and npm view printed 2.33.1 as the published version, so the next publish is the first one where alcore is the only backend.
+- Decision (main agent, 2026-11-18, on the owner's «decide yourself. solve the matter yourself if necessary.»): the next publish is the first release whose only server is alcore (commit 567fc5c2, the retirement of the TypeScript server, is not an ancestor of v2.33.1, and npm serves 2.33.1). A whole-process memory ceiling (TRDD-12FGMAEP) is therefore added and tested before the tag. Its value is chosen on that card.
