@@ -698,6 +698,9 @@ fn main() {
         h.signal();
     }
 
+    // TRDD-N60JUWU3: a timed-out stop holds no CoreState, so its stop marker is written from disk
+    // after the runtimes stop (below).
+    let mut stop_from_disk = false;
     match agentlens_core::shutdown::flush_with_deadline(&state, remaining(stop_deadline)) {
         agentlens_core::shutdown::Outcome::Flushed(mut st) => {
             st.flush_spans();
@@ -713,6 +716,7 @@ fn main() {
             agentlens_core::collector_lifecycle::record_stop(&file, &mut st.lifecycle, agentlens_core::now_ms());
         }
         agentlens_core::shutdown::Outcome::TimedOut { holder } => {
+            stop_from_disk = true;
             let holder = holder.unwrap_or_else(|| "unknown".to_owned());
             // The CLI's own timeout message (serverControl.ts stopServer) greps server.log for
             // exactly this shape to name the holder in ITS error — keep the two in lockstep.
@@ -741,6 +745,13 @@ fn main() {
     // span flush) got any of it.
     rt.shutdown_timeout(remaining(stop_deadline));
     bg_rt.shutdown_timeout(remaining(stop_deadline));
+
+    // TRDD-N60JUWU3: after BOTH runtimes stopped, never before — the 30s lifecycle heartbeat (an
+    // `rt` task) persists the in-memory store, which has no `stoppedAt`, and would overwrite this
+    // marker. Without it the next boot classifies this timed-out stop as a crash.
+    if stop_from_disk {
+        agentlens_core::collector_lifecycle::record_stop_from_disk(std::path::Path::new(&data_dir), agentlens_core::now_ms());
+    }
 
     // The digest spool tap's last seal, AFTER both runtimes stopped: the OTLP tap writes on the
     // blocking pool and a hook/status-line write can be in flight at the signal, so sealing any

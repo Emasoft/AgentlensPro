@@ -92,6 +92,16 @@ pub fn record_stop(file: &Path, store: &mut LifecycleStore, now_ms: i64) {
     persist(file, store);
 }
 
+/// The timed-out stop path (alcore.rs) holds no CoreState — the state lock is the very thing that
+/// timed out — so it records the stop from the file on disk. Call it only AFTER the runtimes have
+/// stopped: the 30s heartbeat persists the in-memory store, which carries no `stoppedAt`, and would
+/// overwrite this marker (TRDD-N60JUWU3).
+pub fn record_stop_from_disk(data_dir: &Path, now_ms: i64) {
+    let file = lifecycle_file(data_dir);
+    let mut store = load(&file);
+    record_stop(&file, &mut store, now_ms);
+}
+
 /// computeCollectorGaps — a gap spans one run's last-known-alive time (`stoppedAt` when it shut
 /// down cleanly, else `lastHeartbeat`) to the NEXT run's `startedAt`; only gaps ≥ `min_gap_ms`
 /// report. Wire shape per run: `{startedAt, endedAt, durationMs, reason}` in that key order.
@@ -194,5 +204,27 @@ mod tests {
                 { "startedAt": "2026-08-20T10:02:00.000Z", "endedAt": "2026-08-20T10:02:20.000Z", "durationMs": 20000, "reason": "crash" },
             ])
         );
+    }
+
+    #[test]
+    fn timed_out_stop_from_disk_reads_as_shutdown() {
+        let dir = std::env::temp_dir().join(format!("al-lifecycle-{}-timedout", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // One run with a start and a heartbeat, no stoppedAt — what a timed-out stop leaves today.
+        let file = lifecycle_file(&dir);
+        let store = LifecycleStore { runs: vec![json!({"startedAt": "2026-08-20T10:00:00.000Z", "lastHeartbeat": "2026-08-20T10:00:30.000Z"})] };
+        persist(&file, &store);
+        assert!(load(&file).runs[0].get("stoppedAt").is_none());
+        // 2026-08-20T10:00:45.000Z
+        record_stop_from_disk(&dir, 1_787_220_045_000);
+        let mut reloaded = load(&file);
+        assert_eq!(reloaded.runs[0]["stoppedAt"], json!("2026-08-20T10:00:45.000Z"));
+        // A later boot 30 s after the stop: the gap must classify as shutdown, not crash.
+        reloaded.runs.push(json!({"startedAt": "2026-08-20T10:01:15.000Z", "lastHeartbeat": "2026-08-20T10:01:15.000Z"}));
+        let gaps = compute_gaps(&reloaded, MIN_GAP_MS);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0]["reason"], json!("shutdown"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
