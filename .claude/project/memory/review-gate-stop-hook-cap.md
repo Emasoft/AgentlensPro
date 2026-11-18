@@ -2,7 +2,7 @@
 name: review-gate-stop-hook-cap
 description: "goal paused hook blocked the turn 9 times / stop_hook_active ignored / 9 consecutive Stop blocks / hook blocked the turn from ending / goal paused by a stop hook / runMainGate no give-up policy / runSubagentGate honours stop_hook_active / review gate blocks forever / is the 9 block cap per hook or across all Stop hooks / CLAUDE_CODE_STOP_HOOK_BLOCK_CAP / why did the goal pause / was the goal pause caused by the review gate or the goal checker / owner requires the gate to block until a fork is spawned / TRDD-LR4SI79M cap scope / stop gate loop until the cap / Claude Code overrides a Stop hook after 9 blocks"
 ocd: 2026-10-14
-lmd: 2026-11-17
+lmd: 2026-11-18
 metadata:
   node_type: memory
   type: project
@@ -13,11 +13,14 @@ publish-globally: false
 # Review gate — stop_hook_active and the 9-block cap
 
 
-^ATOM-E7SR-7AR3 [desc: "A proposal gets no review when written inside a janitor turn or when the Stop hit the 2-round cap (silent deferral); a finished review is delivered with the next prompt, heartbeat included", keywords: proposal_got_no_harness_review no_measure_report_after_proposal review_deferred cap_of_2_blocking_rounds proposal_in_heartbeat_turn janitor_turn_never_reviewed review_delivered_with_heartbeat_prompt prompt.submit_injection REVIEW_DEFERRED_to_the_next_stop review-mod_pending_review measurement_missing_for_proposal PROPOSAL_FOR_ACTION_not_reviewed, type: project, trdd: TRDD-4BV8F9B9, ocd: 2026-11-17, lmd: 2026-11-17]
+^ATOM-E7SR-7AR3 [desc: "A proposal gets no review when written inside a janitor turn or when the Stop hit the 2-round cap (silent deferral)", keywords: proposal_got_no_harness_review no_measure_report_after_proposal review_deferred cap_of_2_blocking_rounds proposal_in_heartbeat_turn janitor_turn_never_reviewed REVIEW_DEFERRED_to_the_next_stop review-mod_pending_review measurement_missing_for_proposal PROPOSAL_FOR_ACTION_not_reviewed, type: project, trdd: TRDD-4BV8F9B9, ocd: 2026-11-17, lmd: 2026-11-18]
 A turn whose reply carries the proposal marker can end with no harness review and no measurement reaching the model, for two different reasons, and neither is a lost delivery.
 
 1. The proposal was written inside a janitor turn (for example in the reply to a `[janitor-heartbeat]` fire). The review mod never reviews or measures a janitor turn, whatever it wrote (its Stop handler returns on the janitor test of the turn prompt). DO NOT answer a review with a revised proposal inside a heartbeat turn; note it and send the proposal in the next working turn. Measured once (2026-11-17).
 2. The Stop of the turn reached the cap of 2 blocking rounds of the review mod. The mod then defers the review: the user sees a yellow REVIEW DEFERRED note and the model sees nothing. Measured once (2026-11-17): the Stop lasted 2.6 s and printed that note. NOT traced and not counted: how the counter reached 2 in that turn. INFERRED from one injected report, not measured: that the debt is paid by the review of the next non-janitor turn, and that the deferred proposal is never measured (card TRDD-ASXUW08U).
+
+
+^ATOM-V8AP-AZM6 [desc: "A finished PASS review is injected with the next prompt of any kind, heartbeat included; Stop duration, hook_system_message and hook_additional_context in the transcript tell the no-review cases apart", keywords: review_delivered_with_heartbeat_prompt finished_review_injected_with_next_prompt where_did_the_review_report_go review_report_arrives_in_heartbeat_fire prompt.submit_injection hook_additional_context_holds_review_reports hook_system_message_REVIEW_DEFERRED_note tell_deferred_review_from_janitor_turn_in_transcript stop_lasted_seconds_no_review_ran read_injected_context_of_heartbeat_fire PASS_review_delivered_next_turn how_to_tell_why_proposal_was_not_reviewed, type: project, trdd: TRDD-4BV8F9B9, ocd: 2026-11-18, lmd: 2026-11-18]
 
 What does work: a finished PASS review is injected with the next prompt of ANY kind, a cron heartbeat prompt included (seen twice on 2026-11-17). So read the injected context of a heartbeat fire: the review of the previous working turn may be there and nowhere else.
 
