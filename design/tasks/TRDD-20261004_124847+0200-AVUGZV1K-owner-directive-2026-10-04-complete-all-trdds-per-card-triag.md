@@ -4,7 +4,7 @@ title: Owner directive 2026-10-04 complete all TRDDs - per-card triage then work
 column: todo
 status: tasked
 created: 2026-10-04T12:48:47+0200
-updated: 2026-11-18T16:57:23+0100
+updated: 2026-11-18T23:43:21+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -149,3 +149,7 @@ Environment: the collector was RUNNING but not answering on port 3000 after a 'r
 
 2026-11-18 (main agent): moved from dev to todo because nothing has worked this card since 2026-10-19; todo was chosen over superseded because closing an owner-directive card needs a read of this card and of TRDD-G93MZOBJ side by side, which was not done. The NOT DONE list in the STATE block of 2026-10-14 (the agent preflight of the setup skill step, the Dockerfile lines that copy the retired standalone/server.js, the gaps of check-dist-contents) is still open and is the work this card owes. The move was made on git dates, not on a full read of the card.
 2026-11-18 CORRECTION (main agent): the note above called the NOT DONE list still open without a check. Read since, on HEAD of fix/setup-agent-preflight: (1) agent preflight of the setup skill step: still open; src/cli/setup.ts returns from the dry-run branch at line 1138, before the agent drift check at line 1180, and installs skills (line 1147) before a missing agent source is found. (2) Dockerfile: still open; line 39 copies standalone/server.js and line 65 runs it. (3) check-dist-contents: not re-checked.
+
+## Human review skipped (2026-11-18)
+
+- TRDD-V50CQS22 (archived bd110ffb) and TRDD-C6W0SWUT (archived ca4c0b0f) were moved ai_review to complete by main-agent@agentlenspro, SKIPPING human_review, under the owner's order while away ("on other things decide yourself"); the owner may reopen either. V50CQS22 box 4 rests on reports/search/20261118_210116+0100-memory-vs-corpus-size.md, which is LOCAL-ONLY (/reports/ is gitignored here by TRDD-TKN5VALS, against the global rule that keeps reports/ tracked: an owner decision); the committed guard is the out-of-memory message test in src/test/searchCli.test.ts.
