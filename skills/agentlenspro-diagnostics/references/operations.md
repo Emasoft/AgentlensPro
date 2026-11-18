@@ -87,7 +87,7 @@ restart`.
 - `agentlenspro --uninstall-hooks` — removes the agentlens hook entries. A running session keeps its hooks until it restarts, and the next launch of a verb that self-heals the install registers them again (`AGENTLENS_NO_AUTOSETUP=1` stops that). The review gate and the review supervisor are never switchable.
 
 **The kill-switch stops only COLLECTION.** `agentlenspro disable [reason]` drops one flag file that stops storing telemetry, raw
-API bodies and hook events, plus the CLI hook spool (the status line is not collection: it always POSTs to the server, which stores it), in
+API bodies and hook events, plus the CLI hook spool (the status line is not collection: it always POSTs to the server, which stores it, and when no server takes the sample the hook appends it to the write-ahead file of the store, `<dataDir>/statusline/<stream>/<UTC day>/wal-cli.ndjson`, which `alcore statusline-seal --data-dir DIR` later turns into parquet parts with no server), in
 **every** Claude Code session already running, on that session's next hook fire. No restart needed (a `settings.json` edit alone
 cannot reach a session that already loaded its config). `AGENTLENS_DISABLED=1` in the environment is the same switch for the
 process that sees it. The server runs in **no-collection mode** (answers, stores no telemetry, raw bodies or hook events; it still stores status-line samples). The switch refuses no command and
