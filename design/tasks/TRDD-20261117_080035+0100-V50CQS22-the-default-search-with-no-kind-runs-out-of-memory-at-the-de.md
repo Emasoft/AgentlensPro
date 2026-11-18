@@ -4,7 +4,7 @@ title: The default search with no kind runs out of memory at the default limit o
 column: dev
 status: tasked
 created: 2026-11-17T08:00:35+0100
-updated: 2026-11-18T11:45:37+0100
+updated: 2026-11-18T21:09:41+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,8 +29,8 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 - [x] The cause is shown by an experiment that changes one thing (for example the thread count of the line-mode scan groups), not inferred.
 - [x] The no-kind search passes 10 of 10 at 1.5GB on the frozen set in hits, count and files mode, literal and regex, with rc 137 counted apart.
 - [x] Its per-transcript counts equal those of the current build at 16GB (reference to take before the change).
-- [ ] A test or a documented measurement guards it; types, lint and the search test file pass.
-- [ ] The memory need of the default search is measured against corpus size (or the search retries with one thread or a higher limit on an out-of-memory error), so that growth of the project does not bring the failure back unannounced.
+- [x] A test or a documented measurement guards it; types, lint and the search test file pass.
+- [x] The memory need of the default search is measured against corpus size (or the search retries with one thread or a higher limit on an out-of-memory error), so that growth of the project does not bring the failure back unannounced.
 - [x] It is read where an invalid-JSON line goes in line mode (the frozen set holds 10; line mode reports 0 skipped), and the obj-is-null branch of the merged filter is exercised by a committed test.
 
 ## Notes and lessons learned
@@ -58,6 +58,7 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 - 2026-11-18 main agent, CORRECTION of the note above: the sentence that the need does not grow in step with corpus size is withdrawn. The three runs used different patterns (5 matches against about 301,000), one run each, under host load 13 to 26, and this card records swings of about 300 million bytes between runs of one command. What stands: the three measured values, and that each run ended with rc 0 at the default limit. A related defect found the same day has its own card, TRDD-NRCIAFXS (search --help prints the global usage).
 - 2026-11-18 main agent, BOX 1 TICKED on this basis: the one thing changed is the form of the filter (commit 31c34fb8, 7 added and 2 removed lines: the match test and the scope filters as ONE WHERE instead of a CTE filter plus an outer filter). MEASURED BY ME, one run per cell: the builds before it fail with the out-of-memory error at 1.5GB, 2GB and 3GB (main17-nokind-matrix.txt, main18-nokind-modes.txt); the build with it passes at 1.5GB with equal per-transcript counts (main19-old-vs-new.txt). BY THE WORKER FILES, not rerun by me: the two-filter form fails at 1, 2, 3 and 4 threads, 3 runs each, so the thread count is not the cause. NOT SHOWN: the mechanism inside DuckDB (why two FILTER operators need more memory than one). STILL OPEN: box 4 (a test or documented measurement that guards it) and box 5 (memory need against corpus size; no retry, by the fail-fast decision of 2026-11-18). PLAN for both: one worker writes a read-only measurement script (nested subsets of the frozen file list, several memory limits, 3 runs each, peak resident size per run) and a tracked report under reports/search/; it starts when the host load is low, since this card records swings of about 300 million bytes between runs under load.
 - 2026-11-18 main agent, CHECK behind the tick of box 1: git log 6dce222c..31c34fb8 lists 31c34fb8 and three docs commits; git diff --stat 6dce222c 31c34fb8 -- src is one file, src/cli/searchCli.ts, 7 insertions and 2 deletions. So the failing build of 6dce222c and the passing build of 31c34fb8 differ in src by that one change. Still one run per cell on my side, and the mechanism is not shown.
+2026-11-18 21:15 main agent, BOXES 4 AND 5 TICKED. Box 5: the memory need of the default search was measured against corpus size, reports/search/20261118_210116+0100-memory-vs-corpus-size.md (nested byte prefixes of the frozen set at 25, 50, 75, 100%, limits 1GB to 2GB, 3 runs per cell, peak resident size per run, loads 13.9 to 29.8, raw rows reports_dev/V50CQS22/20261118-scale-full.tsv): the lowest passing tested limit rose from 1.25GB (25 and 50%) to 1.5GB (75 and 100%); the 2GB default passed 3/3 at 100%, plain and --fuzzy. No retry (fail-fast decision of 2026-11-18): growth past the limit is announced by one stderr line and exit 2 naming the limit, AGENTLENS_DUCKDB_MEMORY_LIMIT and --since/--session/--kind (searchCli.ts:1648-1649), driven by a real DuckDB out-of-memory error in the searchCli test 'out of memory'. Box 4: that report is the documented measurement; checks run by me at load 17.9: the searchCli test file 86 passing, eslint clean on searchCli.ts and its test; check-types rc 0 in the item 8a run of the same tree. NOT SHOWN: which of total bytes, file count or the largest line sets the need; no growth figure is drawn from four sizes. All six boxes ticked.
 
 ## Message part done 2026-11-18
 
