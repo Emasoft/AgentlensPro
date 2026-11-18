@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-19T00:17:35+0100
+updated: 2026-11-19T00:18:52+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -73,6 +73,7 @@ NOT decided, left for the owner: whether agentlenspro ships the review part of ~
 2026-11-18 20:30 — ADDENDUM to the 20:20 entry; the two lines are ONE current entry, read together (both were edited in place after harness reviews). The mixed-matcher test landed in 410a7211 (it passes on current code; its failing direction is not shown). Item 7 is UNCLEAR, not landed: 6a31062d folds the launch notices into the stderr JSON, but no read line confirms that warnings are written to <dataDir>/autosetup.log. Item 11 landed in code but, like item 4, is not run through the linked CLI. Also OPEN or UNCLEAR, by the same report: whether the hook and gate verbs accept --stamp at run time (their exit code is always 0, so the probe proves nothing; source read only); the post-deploy jq check (17 stamped, 0 bare); the item 4 comment line at column 0 inside writeFileAtomic; the symlink follow-up from 87440d7e (unlink or rename aside the destination before copying); the server start drift back-off. With the 20:20 entry this names every OPEN or UNCLEAR row of that report for this card, except the separate elements of the item 5B NOT COVERED list in the body (an unstamped copy in a settings file the installer does not write, and the rest of that list), which stay listed there.
 2026-11-19T00:01+0100 — CURRENT, read with the 20:20 and 20:30 entries: item 8 LANDED in code, 8a a41a6c55 and 8b 6d8a2047 (details: Item 8 plan). Not deployed: no bundle built since; that the first qualifying launch rewrites both status line keys once is INFERRED. implementation-commits now also lists 7a279550, 875aca58, 7eb0074a, b00b5bd5, 5d5dd76b, 410a7211 (found by git log --grep, missing from the field). Still OPEN: item 10 (needs its own proposal), the CHANGELOG.md:25 parenthesis, the item 4 docs, the Dockerfile repair, the batch refusal contract card, the 2026-11-18 incident, the post-deploy jq check (hooks 17 stamped and 0 bare, plus both status line keys stamped), and the rest of the 20:30 list. NEXT: item 10 proposal, then the docs owed before the publish.
 2026-11-19T00:17+0100 — correction to the 00:01 entry and to commit d68fe671: seven commits were missing from implementation-commits (7a279550, 875aca58, 7eb0074a, b00b5bd5, 5d5dd76b, 410a7211, a41a6c55), not eight and not six; 6d8a2047 was added as new. Item 10 spec: section Item 10 plan (2026-11-19, after the harness review).
+2026-11-19T00:18+0100 — docs landed in bcc2e9ed: the CHANGELOG.md:25 clause removed (and the backup name corrected to -<time>-<pid>), the item 8 CHANGELOG bullet, a README paragraph on the version-stamp self-heal covering skills, agents, hooks and status line (the item 4 docs), and the status line step in operations.md. Item 10 is in dev with a sonnet-worker (spec: Item 10 plan section). Still OPEN: item 10, the Dockerfile repair, the batch refusal contract card, the 2026-11-18 incident, the post-deploy jq check, and the rest of the 20:30 list.
 
 ## Owner orders 2026-11-18
 
