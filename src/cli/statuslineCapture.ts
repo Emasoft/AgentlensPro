@@ -160,6 +160,25 @@ function cliSealBytes(): number {
  *  failed): without it a file sitting over the threshold would start a process on every render. */
 export const SEAL_KICK_MIN_GAP_MS = 30_000
 
+/** The detached sealer appends its output here (TRDD-RTHA7EWK item 5). Over this size the file is
+ *  rotated to `<name>.1` (an older `.1` is replaced) before the next open, so the log stays bounded. */
+const SEAL_LOG_MAX_BYTES = 1024 * 1024
+
+/** Open `<dataDir>/statusline-seal.log` for append, rotating it first when it is over SEAL_LOG_MAX_BYTES.
+ *  Returns undefined when the log cannot be opened: the sealer is then started with stdio ignored, because
+ *  a log problem must never stop the seal, and never throws out of the hook. */
+function openSealLog(): number | undefined {
+  try {
+    const log = path.join(dataDir(), 'statusline-seal.log')
+    try {
+      if (fs.statSync(log).size > SEAL_LOG_MAX_BYTES) fs.renameSync(log, `${log}.1`)
+    } catch { /* no log yet, or it cannot be rotated: opening below decides */ }
+    return fs.openSync(log, 'a')
+  } catch {
+    return undefined
+  }
+}
+
 /** Start `alcore statusline-seal` detached, and only when all of these hold:
  *   - this append created today's file (yesterday's file is now complete) or the file reached the
  *     seal threshold. A size test and a "created" flag, not a timer: both are O(1) on the render path;
@@ -179,7 +198,18 @@ function maybeKickSeal(appended: { file: string; created: boolean }): void {
     const alcore = alcoreBin(process.env, undefined, undefined, resolveBinNativeDir())
     if (!alcore) return
     fs.writeFileSync(stamp, String(Date.now()))
-    spawn(alcore, ['statusline-seal', '--data-dir', dataDir()], { detached: true, stdio: 'ignore' }).unref()
+    // TRDD-RTHA7EWK item 5: the sealer's stdout and stderr (what it sealed, why it refused a file) were
+    // thrown away with stdio 'ignore', so a refused write-ahead file left no trace outside the server log.
+    // The detached child gets its own dup of the fd, so this process closes its copy right after spawn.
+    const logFd = openSealLog()
+    try {
+      spawn(alcore, ['statusline-seal', '--data-dir', dataDir()], {
+        detached: true,
+        stdio: logFd === undefined ? 'ignore' : ['ignore', logFd, logFd],
+      }).unref()
+    } finally {
+      if (logFd !== undefined) fs.closeSync(logFd)
+    }
   } catch { /* contract 2: a sealer that cannot start loses nothing, the lines stay readable in the write-ahead file */ }
 }
 

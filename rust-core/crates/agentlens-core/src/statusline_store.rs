@@ -9,6 +9,7 @@
 //!   <root>/<stream>/YYYY-MM-DD/wal-cli.rot-<pid>-<base36><seq>.ndjson   wal-cli.ndjson renamed by a sealer, then sealed
 //!   <root>/.seal.lock                                               flock: one sealer per store, in any process
 //!   <root>/.seal-kick                                               time of the last sealer start by the hook
+//!   <root>/<stream>/YYYY-MM-DD/sealfail-<file name>.json            marker of a file the seal REFUSED: file, firstFailMs, lastFailMs, attempts, nextRetryMs, reason (TRDD-RTHA7EWK)
 //!
 //! TRDD-VS1FCUMU: `alcore statusline-seal --data-dir DIR` runs `maybe_seal` with no server (no port,
 //! no pidfile, no purge); the 60 s chore of the server runs the same function.
@@ -357,6 +358,102 @@ pub struct SealCounters {
     /// WALs (or lump counts) the seal REFUSED or lost — non-zero means raw JSON sits unsealed
     /// or a torn line became a NULL row; visible here rather than silent.
     pub corrupt_wals: std::sync::atomic::AtomicU64,
+    /// TRDD-RTHA7EWK item 5: seal attempts that ended in a REFUSAL (the file stays unsealed and a
+    /// `sealfail-*.json` marker was written or updated). One count per attempt, not per file.
+    pub refused_files: std::sync::atomic::AtomicU64,
+    /// TRDD-RTHA7EWK item 5: files skipped because their marker is younger than its backoff.
+    pub backoff_skips: std::sync::atomic::AtomicU64,
+}
+
+/// What one seal attempt came to (TRDD-RTHA7EWK item 5). Before this, every failure was a bare
+/// `false`: the reason was dropped, so a refused file was retried at full DuckDB cost on every tick
+/// and left no trace outside one stderr line.
+enum SealOutcome {
+    Sealed,
+    /// The file changed length during the seal (a late append): transient, the next call seals it
+    /// whole. No marker: it is not a refusal.
+    Kept,
+    /// The attempt failed; the text says why. The caller records it in a marker file.
+    Refused(String),
+}
+
+/// A refused file waits this long before its first retry; each further refusal doubles the wait.
+/// The numbers are a choice: the cost of one refused attempt was never measured (TRDD-RTHA7EWK).
+const SEAL_RETRY_BASE_MS: u64 = 5 * 60 * 1000;
+const SEAL_RETRY_CAP_MS: u64 = 6 * 60 * 60 * 1000;
+const SEAL_MARKER_PREFIX: &str = "sealfail-";
+const SEAL_MARKER_SUFFIX: &str = ".json";
+const SEAL_MARKER_REASON_MAX_CHARS: usize = 500;
+
+/// Backoff base of a refused file: `AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS`, default 5 minutes.
+/// 0 turns the backoff off (every call retries every refused file). TRDD-RTHA7EWK item 5.
+pub fn seal_retry_base_ms(vars: &HashMap<String, String>) -> u64 {
+    vars.get("AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS").and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(SEAL_RETRY_BASE_MS)
+}
+
+/// How long a file refused `attempts` times waits after its last failure: base, doubling per
+/// attempt, capped at 6 hours; base 0 = no wait. TRDD-RTHA7EWK item 5.
+pub fn seal_backoff_ms(base_ms: u64, attempts: u64) -> u64 {
+    if base_ms == 0 {
+        return 0;
+    }
+    let doublings = attempts.saturating_sub(1).min(32) as u32;
+    base_ms.saturating_mul(1u64 << doublings).min(SEAL_RETRY_CAP_MS)
+}
+
+/// File name of the marker that records the refusals of `file_name`, in the same directory.
+/// Keyed on the name of the file that is SEALED: a `wal-cli.ndjson` is renamed to a `.rot-` name
+/// before its seal, and a `.rot-` name is an Orphan on every later pass (it fails the pid parse in
+/// `wal_owner`), so it is never renamed again and the name stays stable across retries. A dead
+/// server's `wal-<pid>.ndjson` is an Orphan too. TRDD-RTHA7EWK item 5.
+pub fn seal_marker_name(file_name: &str) -> String {
+    format!("{SEAL_MARKER_PREFIX}{file_name}{SEAL_MARKER_SUFFIX}")
+}
+
+/// The file a marker name belongs to (inverse of `seal_marker_name`).
+fn seal_marker_target(marker_name: &str) -> Option<&str> {
+    marker_name.strip_prefix(SEAL_MARKER_PREFIX)?.strip_suffix(SEAL_MARKER_SUFFIX)
+}
+
+struct SealMarker {
+    first_fail_ms: f64,
+    last_fail_ms: f64,
+    attempts: u64,
+}
+
+/// A missing or unreadable marker reads as None: the file is attempted again at once, which is
+/// the safe direction (a lost marker costs one more attempt, never a lost file).
+fn read_seal_marker(marker: &Path) -> Option<SealMarker> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(marker).ok()?).ok()?;
+    Some(SealMarker { first_fail_ms: v.get("firstFailMs")?.as_f64()?, last_fail_ms: v.get("lastFailMs")?.as_f64()?, attempts: v.get("attempts")?.as_u64()? })
+}
+
+/// Write or update the marker of a refused file (tmp, then rename) and print one stderr line:
+/// path, reason, attempt number, next retry. TRDD-RTHA7EWK item 5.
+fn record_seal_refusal(target: &Path, reason: &str, now_ms: f64, base_ms: u64) {
+    let dir = target.parent().expect("wal lives in a partition dir");
+    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let marker = dir.join(seal_marker_name(name));
+    let (first, attempts) = match read_seal_marker(&marker) {
+        Some(m) => (m.first_fail_ms, m.attempts + 1),
+        None => (now_ms, 1),
+    };
+    let reason: String = reason.chars().take(SEAL_MARKER_REASON_MAX_CHARS).collect();
+    let wait = seal_backoff_ms(base_ms, attempts);
+    // nextRetryMs is for readers (the statusline-history refused view); the sealer decides from lastFailMs, attempts and its own current base.
+    let body = serde_json::json!({ "file": name, "firstFailMs": first as i64, "lastFailMs": now_ms as i64, "attempts": attempts, "nextRetryMs": (now_ms + wait as f64) as i64, "reason": reason });
+    let tmp = dir.join(format!("{}.tmp", seal_marker_name(name)));
+    let written = std::fs::write(&tmp, body.to_string()).and_then(|_| std::fs::rename(&tmp, &marker));
+    let next = match wait {
+        0 => "the next call".to_owned(),
+        wait => iso_from_ms(now_ms + wait as f64),
+    };
+    eprintln!("{} alcore: statusline seal refused {}: {reason} (attempt {attempts}, next retry {next})", crate::log_ts(), target.display());
+    if let Err(e) = written {
+        eprintln!("{} alcore: statusline seal: marker {} not written: {e}", crate::log_ts(), marker.display());
+        // A failed write or rename must not leave the tmp file behind: its name is not a marker name, so no later pass removes it.
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 /// One instance per server process. append() runs at the full sample rate — a push onto a
@@ -521,15 +618,39 @@ pub fn maybe_seal(root: &Path, counters: &SealCounters, vars: &HashMap<String, S
     // own write-ahead file is off limits to every other process.
     let live_server = root.parent().and_then(crate::pid_lock::live_owner_pid);
     let today = day_key(now_ms);
+    // TRDD-RTHA7EWK item 5: read once per call, like the budget.
+    let retry_base = seal_retry_base_ms(vars);
     let mut sealed = 0u64;
     'store: for stream in STATUSLINE_STREAMS {
         for (dir, _) in day_partitions(root, stream) {
             let is_past_day = dir.file_name().and_then(|n| n.to_str()) != Some(today.as_str());
+            // TRDD-RTHA7EWK item 5: a marker whose file is gone (sealed by an older build, purged,
+            // removed by hand) is removed with it, so `statusline-history refused` never lists a ghost.
+            for marker in list_files(&dir, |f| seal_marker_target(f).is_some()) {
+                let target = marker.file_name().and_then(|n| n.to_str()).and_then(seal_marker_target).unwrap_or_default();
+                if !dir.join(target).exists() {
+                    let _ = std::fs::remove_file(&marker);
+                }
+            }
             for wal in list_files(&dir, |f| f.starts_with("wal-") && f.ends_with(".ndjson")) {
                 if started.elapsed() >= budget {
                     break 'store; // the rest waits for the next call
                 }
                 let name = wal.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned();
+                // TRDD-RTHA7EWK item 5: a refused file is not attempted again before its backoff has
+                // passed. Checked on the NAME, before wal_owner: the marker is keyed on the file that is
+                // sealed (see seal_marker_name), and a renamed `.rot-` file keeps its name on every pass,
+                // so a skipped file costs one small read, never a DuckDB open.
+                if retry_base > 0 {
+                    if let Some(m) = read_seal_marker(&dir.join(seal_marker_name(&name))) {
+                        // A marker stamped in the future (the clock was stepped back since) is not honoured: the file is
+                        // retried at once, the safe direction, instead of waiting the step plus the window.
+                        if m.last_fail_ms <= now_ms && now_ms < m.last_fail_ms + seal_backoff_ms(retry_base, m.attempts) as f64 {
+                            counters.backoff_skips.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            continue;
+                        }
+                    }
+                }
                 let (target, rows) = match wal_owner(&name, live_server) {
                     WalOwner::ForeignLive => continue,
                     WalOwner::Cli => {
@@ -586,8 +707,19 @@ pub fn maybe_seal(root: &Path, counters: &SealCounters, vars: &HashMap<String, S
                         (target, rows)
                     }
                 };
-                if seal_one(root, &target, rows, counters, vars) {
-                    sealed += 1;
+                // TRDD-RTHA7EWK item 5: a refusal is recorded in a marker beside the file (and backs off
+                // the next attempt); a seal removes the marker. `Kept` is a late append, not a refusal.
+                match seal_one(root, &target, rows, counters, vars) {
+                    SealOutcome::Sealed => {
+                        sealed += 1;
+                        let sealed_name = target.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                        let _ = std::fs::remove_file(dir.join(seal_marker_name(sealed_name)));
+                    }
+                    SealOutcome::Kept => {}
+                    SealOutcome::Refused(reason) => {
+                        counters.refused_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        record_seal_refusal(&target, &reason, now_ms, retry_base);
+                    }
                 }
             }
         }
@@ -618,8 +750,9 @@ fn keys_missing_from_part(con: &Connection, wal: &Path, part: &Path) -> Result<i
 
 /// Convert ONE WAL to a parquet part and delete it — only after PROVING the part holds every
 /// row. Never panics out of the seal path; every failure removes the untrustworthy part and
-/// keeps the WAL for the next tick.
-fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters, vars: &HashMap<String, String>) -> bool {
+/// keeps the WAL: a late append (`Kept`) is retried on the next call, a refusal after its backoff
+/// (TRDD-RTHA7EWK item 5).
+fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters, vars: &HashMap<String, String>) -> SealOutcome {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = wal.parent().expect("wal lives in a partition dir");
     let out = dir.join(part_name(SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
@@ -627,7 +760,7 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         // Defence in depth behind the collision-free name: COPY TO silently overwrites, and an
         // overwritten part is destroyed data. Refuse; the naming invariant is broken.
         eprintln!("{} alcore: refusing to overwrite existing part {} — part naming must be collision-free", crate::log_ts(), out.display());
-        return false;
+        return SealOutcome::Refused(format!("refusing to overwrite existing part {}: part naming must be collision-free", out.display()));
     }
     // TRDD-VS1FCUMU: the file's length when this seal begins. A status-line hook process that
     // opened `wal-cli.ndjson` before the sealer renamed it can still append its one line to the
@@ -635,7 +768,9 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
     // the row count differ from `expect_rows` (the part is dropped). A line that lands AFTER the
     // COPY is seen only by comparing this length again right before the delete.
     let len_at_start = std::fs::metadata(wal).map(|m| m.len()).ok();
-    let run = || -> Result<bool, String> {
+    // TRDD-RTHA7EWK item 5: every outcome carries its reason now. The closure used to return a bare
+    // bool and the Err text was dropped at the match below, so a refused file could not say why.
+    let run = || -> Result<SealOutcome, String> {
         let con = open_duck(root, vars)?;
         let wal_q = q(&wal.to_string_lossy());
         // TRDD-VS1FCUMU: sample_size=-1 makes read_json_auto infer the schema from the WHOLE file.
@@ -657,7 +792,8 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         };
         if inference_collapsed(&cols) {
             counters.corrupt_wals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Ok(false); // keep the WAL: its raw JSON is the only readable copy
+            // The reason says only what was observed; it does not name a cause.
+            return Ok(SealOutcome::Refused("read_json_auto read the file as one opaque json column; raw lines kept".to_owned())); // keep the WAL: its raw JSON is the only readable copy
         }
         // ORDER BY session_id measured 1.24x better compression (clusters near-identical
         // consecutive samples into dictionary/RLE runs); sealing session_id as VARCHAR is the
@@ -677,10 +813,17 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
             // short part means rows LOST in conversion; count it or the WAL re-fails forever
             // while stats() shows nothing wrong.
             let _ = std::fs::remove_file(&out);
+            // TRDD-RTHA7EWK item 5: a hook line that landed after len_at_start and before the COPY read
+            // the file makes the counts differ too. That is the same transient case as the length check
+            // below, so it is Kept (retried on the next tick), not counted as corrupt, marked or backed off.
+            if std::fs::metadata(wal).map(|m| m.len()).ok() != len_at_start {
+                eprintln!("{} alcore: statusline seal: {} grew before the copy read it; kept for the next call", crate::log_ts(), wal.display());
+                return Ok(SealOutcome::Kept);
+            }
             if got < expect_rows as i64 {
                 counters.corrupt_wals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            return Ok(false);
+            return Ok(SealOutcome::Refused(format!("the part holds {got} rows, the file {expect_rows}")));
         }
         // ignore_errors lands an unparseable line as an all-NULL row (count still matches):
         // a torn line becomes a NULL row — acceptable, never silent. append() writes ts on
@@ -698,7 +841,7 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
             eprintln!("{} alcore: statusline seal: the part of {} lacks {missing} key(s) of the file; part dropped, file kept", crate::log_ts(), wal.display());
             counters.corrupt_wals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let _ = std::fs::remove_file(&out);
-            return Ok(false);
+            return Ok(SealOutcome::Refused(format!("the part lacks {missing} key(s) of the file")));
         }
         // Test-only hold (tests/statusline_seal_cli.rs sets it; nothing else does): it widens the
         // gap between the verified read above and the delete below, so that test can place a
@@ -714,19 +857,20 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         // What this cannot see is an append between this check and the delete, two syscalls
         // apart: that needs a hook process stalled between its open and its write for longer
         // than the settle wait plus this whole seal, and landing in that exact gap.
+        // TRDD-RTHA7EWK item 5: this is Kept, not Refused: transient, so no marker and no backoff.
         if std::fs::metadata(wal).map(|m| m.len()).ok() != len_at_start {
             eprintln!("{} alcore: statusline seal: {} changed length during the seal; kept for the next call", crate::log_ts(), wal.display());
             let _ = std::fs::remove_file(&out);
-            return Ok(false);
+            return Ok(SealOutcome::Kept);
         }
         std::fs::remove_file(wal).map_err(|e| e.to_string())?;
-        Ok(true)
+        Ok(SealOutcome::Sealed)
     };
     match run() {
-        Ok(ok) => ok,
-        Err(_) => {
+        Ok(outcome) => outcome,
+        Err(e) => {
             let _ = std::fs::remove_file(&out); // best effort
-            false // never panic out of the seal path — the next tick retries
+            SealOutcome::Refused(e) // never panic out of the seal path; the caller marks the file and retries it after its backoff
         }
     }
 }

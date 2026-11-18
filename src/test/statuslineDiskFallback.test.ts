@@ -11,6 +11,8 @@
 //   2. the hook starts the sealer (`alcore statusline-seal`) rarely: when its append created today's file or
 //      the file reached the byte threshold, at most once per SEAL_KICK_MIN_GAP_MS, never beside a live server
 //      and never under AGENTLENS_NO_REVIVE=1.
+//   3. the output of the sealer the hook started is appended to <dataDir>/statusline-seal.log (rotated over
+//      1 MiB), not thrown away (TRDD-RTHA7EWK item 5).
 // The sealer itself is tested in rust-core/crates/agentlens-core/tests/statusline_seal_cli.rs.
 
 import * as assert from 'assert'
@@ -244,5 +246,53 @@ suite('statusline disk fallback — the sealer is started rarely, and never besi
     await captureStatusline(payload())
     assert.strictEqual(kicks().length, 0, `no sealer beside a live server, got ${JSON.stringify(spawns)}`)
     assert.ok(fs.existsSync(path.join(dir, 'statusline')), 'the sample is still stored')
+  })
+})
+
+// A real child, not the recorder of the suite above: what is pinned is where the detached sealer's output
+// goes. The stub is a shell script that prints one known line on each stream, passed through AGENTLENS_ALCORE.
+suite('statusline disk fallback — the output of the hook-started sealer is kept in a log (TRDD-RTHA7EWK item 5)', () => {
+  let dir: string
+  const env = envScope()
+  const log = (): string => path.join(dir, 'statusline-seal.log')
+  const logHas = (text: string): boolean => {
+    try { return fs.readFileSync(log(), 'utf-8').includes(text) } catch { return false }
+  }
+  // The sealer is detached, so the test waits for its output (bounded) instead of for the child.
+  const waitFor = async (cond: () => boolean): Promise<void> => {
+    const deadline = Date.now() + 8000
+    while (!cond() && Date.now() < deadline) await new Promise(r => setTimeout(r, 50))
+  }
+
+  setup(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sl-seallog-'))
+    const stub = path.join(dir, 'stub-alcore.sh')
+    fs.writeFileSync(stub, '#!/bin/sh\necho "stub sealer stdout line"\necho "stub sealer stderr line" >&2\n', { mode: 0o755 })
+    env.set('HOME', dir)
+    env.set('AGENTLENS_DATA_DIR', dir)
+    env.set('AGENTLENS_STATUSLINE_TIMEOUT_MS', '100')
+    env.set('AGENTLENS_ALCORE', stub)
+    env.set('AGENTLENS_UI_URL', `http://127.0.0.1:${await freePort()}`)
+    env.unset('AGENTLENS_NO_REVIVE')
+  })
+  teardown(() => {
+    env.restore()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('(l1) the stdout and the stderr of the started sealer both land in statusline-seal.log', async () => {
+    await captureStatusline(payload())
+    await waitFor(() => logHas('stub sealer stdout line') && logHas('stub sealer stderr line'))
+    assert.ok(logHas('stub sealer stdout line'), 'the sealer stdout line is in the log')
+    assert.ok(logHas('stub sealer stderr line'), 'the sealer stderr line is in the log')
+  })
+
+  test('(l2) a log over 1 MiB is moved to statusline-seal.log.1 before the next start appends to a fresh one', async () => {
+    fs.writeFileSync(log(), Buffer.alloc(1024 * 1024 + 1, 0x61))
+    await captureStatusline(payload())
+    await waitFor(() => logHas('stub sealer stdout line'))
+    assert.ok(logHas('stub sealer stdout line'), 'the new line is in the fresh log')
+    assert.ok(fs.statSync(log()).size < 1024, 'the live log was started over')
+    assert.strictEqual(fs.statSync(`${log()}.1`).size, 1024 * 1024 + 1, 'the old log is kept whole as .1')
   })
 })

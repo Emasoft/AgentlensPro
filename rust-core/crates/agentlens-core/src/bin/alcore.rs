@@ -103,6 +103,8 @@ fn usage(msg: &str) -> ! {
 fn statusline_seal_usage(msg: &str) -> ! {
     eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
     eprintln!("usage: alcore statusline-seal --data-dir DIR");
+    // TRDD-RTHA7EWK item 5: the knob is named where the operator reads the usage.
+    eprintln!("env:   AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS  wait before a refused file is tried again, doubling per refusal up to 6 h (default 300000; 0 = no backoff)");
     exit(64);
 }
 
@@ -143,10 +145,15 @@ fn statusline_seal(args: &[String]) -> ! {
     let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
     let counters = agentlens_core::statusline_store::SealCounters::default();
     let sealed = agentlens_core::statusline_store::maybe_seal(&root, &counters, &vars, agentlens_core::now_ms() as f64);
-    println!(
-        "statusline-seal: sealed {sealed} WAL(s), refused {}",
-        counters.corrupt_wals.load(std::sync::atomic::Ordering::Relaxed)
-    );
+    // TRDD-RTHA7EWK item 5: R is the files refused in THIS call (it was corrupt_wals, a counter of a different thing);
+    // W, the files left alone because their marker is younger than its backoff, is printed only when above 0.
+    let refused = counters.refused_files.load(std::sync::atomic::Ordering::Relaxed);
+    let in_backoff = counters.backoff_skips.load(std::sync::atomic::Ordering::Relaxed);
+    let mut line = format!("statusline-seal: sealed {sealed} WAL(s), refused {refused}");
+    if in_backoff > 0 {
+        line.push_str(&format!(", in backoff {in_backoff}"));
+    }
+    println!("{line}");
     exit(0);
 }
 fn main() {

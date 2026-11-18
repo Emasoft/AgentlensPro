@@ -45,7 +45,7 @@ impl Store {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_alcore"));
         cmd.arg("statusline-seal").arg("--data-dir").arg(&self.base);
         // The knobs under test are set per call; an ambient value must not leak in.
-        for k in ["AGENTLENS_STATUSLINE_CLI_SEAL_BYTES", "AGENTLENS_STATUSLINE_SEAL_BUDGET_MS", "AGENTLENS_STATUSLINE_SEAL_ROWS", "AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS", "AGENTLENS_STATUSLINE_SEAL_TEST_DEFAULT_SAMPLE"] {
+        for k in ["AGENTLENS_STATUSLINE_CLI_SEAL_BYTES", "AGENTLENS_STATUSLINE_SEAL_BUDGET_MS", "AGENTLENS_STATUSLINE_SEAL_ROWS", "AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS", "AGENTLENS_STATUSLINE_SEAL_TEST_DEFAULT_SAMPLE", "AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS"] {
             cmd.env_remove(k);
         }
         for (k, v) in env {
@@ -232,6 +232,8 @@ fn a_line_appended_after_the_part_was_written_is_not_deleted_with_the_file() {
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("sealed 0 WAL"), "the grown file must not be sealed: {text}");
+    assert!(text.contains("refused 0"), "a length change is kept, not refused: {text}");
+    assert!(names(&d, "sealfail-", ".json").is_empty(), "a length change is kept, not refused, so it leaves no marker");
     assert!(names(&d, "part-", ".parquet").is_empty(), "the part that misses the late line is removed");
     assert_eq!(names(&d, "wal-", ".ndjson").len(), 1, "the renamed write-ahead file is kept");
     assert_eq!(s.rows(), 4.0, "all four lines are still readable");
@@ -287,13 +289,18 @@ fn a_part_that_lacks_a_key_of_the_file_is_dropped_and_the_file_is_kept() {
     std::fs::write(d.join("wal-cli.ndjson"), late_key_file()).unwrap();
     let (code, out) = s.seal(&[("AGENTLENS_STATUSLINE_SEAL_TEST_DEFAULT_SAMPLE", "1")]);
     assert_eq!(code, 0, "{out}");
+    assert!(out.contains("sealed 0 WAL(s), refused 1"), "{out}");
     assert!(names(&d, "part-", ".parquet").is_empty(), "the part that lacks the key is removed");
     assert_eq!(names(&d, "wal-", ".ndjson").len(), 1, "the file is kept");
     assert_eq!(s.rows(), 30_000.0, "every row is still readable from the kept file");
-    // Without the knob the same file seals whole.
-    let (code, out) = s.seal(&[]);
+    assert_eq!(names(&d, "sealfail-", ".json").len(), 1, "the refusal left one marker beside the file");
+    // Without the knob the same file seals whole. TRDD-RTHA7EWK item 5: the refusal above left a
+    // marker with the default 5 minute backoff, which would skip the file now; a base of 0 turns the
+    // backoff off, so this second call attempts it at once.
+    let (code, out) = s.seal(&[("AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS", "0")]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(names(&d, "part-", ".parquet").len(), 1, "one part");
     assert!(names(&d, "wal-", ".ndjson").is_empty(), "no write-ahead file is left");
+    assert!(names(&d, "sealfail-", ".json").is_empty(), "the seal removed the marker");
     assert_eq!(late_key_stats(&s), (30_000.0, 1.0, 7.0, 449_955_002.5));
 }

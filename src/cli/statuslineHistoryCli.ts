@@ -18,7 +18,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { dataDir } from './cliCore'
-import { EXIT as CLI_EXIT } from './cliErrors'
+import { EXIT as CLI_EXIT, UsageError } from './cliErrors'
 import { flagValue, assertKnownFlags } from './argHelpers'
 import { queryStatusline, type StatuslineStream } from '../statuslineStore'
 import { calcTokenCostUsd, lookupRates } from '../shared/pricing'
@@ -43,6 +43,10 @@ views:
               bracketed 5m/1h because the write rate is tiered by TTL and the tier is not in
               the payload; the truth is inside the bracket.
   raw         individual samples
+  refused     write-ahead files the sealer refused (stream, day, file, attempts, first and last
+              failure, next retry, reason), read off disk with no server. Takes only --json. The next
+              retry is the time the sealer wrote in the marker (its backoff base is
+              AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS, milliseconds, 0 = no backoff)
 
 flags:
   --session ID   restrict to one session id
@@ -588,6 +592,83 @@ export function coverageLine(
   return `coverage: ${shown} row(s), sorted by ${sortedBy} · ${fresh.samples} sample(s) in window · ${freshness}`
 }
 
+/** Name of the view that lists refused write-ahead files. It has no SQL and no store query, so it
+ *  is not in VIEWS and is handled before the VIEWS lookup. */
+const REFUSED_VIEW = 'refused'
+
+function listDirOrEmpty(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw e
+  }
+}
+
+/** One row per `sealfail-<file>.json` marker under `<root>/<stream>/<day>/`. A marker that does not parse
+ *  or lacks a field is listed with reason 'unreadable marker', never skipped: a refused file that the view
+ *  hides is the failure this view exists to show. The next retry of a refused file is the sealer's own
+ *  decision, written by it as nextRetryMs in the marker, never recomputed here. */
+export function readRefusedMarkers(root: string): Array<Record<string, unknown>> {
+  const rows: Array<Record<string, unknown>> = []
+  for (const stream of ['main', 'subagent']) {
+    for (const day of listDirOrEmpty(path.join(root, stream)).sort()) {
+      const dayDir = path.join(root, stream, day)
+      for (const name of listDirOrEmpty(dayDir).sort()) {
+        if (!name.startsWith('sealfail-') || !name.endsWith('.json')) continue
+        const row: Record<string, unknown> = { stream, day, file: name.slice('sealfail-'.length, -'.json'.length) }
+        try {
+          const m = JSON.parse(fs.readFileSync(path.join(dayDir, name), 'utf-8')) as Record<string, unknown>
+          const { attempts, firstFailMs, lastFailMs, reason } = m
+          if (!Number.isInteger(attempts) || (attempts as number) < 1 || !Number.isFinite(firstFailMs) || !Number.isFinite(lastFailMs) || typeof reason !== 'string') {
+            throw new Error('missing or mistyped field')
+          }
+          // An absent or non-finite nextRetryMs is left out of the row (the table prints '-'); the marker is still readable.
+          Object.assign(row, { attempts, firstFailMs, lastFailMs, reason })
+          if (Number.isFinite(m.nextRetryMs)) row.nextRetryMs = m.nextRetryMs
+        } catch {
+          row.reason = 'unreadable marker'
+        }
+        rows.push(row)
+      }
+    }
+  }
+  return rows
+}
+
+/** Local date and time, to the second: a refusal can be days old, so fmtTime's bare clock would mislead. */
+function fmtDateTime(v: unknown): string {
+  const t = Number(v)
+  if (v === undefined || !Number.isFinite(t)) return '-'
+  const d = new Date(t)
+  const p = (x: number): string => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+/** TRDD-RTHA7EWK item 5: the only place a refused write-ahead file is shown. Disk only, no server, no DuckDB. */
+function runRefusedView(argv: string[]): number {
+  const stray = ['--session', '--project', '--since', '--until', '--limit', '--out'].filter(f => argv.includes(f))
+  if (stray.length > 0) throw new UsageError(`the '${REFUSED_VIEW}' view takes only --json, got ${stray.join(', ')}`)
+  const rows = readRefusedMarkers(statuslineRoot())
+  if (argv.includes('--json')) {
+    console.log(JSON.stringify(rows, null, 2))
+  } else if (rows.length === 0) {
+    console.log('no write-ahead file is refused')
+  } else {
+    const tz = tzLabel()
+    console.log(table(rows, [
+      { key: 'stream', label: 'stream' },
+      { key: 'day', label: 'day' },
+      { key: 'file', label: 'file' },
+      { key: 'attempts', label: 'attempts' },
+      { key: 'firstFailMs', label: `first failure ${tz}`, fmt: fmtDateTime },
+      { key: 'lastFailMs', label: `last failure ${tz}`, fmt: fmtDateTime },
+      { key: 'nextRetryMs', label: `next retry ${tz}`, fmt: fmtDateTime },
+      { key: 'reason', label: 'reason' },
+    ]))
+  }
+  return EXIT.OK
+}
 export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
   if (argv[0] === '--help' || argv[0] === '-h') {
     console.log(STATUSLINE_HISTORY_USAGE)
@@ -611,9 +692,10 @@ export async function runStatuslineHistoryCli(argv: string[]): Promise<number> {
     if (!a.startsWith('--')) { viewName = a; break }
     if (VALUED_FLAGS.has(a)) i++
   }
+  if (viewName === REFUSED_VIEW) return runRefusedView(argv)
   const view = VIEWS[viewName]
   if (!view) {
-    console.error(`unknown view '${viewName}' — expected one of: ${Object.keys(VIEWS).join(', ')}`)
+    console.error(`unknown view '${viewName}' — expected one of: ${[...Object.keys(VIEWS), REFUSED_VIEW].join(', ')}`)
     return EXIT.USAGE
   }
 
