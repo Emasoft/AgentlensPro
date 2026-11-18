@@ -572,6 +572,20 @@ export async function findServerPid(): Promise<number | null> {
   return null
 }
 
+/** The lock holder `server stop` names in its "stuck behind" text: the FIRST line of `logText` that
+ *  matches, or null. Reads the line alcore prints when its bounded stop wait expires —
+ *  rust-core/crates/agentlens-core/src/bin/alcore.rs, format
+ *  `<log_ts> alcore: stop timed out after <N> ms waiting on <holder> — skipping the flush, releasing the pid lock anyway`.
+ *  The capture stops before the " — " tail, so the CLI prints only the holder (`<file>:<line> (holding for N ms)` or
+ *  `unknown`; neither contains " — ", see shutdown.rs flush_with_deadline and the alcore.rs fallback).
+ *  The `stop waiting on` alternative matches no line the current alcore emits; it is kept for an older deployed build.
+ *  The CLI's "stuck behind" message depends on that line shape; keep alcore.rs and this regex in lockstep
+ *  (TRDD-N60JUWU3). */
+export function stopHolderFromLog(logText: string): string | null {
+  const holderLine = logText.match(/alcore: stop (?:waiting on|timed out after \d+ ms waiting on) (.+?)(?: — .*)?$/m)
+  return holderLine ? holderLine[1] : null
+}
+
 export async function stopServer(): Promise<void> {
   const pid = await findServerPid()
   if (pid === null) {
@@ -604,8 +618,8 @@ export async function stopServer(): Promise<void> {
   // Name the lock holder if the server's own bounded-wait poll (TRDD-N60JUWU3) already logged
   // one for this attempt — scoped to bytes written since our own SIGTERM (logTail's fromOffset),
   // never a stale holder from an earlier, unrelated stop.
-  const holderLine = logTail(40, logStart).match(/alcore: stop (?:waiting on|timed out .*waiting on) (.+)/)
-  const holderNote = holderLine ? ` — stuck behind ${holderLine[1]}` : ''
+  const holder = stopHolderFromLog(logTail(40, logStart))
+  const holderNote = holder !== null ? ` — stuck behind ${holder}` : ''
   throw new Error(`server (pid ${pid}) is still running 15s after SIGTERM${holderNote} — a large store can take longer to flush; watch it before escalating to SIGKILL (see server.log for "alcore: stop waiting on <holder>")`)
 }
 
