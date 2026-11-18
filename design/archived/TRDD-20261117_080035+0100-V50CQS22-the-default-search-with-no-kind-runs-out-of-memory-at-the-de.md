@@ -1,10 +1,10 @@
 ---
 trdd-id: V50CQS22
 title: The default search with no kind runs out of memory at the default limit on this project
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-11-17T08:00:35+0100
-updated: 2026-11-18T21:09:41+0100
+updated: 2026-11-18T21:10:39+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -46,6 +46,9 @@ Not known: the cause. Read, not tested: element mode caps every scan group at EL
 
 - 2026-11-17T08:00:35+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-17T09:11:47+0100 — column → dev by main-agent@agentlenspro. fix committed, open boxes remain
+- 2026-11-18T21:10:30+0100 — column → testing by main-agent@agentlenspro. all six acceptance boxes ticked with evidence (e255e6d4)
+- 2026-11-18T21:10:38+0100 — column → ai_review by main-agent@agentlenspro. searchCli test file 86 passing, eslint clean, check-types rc 0
+- 2026-11-18T21:10:39+0100 — COMPLETE by main-agent@agentlenspro. harness adversarial review PASS on the measurement and its report; owner delegated decisions while away (2026-11-18).
 
 ## STATE
 
