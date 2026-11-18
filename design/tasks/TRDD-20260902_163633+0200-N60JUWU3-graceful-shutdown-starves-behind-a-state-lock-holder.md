@@ -3,14 +3,14 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-11-19T00:50:20+0100
+updated: 2026-11-19T00:55:03+0100
 current-owner: main-session
 task-type: bugfix
 priority: high
 min-approval-requirement: none
 created-by: UTFVMVT8
 related: [UTFVMVT8, 2R36W8Q1, HFV4AIT7]
-implementation-commits: [420e6bb9, 17a0667b]
+implementation-commits: [420e6bb9, 17a0667b, d52cebab]
 status: tasked
 ---
 
@@ -188,7 +188,7 @@ cooperative request path.
       a test in `src/test/serverSingleInstance.test.ts`'s style against an isolated `DATA_DIR`),
       `agentlenspro server stop` completes within 10 s and the span/statusline flushes are on disk.
 - [ ] The next boot after such a stop classifies the gap as "shutdown", not "crash".
-- [ ] `agentlenspro server stop`'s own "still running after 10s" message names the lock holder it
+- [x] `agentlenspro server stop`'s own "still running after 10s" message names the lock holder it
       is waiting behind when that is the cause.
 
 ## Notes and lessons learned
@@ -206,3 +206,4 @@ cooperative request path.
 
 2026-11-19T00:43+0100 main agent — source: reports_dev/sonnet-worker/20261119_w63-triage-mvr6-n60j/report.md (read whole). The fix landed in 420e6bb9; three Acceptance boxes are open. Box 2 has a real gap, INFERRED from two read sites and not run: record_stop runs only in the Flushed arm of alcore.rs, and collector_lifecycle.rs:125 reads a missing stoppedAt as crash, so the boot after a timed-out stop reports a crash. That fix and a unit test are in dev (worker w65). Box 3: the CLI regex is extracted into a pure function, with a unit test against the exact alcore line, in dev (worker w66). OWNER QUESTION on box 1: on TimedOut the flush is skipped by design, so 'span/statusline flushes on disk' cannot hold under a real 120 s lock holder; only the stop bound, the pid release and the log line can be asserted. An end-to-end test also needs an out-of-process lock holder, which means a feature-gated test hook in production code (the card forbids a debug endpoint). Proposal, not done: reword box 1 to 'stop completes within the bound, releases the pid lock, and logs the holder', and decide whether a feature-gated test hook is acceptable.
 2026-11-19T00:50+0100 main agent, correction to the entry above: box 3 was not done when that line was written, the worker had only been dispatched. Box 2: 17a0667b landed (record_stop_from_disk after both runtimes stop, unit test timed_out_stop_from_disk_reads_as_shutdown, 5 lib tests and the alcore build passing on the combined tree). Box 2 stays UNTICKED: the flag and the call site are covered only by the build, and a thread abandoned by shutdown_timeout (the stuck holder) can still persist the in-memory store over the marker. A real proof needs the same out-of-process lock-holder hook as box 1, so boxes 1 and 2 both WAIT ON THE OWNER's decision recorded above. Box 3: the holder regex fix and its tests are in dev (worker w66, not committed).
+2026-11-19T00:55+0100 main agent: box 3 ticked on d52cebab. stopHolderFromLog extracts the holder from the alcore 'stop timed out after N ms waiting on <holder>' line (capture stops before the ' — ' tail), and stopServer appends ' — stuck behind <holder>'. 9 unit tests, one of them reading the format string out of alcore.rs; serverStopBoundedWait 1 passing. Not shown end to end: a real held lock producing that line needs the box 1 hook (owner decision above). implementation-commits gains d52cebab.
