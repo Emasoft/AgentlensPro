@@ -4,7 +4,7 @@ title: The catch-up card save tombstones every file key the store lacks with no 
 column: todo
 status: tasked
 created: 2026-11-17T17:56:24+0100
-updated: 2026-11-18T00:45:09+0100
+updated: 2026-11-18T05:42:00+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -57,6 +57,7 @@ CORRECTION TO THE INCREMENT B SPEC (2026-11-17T20:47:00+0100, main agent). Point
 
 - 2026-11-17T17:56:24+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-17T18:32:17+0100 — column → todo by main-agent@agentlenspro. the missing ceiling is in practice a new deletion (live delta a tenth of the compaction size after 18 days); blocks the release
+- 2026-11-18 note by main-agent@agentlenspro: item (a) of the deferred list is done in the commit after 44f31935 (comment at the tombstone loop of DeltaLog::save_from reworded to what was read; log_reader.rs note points at it). Item (b), the dated correction for d46ef1ec, is still owed: read reports_dev/PGMMB2QG/box6-run-20261118_004509+0100 first.
 
 ## Notes
 
