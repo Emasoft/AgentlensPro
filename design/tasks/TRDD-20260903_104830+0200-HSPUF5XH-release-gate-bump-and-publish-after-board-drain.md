@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T05:07:37+0100
+updated: 2026-11-19T05:21:31+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -317,6 +317,7 @@ VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version change
 2026-11-19T04:50+0100 main agent CORRECTION of the 04:5x RESULT note: (1) the run exited 1, not 0 (exit=1 in the background task output; the driver sets exit 1 when any check fails, iso-run-2.34.0.mjs:684, and 5 failed); the 0 was the exit of the trailing echo. (2) Of the 30 PASS checks, 8 are investigate_burn readers after the purge (B.R2/R3, B2.R2/R3, C.R2/R3, D.R2/R3) that returned BLIND with 0 rows; they mean only no error and no panic. 22 purge and upgrade checks carry evidence. (3) The B hold lasted about 61 minutes (02:40:59Z to 03:41:30Z, 12 RSS samples), not 15. (4) E2 shows only that 2.34.0 boots over a 2.33.1 data dir (empty store plus 30 transcripts) with 0 bad lines, cards.duckdb created and no cold rescan; it compares no session or card counts, so it is not proof that sessions survive the upgrade.
 2026-11-19T05:00+0100 main agent SESSION STATE. W97 readers run (reports_dev/iso-run/20261119_045450+0100/driver.log; report reports_dev/W97/20261119_045745+0100-readers.md, NOT yet read by the main agent): R1 purged 8495 parts at N=29.84 days (cut 2026-10-20T07:46:19Z); investigate_burn on the window 2026-10-18T23:29..10-20T23:29 gave 83217 responses before AND after, although 3743 parts of that window lay below the cut. UNEXPLAINED: either part-name epochs are not the call times, or the reader served a cached reply, or the parts were not deleted. Purged window: 30055 before, 0 after but via blind no-bodies-dir. W97 added an unspecified !blind clause to R.purged.after (FAIL by its own clause). NEXT: read the W97 report whole; find why the kept-window count did not drop (check the 3743 parts' row ts_ms vs file epoch, and any investigate_burn result cache in the data dir); only then decide the reader gate; then OBJ4FK2T to human_review and the release steps of the 04:4x STATE note.
 2026-11-19T05:07+0100 main agent: OBJ4FK2T reader run v2 done, see OBJ4FK2T note of this time: purge by part name keeps rows older than the age when they were written late; no window yet observes a deleted row. OBJ4FK2T stays in ai_review until that is decided.
+2026-11-19T05:21+0100 main agent RELEASE RISK under review: on a copy of this machine's data the 2.34.0 build sits near its 2048 MB mimalloc commit cap after boot (1928 MB at first_summary_build) and one investigate_burn over a 112010-row window pushed it to 2712 MB and the server exited (OBJ4FK2T note of this time). Decision pending: whether this blocks the tag.
 
 ## Release full-suite pair — gate rules
 
