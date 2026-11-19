@@ -4,7 +4,7 @@ title: summary built over a 14-day card window so the 2048 MB cap holds
 column: todo
 status: tasked
 created: 2026-11-19T06:34:46+0100
-updated: 2026-11-19T10:22:02+0100
+updated: 2026-11-19T11:01:35+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -41,6 +41,7 @@ Stopgap carved out of TRDD-735Q3JF4 so the release (TRDD-HSPUF5XH) can unblock; 
 ## Step C constraint
 
 2026-11-19: every step C disclosure wrapper (/api/summary, first SSE frame, push_update, dashboard HTML, MCP aggregates) must take the summary and its window from ONE summary_now_windowed call (one lock, one cache slot; store_summary clears the window on each store). Pairing st.summary_window with a summary Arc taken under a different lock reintroduces the stale-window mismatch the harness review flagged; no version ties the two otherwise.
+2026-11-19 11:01 DECISIONS for step C (advisor consulted; facts in reports_dev/ER88PXNB/20261119_102600+0100-c-summary-serving-sites.md and 20261119_110000+0100-c-spec-facts.md). Split: C1 = /api/summary, GET /, first SSE frame, push_update; C2 = every MCP arm and /api/instruction-suggestions still on summary_now, plus a source guard (no response-path summary_now left, no read of summary_window outside summary_now_windowed); C3 = CHANGELOG, README, operations.md. C1 writes window.to_json() as a trailing summaryWindow key through a serialization wrapper (StrippedViewWindowed) and build_update_payload's sessionSummary, never into the cached Value; spec reports_dev/ER88PXNB/specs/20261119_110004+0100-c1-spec.md. C2 writes summaryWindow as a one-line STRING inserted as the FIRST key of an object payload: lean shaping (lean_response.rs shape_generic) puts top-level scalars first and drops or elides objects under the token ceiling (narrow_to keeps the first N keys), and the CLI digest prints only verdict, text, or the first 300 characters of the JSON. get_instruction_suggestions success is a bare array and stays undisclosed; the dashboard receives summaryWindow but renders nothing yet; both go into the CHANGELOG as known limitations. No by-id answer needs the field: summary_for_ids serves a complete family build or a cached summary that already holds every family card. Time wording fix for the 10:22 correction: about 10:03 and 10:16, read from the updated: field.
 
 ## Known limitations
 
