@@ -217,9 +217,12 @@ async function defaultRepair(step: Step, ctx: Ctx): Promise<RepairOutcome> {
 }
 
 async function defaultFullSetup(ctx: Ctx): Promise<boolean> {
+  // pathEnv is forwarded on purpose: without it runSetup falls back to process.env.PATH, so the hooks step
+  // looked for agentlenspro on the ambient PATH instead of the context's (CI on Linux has no global install:
+  // "refusing: agentlenspro is not on PATH", first-run setup failed; CI run 44592701995, 2026-11-19).
   const outcome = await runSetup({
     yes: true, forceInstall: ctx.forceInstall, home: ctx.home, dataDir: ctx.dataDir, settingsPath: ctx.settingsPath,
-    skillsDir: ctx.skillsDir, agentsDir: ctx.agentsDir, repoRoot: ctx.repoRoot, log: () => { /* quiet: one summary line only */ },
+    skillsDir: ctx.skillsDir, agentsDir: ctx.agentsDir, repoRoot: ctx.repoRoot, pathEnv: ctx.pathEnv, log: () => { /* quiet: one summary line only */ },
   })
   return outcome.exitCode === 0
 }
