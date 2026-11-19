@@ -4,7 +4,7 @@ title: alcore mimalloc commit reaches about 2.05 GB within 15 s on the clone and
 column: todo
 status: tasked
 created: 2026-10-23T04:39:08+0200
-updated: 2026-11-18T10:34:32+0100
+updated: 2026-11-19T05:42:37+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -209,3 +209,7 @@ CORRECTIONS after review to the note FROM TRDD-12FGMAEP above and to the archive
 ## Parked 2026-11-18
 
 2026-11-18 main agent: PARKED by owner order (verbatim): «windows is not a priority now. i need the search option asap!». Increment 4 (a summary window over the card list) was drafted, not proposed and not written: draft at scripts_dev/735q-inc4/proposal-draft.md; facts at reports_dev/cheap-worker/20261118_w17-735q-window-facts.md (read whole by the main agent). Measured by the prepared script on a copy of cards.duckdb (stored card bytes): all 110,619 cards 181.4 MB; active in the last 7 days plus family 6,893 cards 27.6 MB; 29 cards carry a timeline, 18.2 MB, all inside the last day; largest card 3.6 MB. Code facts for the include hook, by the worker report: one MCP dispatch site at ui.rs:2421 to 2423; argument names sessionId, parentSessionId, session; routes at ui.rs:4165 and 4206; span window knob summaryWindowHours at retention_config.rs:22. Owed before a proposal: the prediction restated on these bytes; the consumers whose need was not classified named one by one. The server stays down behind the brake until this card resumes.
+
+## Notes and lessons learned
+
+2026-11-19T05:42+0100 main agent RESUMED as a release blocker of TRDD-HSPUF5XH (the search option the owner put first has shipped). New measurement on the 2.34.0 release build (builds_dev/rel-2.34.0-3736dd88/alcore), isolated readers runs on a copy of this machine's cards.duckdb (110619 cards), offsets and store, no transcripts: v5 (reports_dev/iso-run/20261119_052636+0100, alone at load 15.5) both servers exited on the cap with NO request in flight, R0 at uptime 27.3 s with commit 2058 MB, R1 at 21.4 s with 2048 MB; first_summary_build at up 8.4 s and 2.4 s with commit 2013 and 1995 MB; the driver sent no HTTP request other than /api/server-stats polls in waitReady before READY. So on today's card count the first summary build alone reaches the cap, whatever asks for it. The line-39 note 'the whole-process backstop of TRDD-12FGMAEP is still owed before any publish' is out of date: 12FGMAEP closed 2026-11-18 with the backstop in 73211a46 (HSPUF5XH note 2026-11-19T03:57).
