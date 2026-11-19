@@ -1,10 +1,10 @@
 ---
 trdd-id: OBJ4FK2T
 title: store api_calls parts have no retention by age
-column: dev
+column: ai_review
 status: tasked
 created: 2026-11-19T01:24:10+0100
-updated: 2026-11-19T02:48:30+0100
+updated: 2026-11-19T02:53:36+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-19T01:24:10+0100
-implementation-commits: [d195661b, 43cce6bf, 07d7f536, 1793ba8f, 26838862]
+implementation-commits: [d195661b, 43cce6bf, 07d7f536, 1793ba8f, 26838862, d1363139, 32f9618b]
 ---
 
 # store api_calls parts have no retention by age
@@ -31,6 +31,8 @@ Split out of TRDD-IRNHEN4Z on 2026-11-19 as a release blocker of TRDD-HSPUF5XH: 
 
 - 2026-11-19T01:24:10+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T02:16:12+0100 — column → dev by main-agent@agentlenspro. implemented in d195661b; TS config mirror pending
+- 2026-11-19T02:53:36+0100 — column → testing by main-agent@agentlenspro. code and tests committed (d195661b..32f9618b); main-agent runs: api_call_retention 4, chores_purge 4, retention_config 2, retentionConfig 12, clippy 0
+- 2026-11-19T02:53:36+0100 — column → ai_review by main-agent@agentlenspro. testing passed through: the runs above are the testing evidence; the harness review of this turn is the AI review
 
 ## Notes and lessons learned
 
