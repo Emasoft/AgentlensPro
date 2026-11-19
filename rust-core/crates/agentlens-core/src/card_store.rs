@@ -284,9 +284,10 @@ pub struct CardStore {
     /// Bumped by every `clear`; slots restart from 0 after one, so a consumer that remembers slot
     /// positions (the summary engine) can tell a restart from ordinary growth.
     epoch: u64,
-    /// TRDD-AXJH3WTU: the store write generation. Bumped by `put_arc` (the one card write path, so also every `CoreState::put_log_session`)
-    /// and by `discard_cards`; NOT by `clear` (the clear path has `epoch` and `finish_clear_after_save`) nor `demote_cold` (it adds,
-    /// replaces and removes no card). WHY: `DurableState` compares it with the generation its last card save covered, so a writer that
+    /// TRDD-AXJH3WTU: the store write generation. Bumped by `put_arc` (the one card write path, so also every `CoreState::put_log_session`),
+    /// by `discard_cards`, and by `demote_cold` once per card it demotes (its stored text changes: `strip_timeline_value` sets
+    /// `timelineTruncatedCount` and `timelineRetainedBytes`, which the persisted record keeps). NOT by `clear`
+    /// (the clear path has `epoch` and `finish_clear_after_save`). WHY: `DurableState` compares it with the generation its last card save covered, so a writer that
     /// never calls `mark_dirty` (the `/api/import` handler, the on-demand reparse in ui.rs) still reaches the card log at the next
     /// timed tick. A plain `u64`: every writer holds `&mut CardStore` (under the CoreState mutex), so no atomic is needed.
     write_generation: u64,
@@ -1094,6 +1095,10 @@ impl CardStore {
             // same delta. Applied AFTER the UPDATE committed, for the same reason the resident
             // strip is: a failed UPDATE must leave the counter describing the table.
             self.card_bytes = (self.card_bytes as i64 + bytes_delta) as u64;
+            // TRDD-AXJH3WTU: the table holds the new text, so the generation moves here, once per UPDATE. A bump after the loop would be
+            // skipped by the `?` returns above it, which leave the cards demoted before the failing one changed in the table.
+            // WHY the card log must see it: a demotion alone, with no put in the same lock hold, must still reach the card log.
+            self.write_generation += 1;
             demoted += 1;
         }
         Ok(demoted)
