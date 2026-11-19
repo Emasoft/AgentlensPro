@@ -87,19 +87,23 @@ suite('last-compact / resumeStaleness under the kill-switch (TRDD-RBBEX59R e, B6
 
   test('file half armed, newest record OLDER than the flag mtime: exit 2, stdout EMPTY, one stderr line naming the arm time (all output modes)', () => {
     preCompact(now - 3_600_000)
-    armFileAt(now - 60_000)
+    // Whole seconds: utimesSync of an integer-ms time reads back 1/1024 ms low on node 20/22 about half the time (libuv), which shifted the printed arm time by 1 ms (CI flake 2026-11-19).
+    const armedAt = Math.floor((now - 60_000) / 1000) * 1000
+    armFileAt(armedAt)
     for (const extra of [[], ['--seconds'], ['--json']]) {
       const r = run(extra)
       assert.strictEqual(r.code, 2, `${extra.join(' ')}: ${r.stderr}`)
       assert.strictEqual(r.stdout, '', 'a pre-switch record must print nothing on stdout')
-      assert.ok(r.stderr.includes(`armed at ${new Date(now - 60_000).toISOString()}`), r.stderr)
+      assert.ok(r.stderr.includes(`armed at ${new Date(armedAt).toISOString()}`), r.stderr)
       assert.strictEqual(r.stderr.split('\n').length, 1, 'exactly one stderr line')
       assert.ok(r.stderr.includes('agentlenspro enable'), 'the line names the remedy')
     }
   })
 
   test('file half armed, newest record stamped EXACTLY at the flag mtime: trusted (the boundary is strict less-than)', () => {
-    const at = Math.floor(now - 60_000)
+    // Whole seconds: utimesSync of an integer-ms time reads back 1/1024 ms low on node 20/22 about half the time (libuv),
+    // so the flag mtime would sit just below the record and this test would exercise the older-record branch, not the boundary.
+    const at = Math.floor((now - 60_000) / 1000) * 1000
     preCompact(at)
     const p = armFileAt(at)
     // utimesSync can round the mtime UP on a coarse-resolution filesystem; then the record would be OLDER than the flag and the test would exercise the wrong branch.

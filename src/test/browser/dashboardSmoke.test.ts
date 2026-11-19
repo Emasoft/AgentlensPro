@@ -178,6 +178,7 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
   let uiPort = 0
   const tmpDirs: string[] = []   // one per boot ATTEMPT — a retried attempt still left a dir behind
   let getServerLog: () => string = () => ''
+  let shortTmp: string | undefined
   const shotStamp = new Date().toISOString().replace(/[:.]/g, '-')
 
   function attachErrorCollector(page: Page): string[] {
@@ -293,10 +294,17 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
 
     fs.mkdirSync(SCREENSHOT_DIR, { recursive: true })
     const { default: puppeteer } = await import('puppeteer-core')
+    // Chrome writes its SingletonSocket under TMPDIR. The capped TMPDIR (tests_dev/tmp/run-<ts>-<pid>) makes
+    // that path exceed the unix socket limit (107 bytes Linux, 103 macOS): Chrome dies with "Socket path too long".
+    // This short dir holds only a symlink back into the capped TMPDIR, so Chrome's temp data still lands inside
+    // the capped run dir and the 4 GB cap still counts it.
+    shortTmp = fs.mkdtempSync('/tmp/als-')
+    fs.symlinkSync(os.tmpdir(), path.join(shortTmp, 't'))
     browser = await puppeteer.launch({
       executablePath: chromePath,
       headless: true,  // HARD requirement: never open a visible window in tests
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      env: { ...process.env, TMPDIR: path.join(shortTmp, 't') },
     })
   })
 
@@ -327,6 +335,11 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
           }
         } finally {
           for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ } }
+          if (shortTmp) {
+            // Best effort, like the loop above: a teardown error must not mask an earlier failure, so a real error is logged to stderr instead of thrown.
+            try { fs.unlinkSync(path.join(shortTmp, 't')) } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write('[browser-smoke] cleanup failed under ' + shortTmp + ': ' + String(e) + '\n') }
+            try { fs.rmdirSync(shortTmp) } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write('[browser-smoke] cleanup failed under ' + shortTmp + ': ' + String(e) + '\n') }
+          }
         }
       }
     }

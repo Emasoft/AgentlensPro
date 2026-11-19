@@ -34,6 +34,23 @@ function write(name: string, content: string, mtimeMs: number): string {
   return p
 }
 
+// Replace the file at p with new content and mtime, keeping the inode distinct. The old file
+// object is held open until the new one exists: an unlinked inode is freed only at its last
+// close, so the new file cannot take its number. Linux reused a just-freed inode number at once
+// (observed in a node:22 Docker container; ext4 on the CI runner INFERRED; these tests passed on
+// macOS APFS), so a plain unlink-then-create can keep the same inode there, the
+// replacement reads as unchanged, and the 'replaced' class is never reached on Linux CI.
+function replaceFile(p: string, content: string, mtimeMs: number): void {
+  const old = fs.openSync(p, 'r')
+  try {
+    fs.unlinkSync(p)
+    fs.writeFileSync(p, content)
+    fs.utimesSync(p, new Date(mtimeMs), new Date(mtimeMs))
+  } finally {
+    fs.closeSync(old)
+  }
+}
+
 // The outcome object the caller passes to outstandingSources. It is an OBJECT, not a
 // bare boolean, so a caller cannot assert completeness it never checked: the
 // compiler stops `true` where `{ complete: boolean }` is required.
@@ -150,9 +167,8 @@ suite('discovery — deterministic classification of change', () => {
     const p = path.join(corpus, 'a.request.json')
     write('a.request.json', body(500), NOW)
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
-    // Remove and recreate so the inode differs — a replacement, not an in-place rewrite.
-    fs.unlinkSync(p)
-    write('a.request.json', body(500), NOW + 1000)
+    // Replace the file so its inode differs: a replacement, not an in-place rewrite.
+    replaceFile(p, body(500), NOW + 1000)
     const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
     assert.strictEqual(r.counts.replaced, 1)
   })
@@ -433,8 +449,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     const p = path.join(corpus, 'a.request.json')
     write('a.request.json', body(500), NOW)
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
-    fs.unlinkSync(p)
-    write('a.request.json', body(500), NOW + 1000) // same bytes, different inode
+    replaceFile(p, body(500), NOW + 1000) // same bytes, different inode
     const r = discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
     assert.strictEqual(r.counts.replaced, 1, 'the file object was replaced')
     const rec = latestByPath(loadSourceIndex(indexPath).records).get(p)!
@@ -500,8 +515,7 @@ suite('discovery — crash at every checkpoint boundary', () => {
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW })
 
     // Replace it: same bytes, a new file object.
-    fs.unlinkSync(p)
-    write('a.request.json', same, NOW + 1000)
+    replaceFile(p, same, NOW + 1000)
     discoverRawBodySources({ corpusDir: corpus, indexPath, nowMs: NOW + 2000 })
     let rec = latestByPath(loadSourceIndex(indexPath).records).get(p)!
     assert.strictEqual(rec.class, 'replaced')
