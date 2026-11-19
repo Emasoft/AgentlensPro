@@ -244,7 +244,14 @@ const MAX_NON_TEST_OPENERS = 27
 //     a proxied connection). Folding its cases into another opener test file would hide the same construction.
 //     The file became an opener in f2374de6, which landed with no `pnpm run compile`; the cap was first
 //     seen exceeded by the compile of 2026-11-18.
-const MAX_TEST_OPENERS = 12
+// 2026-11-19 (TRDD-HSPUF5XH): DEFENDED RAISE 12 -> 13, the same wrong-way move for the Rust twin of the file above:
+//   rust-core/crates/agentlens-store/tests/duck_path_pattern.rs (290f0bc8, TRDD-C6W0SWUT): its canary tests (canary_tree and the
+//     three tests after it) open raw `Connection::open_in_memory()` handles to prove that DuckDB `read_*` reads a quote-doubled
+//     path holding * ? or [ as a glob and that `glob_escape` / `sq_path` fix it; its production-chain test already goes through
+//     `open_store`. The reasons given above for duckPathPattern.test.ts apply unchanged. The file became an opener in 290f0bc8,
+//     which landed with no `pnpm run compile`; the cap was first seen exceeded by the release-gate compile of 2026-11-19.
+//     `git log -G` over the three opener patterns since da8fe5af names 290f0bc8 only.
+const MAX_TEST_OPENERS = 13
 
 // WHAT THIS CAP DOES NOT MEASURE — stated here because the commit that added it overclaimed.
 // It counts CONSTRUCTION (`X::open`, `new SQL.Database`, `DuckDBInstance.create`). The card says
