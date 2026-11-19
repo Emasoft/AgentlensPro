@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T01:37:25+0100
+updated: 2026-11-19T01:43:19+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -290,6 +290,7 @@ VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version change
 2026-10-16: USSG465Q removed from blocked-by: it is complete (ddb58799).
 2026-10-16: drops 3RVTC1HY (complete; not yet deployed, which is this card's step).
 2026-10-17: O8MGRU72 complete (commits 3a9ec263, 45a7711a, 14e33321) and removed from blocked-by; its open residue (one intermittent watcher test, one SIGKILLed full run) is recorded on its STATE block.
+2026-11-19 lock count redone with one pattern (\.lock() or \.lock_timed() on any binding) over the whole start_sweeper: v2.33.1 lines 950-1064 hold 3 (965, 983, 1051); HEAD lines 1769-2045 hold 6 (1788, 1824, 1895, 1946, 1980, 2017). Same counts; the earlier tag span 950-1067 is corrected to 950-1064.
 
 ## Release full-suite pair — gate rules
 

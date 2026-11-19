@@ -4,7 +4,7 @@ title: A start after an interrupted clear exits when the card log cannot be read
 column: ai_review
 status: tasked
 created: 2026-11-17T19:44:14+0100
-updated: 2026-11-19T01:38:19+0100
+updated: 2026-11-19T01:43:18+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -35,7 +35,14 @@ Whether this has ever happened on a real folder. Whether the same holds for an u
 - 2026-11-17T19:44:14+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T01:25:08+0100 — column → todo by main-agent@agentlenspro. release blocker of TRDD-HSPUF5XH (Release list decision 2026-11-19)
 - 2026-11-19T01:38:19+0100 — column → ai_review by main-agent@agentlenspro. code and tests committed; the harness review of this turn is the AI review
+2026-11-19 main-agent@agentlenspro: the move todo to ai_review was direct; dev was worker W73 and testing was the main-agent run of sweeper_backstop_tests (23 passed), with no stop in the dev or testing column.
 
 ## Notes
 
 2026-11-19T01:38:13+0100 main agent: implemented by W73 (report reports_dev/sonnet-worker/20261119_w73-muz04jyu/report.md, read by the main agent). restore_from_snapshot no longer loads either log when a clear was interrupted (log_reader.rs:964-967 read by the main agent); that branch replaces both logs with rewrite_from, which reads neither old file. Box 1: the new test failed before the fix with the corrupt-line Err (worker run, exit 101) and passes after. Box 2: met for the interrupted-clear branch; a second test corrupts the card snapshot and the offsets log too. DECISION in writing on the stale-version branch: it keeps loading both logs, because it tombstones with save(&IndexMap::new()), which diffs against the keys the load seeds (W73 report line 16); so a corrupt card log fails the start there exactly as in the normal branch. Box 3: new test a_normal_start_next_to_a_corrupt_card_log_still_fails_the_start. Behaviour change named: the 'an /api/clear was interrupted' line now prints on every interrupted-clear start, even with empty logs. Main-agent run 2026-11-19: cargo test -p agentlens-core --lib sweeper_backstop_tests, 23 passed, exit 0 (load 18 at start); clippy -D warnings exit 0 by the worker. Not covered: rewrite_from returns Err when a delta cannot be removed, where save did not.
+
+## Notes and lessons learned
+
+2026-11-19 main-agent review answer: box 2 checked against the whole 58614f10 diff and log_reader.rs 996-1009, read by the main agent: on the interrupted-clear path both rewrite_from calls run, then stamp_version, then finish_clear, the order the JDQR0HDT comment requires. The stale-version branch keeps load+save: delta_log.rs 460 (load seeds written) and 879 (save tombstones only unseen written keys) confirm that save needs the load.
+2026-11-19 decision: the new Err path is accepted. rewrite_from returns Err when the old delta cannot be removed (pinned by the delta_log test a_rewrite_from_whose_delta_cannot_be_removed_is_an_err_and_leaves_written_as_it_was), because that delta would replay stale records under the new empty snapshot. At start the ? exits alcore with the error in server.log, the clear flag stays 1, and the next start repeats the branch, so no cleared card is restored. This is the fail-fast the branch comment already states for disk errors.
+2026-11-19 scope of the evidence: the restore path returns Ok in unit tests only; no real alcore start against a corrupt card log was run.

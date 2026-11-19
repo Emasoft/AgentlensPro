@@ -4,7 +4,7 @@ title: The Docker image still copies and runs the retired standalone server bund
 column: todo
 status: tasked
 created: 2026-11-19T01:23:56+0100
-updated: 2026-11-19T01:37:26+0100
+updated: 2026-11-19T01:43:18+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -29,3 +29,7 @@ Split out of TRDD-YL3EWT6N (its OPEN item "the Dockerfile repair") on 2026-11-19
 ## Approval log
 
 - 2026-11-19T01:23:56+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes and lessons learned
+
+2026-11-19 correction: the earlier reason (a run cannot download the artifacts of another run) is wrong; actions/download-artifact v4 accepts run-id and github-token. The real obstacle is order: docker.yml and publish.yml start on the same tag at the same time, so the publish.yml binaries may not exist yet when docker.yml needs them, and waiting on publish.yml needs a workflow_run trigger, a larger change than compiling alcore in the image.
