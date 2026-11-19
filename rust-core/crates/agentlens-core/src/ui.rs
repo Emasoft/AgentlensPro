@@ -5046,9 +5046,10 @@ mod rebuild_admission_tests {
     /// `&mut CoreState` from a caller who is holding the lock — which is exactly what
     /// `hook_events::ingest_hook_event` does, called with the guard live from `ui.rs`.
     ///
-    /// So: scan every other source file in the crate, and name the one site that is known and
-    /// still open. Naming it is the point. An allowlist entry is a debt the test forces someone to
-    /// look at; silence is a debt nobody can see — and silence is what let site 20 through.
+    /// So: scan every other source file in the crate. No site is known and open today: the last one, the
+    /// StopFailure calibration in hook_events.rs, reads the memoized burn subset since TRDD-ER88PXNB. If one has to
+    /// be allowed again, name it here: an allowlist entry is a debt the test forces someone to look at; silence is
+    /// a debt nobody can see — and silence is what let site 20 through.
     #[test]
     fn no_other_file_rebuilds_the_summary_from_a_caller_holding_the_lock() {
         let rebuilders = ["build_session_summary", "live_burn_status", "session_summary"];
@@ -5057,19 +5058,9 @@ mod rebuild_admission_tests {
         // walk straight past a needle that only knows the dot.
         let needles: Vec<String> =
             rebuilders.iter().flat_map(|n| [format!(".{n}("), format!("CoreState::{n}(")]).collect();
-        // THE ONE KNOWN, STILL-OPEN SITE — pinned to its exact line text, not skipped by filename.
-        // Skipping the FILE would blind this test to a second rebuild appearing in it, which is the
-        // same "the guard could not see it" failure this whole card is about. TRDD-QE114936 carried
-        // it forward rather than fixing it: it is on the INGEST path (POST /api/hook-events →
-        // `ingest_hook_event`, StopFailure branch), not the MCP read path this card covers, and
-        // moving it changes where capacity calibration reads its sessions. DELETE THIS when it
-        // lands — the assertion below then requires the count to be 0 and fails until you do.
-        // Assembled at runtime for the same reason the needles are: spelled out in full, this pin
-        // is itself a `.build_session_summary(` occurrence in ui.rs, and the test above rightly
-        // fails on it. (It did — which is a free demonstration that that test is live.)
-        let known_open = ("hook_events.rs", format!("let sessions = st.build_{}(now_ms as f64);", "session_summary"));
+        // TRDD-ER88PXNB: the hook_events.rs StopFailure calibration now reads the memoized burn subset, so no known-open caller remains.
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let (mut hits, mut known_seen): (Vec<String>, usize) = (Vec::new(), 0);
+        let mut hits: Vec<String> = Vec::new();
         let mut stack = vec![src];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).expect("the crate's own src dir is readable") {
@@ -5089,16 +5080,11 @@ mod rebuild_admission_tests {
                     if trimmed.starts_with("//") || !needles.iter().any(|n| line.contains(n.as_str())) {
                         continue;
                     }
-                    if (name.as_str(), trimmed) == (known_open.0, known_open.1.as_str()) {
-                        known_seen += 1;
-                        continue;
-                    }
                     hits.push(format!("{name}:{}: {trimmed}", i + 1));
                 }
             }
         }
         assert!(hits.is_empty(), "a summary rebuild appeared in a file that can be called with the state lock held:\n{hits:#?}");
-        assert_eq!(known_seen, 1, "the one allowed rebuild ({known_open:?}) is no longer where this test expects it — if it was FIXED, delete the `known_open` entry; if it MOVED, this test must be re-pinned");
     }
 }
 

@@ -327,8 +327,26 @@ fn calibrate_on_stop_failure(st: &mut crate::CoreState, ev: &str, rec: &Value, n
         return;
     }
     st.counters.stop_failure_calibrations += 1;
-    let sessions = st.build_session_summary(now_ms as f64);
-    let sessions = sessions.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+    // TRDD-ER88PXNB: the burn subset, not build_session_summary: that one merges EVERY resident card under this lock
+    // (about 700 MB on a 110k-card corpus) and stores the result in summary_cache, where the summary engine would not
+    // recognise it and the next pass would be a full rebuild. Calibration reads consumption events, and the burn subset
+    // holds every card with a non-empty timeline (where api_request_events reads events), plus the
+    // cards with an OTEL session of the same id and their linked twins; the parity argument is in lib.rs.
+    // INFERRED, not measured: a session that stalled with an empty timeline and no OTEL twin is not in the subset, so
+    // calibrate_from_stop_failure cannot find its accountId in `sessions` and falls back to the live account
+    // (burn_calibration.rs looks the account up over `sessions`).
+    let subset = match &st.burn_subset_memo {
+        Some((v, memo)) if *v == st.data_version => memo.clone(),
+        _ => {
+            let inputs = st.burn_snapshot();
+            let built = std::sync::Arc::new(crate::CoreState::burn_subset_summary(&inputs.spans, &inputs.cards, &inputs.accounts));
+            // WHY store it: this runs under the state lock; memoizing it per data_version means the 4 s burn tick
+            // (ui::burn_summary_now) reuses it instead of building the same subset again.
+            st.burn_subset_memo = Some((st.data_version, built.clone()));
+            built
+        }
+    };
+    let sessions = subset.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
     let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now_ms as f64);
     let current_account_uuid = st.burn.current_account(now_ms as f64).account_uuid;
     let outcome = crate::burn_calibration::calibrate_from_stop_failure(

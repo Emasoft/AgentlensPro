@@ -411,7 +411,15 @@ fn main() {
     // TRDD-2HRA270Y: opens the CoreState::open window; boot_start .. here is arg parsing, pid lock, embed key.
     static BEFORE_CORE_OPEN: std::sync::Once = std::sync::Once::new();
     BEFORE_CORE_OPEN.call_once(|| agentlens_core::rss_guard::log_boot_phase("before_core_open", None));
-    let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
+    let mut core = agentlens_core::CoreState::open(std::path::Path::new(&data_dir));
+    // TRDD-ER88PXNB: the summary card window is set here, at boot, and nowhere else: CoreState::open keeps 0 (every
+    // card) so tests and tools that open a state see the whole corpus. Knob precedence: env > config.json > default 14.
+    core.summary_card_days = agentlens_core::retention_config::resolve_knob(
+        std::path::Path::new(&data_dir),
+        &agentlens_core::retention_config::SUMMARY_CARD_DAYS,
+    );
+    eprintln!("{} alcore: summary card window {} days (0 = every card)", agentlens_core::log_ts(), core.summary_card_days);
+    let state = Arc::new(Mutex::new(core));
     // TRDD-2HRA270Y: with `before_core_open` brackets CoreState::open (the largest candidate for the ~780 MB).
     static AFTER_CORE_OPEN: std::sync::Once = std::sync::Once::new();
     AFTER_CORE_OPEN.call_once(|| agentlens_core::rss_guard::log_boot_phase("after_core_open", None));

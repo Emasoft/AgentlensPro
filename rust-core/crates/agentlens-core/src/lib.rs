@@ -197,6 +197,46 @@ pub struct SummaryInputs {
     /// The caches previous outputs, handed over for in-place patching (see `summary_engine`).
     pub prev: summary_engine::Prev,
     pub engine: Arc<summary_engine::SummaryEngine>,
+    /// TRDD-ER88PXNB: the card-window cutoff for this pass (None = every card). The filter itself runs in
+    /// `summary_from`, OFF the state lock, because it parses one date per resident card.
+    pub card_cutoff_ms: Option<f64>,
+    /// TRDD-ER88PXNB: the summaryCardDays value the cutoff came from, for the `SummaryWindow` description.
+    pub card_days: f64,
+    /// TRDD-ER88PXNB: filled by `summary_from` when the window is on; the caller hands it to `store_summary_window`.
+    pub window: Option<SummaryWindow>,
+}
+
+/// TRDD-ER88PXNB: what the summary covers when the card window is on: the sessions whose last activity
+/// (startTime + durationMs) is at or after `cutoff_ms`. Routes that show totals add `to_json()` to their payload.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SummaryWindow {
+    pub card_days: f64,
+    pub cutoff_ms: f64,
+    pub cards_included: usize,
+    pub cards_resident: usize,
+}
+
+impl SummaryWindow {
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "cardDays": self.card_days,
+            "cutoffMs": self.cutoff_ms,
+            "basis": format!("sessions active within at least the last {} days (last activity = startTime + durationMs, cutoff at the UTC midnight that starts the window; fractional days round up to whole UTC days)", self.card_days),
+            "cardsIncluded": self.cards_included,
+            "cardsResident": self.cards_resident,
+        })
+    }
+}
+
+/// TRDD-ER88PXNB: the cutoff of the summary card window. WHY quantized to a UTC midnight: the summary engine reuses
+/// its state only while the windowed list keeps its old cards as an id-for-id prefix, so every age-out is a full pass;
+/// a cutoff that moved with the clock would age a card out on almost every rebuild. None = no window (days <= 0 or NaN).
+pub fn summary_card_cutoff_ms(now_ms: f64, days: f64) -> Option<f64> {
+    if days.is_nan() || days <= 0.0 {
+        return None;
+    }
+    const DAY_MS: f64 = 86_400_000.0;
+    Some(((now_ms / DAY_MS).floor() - days.ceil()) * DAY_MS)
 }
 
 pub struct CoreState {
@@ -275,6 +315,14 @@ pub struct CoreState {
     pub summary_cache: derived_cache::VersionedCache<Value>,
     /// The burn subset summary memoized by `data_version` (TRDD-735Q3JF4 item 2): `ui::burn_summary_now` computes it once per version, not on every 4 s tick and burn request. Dropped with `summary_cache` under stage-2 memory pressure.
     pub burn_subset_memo: Option<(u64, Arc<Value>)>,
+    /// TRDD-ER88PXNB: the summary is built over the log cards whose last activity falls in the last
+    /// `summary_card_days` UTC days; 0 = every resident card. WHY 0 by default: only alcore's boot sets it from the
+    /// summaryCardDays knob, so tests and tools that open a CoreState keep the whole corpus.
+    pub summary_card_days: f64,
+    /// TRDD-ER88PXNB: what the stored summary covers, set by `store_summary_window` once the summary of the current
+    /// version lands. WHY here and not inside the summary Value: the summary engine recognises its own previous output
+    /// by Arc pointer identity, and inserting a field into that Value would copy the Arc and force a full pass on every rebuild.
+    pub summary_window: Option<SummaryWindow>,
     /// Set by the first `ui::summary_now` call and never cleared: "a summary reader has asked since boot".
     /// `ui::rebuild_once` builds nothing until it is true (TRDD-735Q3JF4 increment 1, item 1). Lives here, not in a
     /// process-global, so each test's fresh state starts unasked and parallel tests stay isolated.
@@ -445,6 +493,12 @@ impl CoreState {
     /// pointer copy: no card text crosses the lock and nothing is parsed (TRDD-9VX3WTGU Phase C —
     /// `cards_json()` is now only the cold-boot/CLI/parity read of the TABLE).
     pub fn summary_snapshot(&mut self) -> SummaryInputs {
+        self.summary_snapshot_at(crate::now_ms() as f64)
+    }
+
+    /// TRDD-ER88PXNB: `summary_snapshot` at a given clock, so tests can move time across a UTC midnight.
+    /// It only records the cutoff; `summary_from` applies it off the lock.
+    pub fn summary_snapshot_at(&mut self, now_ms: f64) -> SummaryInputs {
         SummaryInputs {
             version: self.data_version,
             spans: self.window.spans.clone(),
@@ -455,6 +509,9 @@ impl CoreState {
             // engine can patch them in place (see `summary_engine`). `&mut self` is for this.
             prev: summary_engine::Prev { summary: self.summary_cache.take_arc() },
             engine: self.summary_engine.clone(),
+            card_cutoff_ms: summary_card_cutoff_ms(now_ms, self.summary_card_days),
+            card_days: self.summary_card_days,
+            window: None,
         }
     }
 
@@ -463,6 +520,13 @@ impl CoreState {
     pub fn summary_from(inputs: &mut SummaryInputs, now_ms: f64) -> summary_engine::SummaryBuild {
         let _ = now_ms;
         let prev = std::mem::take(&mut inputs.prev);
+        // TRDD-ER88PXNB: the card window, applied here OFF the state lock. `retain` keeps first-insert order, which the
+        // engine needs (it indexes cards by position).
+        if let Some(cutoff_ms) = inputs.card_cutoff_ms {
+            let cards_resident = inputs.log_cards.len();
+            inputs.log_cards.retain(|c| crate::log_reader::last_active_ms(c) >= cutoff_ms);
+            inputs.window = Some(SummaryWindow { card_days: inputs.card_days, cutoff_ms, cards_included: inputs.log_cards.len(), cards_resident });
+        }
         let built = inputs.engine.build(inputs.version, &inputs.spans, &inputs.log_cards, inputs.epoch, &inputs.accounts, prev);
         // TRDD-2HRA270Y: one boot-phase reading after the first summary build through summary_from returns
         // (callers: ui::rebuild_once, ui::summary_now). Not every build passes here: summary_over is also
@@ -484,6 +548,15 @@ impl CoreState {
             self.otel_attribution = build.attribution;
         }
         stored
+    }
+
+    /// TRDD-ER88PXNB: record what the stored summary covers, only when the summary of `version` is the one now in the
+    /// cache: a build that lost the race is discarded whole, and so is its window.
+    pub fn store_summary_window(&mut self, version: u64, window: Option<SummaryWindow>) {
+        // WHY not `current`: it counts a served hit, and this is only an existence check on the cached summary.
+        if !self.summary_cache.is_empty() && self.summary_cache.version() == version {
+            self.summary_window = window;
+        }
     }
 
     /// Returns the merged summary AND `otelAttributionBySession` (server.ts:2245) — the OTEL
@@ -846,6 +919,8 @@ impl CoreState {
             sweeper: None,
             summary_cache: derived_cache::VersionedCache::default(),
             burn_subset_memo: None,
+            summary_card_days: 0.0,
+            summary_window: None,
             summary_asked: false,
             summary_engine: Arc::new(summary_engine::SummaryEngine::default()),
             accounts: account_registry::AccountRegistry::default(),
