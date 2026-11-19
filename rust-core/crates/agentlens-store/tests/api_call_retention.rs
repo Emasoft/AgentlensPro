@@ -48,7 +48,7 @@ fn only_parts_older_than_the_retention_are_removed_and_foreign_names_stay() {
         touch(&dir, n);
     }
     touch(&dir, "zz-null-ts.parquet");
-    let mut removed = purge_api_call_parts(&store, 31.0, NOW_MS).unwrap();
+    let mut removed = purge_api_call_parts(&store, 31.0, NOW_MS).unwrap().removed;
     removed.sort();
     let mut want = vec![old40.clone(), old31_plus.clone()];
     want.sort();
@@ -61,15 +61,46 @@ fn only_parts_older_than_the_retention_are_removed_and_foreign_names_stay() {
 #[test]
 fn zero_nan_negative_retention_and_a_missing_directory_remove_nothing() {
     let store = tmp("guards");
-    assert_eq!(purge_api_call_parts(&store, 31.0, NOW_MS).unwrap(), Vec::<String>::new(), "missing dir");
+    assert_eq!(purge_api_call_parts(&store, 31.0, NOW_MS).unwrap().removed, Vec::<String>::new(), "missing dir");
     let dir = store.join(API_CALLS_DIR);
     std::fs::create_dir_all(&dir).unwrap();
     let ancient = part_file_name(1_000, 1, 0);
     touch(&dir, &ancient);
     for days in [0.0, f64::NAN, -5.0, f64::INFINITY] {
-        assert_eq!(purge_api_call_parts(&store, days, NOW_MS).unwrap(), Vec::<String>::new(), "retention {days}");
+        assert_eq!(purge_api_call_parts(&store, days, NOW_MS).unwrap().removed, Vec::<String>::new(), "retention {days}");
     }
     // A cutoff that underflows (retention longer than the clock has run) removes nothing either.
-    assert_eq!(purge_api_call_parts(&store, 1.0e12, NOW_MS).unwrap(), Vec::<String>::new(), "underflow");
+    assert_eq!(purge_api_call_parts(&store, 1.0e12, NOW_MS).unwrap().removed, Vec::<String>::new(), "underflow");
     assert_eq!(names(&dir), vec![ancient]);
+}
+
+#[test]
+fn a_part_that_cannot_be_removed_is_reported_and_the_rest_are_still_removed() {
+    let store = tmp("partial-failure");
+    let dir = store.join(API_CALLS_DIR);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A directory named like an old part: remove_file fails on it every time.
+    let mut old_dirs: Vec<String> = (0..3).map(|k| part_file_name((NOW_MS - 40 * DAY_MS) as u128, 2, k)).collect();
+    for name in &old_dirs {
+        std::fs::create_dir(dir.join(name)).unwrap();
+    }
+    let mut old_files: Vec<String> = (0..3).map(|k| part_file_name((NOW_MS - 40 * DAY_MS) as u128, 3, k)).collect();
+    for name in &old_files {
+        touch(&dir, name);
+    }
+    let new1 = part_file_name((NOW_MS - DAY_MS) as u128, 3, 9);
+    touch(&dir, &new1);
+    let outcome = purge_api_call_parts(&store, 31.0, NOW_MS).unwrap();
+    let mut removed = outcome.removed;
+    removed.sort();
+    old_files.sort();
+    assert_eq!(removed, old_files);
+    let mut failed: Vec<String> = outcome.failed.into_iter().map(|(name, _)| name).collect();
+    failed.sort();
+    old_dirs.sort();
+    assert_eq!(failed, old_dirs);
+    let mut left = old_dirs;
+    left.push(new1);
+    left.sort();
+    assert_eq!(names(&dir), left);
 }

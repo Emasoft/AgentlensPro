@@ -169,10 +169,14 @@ fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
     // bodies pass fsync barrier fails that batch once and it is retried.
     let api_days = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::API_CALLS_RETENTION_DAYS);
     match agentlens_store::purge_api_call_parts(&data_dir.join("store"), api_days, now_ms as u64) {
-        Ok(removed) if !removed.is_empty() => {
-            println!("{} alcore: api_calls retention: purged {} part(s)", crate::log_ts(), removed.len());
+        Ok(outcome) => {
+            if !outcome.removed.is_empty() {
+                println!("{} alcore: api_calls retention: purged {} part(s)", crate::log_ts(), outcome.removed.len());
+            }
+            for (name, e) in &outcome.failed {
+                eprintln!("{} alcore: api_calls retention: could not remove {name}: {e}", crate::log_ts());
+            }
         }
-        Ok(_) => {}
         Err(e) => eprintln!("{} alcore: api_calls retention: purge failed: {e}", crate::log_ts()),
     }
 }

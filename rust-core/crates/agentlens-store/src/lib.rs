@@ -769,37 +769,54 @@ pub fn api_call_part_epoch_ms(name: &str) -> Option<u64> {
     fields[0].parse::<u64>().ok()
 }
 
+/// What one api_calls purge did: the parts it removed and the parts it could not remove, with the error.
+#[derive(Debug, Default)]
+pub struct PurgeOutcome {
+    pub removed: Vec<String>,
+    pub failed: Vec<(String, std::io::Error)>,
+}
+
 /// TRDD-OBJ4FK2T: removes the api_calls parts whose name epoch is strictly older than `retention_days`.
 /// WHY by name: a part is named at flush time, so its age needs no query and no mtime (a copied or restored
 /// file keeps its name). WHY a name that does not parse is never removed: the dir can hold files this
 /// writer did not make. WHY non-finite, non-positive or underflowing retention removes NOTHING: a bad knob
 /// must never read as "older than now" and wipe the store. A vanished part is dropped from the `part_file`
 /// catalog by the next `sync_new_parts`, so no second update is needed here.
-pub fn purge_api_call_parts(store_dir: &Path, retention_days: f64, now_ms: u64) -> std::io::Result<Vec<String>> {
-    let mut removed = Vec::new();
+/// WHY keep going: one part that always fails must not block every part after it in read_dir order, hour after hour, and the names already removed must still be reported.
+pub fn purge_api_call_parts(store_dir: &Path, retention_days: f64, now_ms: u64) -> std::io::Result<PurgeOutcome> {
+    let mut outcome = PurgeOutcome::default();
     if !retention_days.is_finite() || retention_days <= 0.0 {
-        return Ok(removed);
+        return Ok(outcome);
     }
     let span_ms = retention_days * 86_400_000.0;
     if !span_ms.is_finite() || span_ms >= now_ms as f64 {
-        return Ok(removed);
+        return Ok(outcome);
     }
     let cutoff = now_ms - span_ms as u64;
     let dir = store_dir.join(API_CALLS_DIR);
     let entries = match fs::read_dir(&dir) {
         Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(outcome),
         Err(e) => return Err(e),
     };
     for entry in entries {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                outcome.failed.push(("<unreadable directory entry>".to_owned(), e));
+                continue;
+            }
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         if api_call_part_epoch_ms(&name).is_some_and(|epoch| epoch < cutoff) {
-            fs::remove_file(entry.path())?;
-            removed.push(name);
+            match fs::remove_file(entry.path()) {
+                Ok(()) => outcome.removed.push(name),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => outcome.failed.push((name, e)),
+            }
         }
     }
-    Ok(removed)
+    Ok(outcome)
 }
 
 /// Rows in the four staging tables (blob, part, body, api_call) — RAM not yet flushed.
