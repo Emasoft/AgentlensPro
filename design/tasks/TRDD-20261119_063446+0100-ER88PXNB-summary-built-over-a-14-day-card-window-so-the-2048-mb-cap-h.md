@@ -4,7 +4,7 @@ title: summary built over a 14-day card window so the 2048 MB cap holds
 column: todo
 status: tasked
 created: 2026-11-19T06:34:46+0100
-updated: 2026-11-19T11:30:54+0100
+updated: 2026-11-19T12:02:05+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -54,3 +54,4 @@ Stopgap carved out of TRDD-735Q3JF4 so the release (TRDD-HSPUF5XH) can unblock; 
 
 2026-11-19 10:05: A0+A1 bc42e25f, docs ba0a388d, A2 5292641c (summary_for_ids family helper with one-slot memo), A3 00601b99 (8 by-id arms; arm 6 get_context_history NOT guarded by a test, its fixture has no transcript; stage-2 pressure step drops family_summary_memo). IN FLIGHT: B, the 5 optional-sessionId arms (get_session_status, get_cost_by_cause, get_context_inflation_report, get_cache_break_report, check_cache_expiry), report reports_dev/ER88PXNB/20261119_100500+0100-b-optional-id-arms.md. NEXT: C disclosure wrapper (one summary_now_windowed call per response), D7 boot marker, FINAL isolated run on the post-A0 filter (idle step, commit sampling after reads and after one family build), then release HSPUF5XH.
 2026-11-19 11:30: B 9ba7b1fc (5 optional-sessionId arms), C1 31428af7 (summaryWindow on /api/summary, GET / and the update frames through StrippedViewWindowed and build_update_payload; final checks read: clippy and workspace check end with Finished and no warning, mutations M1 and M2 each fail both new tests). IN FLIGHT: C2, every MCP arm and /api/instruction-suggestions on summary_now_windowed with a first-key summaryWindow string, plus the source guard; spec reports_dev/ER88PXNB/specs/20261119_c2-spec.md, report reports_dev/ER88PXNB/20261119_112650+0100-c2.md. NEXT: C3 docs (CHANGELOG behaviour change and known limitations: dashboard does not render summaryWindow, get_instruction_suggestions success array undisclosed, CLI stdout hides it for verdict and text tools), D7 boot marker, FINAL isolated run, release HSPUF5XH.
+- 2026-11-19 12:02: C2 landed (MCP answers lead with summaryWindow). T1 15 rows pass 7 of 7 after the fixture gives each test server an empty home; before that get_cache_risk_costs hung 3 of 3 on this machine's real transcript store (follow-up TRDD-JVRPBSX9). get_window_eta and get_account_burners are checked by reading only. Next: C3 docs. Report: reports_dev/ER88PXNB/20261119_112650+0100-c2.md.
