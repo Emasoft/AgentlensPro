@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T02:56:21+0100
+updated: 2026-11-19T02:58:27+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [6MG5N1ZF, OBJ4FK2T, MUZ04JYU, AXJH3WTU, PGMMB2QG]
+blocked-by: [6MG5N1ZF, OBJ4FK2T, AXJH3WTU]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -22,7 +22,7 @@ status: tasked
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
 
-**NEXT ACTION:** wait for `blocked-by` to drain. Re-run
+**NEXT ACTION (2026-11-19T12:50+0100, supersedes the old drain wording kept below):** follow the release order in the Notes entry of 2026-11-19T12:40 (docs worker, version bump and stamp, alcore built in builds_dev and signed, isolated <=4 GB run incl. the OBJ4FK2T end-to-end purge and AXJH3WTU box 3, CI green, full-suite pair, merge, tag). Old wording: wait for `blocked-by` to drain. Re-run
 `grep -H '^column:' design/tasks/*.md` and remove any id from `blocked-by`
 whose card has reached a terminal column (`complete`, `cancelled`,
 `superseded`) or moved out of the gating set (`dev|testing|todo|blocked|plan|dispatch`).
@@ -293,6 +293,7 @@ VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version change
 2026-11-19 lock count redone with one pattern (\.lock() or \.lock_timed() on any binding) over the whole start_sweeper: v2.33.1 lines 950-1064 hold 3 (965, 983, 1051); HEAD lines 1769-2045 hold 6 (1788, 1824, 1895, 1946, 1980, 2017). Same counts; the earlier tag span 950-1067 is corrected to 950-1064.
 2026-11-19 the original lock-comparison spans were corrected in place to 950-1064 (v2.33.1) and 1769-2045 (HEAD): both now end at the column-0 closing brace of start_sweeper, read by the main agent with git show of each revision. The earlier ends, 1067 and 2048, fell on the doc comment of the next function, last_active_ms, past the closing brace.
 2026-11-19T12:40+0100 main agent SESSION STATE (before a compaction; never run /janitor-write-handoff). GATE: MUZ04JYU and PGMMB2QG in human_review (AI review read whole: transcript lines 66493 and 66928, PASS); OBJ4FK2T in ai_review (commits d195661b..32f9618b, 918224a3; its harness review must be read whole before human_review); AXJH3WTU testing, box 3 open; 6MG5N1ZF testing, box 2 is post-tag (RISK ACCEPTED candidate). NEXT, per the advisor pass of 12:35 (Fable): (1) docs worker: CHANGELOG entry in user terms (alcore now deletes store/api_calls parts older than apiCallsRetentionDays, default 90 days, env AGENTLENS_API_CALLS_RETENTION_DAYS; a store younger than 90 days loses nothing at first boot) and fix ARCHITECTURE.md:364 'a single RETENTION_META table' (there are two, kept equal by retention_config tests). (2) version bump + node scripts/stamp-surfaces.js --write. (3) alcore release build in builds_dev or a worktree (NOT copied over the running bin-native file), codesign -s - --force, --version not exit 137, grep the binary for 'api_calls retention'. (4) Isolated <=4 GB run (own HOME, DATA_DIR, ports, OTLP not 4318; copied sample with a current log-delta-version.json): AXJH3WTU box 3 size; purge chain: count sample parts older than N days and unparsable names, start with AGENTLENS_API_CALLS_RETENTION_DAYS=N, the 'purged K part(s)' line must equal the count, foreign names untouched, a cache-turns query and a windowed reader without repeated errors, one bodies pass, restart with the env unset: zero removed; record on OBJ4FK2T. Plus the replaced live gates (line 326). (5) CI green on main via the PR, full-suite pair, merge --no-ff, tag. Each blocker gets CLEARED or RISK ACCEPTED written here first. CI cargo test (ci.yml:305) runs from a full checkout, so the parity test finds src/retentionConfig.ts; the Dockerfile only builds alcore.
+2026-11-19T12:50+0100 main agent GATE DECISIONS under the owner words decide yourself (owner veto stays open). MUZ04JYU: RISK ACCEPTED pending the owner close; code fixed (58614f10) and AI-reviewed PASS (transcript line 66493); the risk accepted is that the owner's human_review finds a fault after the tag. PGMMB2QG: RISK ACCEPTED pending the owner close; code fixed (40af6326 and earlier) and AI-reviewed PASS (line 66928); same risk. 6MG5N1ZF box 2: RISK ACCEPTED; the published amd64 image can only be started after the tag run of docker.yml; failure mode for the release notes: the Docker image of this release may fail to build on amd64 or fail to start alcore, while the npm package is unaffected; checked after the tag. Still blocking: OBJ4FK2T (source committed and unit-tested; the purge has NOT run end to end; the isolated run must record it) and AXJH3WTU (box 3 measurement on the isolated run).
 
 ## Release full-suite pair — gate rules
 
