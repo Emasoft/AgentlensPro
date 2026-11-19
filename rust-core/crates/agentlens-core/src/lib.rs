@@ -1086,6 +1086,8 @@ impl CoreState {
                 // stage 1 freed the stripped twin, removed by TRDD-091Z1FU0; its new action is TRDD-VLJFJ9ZC
                 if new >= 2 {
                     self.summary_cache.clear();
+                    // TRDD-ER88PXNB A2: the family memo holds a summary too; shed it with the summary cache.
+                    self.family_summary_memo = None;
                     self.burn_subset_memo = None;
                     self.latest_resident_blobs.clear();
                     // u64::MAX over a budget of 1 forces the time window to halve (floored at 5 min).

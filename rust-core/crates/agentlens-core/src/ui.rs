@@ -1211,7 +1211,13 @@ fn light_session(session: &Value) -> Value {
 /// TRDD-MVR6PXC0: the body is now four steps — three cheap ones that need the state, and ONE
 /// (`reparse_session_card`) that needs only `&Env`. That is the split `resolve_session_card_offlock`
 /// exploits; the pieces are shared so the two drivers cannot drift into two different answers.
-fn resolve_session_card(st: &mut CoreState, summary: &Value, session_id: &str, now: i64) -> Option<Value> {
+fn resolve_session_card(
+    st: &mut CoreState,
+    summary: &Value,
+    session_id: &str,
+    now: i64,
+    attribution: Option<&indexmap::IndexMap<String, Vec<Value>>>,
+) -> Option<Value> {
     let mut session = summary_card(summary, session_id);
     if timeline_empty(session.as_ref()) && st.cards.contains(session_id) {
         if let Some(card) = reparse_session_card(&st.log_env, session_id, now) {
@@ -1219,7 +1225,7 @@ fn resolve_session_card(st: &mut CoreState, summary: &Value, session_id: &str, n
         }
     }
     if let Some(s) = session.as_mut() {
-        graft_otel_attribution_onto(st, s, session_id);
+        graft_otel_attribution_onto(st, s, session_id, attribution);
     }
     session
 }
@@ -1268,13 +1274,21 @@ fn stamp_and_store_reparsed(st: &mut CoreState, mut card: Value) -> Value {
 /// TRDD-5GFSFX0Q's graft, onto the SERVED copy only — it runs AFTER `put_log_session`, so the
 /// STORED card stays pure. Cheap and state-bound: one IndexMap read plus a merge of two Vecs already
 /// sized to a single session's timeline, so this half keeps the guard.
-fn graft_otel_attribution_onto(st: &CoreState, session: &mut Value, session_id: &str) {
+fn graft_otel_attribution_onto(
+    st: &CoreState,
+    session: &mut Value,
+    session_id: &str,
+    attribution: Option<&indexmap::IndexMap<String, Vec<Value>>>,
+) {
     let claude_log = session.get("source").and_then(Value::as_str) == Some("claude_code")
         && session.get("dataSource").and_then(Value::as_str) == Some("log");
     if !claude_log {
         return;
     }
-    if let Some(entries) = st.otel_attribution.get(session_id).filter(|e| !e.is_empty()) {
+    // TRDD-ER88PXNB A3: a family build (summary_for_ids) carries its own attribution, because `st.otel_attribution` is the
+    // attribution of the cached summary and does not cover the family's cards; None reads the state's map as before.
+    let attribution = attribution.unwrap_or(&st.otel_attribution);
+    if let Some(entries) = attribution.get(session_id).filter(|e| !e.is_empty()) {
         let log_tl: Vec<Value> = session.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default();
         let grafted = crate::feed_merge::graft_otel_attribution(&log_tl, Some(entries));
         if let Some(obj) = session.as_object_mut() {
@@ -1344,7 +1358,7 @@ fn resolve_session_card_offlock_with(
     if let Some(s) = session.as_mut() {
         // Lock 3: the OTEL graft's one map read and in-memory merge.
         let st = st2.lock_timed();
-        graft_otel_attribution_onto(&st, s, session_id);
+        graft_otel_attribution_onto(&st, s, session_id, None);
     }
     session
 }
@@ -2797,13 +2811,20 @@ async fn handle(
                         // TRDD-QE114936: summary and id selection happen OFF the lock; the guard
                         // below covers only the `resolve_session_card` loop, which needs
                         // `&mut CoreState` for its reparse-on-demand fallback.
-                        let (_, summary) = summary_now(&state, now as f64);
-                        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // The matched card is not known until the shaper runs, so resolve only
                         // the ONE id the query can possibly name — the normalized equivalence
                         // class is a pure string test, so it is safe to precompute here.
                         let q = args.get("agentId").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
                         let q_bare = q.strip_prefix("agent-").unwrap_or(&q).to_owned();
+                        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                        // Seed = the same agent-id equivalence the tool applies (lowercase, agent- prefix stripped);
+                        // the same expression as `strip_agent_prefix` in mcp_tools.rs (private there) — keep the two in step.
+                        let family = summary_for_ids(&state, now as f64, &|id| {
+                            let lower = id.to_lowercase();
+                            lower.strip_prefix("agent-").unwrap_or(&lower) == q_bare
+                        });
+                        let summary = family.summary.clone();
+                        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let ids: Vec<String> = sessions
                             .iter()
                             .filter_map(|s| s.get("sessionId").and_then(Value::as_str))
@@ -2817,7 +2838,7 @@ async fn handle(
                             let mut st = state.lock_timed();
                             let mut timelines = std::collections::HashMap::new();
                             for id in ids {
-                                let tl = resolve_session_card(&mut st, &summary, &id, now)
+                                let tl = resolve_session_card(&mut st, &summary, &id, now, family.attribution.as_ref())
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default();
                                 timelines.insert(id, tl);
@@ -2908,14 +2929,16 @@ async fn handle(
                         // TRDD-QE114936: the summary is read OFF the lock; the guard covers only
                         // the resolved timeline (the same reparse-on-demand + OTEL graft path
                         // row 30 uses), which needs `&mut CoreState`.
-                        let (_, summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                        let family = summary_for_ids(&state, now as f64, &|id| id == session_id);
+                        let summary = family.summary.clone();
                         let card = summary
                             .get("sessions")
                             .and_then(Value::as_array)
                             .and_then(|v| v.iter().find(|c| c.get("sessionId").and_then(Value::as_str) == Some(session_id.as_str())).cloned());
                         let timeline: Vec<Value> = {
                             let mut st = state.lock_timed();
-                            resolve_session_card(&mut st, &summary, &session_id, now)
+                            resolve_session_card(&mut st, &summary, &session_id, now, family.attribution.as_ref())
                                 .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                 .unwrap_or_default()
                         };
@@ -2930,9 +2953,11 @@ async fn handle(
                     "get_subagent_tree" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock — nothing else here needs the state.
-                        let (_, summary) = summary_now(&state, now);
+                        let session_id = s("sessionId").unwrap_or_default();
+                        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                        let summary = summary_for_ids(&state, now, &|id| id == session_id).summary;
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                        let payload = crate::mcp_tools::get_subagent_tree(&sessions, &s("sessionId").unwrap_or_default(), now);
+                        let payload = crate::mcp_tools::get_subagent_tree(&sessions, &session_id, now);
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_loaded_plugin_versions" => {
@@ -2998,11 +3023,13 @@ async fn handle(
                         // uses — reparse-on-demand + OTEL graft) and the fork-ancestor walk, both
                         // of which need `CoreState`. The multi-GB transcript parse then runs with
                         // the lock RELEASED.
-                        let (_, summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                        let family = summary_for_ids(&state, now as f64, &|id| id == session_id);
+                        let summary = family.summary.clone();
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let (timeline, env, ancestor) = {
                             let mut st = state.lock_timed();
-                            let timeline: Vec<Value> = resolve_session_card(&mut st, &summary, &session_id, now)
+                            let timeline: Vec<Value> = resolve_session_card(&mut st, &summary, &session_id, now, family.attribution.as_ref())
                                 .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                 .unwrap_or_default();
                             let parent_of = |sid: &str| -> Option<String> {
@@ -3680,7 +3707,12 @@ async fn handle(
                         } else {
                             // TRDD-QE114936: summary OFF the lock; the guard covers only the
                             // bodies-dir path read.
-                            let (_, summary) = summary_now(&state, now);
+                            // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                            // a prefix shorter than 8 chars would seed most of the corpus into one family build
+                            let summary = summary_for_ids(&state, now, &|id| {
+                                id == session_id || (session_id.len() >= 8 && id.starts_with(session_id.as_str()))
+                            })
+                            .summary;
                             let sessions: Vec<Value> =
                                 summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                             let bodies_dir = {
@@ -4211,7 +4243,8 @@ async fn handle(
                         // branch that needs it — the other two tools never read a card model, so
                         // they must not pay for a summary read at all.
                         let card_model = if name == "get_context_history" {
-                            let (_, summary) = summary_now(&state, crate::now_ms() as f64);
+                            // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                            let summary = summary_for_ids(&state, crate::now_ms() as f64, &|id| id == session_id).summary;
                             summary
                                 .get("sessions")
                                 .and_then(Value::as_array)
@@ -4315,7 +4348,8 @@ async fn handle(
         // CoreState would stall every other request on the server.
         let session_id = percent_decode(&path["/api/composition-index/".len()..]);
         let now = crate::now_ms() as f64;
-        let (_, comp_summary) = summary_now(&state, now);
+        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+        let comp_summary = summary_for_ids(&state, now, &|id| id == session_id).summary;
         let comp_projects = crate::composition_project_map(&comp_summary);
         let comp = composition_for(&state, &session_id, now, &comp_projects).await?;
         let summary = crate::context_composition_index::session_composition_summary(&comp);
@@ -4358,10 +4392,12 @@ async fn handle(
         let now = crate::now_ms();
         // TRDD-QE114936: summary read OFF the lock before the guard below, instead of
         // resolve_session_card rebuilding it inline while holding `st`.
-        let (_, summary) = summary_now(&state, now as f64);
+        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+        let family = summary_for_ids(&state, now as f64, &|id| id == session_id);
+        let summary = family.summary.clone();
         let body = {
             let mut st = state.lock_timed();
-            let session = resolve_session_card(&mut st, &summary, &session_id, now);
+            let session = resolve_session_card(&mut st, &summary, &session_id, now, family.attribution.as_ref());
             // `session?.<k> ?? <default>` — nullish: an explicit null falls back too.
             let field = |k: &str, default: Value| {
                 session.as_ref().and_then(|s| s.get(k)).filter(|v| !v.is_null()).cloned().unwrap_or(default)
@@ -5374,6 +5410,126 @@ mod rebuild_admission_tests {
             }
         }
         assert!(hits.is_empty(), "a summary rebuild appeared in a file that can be called with the state lock held:\n{hits:#?}");
+    }
+
+    /// TRDD-ER88PXNB A3: the by-id MCP tools and routes switched to `summary_for_ids` (all but arm 6, see below) answer an old
+    /// session (older than `summary_card_days`) as it does with the window off. Two real servers (OTLP + UI/MCP over sockets)
+    /// hold identical cards, one with
+    /// `summary_card_days = 14.0` and one with `0.0`; dates are relative to the real clock because `summary_now_windowed`
+    /// snapshots with it. `old-s` is 40 days old with a recent parent and an `agent-ag1` child. `old-twin` is its own 40-day
+    /// family with a live OTEL twin (an api_request span an hour old); the twin sits on a separate id so that no OTEL card of
+    /// `old-s` hides the miss, and `/api/timeline/old-twin` must carry the attribution grafted from the family build.
+    /// Guard coverage (measured by mutation, each arm made to seed nothing): arms 1-5 and 8 fail this test (arm 2 on `old-s`
+    /// only); arm 7 (composition-index) fails on `old-twin` only; arm 6 (get_context_history) is NOT guarded, because it
+    /// reads only the card model for a step cost and this fixture has no transcript to make that visible.
+    /// MUTATION CHECK: switch the `get_session_detail` arm back to `summary_now` and this MUST fail.
+    #[test]
+    fn by_id_lookups_answer_old_sessions_as_with_the_window_off() {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        let _serial = serial();
+        let now_ms = crate::now_ms() as f64;
+        let iso = |days_ago: f64| crate::summarize::helpers::iso_from_ms(now_ms - days_ago * 86_400_000.0);
+        let start = |days: f64, tag: &str| -> (SocketAddr, SocketAddr, RemoveOnDrop) {
+            let (dir, cleanup) = unique_dir(tag);
+            let mut st = CoreState::open(&dir);
+            st.summary_card_days = days;
+            for (id, ago, parent) in [("recent-root", 1.0, None), ("old-s", 40.0, Some("recent-root")), ("agent-ag1", 41.0, Some("old-s")), ("old-twin", 40.0, None)] {
+                let mut c = serde_json::json!({
+                    "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": iso(ago), "durationMs": 1000.0,
+                    "model": "claude-opus-5", "tokensSource": "transcript", "timeline": [{ "type": "llm", "timestamp": iso(ago) }]
+                });
+                if let Some(p) = parent {
+                    c["parentSessionId"] = serde_json::json!(p);
+                }
+                st.put_log_session(c);
+            }
+            let state = Arc::new(Mutex::new(st));
+            let (otx, orx) = std::sync::mpsc::channel();
+            let (utx, urx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let hub = Arc::new(super::SseHub::default());
+                    let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
+                    let ui = super::serve_ui("127.0.0.1:0".parse().unwrap(), state, hub, move |b| utx.send(b).unwrap());
+                    let _ = tokio::join!(otlp, ui);
+                });
+            });
+            (orx.recv().unwrap(), urx.recv().unwrap(), cleanup)
+        };
+        let request = |addr: SocketAddr, raw: String| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            // Fail fast: a hung server must fail this test, not stall the whole lib test run.
+            s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            s.write_all(raw.as_bytes()).unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).expect("a by-id request must be answered within the read timeout");
+            out.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default()
+        };
+        let get = |addr: SocketAddr, path: String| request(addr, format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nConnection: close\r\n\r\n"));
+        let mcp = |addr: SocketAddr, tool: &str, args: serde_json::Value| -> String {
+            let body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": args } }).to_string();
+            let resp = request(addr, format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+            let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_else(|e| panic!("{tool}: not JSON ({e}): {resp}"));
+            v["result"]["content"][0]["text"].as_str().map(str::to_owned).unwrap_or(resp)
+        };
+        // The OTEL twin of old-s: an interaction plus an api_request span an hour old, so it is inside the span window.
+        let ns = |ago_ms: f64| format!("{}", ((now_ms - ago_ms) * 1e6) as u64);
+        let twin = serde_json::json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": [
+            { "name": "claude_code.interaction", "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "aaaaaaaaaaaaaaaa",
+              "startTimeUnixNano": ns(3_700_000.0), "endTimeUnixNano": ns(3_690_000.0),
+              "attributes": [ { "key": "session.id", "value": { "stringValue": "old-twin" } }, { "key": "user_prompt", "value": { "stringValue": "Fix the bug" } } ] },
+            { "name": "claude_code.api_request", "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "cccccccccccccccc", "parentSpanId": "aaaaaaaaaaaaaaaa",
+              "startTimeUnixNano": ns(3_699_000.0), "endTimeUnixNano": ns(3_698_000.0),
+              "attributes": [ { "key": "session.id", "value": { "stringValue": "old-twin" } }, { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } }, { "key": "input_tokens", "value": { "intValue": "70" } } ] }
+        ] }] }] })
+        .to_string();
+        // The server threads run `serve_otlp` + `serve_ui`, which never return; they end with the test process, as in tests/ui.rs.
+        let (otlp_on, ui_on, dir_on) = start(14.0, "byid-on");
+        let (otlp_off, ui_off, dir_off) = start(0.0, "byid-off");
+        for otlp in [otlp_on, otlp_off] {
+            // The body is not asserted: the api_request graft check below fails when the twin was not ingested.
+            request(otlp, format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{twin}", twin.len()));
+        }
+        let ask = |ui: SocketAddr, arm: &str, sid: &str, missing: bool| -> String {
+            let agent = if sid == "old-s" { "agent-ag1" } else { sid };
+            let (asked, asked_agent) = if missing { ("missing-s", "agent-missing") } else { (sid, agent) };
+            let out = match arm {
+                "get_agent_tokens" => mcp(ui, arm, serde_json::json!({ "agentId": asked_agent })),
+                "composition-index" => get(ui, format!("/api/composition-index/{asked}")),
+                "timeline" => get(ui, format!("/api/timeline/{asked}")),
+                _ => mcp(ui, arm, serde_json::json!({ "sessionId": asked })),
+            };
+            // A not-found text embeds the id it was asked for; spell it as the real one so the two answers can be compared.
+            out.replace(asked_agent, agent).replace(asked, sid)
+        };
+        let mut failures: Vec<String> = Vec::new();
+        // `old-s` has a recent parent and an old child and no OTEL data; `old-twin` is its own family with a live OTEL twin.
+        for sid in ["old-s", "old-twin"] {
+            for arm in ["get_agent_tokens", "get_context_growth", "get_subagent_tree", "get_session_detail", "get_session_burn_profile", "get_context_history", "composition-index", "timeline"] {
+                // get_session_burn_profile names the data dir in its `coverage` text; the two servers have different ones.
+                let (on, off) = (
+                    ask(ui_on, arm, sid, false).replace(&*dir_on.0.to_string_lossy(), "<dir>"),
+                    ask(ui_off, arm, sid, false).replace(&*dir_off.0.to_string_lossy(), "<dir>"),
+                );
+                if on != off {
+                    failures.push(format!("{sid} {arm}: window 14 d answers differently from window off\n  on : {on}\n  off: {off}"));
+                }
+                // Arms 6 and 7 answer the same for a missing id on this fixture, so the not-found test cannot apply to them.
+                if !matches!(arm, "get_context_history" | "composition-index") && on == ask(ui_on, arm, sid, true).replace(&*dir_on.0.to_string_lossy(), "<dir>") {
+                    failures.push(format!("{sid} {arm}: window 14 d answers the old session as it answers a missing id: {on}"));
+                }
+            }
+        }
+        for ui in [ui_on, ui_off] {
+            let tl: serde_json::Value = serde_json::from_str(&ask(ui, "timeline", "old-twin", false)).unwrap();
+            assert!(
+                tl["timeline"].as_array().unwrap().iter().any(|e| e["type"] == "api_request"),
+                "the OTEL twin attribution must be grafted onto old-twin: {tl}"
+            );
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
 
