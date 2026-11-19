@@ -320,7 +320,7 @@ Six knobs control how long each kind of data is kept:
 | `bodiesMaxGb` | 8 GB | `AGENTLENS_BODIES_MAX_GB` | live-bodies size cap — an emergency valve that forces immediate ingestion of everything when exceeded (never deletes) |
 | `bodiesRetentionDays` | 31 days | `AGENTLENS_BODIES_RETENTION_DAYS` | legacy `.wad` archive volumes kept before whole-volume deletion (new bodies no longer archive there — see below) |
 | `logEventsRetentionDays` | 31 days | `AGENTLENS_LOG_EVENTS_RETENTION_DAYS` | gated-out OTEL log events kept as daily NDJSON buckets |
-| `apiCallsRetentionDays` | 90 days | `AGENTLENS_API_CALLS_RETENTION_DAYS` | per-call usage rows (`store/api_calls` parquet parts), removed by the hourly purge; default matches the status-line retention, which the cache-turns view joins them to |
+| `apiCallsRetentionDays` | 90 days | `AGENTLENS_API_CALLS_RETENTION_DAYS` | per-call usage rows (`store/api_calls` parquet parts); the purge (at boot, then hourly) removes a part once its write time is older than this age, so rows written late by a backlog flush outlive it by that delay; default matches the status-line retention, which the cache-turns view joins them to |
 
 **Set a value persistently** with the CLI — it is written to `~/.agentlens/config.json` (in the durable data directory, so it too survives uninstall/upgrade, and the always-on daemon re-reads it every boot):
 
