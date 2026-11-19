@@ -24,14 +24,19 @@ pub const BODIES_MAX_GB: Knob = Knob { key: "bodiesMaxGb", env: "AGENTLENS_BODIE
 pub const BODIES_RETENTION_DAYS: Knob = Knob { key: "bodiesRetentionDays", env: "AGENTLENS_BODIES_RETENTION_DAYS", def: 31.0, min: 1.0 };
 pub const LOG_EVENTS_RETENTION_DAYS: Knob = Knob { key: "logEventsRetentionDays", env: "AGENTLENS_LOG_EVENTS_RETENTION_DAYS", def: 31.0, min: 1.0 };
 pub const API_CALLS_RETENTION_DAYS: Knob = Knob { key: "apiCallsRetentionDays", env: "AGENTLENS_API_CALLS_RETENTION_DAYS", def: 90.0, min: 1.0 };
+// TRDD-ER88PXNB: the summary is built over the log cards whose last activity (startTime + durationMs) falls inside the
+// last N UTC days; 0 = every resident card. WHY min 0: resolve_knob floors the value at `min`, so a min of 1 would turn 0
+// into 1 day. Distinct from summaryWindowHours, which bounds the OTEL span replay (span_window.rs), not log cards.
+pub const SUMMARY_CARD_DAYS: Knob = Knob { key: "summaryCardDays", env: "AGENTLENS_SUMMARY_CARD_DAYS", def: 14.0, min: 0.0 };
 
-pub const RETENTION_META: [&Knob; 6] = [
+pub const RETENTION_META: [&Knob; 7] = [
     &SPANS_RETENTION_DAYS,
     &SUMMARY_WINDOW_HOURS,
     &BODIES_MAX_GB,
     &BODIES_RETENTION_DAYS,
     &LOG_EVENTS_RETENTION_DAYS,
     &API_CALLS_RETENTION_DAYS,
+    &SUMMARY_CARD_DAYS,
 ];
 
 /// `Number(envStr)` with the TS guards: unset or empty → not set; non-finite → not set.
