@@ -3,7 +3,7 @@ trdd-id: GVA8TTJF
 title: api_calls coalesced view, cache_turns statusline join, and the acceptance SQL
 column: blocked
 created: 2026-09-03T04:47:31+0200
-updated: 2026-11-19T04:39:17+0100
+updated: 2026-11-19T06:24:04+0100
 current-owner: main-session
 task-type: feature
 priority: high
@@ -116,6 +116,7 @@ pattern), not as SQL `CREATE VIEW` statements:
 2026-10-17 query time: 08c2f4c7 split the pairs OR join into two hash-joined arms, and 7032cb57 folded the claim into the paired join key. On the 700k dataset the full query went from 1410 s, to 799.5 s, to 4.09 s; EXPLAIN ANALYZE shows no nested-loop join left. Worker-measured with the scratchpad harness in a separate process at load 30 or more, single runs. The query-time box stays unticked until the MCP tool-call deadline it is measured against is located (the 60 s is provisional). Still open on this card: the memory box (owned by TRDD-AJGTQ007's streaming replay), B3/M1 (register the tool, gated on that), M4 (owner decision on the subagent filter) and the live boxes 2, 3 and 5 (need a deploy).
 2026-11-19T04:36+0100 main agent, MEASURED on the 2.34.0 release build (builds_dev/rel-2.34.0-3736dd88/alcore) in the isolated run of TRDD-HSPUF5XH (reports_dev/iso-run/20261119_033859+0100/driver.log lines 34-35 and 48-49): MCP tools/call run_cache_turns_sql answers -32601 unknown tool. Cause, read by the main agent: ui.rs:3332 dispatches run_cache_turns_sql, but mcp.rs:124-125 refuses any name absent from assets/mcp-tools.json, and that asset (53 tools, last changed in 9bb520d0) does not list it (checked with node over the JSON). No src/ TypeScript, README, CHANGELOG, skill or ARCHITECTURE text names the tool (grep). So the cache_turns SQL engine ships unreachable; exposing it needs a schema entry regenerated with rust-core/crates/agentlens-core/assets/gen-mcp-tools.mjs plus a CLI verb, as part of this card.
 2026-11-19T04:39+0100 main agent CORRECTION of the 04:3x note: the grep for the tool name covered README.md, CHANGELOG.md, skills/, ARCHITECTURE.md and src/**/*.ts; standalone/ and media/src were not searched. That the tool was unreachable in 2.33.1 too is INFERRED from the asset's single commit 9bb520d0; v2.33.1 itself was not checked.
+2026-11-19T06:24+0100 main agent: when run_cache_turns_sql is added to assets/mcp-tools.json (absent today; W105 (reports_dev/W105/report.md, read by the main agent; its round-2 blocker on the CLI exit code was answered by reading callTool, cliCore.ts:269-276): the cache_turns reader runs in production only through the MCP arm run_cache_turns_sql (ui.rs:3332, run_preset_or_sql at :3344), and that name is absent from the embedded tool schema (assets/mcp-tools.json, 53 names, include_str at mcp.rs:23), so tool_exists (mcp.rs:124) refuses it with -32601 before the arm runs; checked on the working-tree schema, the 2.34.0 release build and bin-native/darwin-arm64/alcore. No HTTP route, chore, CLI verb or statusline-history view reaches it; only in-process cargo tests (cache_turns_sql.rs:571 onward) run it), measure the reader after an api_calls purge (TRDD-OBJ4FK2T, default 90 days) on an isolated server before closing this card. The ui.rs:3129 line in this card is stale; the arm is at ui.rs:3332.
 
 ## N6A8VX3G landed — join requirements for THIS card (2026-10-08)
 

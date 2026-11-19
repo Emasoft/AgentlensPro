@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T05:52:36+0100
+updated: 2026-11-19T06:24:04+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [735Q3JF4, OBJ4FK2T]
+blocked-by: [735Q3JF4]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -322,6 +322,7 @@ VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version change
 2026-11-19T05:41+0100 main agent CORRECTION of the blocker set an hour ago: blocked-by is now [OBJ4FK2T, 735Q3JF4], not 563B8WYH. Reason, from TRDD-735Q3JF4 lines 39, 194 and 211 (read by the main agent) and worker W100's report reports_dev/W100/20261119_0535-memory-cards.md: 735Q3JF4 holds the 2026-11-18 live measurement (a capped build with its increments 1-3, sha256 65e2ceca, exits on the 2048 MB cap once one full summary is built over 110619 cards; collection off, 0 resident spans) and the plan (increment 4: answers from DuckDB SQL, a bounded resident card set); 563B8WYH (last updated 2026-10-20) is the older umbrella with no plan. CORRECTION of the turn text 'upgrading the live server would make it exit every 25 s': the live server already runs a post-2.33.1 capped build and already exits on the cap; it is held down by the revive brake (~/.agentlens/NO_REVIVE since 2026-11-18 04:58:05, per 735Q3JF4 line 194); agentlenspro server status today: not running. 735Q3JF4 was parked 2026-11-18 by owner order «windows is not a priority now. i need the search option asap!»; agentlenspro search has since shipped, so the release path now resumes 735Q3JF4. Other review corrections: the 2.33.1 claim is 'no process memory cap found under hard.cap, rss_hard, memory guard, RSS_HARD_CAP'; the v5 server-log read cut the composition lines after 'mi committed' (those fields unread).
 2026-11-19T05:47+0100 main agent: OBJ4FK2T leaves blocked-by: its three boxes are met and readers run v6 passed 17/17 (OBJ4FK2T note of this time); it waits in human_review, which does not gate the tag. The release is blocked only by TRDD-735Q3JF4 (the 2048 MB cap is reached by the first summary build: v6 mi_commit 1955 and 2004 MB at first_summary_build on 110619 cards).
 2026-11-19T05:52+0100 main agent CORRECTIONS (harness review). (1) OBJ4FK2T goes back into blocked-by: removing it rested on 'human_review does not gate the tag', which no board rule or owner order states; the owner orders «complete all pending tasks and publish/install/deploy» and «i remember telling to publish whenever you want» do not say a card may ship unreviewed, and the reader the 90-day default exists for (cache_turns) is still unmeasured after the purge (TRDD-GVA8TTJF). It leaves blocked-by when that reader is measured or the owner rules. (2) 'the search option has shipped' (notes of 2026-11-19 05:4x): search is implemented and installed from this branch (commits 6584d2dd, 7fe63866, e343ec69, 8590184d, c4d90ea6; TRDD-NRCIAFXS closed in 381a6cd2), not published: 2.34.0 is unreleased.
+2026-11-19T06:24+0100 main agent: OBJ4FK2T leaves blocked-by again, now on a verified reason: the one unmeasured reader (cache_turns) has no production path in 2.34.0. W105 (reports_dev/W105/report.md, read by the main agent; its round-2 blocker on the CLI exit code was answered by reading callTool, cliCore.ts:269-276): the cache_turns reader runs in production only through the MCP arm run_cache_turns_sql (ui.rs:3332, run_preset_or_sql at :3344), and that name is absent from the embedded tool schema (assets/mcp-tools.json, 53 names, include_str at mcp.rs:23), so tool_exists (mcp.rs:124) refuses it with -32601 before the arm runs; checked on the working-tree schema, the 2.34.0 release build and bin-native/darwin-arm64/alcore. No HTTP route, chore, CLI verb or statusline-history view reaches it; only in-process cargo tests (cache_turns_sql.rs:571 onward) run it. Blocked only by TRDD-735Q3JF4.
 
 ## Release full-suite pair — gate rules
 
