@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: todo
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T15:26:59+0100
+updated: 2026-11-19T15:45:06+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -404,3 +404,12 @@ FROM TRDD-12FGMAEP (commit 73211a46, footprint backstop in the memory guard of a
 - 2026-11-19T15:26+0100 — Gates run 2 at 6d38c2de: compile and store exit 0; core exit 101, only core_cap_guard (2 of 7 failed): three bare Runtime::new() in ui.rs rebuild_admission_tests (ER88PXNB, 2026-11-19) and SET threads=1 in a store test (R36S0PS9, 2405b7b3, on local main, not on origin/main). Clippy did not run. The 59 core test targets before it reported ok; cargo stops at the first failing binary, so the 80 integration binaries after core_cap_guard and the doc-tests did not run (60 Running lines against 137 files in tests/). This line first said every other core binary reported ok, and the b795e4fe message says core failed only in core_cap_guard: both overclaimed (reports_dev/HSPUF5XH/20261119-gates-run2/g3-core.txt).
 - Fixed: 7d293131 (refused view skips non-directory day entries; ENOENT branch untested), 63a28fcd (guard fix; guard 7 passed, rebuild_admission_tests 22 passed; its message reads 'alcores own' for the intended alcore's own, a shell-quoting typo, not amended). Compile rerun on 4a11f3b9: exit 0.
 - Gate correction: CI runs cargo test --workspace and cargo clippy --workspace --all-targets -D warnings (ci.yml:302,305). The local clippy gate now uses --all-targets, the crates other than core and store are tested, and agentlens-core is rerun in full with --no-fail-fast (gates run 3, reports_dev/HSPUF5XH/20261119-gates-run3/).
+
+## Gate invalidation rule (2026-11-19)
+
+- A gate result may be reused at a later HEAD only when `git diff --stat <gate HEAD>..HEAD -- <its paths>` is empty, recorded here with the command.
+- rust-core/crates/<crate>/: voids that crate's cargo test gate and clippy. agentlens-store changes also void agentlens-core (core depends on store); core changes do not void store.
+- src/, media/, standalone/, scripts/, package.json, pnpm-lock.yaml: void compile and the full-suite pair, not the cargo gates. skills/ and agents/ ship in the package: they void compile (check-dist-contents).
+- scripts/test-data-cap.sh, the repo-root .cargo/config.toml, src/test/setup.js: void every test gate and the pair.
+- design/, reports/, CHANGELOG.md and other Markdown outside skills/: void nothing. .github/workflows/: voids nothing locally; CI checks it.
+- Compile reruns at the final HEAD in any case, because its guards (check-duckdb-only and others) scan Rust sources.
