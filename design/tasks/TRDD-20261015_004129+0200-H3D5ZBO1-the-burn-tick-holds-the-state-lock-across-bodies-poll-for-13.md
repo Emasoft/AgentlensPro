@@ -4,7 +4,7 @@ title: The burn tick holds the state lock across bodies.poll, for 130-576 s on t
 column: testing
 status: tasked
 created: 2026-10-15T00:41:29+0200
-updated: 2026-11-19T01:25:07+0100
+updated: 2026-11-19T12:57:36+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -53,3 +53,7 @@ NEXT: (1) commit-2 review follow-ups in flight (poll doc-hidden, TS BurnRiskRepo
 ## Notes
 
 2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as POST-RELEASE CHECK (NEXT 3 and 4). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.
+
+## Progress log
+
+2026-11-19 12:57 — TRDD-569BMAGD routed this card's measurement copies through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). Copying a full ~/.agentlens clone (BASE, dd-base, pristine) is now refused: re-running these arms needs a sample of at most 4 GB.
