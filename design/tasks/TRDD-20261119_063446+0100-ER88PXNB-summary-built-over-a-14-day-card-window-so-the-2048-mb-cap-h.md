@@ -4,7 +4,7 @@ title: summary built over a 14-day card window so the 2048 MB cap holds
 column: todo
 status: tasked
 created: 2026-11-19T06:34:46+0100
-updated: 2026-11-19T06:34:46+0100
+updated: 2026-11-19T06:38:26+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,7 @@ Stopgap carved out of TRDD-735Q3JF4 so the release (TRDD-HSPUF5XH) can unblock; 
 ## Approval log
 
 - 2026-11-19T06:34:46+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes and lessons learned
+
+2026-11-19T06:38+0100 main agent, answers to the harness review of the proposal. (1) REJECTED with evidence, the claim that the base before the summary is 1.8 GB: in all six boots of runs 20261119_054437, 062411 and 062705 the boot-phase burn_scan_start (the last phase before the build) reads 1211-1224 MB of mimalloc commit and first_summary_build 1920-2009 MB, so the build adds 700-790 MB. The composition lines that read 1436 and 1800 MB carry 'summary-cache none' and sit between burn_scan_start and first_summary_build in the same second (e.g. 06:33:28 burn_scan_start up 7.63 = 1224 MB, 06:33:29 composition 1800 MB with mi live 1618 MB, 06:33:29 first_summary_build up 8.44 = 2003 MB), so they sample the build in progress; their '[up 0s]' is the composition tick's own counter. Independent proof that the summary unit is the filler: 735Q3JF4 run C2 (2026-10-23, 59444 cards) with the summary build and its summary_now consumers off held commit at 660 MB against 1964 MB with it on (live +473 MB and free-in-page +836 MB both vanished). (2) Wording: 'the read adds at most about 300 MB' becomes 'the cap guard saw no commit above 2304 MB during the reads' (the guard samples periodically; a peak between samples is not excluded, and the production guard samples the same way). (3) INFERRED, not measured: that a 14-day window cuts the build cost in proportion to its share of cards (15%); fragmentation (free-in-page, about 900 MB in run A of 2026-10-23) may not scale linearly. (4) PREDICTION revised to a delta against the same run's base: first_summary_build minus burn_scan_start <= 200 MB (today 700-790 MB) and the highest sampled commit <= 1.75 GB; a delta above 300 MB or a sample above 1.85 GB falsifies the model. (5) Composition lines re-read with mi live and free-in-page shown (only the derived-slack to mi abandoned fields were elided). (6) NOT FIXED and to be measured in the evidence run: burn_snapshot (lib.rs:590) clones every resident card for burn_summary_now (ui.rs:522, 1005, 4423 run_burn_tick) and burn_subset_summary (lib.rs:618) indexes them all; it is not narrowed by this card.
