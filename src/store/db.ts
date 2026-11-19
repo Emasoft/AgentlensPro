@@ -96,6 +96,8 @@ export const PARTS_DIR = 'parts'
 // must never create, write, verify or delete `api_calls`; every place that enumerates the layout
 // treats it as OPTIONAL (present-or-absent are both valid). The constant exists so the one place
 // that must NOT lose it — the migration swap in migrate.ts — can name it.
+// TRDD-OBJ4FK2T: the Rust chore `purge_tick` (agentlens-core chores.rs) removes api_calls parts older than
+// apiCallsRetentionDays; that is the only deleter, and TypeScript still must not delete here.
 export const API_CALLS_DIR = 'api_calls'
 
 function partFiles(dir: string, sub: string): string[] {

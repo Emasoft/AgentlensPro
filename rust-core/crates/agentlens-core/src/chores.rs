@@ -161,6 +161,20 @@ fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
             freed as f64 / 1_048_576.0
         );
     }
+
+    // TRDD-OBJ4FK2T: api_calls parts older than apiCallsRetentionDays (default 31) are removed by the epoch in their name.
+    // WHY 31: the hook-events and log-events default, above the 14-day reach of every windowed reader (rate_limit_report at most
+    // 336 h, the others 48 h); readers with no window (cache_turns_sql, get_cache_event_log with window 0, untilIso, raw SQL) see at
+    // most that many days. A backlog flush can put old rows in a new part, which then outlives the age; a part removed during the
+    // bodies pass fsync barrier fails that batch once and it is retried.
+    let api_days = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::API_CALLS_RETENTION_DAYS);
+    match agentlens_store::purge_api_call_parts(&data_dir.join("store"), api_days, now_ms as u64) {
+        Ok(removed) if !removed.is_empty() => {
+            println!("{} alcore: api_calls retention: purged {} part(s)", crate::log_ts(), removed.len());
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("{} alcore: api_calls retention: purge failed: {e}", crate::log_ts()),
+    }
 }
 
 /// `stagedBodyBytes` for ONE target (server.ts:634) — the live bytes still staged in the bodies

@@ -650,7 +650,7 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let tag = format!("part-{now_ms}-{}-{}.parquet", std::process::id(), store.next_part);
+    let tag = part_file_name(now_ms, std::process::id(), store.next_part);
     store.next_part += 1;
     let mut part_paths = Vec::new();
     let mut n = 0u64;
@@ -750,6 +750,56 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
         part_paths.push(out);
     }
     Ok(FlushResult { n, part_paths })
+}
+
+/// The one place that builds a flush part name, so the writer and `api_call_part_epoch_ms` cannot drift.
+pub fn part_file_name(now_ms: u128, pid: u32, n: u64) -> String {
+    format!("part-{now_ms}-{pid}-{n}.parquet")
+}
+
+/// The flush time in epoch ms carried by a part name built by `part_file_name`; None for any other name
+/// (prefix `part-`, three `-` separated unsigned integers, suffix `.parquet`).
+pub fn api_call_part_epoch_ms(name: &str) -> Option<u64> {
+    let fields: Vec<&str> = name.strip_prefix("part-")?.strip_suffix(".parquet")?.split('-').collect();
+    if fields.len() != 3 || !fields.iter().all(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    fields[1].parse::<u32>().ok()?;
+    fields[2].parse::<u64>().ok()?;
+    fields[0].parse::<u64>().ok()
+}
+
+/// TRDD-OBJ4FK2T: removes the api_calls parts whose name epoch is strictly older than `retention_days`.
+/// WHY by name: a part is named at flush time, so its age needs no query and no mtime (a copied or restored
+/// file keeps its name). WHY a name that does not parse is never removed: the dir can hold files this
+/// writer did not make. WHY non-finite, non-positive or underflowing retention removes NOTHING: a bad knob
+/// must never read as "older than now" and wipe the store. A vanished part is dropped from the `part_file`
+/// catalog by the next `sync_new_parts`, so no second update is needed here.
+pub fn purge_api_call_parts(store_dir: &Path, retention_days: f64, now_ms: u64) -> std::io::Result<Vec<String>> {
+    let mut removed = Vec::new();
+    if !retention_days.is_finite() || retention_days <= 0.0 {
+        return Ok(removed);
+    }
+    let span_ms = retention_days * 86_400_000.0;
+    if !span_ms.is_finite() || span_ms >= now_ms as f64 {
+        return Ok(removed);
+    }
+    let cutoff = now_ms - span_ms as u64;
+    let dir = store_dir.join(API_CALLS_DIR);
+    let entries = match fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if api_call_part_epoch_ms(&name).is_some_and(|epoch| epoch < cutoff) {
+            fs::remove_file(entry.path())?;
+            removed.push(name);
+        }
+    }
+    Ok(removed)
 }
 
 /// Rows in the four staging tables (blob, part, body, api_call) — RAM not yet flushed.
