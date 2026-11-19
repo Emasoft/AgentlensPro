@@ -1,10 +1,10 @@
 ---
 trdd-id: 569BMAGD
 title: Measurement scripts copy store clones and transcripts with no size check
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-11-19T12:42:17+0100
-updated: 2026-11-19T13:01:41+0100
+updated: 2026-11-19T14:27:14+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -22,6 +22,7 @@ approval-datetime: 2026-11-19T12:42:17+0100
 ## Approval log
 
 - 2026-11-19T12:42:17+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T14:27:14+0100 — COMPLETE by main-agent@agentlenspro. archived as complete (from column dev).
 
 ## Problem
 
@@ -35,3 +36,11 @@ Data copies in measurement scripts go through scripts/capped-copy.sh (du -sk cou
 
 2026-11-19 12:57 — 26 files converted, scripts_dev is gitignored so the backups (*.bak-20261119-cap) are the restore point. Worker report: reports_dev/test-data-cap/20261119_124214+0100-capped-copy-conversion.md. The worker skipped cores-harness.sh (its STEP 2 misread a parent mkdir as the destination); the main agent applied it: the copy names projects/$(basename "$src"), absent after the rm -rf, the same final path cp -R produced. capped-copy.sh runs /bin/cp -cpR on Darwin, so file and directory sources both work; the originals used cp -cR or cp -R, so -p only adds preserved modes and times. Not covered: a NEW ad-hoc copy command typed by an agent is still unchecked; only these scripts and the tests are.
 2026-11-19 (between 12:59 and 13:09; the clock was not read) — Cross-volume check: /bin/cp -c and /bin/cp -cpR from the boot disk to the external volume both exit 0 with identical contents (a file and a small directory), so the clone flag falls back to a copy across volumes. Cards notified: 2HRA270Y, 735Q3JF4, H3D5ZBO1, 7YPQWKPG. No owning card was notified for cores-harness.sh or the digest-* scripts (none found). Whether a .bak-20261119-cap file existed before the worker ran cannot be shown (cp -p keeps the source dates); the suffix was new this session.
+2026-11-19T14:26:46+0100 — Closed. The work is landed: scripts/capped-copy.sh (af5e4c74), 26 measurement scripts converted (scratch scripts in gitignored scripts_dev, backups *.bak-20261119-cap), card notes cc05d1d5 and 74e1e460, CLAUDE.md gap text c05cf4aa. Still not covered, recorded in CLAUDE.md: a new ad-hoc copy typed by an agent is unchecked; the test cap samples every 5 s and counts only TMPDIR.
+
+## Acceptance
+
+- [x] scripts/capped-copy.sh exists, tracked, refuses above 4194304 KB and an existing destination (af5e4c74).
+- [x] The 26 data-copying measurement scripts found by the sweep copy through capped-copy.sh (diff against each .bak-20261119-cap backup plus bash -n or ast.parse, all clean; Progress log 12:57).
+- [x] The sites left unchanged are listed with their reason (Decision section).
+- [x] CLAUDE.md states what is still not covered (c05cf4aa).
