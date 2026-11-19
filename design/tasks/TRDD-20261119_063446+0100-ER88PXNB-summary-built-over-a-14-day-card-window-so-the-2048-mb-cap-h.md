@@ -4,7 +4,7 @@ title: summary built over a 14-day card window so the 2048 MB cap holds
 column: todo
 status: tasked
 created: 2026-11-19T06:34:46+0100
-updated: 2026-11-19T08:29:27+0100
+updated: 2026-11-19T09:06:28+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -41,3 +41,7 @@ Stopgap carved out of TRDD-735Q3JF4 so the release (TRDD-HSPUF5XH) can unblock; 
 ## Step C constraint
 
 2026-11-19: every step C disclosure wrapper (/api/summary, first SSE frame, push_update, dashboard HTML, MCP aggregates) must take the summary and its window from ONE summary_now_windowed call (one lock, one cache slot; store_summary clears the window on each store). Pairing st.summary_window with a summary Arc taken under a different lock reintroduces the stale-window mismatch the harness review flagged; no version ties the two otherwise.
+
+## Known limitations
+
+2026-11-19 (A2 worker finding, by its report): summary_now / summary_now_windowed take the card cutoff from summary_snapshot(), which reads the REAL clock, while summary_from receives the caller's now_ms. In production now_ms is the real clock, so the two agree; a test or caller passing a fixed now gets a cutoff from the real clock (A2 tests store the summary by hand with summary_snapshot_at(now) for this reason). Fix only if a caller ever needs a fixed now: pass now_ms into the snapshot. Also: the family memo (CoreState.family_summary_memo) keeps one family summary resident; the A3 worker adds a shed on the stage-2 pressure ladder, and the final isolated run must sample commit after one family build.
