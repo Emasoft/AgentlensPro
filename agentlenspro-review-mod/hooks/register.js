@@ -46,7 +46,8 @@
 // systemMessage! the adversarial review instead must be injected in the context and visible by both the agent and the
 // user!"). The coloured display is the user's copy only. The model gets every report RAW: a BLOCK through the block
 // string at once; a PASS, and an interrupted turn's review, through the one store (pendingAtom) that the next
-// prompt.submit injects as context, once. The usage table never reaches the model.
+// prompt.submit injects as context, once; a DEFERRED review, as one line at that prompt that says so and why (0.7.13,
+// TRDD-ASXUW08U, deferredLine). The usage table never reaches the model.
 // SUBAGENTS (0.6.0, owner 2026-11-14: "subagents must have their fork adversarial review and measure report too at the end
 // of each turn, so they too must print the systemMessage"; "only the token counts must be restricted to the user view
 // with systemMessage!!! the adversarial review instead must be injected in the context and visible by both the agent and
@@ -82,9 +83,10 @@ const DIFF_MAX = 40000
 const OBS_MAX = 4000
 const MAX_ASSUMPTIONS = 8
 
-// The ONE store of what the model has not been shown yet (0.5.2): `{ text, block, injected, at, debt?, debtWhy? }`. It
-// holds a Stop review that PASSED and an interrupted turn's review (RAW, never the usage table), plus a DEBT left by a
-// review that could not run; prompt.submit is its one injection point. Session state, so a module reload does not lose it.
+// The ONE store of what the model has not been shown yet (0.5.2): `{ text, block, injected, at, debt?, debtWhy?, debtTold?,
+// debtProposal? }` (the last two since 0.7.13, defer). It holds a Stop review that PASSED and an interrupted turn's review
+// (RAW, never the usage table), plus a DEBT left by a review that could not run; prompt.submit is its one injection point.
+// Session state, so a module reload does not lose it.
 const pendingAtom = atom({ plugin: "agentlenspro-review-mod", key: "pendingReview" }, null)
 // The head of that injection: the agent must know it is the harness review of its own previous turn, and what to do.
 // 0.6.0: the same store also carries the reviews of SUBAGENT turns, each tagged "subagent <type> <id>" in its report header.
@@ -443,16 +445,18 @@ function reviewedTurn(key, kind, who = kind) {
 const heldAtom = atom({ plugin: "agentlenspro-review-mod", key: "heldInterrupted" }, [])
 // How many boxes this module put into heldAtom since a Stop last took them. It exists for dropHeld alone: by the mods
 // documentation $.state is already reset when classic.SessionStart fires after /clear, /resume or /branch, so the atom cannot
-// say how many boxes went. A module variable outlives those commands (they do not reload the module); after a reload of the
-// module it restarts at 0, and dropHeld then prints no row.
+// say how many boxes went. A module variable outlives those commands (they do not reload the module). A reload of the module
+// restarts it at 0 while the boxes stay in $.state, so session.start, which fires again after such a reload, re-reads it from
+// the atom (0.7.13, TRDD-0IFG1B11 case a: up to 0.7.12 a reload then a /clear dropped the boxes with no row).
 let heldCount = 0
 // /clear, /resume and /branch leave the conversation a held box belongs to (for a new one, another one, a copy of it):
 // classic.SessionStart then carries the source "clear", "resume" or "fork". The box is dropped and ONE row says how many went
 // and why, so a row that promised a box is not left unanswered. The atom is emptied here too (the engine has reset it already,
 // by the mods documentation; not measured here), so the drop does not rest on the order of the reset and this event. Every
 // other source ("startup", "compact") drops nothing.
-// LIMITS: after a reload of this module no row is printed (heldCount is 0); a session that ends before its next Stop shows
-// nothing; a review still running when the command is given holds its box in the conversation that follows.
+// LIMITS: after a reload of this module whose session.start could not read the atom, no row is printed (heldCount is 0); a
+// session that ends before its next Stop shows nothing; a review still running when the command is given holds its box in
+// the conversation that follows.
 const LEAVING_COMMAND = new Map([["clear", "/clear"], ["resume", "/resume"], ["fork", "/branch"]])
 async function dropHeld($, source) {
   const command = LEAVING_COMMAND.get(source)
@@ -462,8 +466,12 @@ async function dropHeld($, source) {
     left = (await read($, heldAtom)).length
     if (left > 0) await update($, heldAtom, () => [])
   } catch (err) {
-    // Not cleared = not known to be dropped: say nothing of a drop, and leave the count for the next Stop or the next such event.
-    $.ui.status(`review: held interrupted-turn reports not cleared — ${errText(err)}`)
+    // Not cleared = not known to be dropped, so the row says "may". Case c of TRDD-0IFG1B11 (0.7.13): up to 0.7.12 only a
+    // status line said so, which an unattended session loses. The count goes with the row: a box still held is shown by the
+    // next Stop, and a later such event that can read the atom counts it from there, so no box is reported twice.
+    const n = heldCount > 0 ? String(heldCount) : "any"
+    heldCount = 0
+    $.ui.log(`review-mod: ${n} held interrupted-turn report(s) may be dropped, not shown: ${command} left the conversation they belonged to and the held reports could not be read or cleared (${errText(err)}); any still held is shown at the next Stop`)
     return
   }
   const dropped = Math.max(heldCount, left)
@@ -484,6 +492,11 @@ async function dropHeld($, source) {
 const DISPLAY_DIR = ".claude/tmp/agentlenspro-review-mod"
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/
 const ANSI_SGR = /\u001b\[[0-9;]*m/g
+// The line that ends the held interrupted-turn boxes at the top of a main Stop display; the rows after it are that Stop's own
+// turn (0.7.13, TRDD-IT5KUORN). CONTRACT with hooks/show.py (HELD_END there): show.py never prints it, and over the hook output cap
+// it cuts the held part before any row of the Stop's own turn. U+001E alone on its line: a CONTROL character, which plainReport,
+// note and usageTable strip from every text they put in a display, so no row of a report or a box can equal it.
+const HELD_END = "\u001e"
 
 function displaySink() {
   const lines = []
@@ -821,7 +834,8 @@ async function storeForModel($, text, block) {
   await update($, pendingAtom, (prev) => {
     const waiting = prev && !prev.injected && prev.text ? prev : null
     return {
-      ...(prev && prev.debt ? { debt: true, debtWhy: prev.debtWhy } : {}),
+      // Every debt field (debtTold and debtProposal since 0.7.13): a stored report neither drops a debt nor repeats its line.
+      ...(prev && prev.debt ? { debt: true, debtWhy: prev.debtWhy, debtTold: prev.debtTold, debtProposal: prev.debtProposal } : {}),
       text: waiting ? `${waiting.text}\n\n${text}` : text,
       block: block || !!(waiting && waiting.block),
       injected: false,
@@ -860,7 +874,7 @@ async function reviewInterrupted($, prompt, mark, reviewedUsage) {
       calls.push(callRecord("review (interrupted, completion)", COMPLETION_MODEL, c))
       res = c.isAnswered ? parseVerdict(c.text.trim()) : { ok: false, why: `fork: ${res.why}; completion: ${c.reason}` }
     }
-    if (!res.ok) { await defer($, `interrupted turn: ${res.why}`); return }
+    if (!res.ok) { await defer($, `interrupted turn: ${res.why}`, null, scan.proposal); return }
     const text = `${measure ? measure + "\n\n" : ""}[AGENTLENSPRO-REVIEW-REPORT] (run by the harness, interrupted turn)\n${res.text}`
     await storeForModel($, text, res.block)
     heldReport = text
@@ -888,14 +902,43 @@ async function reviewInterrupted($, prompt, mark, reviewedUsage) {
 // every deferral is also shown to the user (the Stop display, or the transcript log from a timer) and counted in the
 // plugin store (key "deferred"). Nothing is ever dropped: a stop the harness could not review leaves a DEBT in session
 // state, and the next stop must review that work (it is in the conversation the fork reads), even when that turn
-// changed nothing.
-async function defer($, why, sink = null) {
+// changed nothing. `proposal` is whether the deferred turn had a proposal: true, false, or null when the scan did not run.
+// 0.7.13 (TRDD-ASXUW08U): the model is told too, in ONE line at the next prompt (debtTold false until prompt.submit has
+// told it; deferredLine). Up to 0.7.12 it got nothing: on 2026-11-17 a proposer waited for a review and a measurement
+// that did not come.
+async function defer($, why, sink = null, proposal = null) {
   note($, sink, "yellow", `REVIEW DEFERRED to the next stop (not dropped): ${why}`)
   $.ui.status(`review: deferred — ${why}`)
   try { const n = (await $.store.get("deferred")) || 0; await $.store.set("deferred", n + 1) } catch { /* the message above records it */ }
   // The debt is merged into the record as it is at write time (update's own prev, not an earlier read): the record may
   // hold a report still waiting for the model (0.5.2), and a stale copy would drop it.
-  await update($, pendingAtom, (prev) => ({ ...(prev || { text: "", block: false, injected: true, at: Date.now() }), debt: true, debtWhy: why }))
+  await update($, pendingAtom, (prev) => ({
+    ...(prev || { text: "", block: false, injected: true, at: Date.now() }),
+    debt: true,
+    debtWhy: why,
+    debtTold: false,
+    debtProposal: mergeProposal(prev && prev.debt ? (prev.debtProposal ?? null) : undefined, proposal),
+  }))
+}
+
+// What the debt knows of the deferred turns' proposals, after one more deferral: a seen proposal makes it true, two known
+// "none" keep it false, anything not known makes it null. `before` is undefined when there was no debt yet.
+function mergeProposal(before, now) {
+  if (before === undefined) return now
+  if (before === true || now === true) return true
+  return before === false && now === false ? false : null
+}
+
+// The ONE line prompt.submit gives the model for a debt it was not told of (0.7.13, TRDD-ASXUW08U). A deferred review never
+// measures a proposal later (the measurement runs only for a proposal in the turn its own Stop reviews), so the line says
+// so and how to get one: repeat the proposal. The marker itself is not written here, so this context never reads as one.
+function deferredLine(why, proposal) {
+  const reason = String(why).replace(/\s+/g, " ").replace(CONTROL, "")
+  const measure = " got no measurement, and a deferred proposal is not measured later: if it still stands, repeat the proposal with its marker line in your next reply and the harness measures it at that stop."
+  const tail = proposal === true ? ` That turn's proposal${measure}` : proposal === false ? "" : ` If that turn made a proposal, it${measure}`
+  // "deferred its review", not "did not review": on the pendingBlock path the turn WAS reviewed (BLOCK) and only the
+  // re-check is deferred (harness review of 0.7.13); the reason in brackets says which.
+  return `[agentlenspro-review-mod] REVIEW DEFERRED: the harness deferred its review of your earlier turn (${reason}); it reviews that work at your next stop that is not a janitor turn. Do not spawn a review fork.${tail}`
 }
 
 // One main-thread, non-janitor Stop: scan, measure (proposal only), review. Returns the mod's block text, or null to let
@@ -905,13 +948,15 @@ async function reviewAtStop($, e, sink) {
   // A review that could not run must not let the stop through (owner: "unskippable"). It blocks and the next
   // stop retries, up to MAX_ROUNDS per turn; past that it is deferred (the engine's own 9-block cap
   // would end the turn anyway, and an endless block would wedge the session).
+  // Whether this turn has a proposal, once the scan ran (null before): a deferral hands it to the debt (TRDD-ASXUW08U).
+  let proposalSeen = null
   const failClosed = async (why) => {
     if (roundsThisTurn < MAX_ROUNDS) {
       roundsThisTurn++
       note($, sink, "yellow", `REVIEW FAILED, stop blocked for a retry (round ${roundsThisTurn}/${MAX_ROUNDS}): ${why}`)
       return `[agentlenspro-review-mod] The review could not run (${why}); end your turn again and the harness retries it at the next stop. Do not spawn a review fork.`
     }
-    await defer($, `${why}; ${MAX_ROUNDS} retries this turn failed`, sink)
+    await defer($, `${why}; ${MAX_ROUNDS} retries this turn failed`, sink, proposalSeen)
     return null
   }
   const calls = []
@@ -931,6 +976,7 @@ async function reviewAtStop($, e, sink) {
     const lastMessage = typeof e.last_assistant_message === "string" ? e.last_assistant_message : null
     const proposalFromLast = !scan.proposal && lastMessage !== null && PROPOSAL_LINE.test(lastMessage)
     if (proposalFromLast) scan.proposal = true
+    proposalSeen = scan.proposal
     const pendingBlock = pending && pending.block ? pending.text : null
     const debt = pending && pending.debt ? pending.debtWhy : null
     // Clears what this stop deals with: the record read at its start (its BLOCK goes into this review or into the block
@@ -950,7 +996,9 @@ async function reviewAtStop($, e, sink) {
         roundsThisTurn++
         return `[agentlenspro-review-mod] The review of your INTERRUPTED earlier turn found BLOCKERS this turn did not address; fix each (or state why you reject it), then end the turn.\n\n${pendingBlock}`
       }
-      if (pendingBlock) await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached; the interrupted turn's BLOCK review was not re-checked`, sink)
+      // scan.proposal is false here by construction (shouldReview returns true for any proposal); passed anyway, so the
+      // debt never claims "no proposal" on reasoning a later change to shouldReview could break (review of 0.7.13).
+      if (pendingBlock) await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached; the interrupted turn's BLOCK review was not re-checked`, sink, scan.proposal)
       return null
     }
     const workAt = scan.work ? scan.work.index : -1
@@ -961,7 +1009,7 @@ async function reviewAtStop($, e, sink) {
       return null
     }
     if (roundsThisTurn >= MAX_ROUNDS) {
-      await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached this turn`, sink)
+      await defer($, `cap of ${MAX_ROUNDS} blocking rounds reached this turn`, sink, scan.proposal)
       return null
     }
     $.ui.status(scan.proposal ? "review: measuring the proposal, then reviewing…" : "review: reviewing this turn…")
@@ -1319,6 +1367,15 @@ export const register = (on, options) => {
     if (reviewDepth === 0 && result && result.usage) recordStep(e.agentId || "main", result)
     return result
   })
+  // Case a of TRDD-0IFG1B11 (0.7.13): a reload of this module restarts heldCount at 0 while the held boxes stay in $.state, so
+  // a /clear, /resume or /branch before the next Stop dropped them with no row. session.start fires again after a reload of
+  // the module (type documentation: "once per fresh load of one (never /clear)"; "a reload (changed modules only)"), so the
+  // count is re-read from the atom there. At process start the atom is empty and nothing changes. A failed read leaves the
+  // LIMITS case of dropHeld, said on the status line.
+  on("session.start", async ($, e, next) => {
+    try { heldCount = Math.max(heldCount, (await read($, heldAtom)).length) } catch (err) { $.ui.status(`review: held interrupted-turn reports not counted — ${errText(err)}`) }
+    return next(e)
+  })
   on("classic.SessionStart", async ($, e, next) => {
     stepUsage.clear()
     // A held interrupted-turn box is NOT dropped at every SessionStart any more (0.7.12, TRDD-ISEF8YO7): this event also fires
@@ -1350,12 +1407,18 @@ export const register = (on, options) => {
   on("prompt.submit", async ($, e, next) => {
     try {
       let pending = null
+      let debtLine = null
       await update($, pendingAtom, (prev) => {
         pending = prev && !prev.injected && prev.text ? prev : null
-        return pending ? { ...prev, injected: true } : prev
+        // 0.7.13 (TRDD-ASXUW08U): a debt the model was not told of yet is told now, once, in one line (deferredLine). A
+        // record from 0.7.12 has no debtTold and is told once too.
+        debtLine = prev && prev.debt && !prev.debtTold ? deferredLine(prev.debtWhy, prev.debtProposal) : null
+        if (!pending && !debtLine) return prev
+        return { ...prev, ...(pending ? { injected: true } : {}), ...(debtLine ? { debtTold: true } : {}) }
       })
-      if (!pending) return next(e)
-      return next({ ...e, context: [...((e && e.context) || []), `${REVIEW_HEAD}\n\n${pending.text}`] })
+      if (!pending && !debtLine) return next(e)
+      const added = [...(debtLine ? [debtLine] : []), ...(pending ? [`${REVIEW_HEAD}\n\n${pending.text}`] : [])]
+      return next({ ...e, context: [...((e && e.context) || []), ...added] })
     } catch (err) {
       $.ui.status(`review: review not injected — ${errText(err)}`)
       return next(e)
@@ -1395,25 +1458,28 @@ export const register = (on, options) => {
     // many $.ui.log rows with the host prefix, no colour). Put here, oldest first and ahead of this turn's own rows, on the next
     // Stop of ANY kind (a janitor turn writes the display too), and taken from the session state in ONE update, so each box is
     // shown once. A failure here must not fail the hook: the engine would skip it, and `mine`, this stop's block, with it. The
-    // boxes then stay held and one row says why. show.py fit() protects only the LAST box, so with several held items an
-    // earlier box can be cut by the output cap; accepted: the tail box is the current turn's.
+    // boxes then stay held and one row says why.
+    // HELD_END follows the held lines (0.7.13, TRDD-IT5KUORN). Up to 0.7.12 show.py could not tell them from this turn's rows:
+    // fit() kept only the LAST usage box and cut the lines before it from their end, which is where THIS turn's report sits,
+    // so a held box cut the current report (probe of 2026-11-18: the user saw the old report and not the current one; on a
+    // BLOCK turn the blocking findings would go). With the line, show.py cuts the held boxes before any row of this turn.
     try {
       let held = []
       if ((await read($, heldAtom)).length > 0) await update($, heldAtom, (prev) => { held = prev || []; return [] })
       // Only what this Stop took leaves the count: by the type documentation every read of one dispatch sees one moment, so a
       // box held while this Stop was reviewing may not be in `held` and is then still held (not measured on a live engine).
       heldCount = Math.max(0, heldCount - held.length)
-      sink.lines.unshift(...held.flatMap((item) => item.lines))
+      if (held.length > 0) sink.lines.unshift(...held.flatMap((item) => item.lines), HELD_END)
     } catch (err) {
-      const why = `[review-mod] held interrupted-turn report(s) could not be read (${errText(err)}); they stay held for the next Stop`
+      const why = `[review-mod] held interrupted-turn report(s) could not be read (${errText(err)}); they stay held for the next Stop`.replace(CONTROL, "")
       sink.lines.unshift(paint("yellow", why))
       logLines($, why, { to: "debug" })
     }
     // Written on every main-thread Stop, empty when the sink is: a leftover from an earlier Stop is never shown.
     // When it cannot be written (no usable cwd in the payload, a refused write) the rows must not be lost: they fall
-    // back to plain dim transcript rows. A Stop with nothing to show logs nothing then.
+    // back to plain dim transcript rows. A Stop with nothing to show logs nothing then. HELD_END is for show.py only.
     try { await writeDisplay($, e.cwd, e.session_id, sink.lines) } catch (err) {
-      if (sink.lines.length > 0) logLines($, [`[review-mod] display file not written (${errText(err)}); plain copy follows`, ...sink.lines.map((l) => l.replace(ANSI_SGR, ""))].join("\n"))
+      if (sink.lines.length > 0) logLines($, [`[review-mod] display file not written (${errText(err)}); plain copy follows`, ...sink.lines.filter((l) => l !== HELD_END).map((l) => l.replace(ANSI_SGR, ""))].join("\n"))
     }
     const r = await next(e)
     return mine ? { ...r, block: [r.block, mine].filter(Boolean).join("\n\n") } : r

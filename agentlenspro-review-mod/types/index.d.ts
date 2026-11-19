@@ -14,6 +14,12 @@ export type PendingReview = {
   // must review that work, even when its own turn changed nothing. debtWhy says why.
   debt?: boolean
   debtWhy?: string
+  // 0.7.13 (TRDD-ASXUW08U): false from a deferral until prompt.submit has told the model of the debt in one line, then true.
+  // Absent on a record written by 0.7.12, which is told once.
+  debtTold?: boolean
+  // Whether the deferred turn had a proposal (a deferred review never measures one later): true seen, false not, null not
+  // known (the scan did not run). The one line says so and asks for the proposal again when it is not false.
+  debtProposal?: boolean | null
 }
 
 export type LastSession = {
