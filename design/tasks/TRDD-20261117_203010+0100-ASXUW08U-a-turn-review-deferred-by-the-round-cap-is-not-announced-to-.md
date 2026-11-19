@@ -1,10 +1,10 @@
 ---
 trdd-id: ASXUW08U
 title: A turn review deferred by the round cap is not announced to the model and its proposal is never measured
-column: dev
+column: human_review
 status: tasked
 created: 2026-11-17T20:30:10+0100
-updated: 2026-11-19T00:12:33+0100
+updated: 2026-11-19T01:08:29+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-17T20:30:10+0100
+implementation-commits: [1266d508]
 ---
 
 # A turn review deferred by the round cap is not announced to the model and its proposal is never measured
@@ -30,16 +31,21 @@ Not established: whether the Stop-hook feedback of another plugin (the goal hook
 CAUTION (2026-11-17T20:47:00+0100, main agent, after the harness review of the turn that closed TRDD-4BV8F9B9; that card is archived and cannot be corrected). Three statements in its FOUND line, and repeated above, are INFERRED and not measured: (1) 'the turn had been continued by Stop-hook feedback three times, so the cap counted across them': only one of the three was a review BLOCK, and how the counter reached 2 is not traced (box 1 here); (2) 'the next non-janitor Stop paid the debt': I read the report injected at 19:05 (one review, no measurement) but not the Stop display of that Stop, nor that it ran with the debt set; (3) 'the deferred proposal was never measured' rests on that one injected entry. If (2) or (3) is wrong, defect 2 above is partly not there. Also: the silent deferral is documented nowhere a proposer reads (not in the rule file, not in the mod README); only a project memory atom (ATOM-E7SR-7AR3) says it.
 
 ## Acceptance
-- [ ] How the cap was reached in the 18:57 turn is traced (which stops raised the counter), with file and line.
-- [ ] When a review is deferred, the model receives one line at the next prompt that says so and names the reason.
-- [ ] A deferred proposal is measured when its debt is paid, or the limit is stated in that line.
-- [ ] A probe or test shows both, and the mod version is bumped.
+- [x] How the cap was reached in the 18:57 turn is traced (which stops raised the counter), with file and line.
+- [x] When a review is deferred, the model receives one line at the next prompt that says so and names the reason.
+- [x] A deferred proposal is measured when its debt is paid, or the limit is stated in that line.
+- [x] A probe or test shows both, and the mod version is bumped.
 
 ## Approval log
 
 - 2026-11-17T20:30:10+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T00:12:33+0100 — column → dev by main-agent@agentlenspro. dispatched 2026-11-19 to the mods-expert-developer agent with M62ZBT7E (owner directive 2026-11-18)
+- 2026-11-19T01:08:29+0100 — column → human_review by main-agent@agentlenspro. built and tested in review mod 0.7.13 (1266d508); the live display check needs the owner
 
 ## Notes
 
 OWNER DIRECTIVE 2026-11-18 00:00 (verbatim): «mods are too complex. only the mods-expert-developer agent can be consulted on them, and developing must be delegated to it.» From here the mod work of this card is designed, written and tested by the agent mods-expert-developer-plugin:mods-expert-developer-agent. The main agent writes no mod code and takes mod questions to that agent.
+
+## Result 2026-11-19
+
+2026-11-19T01:08+0100 main agent: landed in review mod 0.7.13, 1266d508. Trace: two review BLOCKs raised the round counter in that turn (transcript 17:49:30Z and 17:54:24Z), not one as this card said; the reset never ran between. The model now gets one REVIEW DEFERRED line at the next prompt with the reason. Box 3 is met by its SECOND branch only: a deferred proposal is NOT measured later, and the line states that limit and asks for the proposal again. OWNER QUESTION: accept the stated limit, or ask for measurement at payment (the mods agent rejected it as measuring a stale proposal, possibly twice). Evidence (run by the main agent on 1266d508's tree): claude plugin test 23 pass 0 fail; python3 -I tests/test_show.py 10 OK; tsc -p rc 0. Mutations M1-M15 red by the mods agent report (reports/mods-expert-developer-agent/20261119_four-cards.md, read whole; that file is gitignored). NOT run: a live session (Esc + compaction + Stop with a held box over the limit; a reload then /clear; a round-cap deferral then a prompt); the installed mod is still 0.7.10.

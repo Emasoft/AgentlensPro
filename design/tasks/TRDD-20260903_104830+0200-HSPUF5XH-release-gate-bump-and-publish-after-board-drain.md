@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T00:50:22+0100
+updated: 2026-11-19T01:08:43+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -328,3 +328,4 @@ FROM TRDD-12FGMAEP (commit 73211a46, footprint backstop in the memory guard of a
 ## Release order after item 10 (2026-11-19)
 
 2026-11-19T00:50+0100 main agent, from the advisor pass: (1) rebuild and codesign alcore AFTER the version bump: alcore embeds package.json's version at compile time (server_stats.rs include_str!), and a binary built before the bump makes the item 10 check print the 'different installs' notice on this machine. (2) A pre-item-10 alcore answers 'alcore version' with exit 64 (usage), which shows as one probe-failed notice: expected once. (3) The live check of item 10 cannot run in the safe form used so far: AGENTLENS_NO_AUTOSETUP=1 and the NO_REVIVE brake both skip it. It needs an isolated HOME, DATA_DIR and free ports (OTLP not 4318) with auto-setup on, an old server running and a newer binary on disk; then one ordinary verb must print the 'restarted the server' line.
+2026-11-19T01:08+0100 main agent, session state before a compaction: committed this stretch e2c9b0f3 (YL item 10), ea9882c9 (MVR6PXC0 test), 17a0667b (N60JUWU3 box 2), d52cebab (N60JUWU3 box 3), cad619d4 (item 10 CHANGELOG, setup step order, stop message), 1266d508 (review mod 0.7.13; four mod cards now in human_review). Working tree clean except the owner file agentlenspro-review-mod/tsconfig.json. Release blockers per reports_dev/cheap-worker/20261119_w69-blockers/report.md: OWNER 1 (N60JUWU3), LANDED-UNCLOSED 3 (2R36W8Q1, H3D5ZBO1, YL3EWT6N, each still listing open work), OPEN 16; read that report before the next release step. Release notes: standalone/cli.js is stale (it still quotes the old stop text) and is rebuilt by the release build; leftover agent worktrees under .claude/worktrees/ hold old card copies (owner to decide); janitor proposal TRDD-ULJUB4H0 (playwright agent generator) awaits owner approval. Owner questions open: N60JUWU3 box 1 wording and the test hook; ASXUW08U box 3 limit; FBLI5FNQ; the reports/ gitignore conflict (the mods report under reports/ is ignored).

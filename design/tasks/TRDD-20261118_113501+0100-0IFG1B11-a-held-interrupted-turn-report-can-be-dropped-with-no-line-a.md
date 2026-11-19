@@ -1,10 +1,10 @@
 ---
 trdd-id: 0IFG1B11
 title: A held interrupted-turn report can be dropped with no line after a module reload, a failed drop or a stale display file
-column: dev
+column: human_review
 status: tasked
 created: 2026-11-18T11:35:01+0100
-updated: 2026-11-19T00:12:33+0100
+updated: 2026-11-19T01:08:28+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-18T11:35:01+0100
+implementation-commits: [1266d508]
 ---
 
 # A held interrupted-turn report can be dropped with no line after a module reload, a failed drop or a stale display file
@@ -35,12 +36,17 @@ Keep the count of held boxes where a module reload does not reset it (finding F2
 Mod work is designed, written and tested by the agent mods-expert-developer-plugin:mods-expert-developer-agent (owner, 2026-11-18). The main agent writes no mod code.
 
 ## Acceptance
-- [ ] Case a prints the dropped row, or the README states the limit.
-- [ ] Case c prints a row in the conversation, not only a status line.
-- [ ] Case e prints one line that says a display was dropped and why.
-- [ ] Tests cover the three cases and the mod version is bumped.
+- [x] Case a prints the dropped row, or the README states the limit.
+- [x] Case c prints a row in the conversation, not only a status line.
+- [x] Case e prints one line that says a display was dropped and why.
+- [x] Tests cover the three cases and the mod version is bumped.
 
 ## Approval log
 
 - 2026-11-18T11:35:01+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T00:12:33+0100 — column → dev by main-agent@agentlenspro. dispatched 2026-11-19 to the mods-expert-developer agent with M62ZBT7E (owner directive 2026-11-18)
+- 2026-11-19T01:08:28+0100 — column → human_review by main-agent@agentlenspro. built and tested in review mod 0.7.13 (1266d508); the live display check needs the owner
+
+## Result 2026-11-19
+
+2026-11-19T01:08+0100 main agent: landed in review mod 0.7.13, 1266d508. Case a: session.start re-counts held boxes after a reload (relies on the type docs that session.start fires after a reload and that $.state survives it, not checked live; README states the limit). Case c: a row in the conversation. Case e: one line for a stale non-empty display. Evidence (run by the main agent on 1266d508's tree): claude plugin test 23 pass 0 fail; python3 -I tests/test_show.py 10 OK; tsc -p rc 0. Mutations M1-M15 red by the mods agent report (reports/mods-expert-developer-agent/20261119_four-cards.md, read whole; that file is gitignored). NOT run: a live session (Esc + compaction + Stop with a held box over the limit; a reload then /clear; a round-cap deferral then a prompt); the installed mod is still 0.7.10.
