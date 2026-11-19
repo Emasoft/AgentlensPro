@@ -4,7 +4,7 @@ title: summary built over a 14-day card window so the 2048 MB cap holds
 column: todo
 status: tasked
 created: 2026-11-19T06:34:46+0100
-updated: 2026-11-19T09:06:28+0100
+updated: 2026-11-19T09:58:18+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -45,3 +45,7 @@ Stopgap carved out of TRDD-735Q3JF4 so the release (TRDD-HSPUF5XH) can unblock; 
 ## Known limitations
 
 2026-11-19 (A2 worker finding, by its report): summary_now / summary_now_windowed take the card cutoff from summary_snapshot(), which reads the REAL clock, while summary_from receives the caller's now_ms. In production now_ms is the real clock, so the two agree; a test or caller passing a fixed now gets a cutoff from the real clock (A2 tests store the summary by hand with summary_snapshot_at(now) for this reason). Fix only if a caller ever needs a fixed now: pass now_ms into the snapshot. Also: the family memo (CoreState.family_summary_memo) keeps one family summary resident; the A3 worker adds a shed on the stage-2 pressure ladder, and the final isolated run must sample commit after one family build.
+
+## Progress log
+
+2026-11-19 10:05: A0+A1 bc42e25f, docs ba0a388d, A2 5292641c (summary_for_ids family helper with one-slot memo), A3 00601b99 (8 by-id arms; arm 6 get_context_history NOT guarded by a test, its fixture has no transcript; stage-2 pressure step drops family_summary_memo). IN FLIGHT: B, the 5 optional-sessionId arms (get_session_status, get_cost_by_cause, get_context_inflation_report, get_cache_break_report, check_cache_expiry), report reports_dev/ER88PXNB/20261119_100500+0100-b-optional-id-arms.md. NEXT: C disclosure wrapper (one summary_now_windowed call per response), D7 boot marker, FINAL isolated run on the post-A0 filter (idle step, commit sampling after reads and after one family build), then release HSPUF5XH.
