@@ -683,6 +683,10 @@ fn main() {
             _ = terminate_signal() => {}
         }
     });
+    // TRDD-ER88PXNB: WHY this line: mi_peak_commit on it is the highest mimalloc commit over the whole run (reads and
+    // family builds included), which the boot-phase lines before the reads cannot show. The isolated run reads it to
+    // check the headroom under the 2048 MB cap. Logged before the flush so a slow flush cannot hide it.
+    agentlens_core::rss_guard::log_boot_phase("stop_requested", None);
     // Flush on the way out — the writer buffers, and losing the tail on SIGINT/SIGTERM would be
     // a silent hole the store cannot detect. The sweeper flushes the durable state (offsets +
     // cards) the same way: a graceful stop loses nothing.

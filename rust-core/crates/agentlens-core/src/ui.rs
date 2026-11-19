@@ -651,6 +651,10 @@ pub(crate) fn burn_summary_now(state: &Arc<Mutex<CoreState>>) -> Arc<Value> {
         (st.data_version, st.burn_snapshot())
     };
     let built = Arc::new(CoreState::burn_subset_summary(&inputs.spans, &inputs.cards, &inputs.accounts));
+    // TRDD-ER88PXNB D7: one boot-phase reading after the first burn-subset build. WHY: the burn subset and the first
+    // summary build both land in the first seconds of a boot, and the isolated run needs to attribute commit to each.
+    static FIRST_BURN_SUBSET: std::sync::Once = std::sync::Once::new();
+    FIRST_BURN_SUBSET.call_once(|| crate::rss_guard::log_boot_phase("first_burn_subset_build", None));
     let mut st = state.lock_timed();
     if st.data_version == version {
         st.burn_subset_memo = Some((version, built.clone()));
