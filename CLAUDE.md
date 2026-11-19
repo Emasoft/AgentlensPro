@@ -307,7 +307,7 @@ dashboard/OTLP). Hook registration changes need a Claude session restart to take
   `bin-native/<platform>/`, run `codesign -s - --force bin-native/darwin-arm64/alcore`. Without it
   macOS SIGKILLs the binary before `main`, so `server restart` prints *"the server exited during
   startup — it never answered"*, `server.log` is empty, and nothing indicates a signature problem.
-  **The tell is `./bin-native/darwin-arm64/alcore --version` returning exit 137** (128+9 = SIGKILL).
+  **The tell is `./bin-native/darwin-arm64/alcore version` returning exit 137** (128+9 = SIGKILL; alcore has no `--version` flag, which exits 64 as a usage error).
   This took down a working collector on 2026-09-04; `grep -rn codesign scripts/ package.json
   .github/workflows/` returns nothing, so the documented deploy path still reproduces it.
   **MEASURED: exit 137 before, runs after. The MECHANISM is inferred, not established** — the

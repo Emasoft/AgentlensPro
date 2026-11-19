@@ -311,12 +311,13 @@ Loading is incremental and runs in the background, sorted newest-first so recent
 
 All ingested data lives under the data directory: **`$AGENTLENS_DATA_DIR`** if set, else `$DATA_DIR`, else `~/.agentlens`. Prefer the namespaced variable — `DATA_DIR` is a name Docker images, CI systems and data tooling also use, so a stray value in your environment would silently relocate the whole store; it is still honoured because it is a shipped contract, and `agentlenspro server status` reports which one won. This directory is **independent of where the package is installed** — it survives an uninstall, a version upgrade, and a CLI-path change, so your history is never lost when you update. Deletion is always logged, never silent, and only ever removes whole expired segments/volumes (spans and OTEL bodies are archived, never truncated mid-window).
 
-Six knobs control how long each kind of data is kept:
+Seven knobs control how long each kind of data is kept, and how much of it the summary is built over:
 
 | Knob | Default | Environment variable | What it governs |
 | --- | --- | --- | --- |
 | `spansRetentionDays` | 30 days | `AGENTLENS_SPANS_RETENTION_DAYS` | span segments (the trace DB) kept on disk |
 | `summaryWindowHours` | 24 hours | `AGENTLENS_SUMMARY_WINDOW_HOURS` | in-memory rolling summary window (disk keeps everything) |
+| `summaryCardDays` | 14 days | `AGENTLENS_SUMMARY_CARD_DAYS` | log session cards the in-memory summary is built over: a card enters when it was active at or after 00:00 UTC that many whole days before today's UTC date (a fraction rounds up to a whole day); a spawn placeholder and its `agent-` transcript always enter together; `0` builds over every card. Every card stays in memory and on disk; only the summary is narrowed. Separate from `summaryWindowHours` |
 | `bodiesMaxGb` | 8 GB | `AGENTLENS_BODIES_MAX_GB` | live-bodies size cap — an emergency valve that forces immediate ingestion of everything when exceeded (never deletes) |
 | `bodiesRetentionDays` | 31 days | `AGENTLENS_BODIES_RETENTION_DAYS` | legacy `.wad` archive volumes kept before whole-volume deletion (new bodies no longer archive there — see below) |
 | `logEventsRetentionDays` | 31 days | `AGENTLENS_LOG_EVENTS_RETENTION_DAYS` | gated-out OTEL log events kept as daily NDJSON buckets |
@@ -330,7 +331,7 @@ agentlenspro config get spansRetentionDays       # one knob's value + where it c
 agentlenspro config set spansRetentionDays 90    # persist a change (restart the server/daemon to apply)
 ```
 
-Each knob is resolved at boot with the precedence **environment variable > `config.json` > built-in default** — the env var stays the ephemeral ops override, the file is the durable setting you set once. Every value has a safety floor (e.g. days ≥ 1), and a below-floor value from any source is clamped. Restart the server/daemon (`agentlenspro server restart`) after a change.
+Each knob is resolved at boot with the precedence **environment variable > `config.json` > built-in default** — the env var stays the ephemeral ops override, the file is the durable setting you set once. Every value has a safety floor (e.g. days ≥ 1; `summaryCardDays` ≥ 0, where 0 means every card), and a below-floor value from any source is clamped. Restart the server/daemon (`agentlenspro server restart`) after a change.
 
 ### Raw-body capture — mandatory
 

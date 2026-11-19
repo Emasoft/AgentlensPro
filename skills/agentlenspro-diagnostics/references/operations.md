@@ -79,7 +79,7 @@ agentlenspro server restart                       # apply it
 ```
 
 Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxGb` (8) ·
-`bodiesRetentionDays` (31) · `logEventsRetentionDays` (31) · `apiCallsRetentionDays` (90). Raw-body capture is mandatory (no knob): bodies land directly on the SSD at
+`bodiesRetentionDays` (31) · `logEventsRetentionDays` (31) · `apiCallsRetentionDays` (90) · `summaryCardDays` (14; the summary is built over log cards active since 00:00 UTC that many days ago, 0 = every card). Raw-body capture is mandatory (no knob): bodies land directly on the SSD at
 `~/.agentlens/otel-bodies` and the drain ingests them every 60 s (the RAM-disk spool and the
 `bodiesMaxAgeHours`/72h batching wait were removed in TRDD-Z53IJFE9). A
 `set` on a corrupt config file REFUSES to write rather than clobbering it. Recipe — keep a year of
