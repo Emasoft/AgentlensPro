@@ -4,7 +4,7 @@ title: A start after an interrupted clear exits when the card log cannot be read
 column: human_review
 status: tasked
 created: 2026-11-17T19:44:14+0100
-updated: 2026-11-19T02:33:07+0100
+updated: 2026-11-19T02:34:42+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -47,3 +47,4 @@ Whether this has ever happened on a real folder. Whether the same holds for an u
 2026-11-19 main-agent review answer: box 2 checked against the whole 58614f10 diff and log_reader.rs 996-1009, read by the main agent: on the interrupted-clear path both rewrite_from calls run, then stamp_version, then finish_clear, the order the JDQR0HDT comment requires. The stale-version branch keeps load+save: delta_log.rs 460 (load seeds written) and 879 (save tombstones only unseen written keys) confirm that save needs the load.
 2026-11-19 decision: the new Err path is accepted. rewrite_from returns Err when the old delta cannot be removed (pinned by the delta_log test a_rewrite_from_whose_delta_cannot_be_removed_is_an_err_and_leaves_written_as_it_was), because that delta would replay stale records under the new empty snapshot. At start the ? exits alcore with the error in server.log, the clear flag stays 1, and the next start repeats the branch, so no cleared card is restored. This is the fail-fast the branch comment already states for disk errors.
 2026-11-19 scope of the evidence: the restore path returns Ok in unit tests only; no real alcore start against a corrupt card log was run.
+2026-11-19 AI review record: the harness report at transcript line 66493 (2026-11-19T00:40Z, read whole by the main agent) covers the turn that committed 58614f10 and moved this card to ai_review; VERDICT PASS, no blocker. Its MUZ04JYU SHOULD-FIX items (read the whole 58614f10 diff and the stamp-then-finish_clear order; read W73 line 16 whole; decide the rewrite_from Err at start) were answered in the next turns: the diff and log_reader.rs 996-1009 read whole, the Err accepted in writing on this card (6ace6a46). Its other items concern 6MG5N1ZF and HSPUF5XH.

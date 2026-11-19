@@ -4,7 +4,7 @@ title: The catch-up card save tombstones every file key the store lacks with no 
 column: human_review
 status: tasked
 created: 2026-11-17T17:56:24+0100
-updated: 2026-11-19T02:33:07+0100
+updated: 2026-11-19T02:34:42+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -82,3 +82,4 @@ CORRECTION TO THE INCREMENT B SPEC (2026-11-17T20:47:00+0100, main agent). Point
 ## Notes and lessons learned
 
 2026-11-19 box 9 met by 40af6326: save_cards re-arms the file pass and the dirty mark on Err, the fix the box proposed. Test two_failed_card_saves_in_a_row_keep_the_clear_flag_and_the_pass_armed failed before the fix (worker run), passes after, and fails again with both lines removed (worker mutation); sweeper_backstop_tests 24 passed in a main-agent run (load 6.5). The literal path of the box no longer resets the flag over an unchanged log even without the fix, because finish_clear_after_save now rewrites with rewrite_from (W75 report reports_dev/sonnet-worker/20261119_w75-pgmmb2qg-box9/report.md, read by the main agent); the fix closes the remaining gap, a failed timed save that was never retried. Not covered: a failed forced (shutdown) save still drops the mark.
+2026-11-19 AI review record: the harness report at transcript line 66928 (2026-11-19T00:52Z, read whole by the main agent) covers the turn that committed 40af6326 (box 9) and moved this card to ai_review; VERDICT PASS, no blocker, and none of its eight findings concerns this card's code (they concern 6MG5N1ZF and AXJH3WTU, answered in 6b811e27 and 512f2ec3).
