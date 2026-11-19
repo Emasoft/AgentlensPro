@@ -56,4 +56,4 @@ NEXT: (1) commit-2 review follow-ups in flight (poll doc-hidden, TS BurnRiskRepo
 
 ## Progress log
 
-2026-11-19 12:57 — TRDD-569BMAGD routed this card's measurement copies through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). Copying a full ~/.agentlens clone (BASE, dd-base, pristine) is now refused: re-running these arms needs a sample of at most 4 GB.
+2026-11-19 12:57 — TRDD-569BMAGD routed this card's measurement copies through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). clone.sh copies $SRC (~/.agentlens); that copy is refused when it is above 4 GB (its size was not measured), so re-running it may need a sample of at most 4 GB.

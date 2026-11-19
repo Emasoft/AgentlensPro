@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-11-19T01:25:03+0100
+updated: 2026-11-19T13:01:40+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -374,3 +374,7 @@ Step 5a follow-up: TRDD-X0YTE00M (remaining resident lists and App signals).
 ## Notes
 
 2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED. The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.
+
+## Progress log
+
+2026-11-19 13:10 — TRDD-569BMAGD routed scripts_dev/7yp-step2/arm.sh's copy of BASE (a clone of ~/.agentlens) through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). The size of BASE was not measured; re-running the arm may need a sample of at most 4 GB.

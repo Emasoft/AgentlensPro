@@ -78,4 +78,4 @@ Full plan text: ~/.claude/plans/elegant-churning-ripple.md (copied here in summa
 
 ## Progress log
 
-2026-11-19 12:57 — TRDD-569BMAGD routed this card's measurement copies through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). Copying a full ~/.agentlens clone (BASE, dd-base, pristine) is now refused: re-running these arms needs a sample of at most 4 GB.
+2026-11-19 12:57 — TRDD-569BMAGD routed this card's measurement copies through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). The arms copy BASE, a clone of ~/.agentlens; that copy is refused when BASE is above 4 GB (its size was not measured), so re-running them may need a sample of at most 4 GB.

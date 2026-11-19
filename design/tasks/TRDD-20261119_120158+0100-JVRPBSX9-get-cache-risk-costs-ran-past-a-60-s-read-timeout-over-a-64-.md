@@ -27,4 +27,4 @@ Found 2026-11-19 while verifying TRDD-ER88PXNB C2. A test server whose log env w
 
 ## Progress log
 
-- 2026-11-19 12:21: measured once each, debug test build, real store of 71,040 transcript files (about 64 GiB): get_cache_risk_costs answered after 595.687 s (14-day server, first call) and 423.393 s (window-off server, second call); the other 28 calls of that run took 3.67 s together. The 172 s gap between the two calls is unexplained. Release-build timing on the live server is still to do. Evidence: reports_dev/ER88PXNB/20261119_112650+0100-c2.md section 3.
+- 2026-11-19 12:21: measured once each, debug test build, real store of 71,040 transcript files (about 64 GiB): get_cache_risk_costs answered after 595.687 s (14-day server, first call) and 423.393 s (window-off server, second call); the remaining calls of that run took 3.67 s together. The 172 s gap between the two calls is unexplained. Release-build timing on the live server is still to do. Evidence: reports_dev/ER88PXNB/20261119_112650+0100-c2.md section 3.
