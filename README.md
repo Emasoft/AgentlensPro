@@ -557,6 +557,17 @@ Only one server can bind a given port pair at a time. To run a second instance, 
 OTLP_PORT=4319 UI_PORT=3001 bunx agentlenspro
 ```
 
+### Memory guard
+
+alcore exits with status 1 when one of two memory limits is breached, and writes a culprit log to `rss-hard-cap.log` in the data directory (chosen as described under Data retention) so the cause can be found. Both limits are checked every 5 seconds.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `AGENTLENS_RSS_HARD_CAP_MB` | `2048` | Commit cap on the memory committed by alcore's own allocator (mimalloc). Above it, alcore writes a `RSS HARD CAP` log and exits. A zero, negative or non-numeric value is ignored and the default applies. |
+| `AGENTLENS_FOOTPRINT_BACKSTOP_MB` | 3 times the commit cap (6144 MB at the default), or half the physical memory of the host when that is smaller and still above the cap | Backstop for memory outside the allocator (DuckDB, the system allocator). It is checked only while the commit is at or under the cap: when the whole-process physical footprint is strictly above this value, alcore writes `FOOTPRINT BACKSTOP` lines to the same log and exits. A value is used only when it is a positive number of MB above the commit cap; otherwise the default applies. |
+
+When both limits are exceeded, the commit cap is the one logged. The physical footprint is read on macOS only; elsewhere the backstop never fires. At start, `alcore serve` prints its effective limits once on its output, as a line containing `memory guard:`; that output is `server.log` when the server was started by `agentlenspro server start`. Not covered: the startup work that runs before the first guard tick (the store open, the boot sweep and the inline hook-spool drain), and the time between two 5-second ticks.
+
 ### Security & privacy
 
 The dashboard and OTLP receiver bind to `127.0.0.1` by default, so they are not reachable from the network — your session data never leaves your machine. A web page you are browsing can still reach `localhost` from your own browser, so the server also refuses cross-origin browser requests: state-changing requests from a foreign origin are rejected, and responses carry `Access-Control-Allow-Origin` only for same-origin/loopback origins — a page on another site cannot read your local session data (prompts, costs, file paths). Setting `BIND_HOST=0.0.0.0` for LAN access removes the network boundary; only do so on a trusted network.

@@ -248,7 +248,8 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
 
 globals: --full (unshaped payload)   --json (always JSON, never a rendered table)   --out PATH (full JSON to disk, digest to stdout)
 exit:    0 = stdout is a result · 2 = the tool refused (JSON reason on STDERR, stdout empty) · 64 = bad command line
-server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
+server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log
+memory:  alcore exits when mimalloc commit is above AGENTLENS_RSS_HARD_CAP_MB MB (default 2048), or when footprint is above AGENTLENS_FOOTPRINT_BACKSTOP_MB MB (default 3x the cap, or half of host RAM when that is smaller but still above the cap; macOS only); culprit log -> <data dir>/rss-hard-cap.log`
 
 // Short CLI aliases → the full tool name (TRDD-EYA3X5MQ). `reload-cost` is the user-requested
 // shortcut for "how much did each /reload-plugins cost me?"; it now answers the same question for

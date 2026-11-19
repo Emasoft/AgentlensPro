@@ -51,6 +51,14 @@ the dashboard), `daemon` is the ingestion-facing name (it drains the hook spool)
 install` only when you want ingestion to survive a full logout/reboot without any Claude session
 running; for interactive use the on-demand `--start-server` (or any tool call) is enough.
 
+### Memory guard of alcore
+
+alcore exits with status 1 when a memory limit is breached and writes a culprit log to `rss-hard-cap.log` in the data dir. Both limits are checked every 5 s:
+- `AGENTLENS_RSS_HARD_CAP_MB` (default 2048): commit cap on mimalloc committed bytes. A breach writes a `RSS HARD CAP` log.
+- `AGENTLENS_FOOTPRINT_BACKSTOP_MB` (default 3 times the commit cap, 6144 MB; half of host RAM when that is smaller and still above the cap): checked only while the commit is at or under the cap, macOS only. Above it, writes `FOOTPRINT BACKSTOP` lines to the same log. An override counts only as a positive MB value above the commit cap.
+- `alcore serve` prints its effective limits once at start on its output (a `memory guard:` line; that output is server.log when the server was started by `agentlenspro server start`).
+- Not covered: the startup work that runs before the first guard tick (the store open, the boot sweep and the inline hook-spool drain), and the time between two 5-second ticks.
+
 ## Local commands — no server needed (`config`, `env`)
 
 These two subcommands run entirely client-side (they never touch the MCP server), so they work
