@@ -4,7 +4,7 @@ title: With a held interrupted-turn box prepended the Stop display cuts the repo
 column: human_review
 status: tasked
 created: 2026-11-18T11:35:00+0100
-updated: 2026-11-19T01:08:28+0100
+updated: 2026-11-19T01:34:14+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -50,3 +50,7 @@ Mod work is designed, written and tested by the agent mods-expert-developer-plug
 ## Result 2026-11-19
 
 2026-11-19T01:08+0100 main agent: landed in review mod 0.7.13, 1266d508. HELD_END (U+001E) separates held boxes from the current report; show.py fits held usage boxes first, then held lines, then the current part. Evidence (run by the main agent on 1266d508's tree): claude plugin test 23 pass 0 fail; python3 -I tests/test_show.py 10 OK; tsc -p rc 0. Mutations M1-M15 red by the mods agent report (reports/mods-expert-developer-agent/20261119_four-cards.md, read whole; that file is gitignored). NOT run: a live session (Esc + compaction + Stop with a held box over the limit; a reload then /clear; a round-cap deferral then a prompt); the installed mod is still 0.7.10.
+
+## Notes
+
+2026-11-19T01:34:12+0100 main agent: the move of this card to human_review in 3fbdda8c was DIRECT from dev, skipping testing and ai_review; the harness review of that turn was the only AI review. Its type-check evidence (tsc) used the owner's untracked agentlenspro-review-mod/tsconfig.json, which 1266d508 does not carry.

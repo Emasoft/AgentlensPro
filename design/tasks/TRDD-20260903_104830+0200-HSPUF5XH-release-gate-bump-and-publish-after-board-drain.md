@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T01:24:48+0100
+updated: 2026-11-19T01:34:13+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [6MG5N1ZF, C59VAPT8, OBJ4FK2T, MUZ04JYU, AXJH3WTU, PGMMB2QG]
+blocked-by: [6MG5N1ZF, OBJ4FK2T, MUZ04JYU, AXJH3WTU, PGMMB2QG]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -347,3 +347,6 @@ FROM TRDD-12FGMAEP (commit 73211a46, footprint backstop in the memory guard of a
 - RISK ACCEPTED, WBYDQH8K: a test-only flake, ships nothing. Gate rule: a red suite run whose only failure is the watcher parity test is rerun once. ATXO2E1J: a refactor with no behaviour change by its card. CAJ5RCP9: its four feature boxes; failure mode: the durable cache-event history is incomplete; its growth bound is OBJ4FK2T.
 - RISK ACCEPTED, ASXUW08U, M62ZBT7E, ISEF8YO7, SBB1GEJO: package.json files does not name agentlenspro-review-mod (grep exit 1, measured); 1266d508 touches only that folder (measured); SBB1GEJO's defect (clearPending, the REVIEW DEFERRED line) is found by grep only in agentlenspro-review-mod/hooks/register.js, not in src, standalone or rust-core/crates (main agent, 2026-11-19). Failure mode for npm installs: none. The mod's own release (0.7.13) is the owner's separate install.
 - RISK ACCEPTED, 058RS3FB (filed this session, never in blocked-by): by W38 (reports_dev/sonnet-worker/20261118_w38-qe114936-handlers/report.md, not verified by the main agent), these four handlers rebuilt the summary under the same guard at the tag, so INFERRED not worse than 2.33.1. Failure mode: a single-card read can hold the state lock while it parses one transcript.
+- 2026-11-19T01:34:12+0100 main agent: C59VAPT8 LEAVES the list and is cancelled as not a defect: the write-through of a symlinked install destination is deliberate (hookInstall.ts writeFileAtomic doc comment, e08db829), the old bytes are backed up first (both production callers pass backupRoot, setup.ts:1227 and diagnosticsCli.ts:680-682, read by the main agent), and src/test/surfaceVerdict.test.ts passed (21 passing, run 2026-11-19). It was gated before its cited code was read; the dangling-link residuals are named on the card. blocked-by is now 6MG5N1ZF, OBJ4FK2T, MUZ04JYU, AXJH3WTU, PGMMB2QG.
+- 2026-11-19T01:34:12+0100 main agent CORRECTION of the WCENKH6T line above: the harness measure confirmed the TEXT of the W37 report, not the source. Read by the main agent since: at v2.33.1 log_reader.rs:1051 is the only direct state lock in the sweeper loop range (`state.lock().expect("core state")`); at HEAD the direct locks are 1895, 1946 and 1980 (each a one-expression `state.lock_timed().cards.epoch()`, on the Msg::Clear arms by the comments at 1888-1893) and 2017 (`let mut st = state.lock_timed();`, the steady path). W37's numbers (1884, 1935, 1969, 2006) are about 11 lines lower than today's file. So the steady path takes one direct lock at the tag and one at HEAD; the callees are still not compared. The RISK ACCEPTED wording stands.
+- 2026-11-19T01:34:12+0100 main agent, answers to the harness review of the 01:08 session-state turn: (1) the label counts on the 01:08 line of section 'Release order after item 10' (OWNER 1, LANDED-UNCLOSED 3, OPEN 16) come from W69, which read the cards before commit 3fbdda8c moved ASXUW08U and M62ZBT7E to human_review; they are superseded by this section. (2) The reports/ owner question is real: `git check-ignore -v reports/mods-expert-developer-agent/20261119_four-cards.md` prints `.gitignore:40:/reports/`, so the whole reports/ folder is ignored, while the user rule reports-and-memory says reports/ is git-tracked. (3) pid 45497: its origin was never looked up; a process snapshot of 2026-11-19 01:3x holds no pid 45497. (4) The type-check of review mod 0.7.13 (`tsc -p agentlenspro-review-mod/tsconfig.json`) rests on the owner's UNTRACKED tsconfig.json; a clean checkout of 1266d508 cannot reproduce it.

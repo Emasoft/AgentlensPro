@@ -4,7 +4,7 @@ title: The review mod row for a reviewed interrupted turn reads as a failed revi
 column: human_review
 status: tasked
 created: 2026-11-17T23:15:58+0100
-updated: 2026-11-19T01:25:03+0100
+updated: 2026-11-19T01:34:14+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -47,6 +47,7 @@ For the review of a turn that was cut short the review mod prints one user-only 
 2026-11-17T23:43:23+0100 SECOND CORRECTION (main agent). The 23:07:27 review DID finish: its report (tag 'run by the harness, interrupted turn', VERDICT PASS) is in the prompt context of 23:14:44 local. Only the box for the user was lost, at a compaction (TRDD-ISEF8YO7 holds the cause). So in that session both rows belong to reviews that finished and whose reports reached the model; the third row (another session) was not checked for its report. The code facts stand: the row is printed for any model call, also when no report came out, so three outcomes exist at that point (PASS, BLOCK, calls made and no report) and the row must name the one that happened. The installed copy is 0.7.10 and equals the 0.7.11 source in logUsage, reviewInterrupted, defer and reviewAtStop (diff hunks only at lines 54 to 88 and 1033 to 1238).
 OWNER DIRECTIVE 2026-11-18 00:00 (verbatim): «mods are too complex. only the mods-expert-developer agent can be consulted on them, and developing must be delegated to it.» From here the mod work of this card is designed, written and tested by the agent mods-expert-developer-plugin:mods-expert-developer-agent. The main agent writes no mod code and takes mod questions to that agent.
 2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED (not in the npm package). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.
+2026-11-19T01:34:12+0100 main agent: the move of this card to human_review in 3fbdda8c was DIRECT from dev, skipping testing and ai_review; the harness review of that turn was the only AI review. Its type-check evidence (tsc) used the owner's untracked agentlenspro-review-mod/tsconfig.json, which 1266d508 does not carry.
 
 ## Result 2026-11-19
 
