@@ -1327,8 +1327,9 @@ fn resolve_session_card_offlock(
     summary: &Value,
     session_id: &str,
     now: i64,
+    attribution: Option<&indexmap::IndexMap<String, Vec<Value>>>,
 ) -> Option<Value> {
-    resolve_session_card_offlock_with(st2, summary, session_id, || reparse_session_card(env, session_id, now))
+    resolve_session_card_offlock_with(st2, summary, session_id, attribution, || reparse_session_card(env, session_id, now))
 }
 
 /// The body of `resolve_session_card_offlock`, with the reparse injected. The seam exists so a test can prove the
@@ -1337,6 +1338,7 @@ fn resolve_session_card_offlock_with(
     st2: &Arc<Mutex<CoreState>>,
     summary: &Value,
     session_id: &str,
+    attribution: Option<&indexmap::IndexMap<String, Vec<Value>>>,
     reparse: impl FnOnce() -> Option<Value>,
 ) -> Option<Value> {
     let mut session = summary_card(summary, session_id);
@@ -1358,7 +1360,7 @@ fn resolve_session_card_offlock_with(
     if let Some(s) = session.as_mut() {
         // Lock 3: the OTEL graft's one map read and in-memory merge.
         let st = st2.lock_timed();
-        graft_otel_attribution_onto(&st, s, session_id, None);
+        graft_otel_attribution_onto(&st, s, session_id, attribution);
     }
     session
 }
@@ -2631,7 +2633,11 @@ async fn handle(
                         // eighteen direct sites, one call deep where a grep here could not see it.
                         // Renamed `session_status_over` (it computes OVER a summary, it does not
                         // build one) and the summary is read off the lock and passed in.
-                        let (_, summary) = summary_now(&state, now);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let summary = match sid.as_deref().filter(|w| !w.is_empty()) {
+                            Some(wanted) => summary_for_ids(&state, now, &|id| id == wanted).summary,
+                            None => summary_now(&state, now).1,
+                        };
                         let mut st = state.lock_timed();
                         let payload = st.session_status_over(&summary, sid.as_deref(), ws.as_deref(), now);
                         drop(st);
@@ -2777,7 +2783,14 @@ async fn handle(
                         // TRDD-QE114936: ONE off-lock summary read for the WHOLE handler — the
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. Both used to be O(window) rebuilds taken under the state lock.
-                        let (_, timeline_summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let (timeline_summary, family_attribution) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => {
+                                let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
+                                (family.summary, family.attribution)
+                            }
+                            None => (summary_now(&state, now as f64).1, None),
+                        };
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-MVR6PXC0: the log env, cloned off the lock ONCE for the whole scan.
@@ -2793,7 +2806,7 @@ async fn handle(
                                 // Held across it, this site measured 1,475 ms, and the state mutex is
                                 // the ingest path's mutex: every posting session stalls for exactly
                                 // as long as we hold it, so a 4 s hold is 4 s of blocked ingest.
-                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now, family_attribution.as_ref())
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -2865,7 +2878,11 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
-                        let (_, summary) = summary_now(&state, now);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let summary = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => summary_for_ids(&state, now, &|id| id == wanted).summary,
+                            None => summary_now(&state, now).1,
+                        };
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let env = state.lock_timed().log_env.clone();
                         let a = args.clone();
@@ -4006,7 +4023,7 @@ async fn handle(
                                 // the lock above. This site held the mutex 1,234–3,948 ms across that
                                 // reparse, and the state mutex is the ingest path's mutex — a 4 s hold
                                 // blocks every session posting to this server for 4 s.
-                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now, None)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -4046,7 +4063,14 @@ async fn handle(
                         // benefit) and threaded into every candidate instead. The SAME read also
                         // supplies this handler's session list, so the lock is taken only for the
                         // log env.
-                        let (_, timeline_summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let (timeline_summary, family_attribution) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => {
+                                let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
+                                (family.summary, family.attribution)
+                            }
+                            None => (summary_now(&state, now as f64).1, None),
+                        };
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
@@ -4078,7 +4102,7 @@ async fn handle(
                                 // lock above). Held across the reparse this site measured 1,037 and
                                 // 1,274 ms; the state mutex is the ingest path's mutex, so every one
                                 // of those milliseconds is blocked ingest for every posting session.
-                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now, family_attribution.as_ref())
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -4109,7 +4133,14 @@ async fn handle(
                         // this guard rebuilt the summary inline on a miss and then deep-cloned
                         // every card while holding the state lock — 10.2 s measured live. Only
                         // the TTL context still needs the guard.
-                        let (_, summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let (summary, family_attribution) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => {
+                                let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
+                                (family.summary, family.attribution)
+                            }
+                            None => (summary_now(&state, now as f64).1, None),
+                        };
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let ttl = {
                             let mut st = state.lock_timed();
@@ -4133,7 +4164,7 @@ async fn handle(
                                 // This site never surfaced a ≥1000 ms line in the measured window, but
                                 // it probes the same multi-MB transcripts under the same mutex the
                                 // ingest path takes; a hold here blocks every posting session too.
-                                resolve_session_card_offlock(&st2, &log_env, &summary, sid, now)
+                                resolve_session_card_offlock(&st2, &log_env, &summary, sid, now, family_attribution.as_ref())
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -5009,7 +5040,7 @@ mod rebuild_admission_tests {
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let worker_state = Arc::clone(&state);
         let worker = std::thread::spawn(move || {
-            super::resolve_session_card_offlock_with(&worker_state, &summary, S, move || {
+            super::resolve_session_card_offlock_with(&worker_state, &summary, S, None, move || {
                 in_reparse_tx.send(()).unwrap();
                 release_rx.recv_timeout(Duration::from_secs(5)).expect("the main thread never released the reparse");
                 Some(serde_json::json!({ "sessionId": S, "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": [{ "kind": "turn" }] }))
@@ -5421,7 +5452,13 @@ mod rebuild_admission_tests {
     /// `old-s` hides the miss, and `/api/timeline/old-twin` must carry the attribution grafted from the family build.
     /// Guard coverage (measured by mutation, each arm made to seed nothing): arms 1-5 and 8 fail this test (arm 2 on `old-s`
     /// only); arm 7 (composition-index) fails on `old-twin` only; arm 6 (get_context_history) is NOT guarded, because it
-    /// reads only the card model for a step cost and this fixture has no transcript to make that visible.
+    /// reads only the card model for a step cost and this fixture has no transcript to make that visible. TRDD-ER88PXNB B arms
+    /// (an optional sessionId): get_session_status and check_cache_expiry fail on `old-s` and `old-twin`; get_cost_by_cause,
+    /// get_context_inflation_report and get_cache_break_report fail on `old-s` only. NOT guarded: the family attribution that
+    /// get_cost_by_cause, get_cache_break_report and check_cache_expiry pass to their per-session timeline (measured: setting it to
+    /// `None` at each of the three sites still passes this test); and get_context_inflation_report on `old-twin`,
+    /// which answers "No local composition available for this session." for an old and for a missing id alike, so it is left out
+    /// of the not-found check. check_cache_expiry is compared without `idleMs`/`marginMs`, which come from each request's clock.
     /// MUTATION CHECK: switch the `get_session_detail` arm back to `summary_now` and this MUST fail.
     #[test]
     fn by_id_lookups_answer_old_sessions_as_with_the_window_off() {
@@ -5474,7 +5511,7 @@ mod rebuild_admission_tests {
             let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_else(|e| panic!("{tool}: not JSON ({e}): {resp}"));
             v["result"]["content"][0]["text"].as_str().map(str::to_owned).unwrap_or(resp)
         };
-        // The OTEL twin of old-s: an interaction plus an api_request span an hour old, so it is inside the span window.
+        // The OTEL twin of old-twin: an interaction plus an api_request span an hour old, so it is inside the span window.
         let ns = |ago_ms: f64| format!("{}", ((now_ms - ago_ms) * 1e6) as u64);
         let twin = serde_json::json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": [
             { "name": "claude_code.interaction", "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "aaaaaaaaaaaaaaaa",
@@ -5501,13 +5538,24 @@ mod rebuild_admission_tests {
                 "timeline" => get(ui, format!("/api/timeline/{asked}")),
                 _ => mcp(ui, arm, serde_json::json!({ "sessionId": asked })),
             };
+            // check_cache_expiry reports idleMs/marginMs from the clock of each request, so two requests a millisecond apart differ.
+            let out = match serde_json::from_str::<serde_json::Value>(&out) {
+                Ok(mut v) if arm == "check_cache_expiry" => {
+                    for s in v["sessions"].as_array_mut().into_iter().flatten().filter_map(|s| s.as_object_mut()) {
+                        s.remove("idleMs");
+                        s.remove("marginMs");
+                    }
+                    v.to_string()
+                }
+                _ => out,
+            };
             // A not-found text embeds the id it was asked for; spell it as the real one so the two answers can be compared.
             out.replace(asked_agent, agent).replace(asked, sid)
         };
         let mut failures: Vec<String> = Vec::new();
         // `old-s` has a recent parent and an old child and no OTEL data; `old-twin` is its own family with a live OTEL twin.
         for sid in ["old-s", "old-twin"] {
-            for arm in ["get_agent_tokens", "get_context_growth", "get_subagent_tree", "get_session_detail", "get_session_burn_profile", "get_context_history", "composition-index", "timeline"] {
+            for arm in ["get_agent_tokens", "get_context_growth", "get_subagent_tree", "get_session_detail", "get_session_burn_profile", "get_context_history", "composition-index", "timeline", "get_session_status", "get_cost_by_cause", "get_context_inflation_report", "get_cache_break_report", "check_cache_expiry"] {
                 // get_session_burn_profile names the data dir in its `coverage` text; the two servers have different ones.
                 let (on, off) = (
                     ask(ui_on, arm, sid, false).replace(&*dir_on.0.to_string_lossy(), "<dir>"),
@@ -5516,8 +5564,9 @@ mod rebuild_admission_tests {
                 if on != off {
                     failures.push(format!("{sid} {arm}: window 14 d answers differently from window off\n  on : {on}\n  off: {off}"));
                 }
-                // Arms 6 and 7 answer the same for a missing id on this fixture, so the not-found test cannot apply to them.
-                if !matches!(arm, "get_context_history" | "composition-index") && on == ask(ui_on, arm, sid, true).replace(&*dir_on.0.to_string_lossy(), "<dir>") {
+                // Arms 6 and 7 answer the same for a missing id on this fixture, and so does get_context_inflation_report on old-twin
+                // ("No local composition available for this session."), so the not-found test cannot apply to them.
+                if !matches!(arm, "get_context_history" | "composition-index") && !(arm == "get_context_inflation_report" && sid == "old-twin") && on == ask(ui_on, arm, sid, true).replace(&*dir_on.0.to_string_lossy(), "<dir>") {
                     failures.push(format!("{sid} {arm}: window 14 d answers the old session as it answers a missing id: {on}"));
                 }
             }
