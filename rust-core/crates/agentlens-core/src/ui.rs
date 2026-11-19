@@ -5557,7 +5557,13 @@ mod rebuild_admission_tests {
             let (otx, orx) = std::sync::mpsc::channel();
             let (utx, urx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                // Sized from the core cap like alcore's own runtime: core_cap_guard flags a bare
+                // Runtime::new() anywhere under src/, test modules included (TRDD-HSPUF5XH).
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(crate::cores::max_cores())
+                    .enable_all()
+                    .build()
+                    .unwrap();
                 rt.block_on(async move {
                     let hub = Arc::new(super::SseHub::default());
                     let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
@@ -5681,7 +5687,13 @@ mod rebuild_admission_tests {
             let (otx, orx) = std::sync::mpsc::channel();
             let (utx, urx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                // Sized from the core cap like alcore's own runtime: core_cap_guard flags a bare
+                // Runtime::new() anywhere under src/, test modules included (TRDD-HSPUF5XH).
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(crate::cores::max_cores())
+                    .enable_all()
+                    .build()
+                    .unwrap();
                 rt.block_on(async move {
                     let hub = Arc::new(super::SseHub::default());
                     let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
@@ -5780,7 +5792,13 @@ mod rebuild_admission_tests {
             let (otx, orx) = std::sync::mpsc::channel();
             let (utx, urx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                // Sized from the core cap like alcore's own runtime: core_cap_guard flags a bare
+                // Runtime::new() anywhere under src/, test modules included (TRDD-HSPUF5XH).
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(crate::cores::max_cores())
+                    .enable_all()
+                    .build()
+                    .unwrap();
                 rt.block_on(async move {
                     let hub = Arc::new(super::SseHub::default());
                     let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
