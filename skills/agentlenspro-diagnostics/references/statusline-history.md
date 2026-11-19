@@ -42,6 +42,9 @@ matched rather than trusting the project dir.
 | `windows` | 5h/7d history at **full float precision** — the only un-quantized window reading |
 | `peaks` | the largest context/cost jumps between consecutive samples. **Read the `span` column**: a delta across an idle gap is an INTERVAL total, not one turn |
 | `cache` | per-turn cache WRITE vs READ — the falsifier for a claimed cache miss. Cost is bracketed 5m/1h because the write rate is TTL-tiered and the tier is not in the payload |
+| `refused` | the write-ahead files the status-line sealer refused: stream, day, file, attempts, first and last failure, next retry, reason. Read off disk with no server; takes only `--json` |
+
+A refused write-ahead file gets a `sealfail-<file name>.json` marker beside it and is retried with a backoff: 5 minutes at first, doubling per refusal, capped at 6 hours. `AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS` sets the base in milliseconds (`0` = no backoff). The detached sealer appends its output to `<data dir>/statusline-seal.log`, rotated to `statusline-seal.log.1` once over 1 MiB.
 
 **Times are LOCAL, and every time header carries the machine's `±HHMM` offset** (v2.22.0+). Before
 that they rendered UTC under a bare `time` header while `get_cache_event_log` rendered local — two

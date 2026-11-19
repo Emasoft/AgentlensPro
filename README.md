@@ -122,6 +122,36 @@ your own `$HOME`). To customize it — a different log path, an extra `Environme
 that installed plist and `launchctl unload`/`load` it, or re-run `daemon install` to regenerate
 it. On Linux, run `agentlenspro daemon start --supervise` under a systemd **user** service.
 
+#### Searching transcripts: `agentlenspro search`
+
+`agentlenspro search <pattern>` greps the Claude transcripts (`.jsonl`) of the current project — tool outputs, agent responses, thinking, user prompts, hook injections and sub-agent transcripts — with the DuckDB streaming NDJSON reader, straight off disk, so it works with the server down. Without `--session` it covers every session of the project, main and sub-agent. `agentlenspro help search` prints every flag.
+
+| Form | Meaning |
+| --- | --- |
+| (default) | literal, case-insensitive |
+| `--regex` | a regular expression matched against the raw JSON line (a quote is `\"` there) |
+| `--mask` | `*` stands for any run of characters, `?` for exactly one |
+| `--word` | the pattern as a whole word (`port` is not in `report`) |
+| `--fuzzy` | the pattern split on spaces; an entry matches when every word is in it, in any order; a word of 5 or more characters also matches with one character substituted, deleted or inserted |
+
+The four forms are mutually exclusive, and `--case` makes literal, `--mask` and `--word` case-sensitive.
+
+Any of `--kind`, `--tool`, `--file` or `--commit` switches to **element mode**, which matches the unescaped text of one element instead of a raw JSON line: `--kind` takes `prompt response thinking tool-call tool-output diff subagent hook command compact error cron system attachment model-change`; `--tool NAME` selects the calls of that tool and the outputs that answer them; `--file TEXT` selects tool calls whose input holds TEXT and the outputs that name such a file; `--commit SHA` (7 to 40 hex characters) selects tool calls and outputs that hold the SHA. `--kind model-change` needs no pattern and prints one row per change of model in a session.
+
+Scope and filters: `--project DIR`, `--session ID`, `--agent ID`, `--main-only`, `--subagents-only`, `--worktrees`, `--since`, `--until`, `--branch`, `--cwd`, `--model`, `--role`, `--type`. Output: `--limit`, `--width`, `--order`, `--count`, `--files`, `--context N`, `--json`.
+
+```bash
+agentlenspro search "ENOENT" --since 2d --type user
+agentlenspro search "finished" --kind subagent --since 1d --limit 5
+agentlenspro search --show aaaaaaaa:12 --agent bbbb2222    # print one entry in full: SESSION:LINE from a hit
+```
+
+`--show SESSION:LINE` prints the one entry that a hit named, in readable form (cut at `--max-chars`, default 4000); a sub-agent entry needs `--agent ID`. Exit codes: `0` searched (even with no match), `2` no transcript found or unreadable, `64` bad usage.
+
+#### Status-line history: `agentlenspro statusline-history`
+
+`agentlenspro statusline-history <view>` reads the captured status-line samples off disk (no server needed): `project`, `sessions`, `subagents`, `windows`, `peaks`, `cache`, `raw` and `refused`. The `refused` view lists the write-ahead files the sealer refused (stream, day, file, attempts, first and last failure, next retry, reason) and takes only `--json`. A refused file is marked, skipped and retried with a backoff: the base wait is 5 minutes, doubling per refusal up to 6 hours, and `AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS` sets the base in milliseconds (`0` = no backoff). The detached sealer appends its output to `<data dir>/statusline-seal.log`, rotated to `statusline-seal.log.1` over 1 MiB.
+
 #### The single-executable contract
 
 The package publishes exactly ONE bin (`package.json → bin`): `agentlenspro`. Everything —
@@ -184,6 +214,8 @@ delegate, write it down, compact after) with this project's verified rates.
 If AgentlensPro (or something it configured) is misbehaving, `agentlenspro disable [reason]` is the global brake on what it **stores**: it drops a flag file that stops storing telemetry, raw API bodies and hook events, plus the CLI hook spool (the status line is not collection: it keeps POSTing to the server, which stores it, and when no server takes the sample the hook stores it on disk itself), **in every Claude Code session already running**, on that session's very next hook fire — no restart needed. The server keeps running in **no-collection mode**: it answers the exporters and the hooks but writes no telemetry, raw bodies or hook events. The hooks keep running, so the burn-gate, the image cache-guard, the in-band advisor, the review gate and the review supervisor stay on, and so do the other dashboard right-panel switches as you left them. `disable` also stops a running server (a server reads its mode only at boot), and the next hook revives it in no-collection mode; `agentlenspro server stop --stay-down` keeps it down. It also removes the mandatory raw-body capture key (see [Raw-body capture](#raw-body-capture--mandatory)), since a kill switch that left it in place would still have Claude Code writing to disk. `agentlenspro enable` clears the flag, restores the key and restarts a server that still reports no-collection mode.
 
 A `settings.json` edit cannot do this on its own — a session that already loaded its config at launch keeps using it until it restarts. The flag file is the one channel that reaches every already-running process.
+
+The `DISABLED` flag (the flag file, or `AGENTLENS_DISABLED=1`) stops only the ingestion of OTLP telemetry and of event-hook logs (with the raw API bodies and the CLI hook spool named above). The log sweeper keeps parsing transcripts (JSONL), the status-line hook and the review hooks keep running, and the switch itself refuses no CLI verb; whatever is read from telemetry has less data while it is armed.
 
 ### Docker (OTEL only)
 
@@ -337,7 +369,7 @@ Each knob is resolved at boot with the precedence **environment variable > `conf
 
 Claude Code dumps the full raw request/response body of every LLM call to disk (`OTEL_LOG_RAW_API_BODIES`, bodies land in `<data-dir>/otel-bodies`). AgentlensPro **requires** it — together with the rest of the telemetry, the hooks and the status line it reads, it is non-functional without it — so there is no switch: install, `agentlenspro setup` and every CLI launch converge `OTEL_LOG_RAW_API_BODIES` through the same verified settings transaction as every other telemetry key. The cost (tens of GB/day under heavy use) is accepted and bounded by the body store's retention knobs above (`bodiesMaxGb`, `bodiesRetentionDays`).
 
-**If another telemetry setup is already in place** (a company gateway, an enterprise managed-settings file, an `OTEL_*` variable exported in your shell), agentlenspro will not overwrite it: the launch exits non-zero, writes nothing, and **disables itself** (the kill-switch is armed, so every hook except the review gate and the review supervisor is a no-op, and its skills move to `<data-dir>/disabled-surfaces/skills`; its agents stay). To proceed, remove the other setup yourself — the next launch repairs and re-enables — or run any command once with `--force-install-telemetry`, which REPLACES it with agentlenspro's (the managed-settings file needs administrator rights; a shell export must be unset by you).
+**If another telemetry setup is already in place** (a company gateway, an enterprise managed-settings file, an `OTEL_*` variable exported in your shell), agentlenspro will not overwrite it: the launch exits non-zero, writes nothing, and **disables itself** (the kill-switch is armed, so OTLP telemetry and event-hook logs are not stored while the hooks, the burn-gate, the review gate and the review supervisor keep running, and its skills move to `<data-dir>/disabled-surfaces/skills`; its agents stay). To proceed, remove the other setup yourself — the next launch repairs and re-enables — or run any command once with `--force-install-telemetry`, which REPLACES it with agentlenspro's (the managed-settings file needs administrator rights; a shell export must be unset by you).
 
 ### The body store — bodies are deduplicated and compressed, not hoarded on disk
 

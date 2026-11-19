@@ -6,6 +6,10 @@ All notable changes to AgentlensPro are documented here.
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **UPGRADE WARNING, destructive for one kind of data folder (TRDD-JDQR0HDT, e9782faf): at the first start of 2.34.0, a data folder whose card store already carries an interrupted clear (`clear_in_progress = 1`) has its card snapshot tombstoned, cards of deleted transcripts included (their only copy), where the code before this change restored them.** An interrupted clear is a `/api/clear` that emptied the card store and was killed before the first card save after the rescan. The card store (`cards.duckdb`, with its `clear_in_progress` flag) is not in the 2.33.1 source tree, so a data folder last run by 2.33.1 or earlier cannot carry the flag; one last run by a pre-release build can. Before the first start of 2.34.0 on such a folder, read `clear_in_progress` in the `meta` table of `cards.duckdb`; if it is `1`, decide first whether the cards of deleted transcripts matter to you. After an interrupted clear the read positions are tombstoned too, so the next start rescans every transcript from zero.
+
 ### Changed
 
 - **The summary is built over recent log session cards only (TRDD-ER88PXNB).** New knob `summaryCardDays` (default 14, `AGENTLENS_SUMMARY_CARD_DAYS`, `0` = every card): the in-memory summary includes a log session card only when it was active at or after 00:00 UTC that many whole days before today (a fraction rounds up). A spawn placeholder and its `agent-` transcript enter together, so a pair split by the cutoff stays linked. Every card stays in memory and on disk. An MCP tool given a `sessionId` still answers a session older than the window: it builds that session's family (parent, children and link twin) on demand, outside the summary cache. Answers built on the summary say what they cover: `/api/summary`, `GET /` and the dashboard update frames carry a `summaryWindow` object (`cardDays`, `cutoffMs`, `basis`, `cardsIncluded`, `cardsResident`), and the aggregate answers of 17 MCP tools start with a `summaryWindow` sentence ("covers only log sessions active since <date> (the last 14 UTC days): N of M resident session cards; older sessions are left out of these totals and are still answered when asked for by sessionId"). Measured in an isolated run at the production cap on a copy of a 110,619-row card store (release build, placeholder and transcript pairing included): the first summary build added 114-130 MB of allocator commit at 14 days (700-790 MB before; 288-294 MB at 30 days, measured before the pairing), and alcore's peak allocator commit over 300 s idle, three burn reads, two concurrent reads and an old-session lookup by id was 1479-1488 MB in the two runs that ran that whole sequence, under the 2048 MB cap. Process RSS, which includes DuckDB's memory outside that cap, reached 4157 MB during the two concurrent reads. Not covered: the dashboard does not display the window; `get_instruction_suggestions` carries no window when it answers with a list; CLI stdout does not show the sentence for `get_window_eta` and `get_account_burners` (verdict line) or `get_body_writers` (text head), while their `--out` file has it; `get_window_eta` and `get_account_burners` have no executed test of the window.
@@ -23,6 +27,8 @@ All notable changes to AgentlensPro are documented here.
 - **Turning the dashboard "Burn gate" switch off no longer silences the image cache-guard (TRDD-RBBEX59R).** The image guard is governed by its own `cacheGuardEnabled` switch, which now has its own "Image cache-guard" row in the Hook switches panel. The env `AGENTLENS_GATE=off` still disarms every guard, images included.
 
 - **The server now deletes per-call usage rows (`store/api_calls` parquet parts) older than `apiCallsRetentionDays` (default 90 days, environment variable `AGENTLENS_API_CALLS_RETENTION_DAYS`, settable with `agentlenspro config set`) (TRDD-OBJ4FK2T).** Before, that folder grew without limit. The age is read from each part's file name and a file whose name does not match is never deleted; a store younger than 90 days loses nothing at the first boot. The default equals the status-line retention, which the cache-turns view joins these rows to.
+
+- **`agentlenspro setup` refuses, rather than migrating, when a server owns a different data directory (TRDD-V2HFI30L, 973aead7, 29ec567a).** Changing `DATA_DIR` and re-running setup no longer stops the old server: setup names the foreign server (its pid and data dir) and gives the exact stop command, `AGENTLENS_DATA_DIR=<dir> agentlenspro server stop`, or the remedy of pinning `UI_PORT`, `MCP_PORT` and `OTLP_PORT` to free ports. Before, setup took any server that answered on the UI port for its own and sent it SIGTERM, so an isolated setup on the default ports could stop another instance, and a foreign HTTP service could aim the signal at any pid it named.
 
 ### Added
 
@@ -365,6 +371,30 @@ All notable changes to AgentlensPro are documented here.
   `claude-sonnet-5` entry above, `api_calls.cost_usd` / `api_calls.billable_weight` indexed before
   this fix keep their high figures until the forensics index is rebuilt.
 
+- **`agentlenspro setup` and the launch repair now honour `AGENTLENS_DATA_DIR` (TRDD-TYOQA14F, c24058ce).** Setup read only `DATA_DIR` and ignored `AGENTLENS_DATA_DIR`, the variable every other verb reads first, so for a user who set it, setup and the launch repair converged and started a server in `~/.agentlens` while `server stop`, `server status`, the hooks and the server lookup used the chosen folder. It now resolves the folder like every other verb (`AGENTLENS_DATA_DIR`, then `DATA_DIR`, then `~/.agentlens`) and reads the revive brake and the kill-switch in that folder. A user who sets only `AGENTLENS_DATA_DIR` and still has a server running in `~/.agentlens` meets a one-time refusal that names that server and gives its stop command (`AGENTLENS_DATA_DIR=<dir> agentlenspro server stop`). The environment step also no longer counts any answer on the UI port as our own server: it requires our own server to report the OTLP port.
+
+- **`agentlenspro cache-expired` no longer runs the first-run self-heal (TRDD-CS2W7E77, TRDD-YL3EWT6N, 42017224).** It was the one polled read verb missing from the read-only list, so on a fresh machine a looped `agentlenspro cache-expired` ran a full first-run setup (settings.json, hooks, telemetry env, the server step). It now never writes user config, like `cache-state`.
+
+- **`agentlenspro setup` bounds its own waits (TRDD-V2HFI30L, 973aead7).** Its HTTP calls have an overall deadline of 10 seconds and its MCP calls of 15 seconds, on top of the idle timeouts, and its stop, verify and self-test loops are bounded by wall-clock deadlines, so a stalled or trickling server fails setup within seconds instead of hanging it.
+
+- **`agentlenspro setup` checks ownership per port and refuses a stranger on the OTLP port (TRDD-V2HFI30L, 973aead7).** A port counts as ours only when our own server reports it as its own. Before, our server answering on the UI port let a stranger holding the OTLP port through the refusal.
+
+- **`agentlenspro setup` never stops or restarts a server it cannot prove is its own (TRDD-V2HFI30L, 973aead7, 29ec567a).** A server is ours when `<data dir>/server.pid` names it as the live owner and its command line is a server (`alcore`, or the legacy TypeScript server), or when a process snapshot shows `alcore serve --data-dir <ours>`; a pid that a server reports about itself is never enough, and a CLI process is never taken for a server. A server that meets neither test is refused as "not provably ours", with the advice to stop it yourself or pin `UI_PORT`, `MCP_PORT` and `OTLP_PORT` to free ports.
+
+- **The review gate no longer demands a review for the scratch writes of a declared-role worker (TRDD-QQ2XIIZ6, df8bfc70, d476914a, ed0fbd5e).** A fork whose directive declares its role (for example `ROLE: MEASURE`) was never recognised, because its first entry holds a tool result, so every scratch write it made re-armed the gate. The role is now read from the fork directive line, and it relaxes only a write whose target cannot be resolved and sits in an ephemeral directory (a temp, `mktemp` or date-stamped path); a write outside the ephemeral directories still arms the gate, and a worker with no declared role still arms it. Known residual, open on TRDD-QQ2XIIZ6: an `mktemp` assignment that may not run (a compound-command body, a continuation) can leave the variable holding an inherited value; exploiting it needs a declared-role worker evading on purpose.
+
+- **The periodic card save no longer scans DuckDB under the state lock (TRDD-DA0GN1CS, e3c3c388).** The save read the whole card table while holding the state lock; a DuckDB out-of-memory there panicked the log sweeper and poisoned the lock, and ingestion stopped while the server still looked alive. The records now come from the in-memory card layer, with no DuckDB call under the lock.
+
+- **An out-of-memory read of `cards.duckdb` at boot no longer deletes it (TRDD-0BDOV3WC, 4d5db2dc).** The old path deleted the file and rebuilt it from the card snapshot, which lags the saved read positions, so cards could be lost. The file is now reopened at a boot-only 1024 MiB limit and rewritten losslessly, which also compacts it. A failure of the rewrite itself, or an out-of-memory in the meta stage, still takes the old delete-and-rebuild path. A rewrite boot peaks at 1.84 to 1.88 GB of resident memory, against 1.33 to 1.34 GB for an ordinary boot.
+
+- **Any panic now ends the server process, so the hook revive restarts it (TRDD-3RVTC1HY, 542ceca2).** A panic on any thread but the main one (the log sweeper, a request task) left the process running with nothing ingested (28 hours or more on 2026-10-14), and the hook revive, which looks only at the pid, never replaced it. The process now writes a `FATAL` line naming the panic location and exits with status 1; a 10 second alarm backstops a stuck exit. Request handler panics therefore restart the server instead of being absorbed.
+
+- **When the card database is missing, unreadable or refused at startup, the server no longer trusts saved read positions that ran ahead of the card snapshot (TRDD-6B7VV2Z7, 3a5874a5).** It re-reads every log file, so missing or stale session cards are rebuilt; the cost is a full re-read of the transcripts on such a start. After an ingest-version upgrade, the stale card of a deleted transcript no longer comes back.
+
+- **The first start on a reused card store brings the card log level with the store (TRDD-YR6WX7VQ, eef01b1d).** A card the store held and the card-log files lacked counted as already written and was never appended, and a key the store had dropped was never tombstoned. The first timed tick of the sweeper (about 60 seconds after start) now re-derives the hashes from the files and marks the cards dirty only when they differ, so the first save appends the missing cards in one save: 43,569 keys and 63,345,885 bytes on a copy of a 74,730-card store, with no tombstone and no compaction. Once per reused start the sweeper spends one file pass before its next loop: 0.34 s on that copy on a quiet host, 32.9 s under heavy host load. A stop that lands inside the pass exits without the forced save, as a kill would (TRDD-QXODI7TR); a start that dies before the first timed tick leaves the gap open until a later start lives a minute.
+
+- **The launch message about lifting a kill-switch armed for a foreign telemetry setup now says that collection stays off under `AGENTLENS_DISABLED=1` (TRDD-RTHA7EWK item 4, abe31c03).** The message said only that the switch is lifted once the launch repairs succeed, which reads as if collection came back; with `AGENTLENS_DISABLED=1` set it does not, because the environment half keeps it off. The message now ends with "; collection stays off while AGENTLENS_DISABLED=1 is set" in that case.
+
 ### Changed
 
 - **`config set captureRawBodies on` no longer mounts a RAM disk.** Bodies now write straight to
@@ -387,7 +417,31 @@ All notable changes to AgentlensPro are documented here.
   call site that writes every cost row. No number changes today (no entry carries a scheduled
   change); the next real rate change now lands correctly.
 
+### Known issues
+
+Failure modes accepted for this release, none of them fixed in it.
+
+- **The linux/amd64 Docker image was not started before the tag (TRDD-6MG5N1ZF).** It may fail to build, in which case no image is pushed, or build and fail to start, in which case a broken image is published as `latest` and under the version tags. The npm package is unaffected, and its publish does not wait for the image. The image is checked after the tag.
+
+- **A sweeper that stalls without a panic leaves a server that looks alive while session cards stop updating until a restart (TRDD-WCENKH6T).** Nothing detects it. It may be a regression from 2.33.1: the steady sweeper loop takes the state lock directly at one site both at the 2.33.1 tag and now, but the functions it calls were not compared.
+
+- **A stop that times out waiting for the state lock skips its final flush (TRDD-N60JUWU3).** The wait is bounded at 8 seconds now; at 2.33.1 it was unbounded. A lock held for 120 seconds was not run end to end.
+
+- **The server exits when it reaches the 2048 MB memory cap or the whole-process footprint backstop (TRDD-7YPQWKPG, TRDD-768NEX6E, TRDD-12FGMAEP).** The hook revive restarts it with a backoff; that path was not run in the release checks.
+
+- **A panic in a request handler ends the server process (TRDD-OLKITCS7).** It is then restarted by the hook revive, as above. The class of failure existed in 2.33.1, which already shipped the Rust server; how many panic sites a handler can reach now, against 2.33.1, was not measured.
+
+- **At live size under host load, the forced save at stop can overrun its budget and the last read-position save is lost (TRDD-QXODI7TR), and the card-log file pass runs 5 to 59 times slower (TRDD-JKVUBKLR).** Neither was measured at live size for this release.
+
+- **The durable cache-event history can be incomplete (TRDD-CAJ5RCP9).** Its growth bound is the api_calls retention (TRDD-OBJ4FK2T).
+
+- **A single-card read can hold the state lock while it parses one transcript (TRDD-058RS3FB).** Everything else that needs the state lock waits for that read.
+
+- **`agentlenspro statusline-history refused` fails with `ENOTDIR` when a stream folder under `<data dir>/statusline/` (`main` or `subagent`) holds a stray file such as `.DS_Store`.** The view reads every entry of those folders as a day folder and only tolerates a missing one. It works on a data folder with no stray files; until it is fixed, remove the stray file to read the refusals.
+
 ## [2.33.2] - 2026-09-01
+
+Never published to npm; these changes ship in 2.34.0.
 
 ### Added
 
