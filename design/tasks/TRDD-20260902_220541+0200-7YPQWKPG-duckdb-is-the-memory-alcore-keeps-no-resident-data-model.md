@@ -377,4 +377,4 @@ Step 5a follow-up: TRDD-X0YTE00M (remaining resident lists and App signals).
 
 ## Progress log
 
-2026-11-19 13:10 — TRDD-569BMAGD routed scripts_dev/7yp-step2/arm.sh's copy of BASE (a clone of ~/.agentlens) through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). The size of BASE was not measured; re-running the arm may need a sample of at most 4 GB.
+2026-11-19 (between 12:59 and 13:09; the clock was not read) — TRDD-569BMAGD routed scripts_dev/7yp-step2/arm.sh's copy of BASE (a clone of ~/.agentlens) through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). The size of BASE was not measured; re-running the arm may need a sample of at most 4 GB.
