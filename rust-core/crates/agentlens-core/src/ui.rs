@@ -325,13 +325,24 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     {
         let mut st = state.lock_timed();
         st.store_summary(inputs.version, build);
+        // TRDD-ER88PXNB: the window lands with its summary, under the same lock.
+        st.store_summary_window(inputs.version, inputs.window.take());
     }
     // Recorded even if the store above failed on a poisoned lock: the CPU and the allocation churn
     // were spent either way, and that is what the back-off rations.
     flight.last = Some((std::time::Instant::now(), took));
 }
 
+/// TRDD-ER88PXNB: the summary, as before. A caller that must know which cards it covers uses `summary_now_windowed`.
 pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Value>) {
+    let (version, summary, _) = summary_now_windowed(state, now_ms);
+    (version, summary)
+}
+
+/// TRDD-ER88PXNB: `summary_now` plus the card window of the summary it returns. Both come from the one cache slot, read
+/// under one lock, and `store_summary` clears the window whenever a new summary lands, so a stale serve keeps its own window.
+/// That holds because rebuild_gate serializes every rebuild from snapshot to store; an ungated store could be refused and hand back its own build beside the window of the summary still in the cache.
+pub fn summary_now_windowed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Value>, Option<crate::SummaryWindow>) {
     // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
     // essentially always (see `cached_any`), so `stale` is what actually answers the request.
     let stale = {
@@ -341,9 +352,9 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
         st.summary_asked = true;
         let version = st.data_version;
         if let Some(cached) = st.summary_cache.current(version) {
-            return (version, cached);
+            return (version, cached, st.summary_window.clone());
         }
-        st.summary_cache.cached_any()
+        st.summary_cache.cached_any().map(|(v, a)| (v, a, st.summary_window.clone()))
     };
 
     // ADMISSION IS NON-BLOCKING — `try_lock`, never `lock`. This is the whole fix for
@@ -388,7 +399,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
                     let mut st = state.lock_timed();
                     let version = st.data_version;
                     if let Some(cached) = st.summary_cache.current(version) {
-                        return (version, cached);
+                        return (version, cached, st.summary_window.clone());
                     }
                 }
                 if std::time::Instant::now() >= deadline {
@@ -397,7 +408,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
                     // and serving it is free.
                     let newest = {
                         let mut st = state.lock_timed();
-                        st.summary_cache.cached_any()
+                        st.summary_cache.cached_any().map(|(v, a)| (v, a, st.summary_window.clone()))
                     };
                     return newest.unwrap_or(stale_pair);
                 }
@@ -436,7 +447,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
                     let mut st = state.lock_timed();
                     let version = st.data_version;
                     if let Some(cached) = st.summary_cache.current(version) {
-                        return (version, cached);
+                        return (version, cached, st.summary_window.clone());
                     }
                 }
                 match rebuild_gate().try_lock() {
@@ -451,7 +462,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
                     // serving the newer one is free.
                     let newest = {
                         let mut st = state.lock_timed();
-                        st.summary_cache.cached_any()
+                        st.summary_cache.cached_any().map(|(v, a)| (v, a, st.summary_window.clone()))
                     };
                     if let Some(pair) = newest.or(stale) {
                         return pair;
@@ -470,13 +481,16 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
         let version = st.data_version;
         // Re-check under the gate — the rebuild we waited for very likely stored this version.
         if let Some(cached) = st.summary_cache.current(version) {
-            return (version, cached);
+            return (version, cached, st.summary_window.clone());
         }
         st.summary_snapshot()
     };
     let build = CoreState::summary_from(&mut inputs, now_ms);
     let mut st = state.lock_timed();
-    (inputs.version, st.store_summary(inputs.version, build))
+    let summary = st.store_summary(inputs.version, build);
+    // TRDD-ER88PXNB: the window lands with its summary, under the same lock.
+    st.store_summary_window(inputs.version, inputs.window.take());
+    (inputs.version, summary, st.summary_window.clone())
 }
 
 /// The merged summary restricted to what the burn computation reads, built with the state lock

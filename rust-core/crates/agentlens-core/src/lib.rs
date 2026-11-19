@@ -524,7 +524,36 @@ impl CoreState {
         // engine needs (it indexes cards by position).
         if let Some(cutoff_ms) = inputs.card_cutoff_ms {
             let cards_resident = inputs.log_cards.len();
-            inputs.log_cards.retain(|c| crate::log_reader::last_active_ms(c) >= cutoff_ms);
+            // TRDD-ER88PXNB: keep each link pair together. A spawn placeholder (id X) and its agent-X transcript are two
+            // cards with their own start and duration, so the cutoff can fall between them; link_subagent_transcripts needs
+            // both in the list, or the windowed summary shows the pair unlinked. Only pairs that can link come back:
+            // the X side must be a link placeholder. retain keeps first-insert order, which the engine needs.
+            fn sid(c: &Value) -> &str {
+                c.get("sessionId").and_then(Value::as_str).unwrap_or("")
+            }
+            let keep: Vec<bool> = inputs.log_cards.iter().map(|c| crate::log_reader::last_active_ms(c) >= cutoff_ms).collect();
+            let mut want_transcript: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut want_placeholder: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (c, k) in inputs.log_cards.iter().zip(&keep) {
+                if !*k || sid(c).is_empty() {
+                    continue;
+                }
+                if feed_merge::is_link_placeholder(c) {
+                    want_transcript.insert(feed_merge::link_twin_id(c));
+                }
+                if let Some(rest) = sid(c).strip_prefix("agent-").filter(|r| !r.is_empty()) {
+                    want_placeholder.insert(rest.to_owned());
+                }
+            }
+            let mut i = 0usize;
+            inputs.log_cards.retain(|c| {
+                let id = sid(c);
+                let k = keep[i]
+                    || (!id.is_empty()
+                        && (want_transcript.contains(id) || (want_placeholder.contains(id) && feed_merge::is_link_placeholder(c))));
+                i += 1;
+                k
+            });
             inputs.window = Some(SummaryWindow { card_days: inputs.card_days, cutoff_ms, cards_included: inputs.log_cards.len(), cards_resident });
         }
         let built = inputs.engine.build(inputs.version, &inputs.spans, &inputs.log_cards, inputs.epoch, &inputs.accounts, prev);
@@ -546,6 +575,10 @@ impl CoreState {
         let stored = self.summary_cache.store_arc_if_newer(version, build.summary);
         if will_store {
             self.otel_attribution = build.attribution;
+            // TRDD-ER88PXNB: the window describes the summary in the cache, and the cache is ONE slot. Clearing it whenever
+            // a new summary lands means a store path that never calls store_summary_window leaves None, never the previous
+            // summary's window; readers take the cached summary and the window under one lock, so the two always match.
+            self.summary_window = None;
         }
         stored
     }
@@ -745,9 +778,11 @@ impl CoreState {
         // Disjoint field borrows: the cache + side-map are written, the inputs are read.
         // `accounts` joins the disjoint-borrow list for the same reason as the rest: it is READ
         // here while the cache + side-map are written (TRDD-465EXTJ6).
-        let Self { summary_cache, window, cards, data_version, otel_attribution, accounts, .. } = self;
+        let Self { summary_cache, window, cards, data_version, otel_attribution, accounts, summary_window, .. } = self;
         let accounts = accounts.snapshot();
         summary_cache.get(*data_version, || {
+            // TRDD-ER88PXNB: a full-corpus build covers every card, so no window describes it.
+            *summary_window = None;
             let (summary, attribution) = Self::summary_over(&window.spans, &cards.parsed_cards(), &accounts, now_ms);
             *otel_attribution = attribution;
             summary
