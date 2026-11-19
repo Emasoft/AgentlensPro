@@ -4,7 +4,7 @@ title: Imported cards are not marked for the card log save, so a start that refu
 column: todo
 status: tasked
 created: 2026-11-17T18:46:35+0100
-updated: 2026-11-19T01:25:08+0100
+updated: 2026-11-19T01:54:24+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -36,3 +36,8 @@ CORRECTION 2026-11-17T18:52:24+0100 (after the harness review): only IMPORTED ca
 
 - 2026-11-17T18:46:35+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T01:25:08+0100 — column → todo by main-agent@agentlenspro. release blocker of TRDD-HSPUF5XH (Release list decision 2026-11-19)
+
+## Notes and lessons learned
+
+2026-11-19 DESIGN decided by the main agent, given to worker W78: a plain u64 write generation on the core state, incremented by every method that adds, replaces or removes a log-session card outside the clear path; DurableState keeps the generation of its last Ok save (read before the records are built); tick sets cards_dirty when the two differ. One mechanism covers box 1 (import) and box 2 (the on-demand reparse goes through put_log_session). Not yet checked by the main agent: the list of incremented methods, how often tick takes the state lock for the compare, and whether marking the reused restore as saved can skip a card put before a crash (the file pass plus the first early card save should append it; to be shown by a read or a test).
+2026-11-19 PLAN for box 3: measure the exposure on the isolated pre-tag run (own HOME, DATA_DIR and ports, a copied sample of at most 4 GB): count the cards in the store that differ from or are missing in the card log AND whose transcript file does not exist. Until that number exists, box 3 stays open.
