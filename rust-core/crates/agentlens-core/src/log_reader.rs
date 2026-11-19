@@ -952,8 +952,6 @@ impl DurableState {
     /// AND whose source file still exists, for `run_1h_backfill` to patch after boot with a
     /// usage-only pass over that one file.
     fn restore_from_snapshot(&mut self, state: &mut crate::CoreState, env: &Env) -> Result<(usize, usize, usize), String> {
-        let cards = self.cards.load()?;
-        let offsets = self.offsets.load()?;
         // TRDD-JDQR0HDT: an interrupted `/api/clear` takes the SAME branch as a stale ingest version. WHY: the
         // clear emptied the card store and meant to drop every card, above all those of transcripts that no
         // longer exist (the only cards a clear removes for good); it only tells the sweeper, so the card
@@ -962,8 +960,12 @@ impl DurableState {
         // back. Tombstone both logs and restore nothing instead. A schema-version refusal does NOT come
         // here: a layout change does not alter what a card means, so its snapshot cards are kept.
         let clear_interrupted = state.cards.clear_was_interrupted();
+        // TRDD-MUZ04JYU: the logs are NOT loaded when a clear was interrupted. WHY: that branch discards both logs and restores nothing, so
+        // it needs no record, and a card log that cannot be read (a corrupt middle line) failed the start here, before the branch ran.
+        // `cards` and `offsets` stay empty on that path; the stale-version and normal paths load as before.
+        let (cards, offsets) = if clear_interrupted { (IndexMap::new(), IndexMap::new()) } else { (self.cards.load()?, self.offsets.load()?) };
         if clear_interrupted || !self.version_is_current() {
-            if !cards.is_empty() || !offsets.is_empty() {
+            if clear_interrupted || !cards.is_empty() || !offsets.is_empty() {
                 if clear_interrupted {
                     eprintln!("{} alcore: an /api/clear was interrupted — discarding the card snapshot and cold-rescanning; stale read positions and card entries tombstoned now", crate::log_ts());
                 } else {
@@ -987,8 +989,17 @@ impl DurableState {
             // stamp, so the next boot repeats this branch, which is idempotent; the reverse order
             // would leave a current stamp over stale cards. The `?` fails the start on a disk error
             // (fail-fast) rather than rescanning onto logs that still hold stale entries.
-            self.offsets.save(&IndexMap::new())?;
-            self.cards.save(&IndexMap::new())?;
+            // TRDD-MUZ04JYU: an interrupted clear replaces both logs WITHOUT reading them. WHY: `save(&IndexMap::new())` tombstones only the
+            // keys `load()` seeded into `written`, so it needed the load above, and a card log with a corrupt middle line made that load
+            // fail the start (alcore exit(1) at every start) although this branch discards the log anyway. `rewrite_from` with no records
+            // writes an empty snapshot and removes the delta without reading either file. The stale-version branch keeps `save`.
+            if clear_interrupted {
+                self.offsets.rewrite_from(std::iter::empty::<(&str, &Value)>)?;
+                self.cards.rewrite_from(std::iter::empty::<(&str, &Value)>)?;
+            } else {
+                self.offsets.save(&IndexMap::new())?;
+                self.cards.save(&IndexMap::new())?;
+            }
             self.stamp_version();
             // TRDD-JDQR0HDT: only now, with both tombstones on disk, may the rebuilt store stop saying "a clear is in
             // progress". `CardStore::open` kept the flag at 1 so a death before this line (or a load error above)
@@ -2341,6 +2352,81 @@ mod sweeper_backstop_tests {
         let appended = String::from_utf8(delta_after.expect("the delta exists")[before_len..].to_vec()).unwrap();
         assert_eq!(appended.lines().count(), 1, "exactly one record was appended: {appended:?}");
         assert!(appended.contains("\"k\":\"new\""), "and it is the new card: {appended:?}");
+        drop(state);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-MUZ04JYU: a start after an interrupted clear (flag 1, so `DurableState::restore` takes the interrupted-clear branch) next to a card
+    /// log with a corrupt MIDDLE line. That branch discards both logs, so it must not need to read them: the restore returns Ok, both logs end
+    /// empty and readable, the version is stamped (its file was removed first, so the stamp proves the branch ran to its end) and the flag is 0.
+    #[test]
+    fn a_start_after_an_interrupted_clear_next_to_a_corrupt_card_log_empties_both_logs_and_finishes_the_clear() {
+        let root = seed_test_root("clear-muz04jyu");
+        let (data, state, durable) = cleared_and_rescanned(&root);
+        drop(state);
+        drop(durable);
+        corrupt_card_log(&data);
+        std::fs::remove_file(data.join("log-delta-version.json")).unwrap();
+        assert!(crate::delta_log::DeltaLog::new(&data, "log-sessions").load().is_err(), "control: the card log is unreadable as written");
+        let env = Env { home: root.join("home"), platform: Platform::Darwin, vars: std::collections::HashMap::new() };
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+        assert!(!state.lock().unwrap().cards.reused(), "control: the store is refused");
+        assert!(state.lock().unwrap().cards.clear_was_interrupted(), "control: because a clear was in progress");
+        let mut durable = DurableState::open(&data);
+        let mut tailer = LogTailer::default();
+        let out = durable.restore(&mut tailer, &mut state.lock().unwrap(), &env);
+        assert_eq!(out, Ok((0, 0, 0)), "the interrupted-clear branch restores nothing and does not fail on the unreadable card log");
+        assert!(card_log_keys(&data).is_empty(), "the card log is empty and readable again");
+        assert!(crate::delta_log::DeltaLog::new(&data, "log-offsets").load().unwrap().is_empty(), "the offsets log is empty");
+        assert!(durable.version_is_current(), "the version is stamped");
+        drop(state);
+        assert_eq!(clear_flag(&data.join("a")), "0", "the flag is reset");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-MUZ04JYU: the same start with the damage in the other shapes: a corrupt line in the MIDDLE of the card log SNAPSHOT and in the
+    /// offsets log. `rewrite_from` reads neither old file (`compact` reads only its own temp file), so the restore is Ok and both logs end empty.
+    #[test]
+    fn a_start_after_an_interrupted_clear_next_to_a_corrupt_card_snapshot_and_offsets_log_empties_both_logs() {
+        let root = seed_test_root("clear-muz04jyu-snap");
+        let (data, state, durable) = cleared_and_rescanned(&root);
+        drop(state);
+        drop(durable);
+        let damaged = "{\"k\":\"x\",\"v\":1}\nthis line is not json\n{\"k\":\"y\",\"v\":2}\n";
+        for name in ["log-sessions.snapshot.ndjson", "log-offsets.snapshot.ndjson"] {
+            std::fs::write(data.join(name), damaged).unwrap();
+        }
+        assert!(crate::delta_log::DeltaLog::new(&data, "log-sessions").load().is_err(), "control: the card log is unreadable as written");
+        assert!(crate::delta_log::DeltaLog::new(&data, "log-offsets").load().is_err(), "control: the offsets log is unreadable as written");
+        let env = Env { home: root.join("home"), platform: Platform::Darwin, vars: std::collections::HashMap::new() };
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+        assert!(state.lock().unwrap().cards.clear_was_interrupted(), "control: a clear was in progress");
+        let mut durable = DurableState::open(&data);
+        let mut tailer = LogTailer::default();
+        let out = durable.restore(&mut tailer, &mut state.lock().unwrap(), &env);
+        assert_eq!(out, Ok((0, 0, 0)), "neither damaged log stops the interrupted-clear start");
+        assert!(card_log_keys(&data).is_empty(), "the card log is empty and readable again");
+        assert!(crate::delta_log::DeltaLog::new(&data, "log-offsets").load().unwrap().is_empty(), "the offsets log is empty and readable again");
+        drop(state);
+        assert_eq!(clear_flag(&data.join("a")), "0", "the flag is reset");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-MUZ04JYU: the normal branch (a store that is neither reused nor from an interrupted clear, and a current version) restores
+    /// the card log, so a card log with a corrupt middle line still fails the start with an Err: only the interrupted-clear branch skips the load.
+    #[test]
+    fn a_normal_start_next_to_a_corrupt_card_log_still_fails_the_start() {
+        let root = seed_test_root("normal-muz04jyu");
+        let (data, env) = previous_run_with_cards(&root, &["kept"]);
+        corrupt_card_log(&data);
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("fresh")));
+        assert!(!state.lock().unwrap().cards.reused(), "control: a fresh store is not reused");
+        assert!(!state.lock().unwrap().cards.clear_was_interrupted(), "control: and no clear was in progress");
+        let mut durable = DurableState::open(&data);
+        assert!(durable.version_is_current(), "control: the version stamp is current");
+        let mut tailer = LogTailer::default();
+        let out = durable.restore(&mut tailer, &mut state.lock().unwrap(), &env);
+        assert!(out.is_err(), "the unreadable card log fails the start: {out:?}");
         drop(state);
         std::fs::remove_dir_all(&root).unwrap();
     }
