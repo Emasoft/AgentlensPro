@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T06:25:47+0100
+updated: 2026-11-19T06:35:01+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [735Q3JF4]
+blocked-by: [ER88PXNB]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -324,6 +324,7 @@ VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version change
 2026-11-19T05:52+0100 main agent CORRECTIONS (harness review). (1) OBJ4FK2T goes back into blocked-by: removing it rested on 'human_review does not gate the tag', which no board rule or owner order states; the owner orders «complete all pending tasks and publish/install/deploy» and «i remember telling to publish whenever you want» do not say a card may ship unreviewed, and the reader the 90-day default exists for (cache_turns) is still unmeasured after the purge (TRDD-GVA8TTJF). It leaves blocked-by when that reader is measured or the owner rules. (2) 'the search option has shipped' (notes of 2026-11-19 05:4x): search is implemented and installed from this branch (commits 6584d2dd, 7fe63866, e343ec69, 8590184d, c4d90ea6; TRDD-NRCIAFXS closed in 381a6cd2), not published: 2.34.0 is unreleased.
 2026-11-19T06:24+0100 main agent: OBJ4FK2T leaves blocked-by again, now on a verified reason: the one unmeasured reader (cache_turns) has no production path in 2.34.0. W105 (reports_dev/W105/report.md, read by the main agent; its round-2 blocker on the CLI exit code was answered by reading callTool, cliCore.ts:269-276): the cache_turns reader runs in production only through the MCP arm run_cache_turns_sql (ui.rs:3332, run_preset_or_sql at :3344), and that name is absent from the embedded tool schema (assets/mcp-tools.json, 53 names, include_str at mcp.rs:23), so tool_exists (mcp.rs:124) refuses it with -32601 before the arm runs; checked on the working-tree schema, the 2.34.0 release build and bin-native/darwin-arm64/alcore. No HTTP route, chore, CLI verb or statusline-history view reaches it; only in-process cargo tests (cache_turns_sql.rs:571 onward) run it. Blocked only by TRDD-735Q3JF4.
 2026-11-19T06:25+0100 main agent, re-checked myself (harness review): grep -c run_cache_turns_sql on assets/mcp-tools.json = 0; the only non-test include of that file is mcp.rs:23 (tests/ui.rs:1662 is a test); the arm is at ui.rs:3332; grep -c -a run_cache_turns_sql = 0 in builds_dev/rel-2.34.0-3736dd88/alcore and in bin-native/darwin-arm64/alcore, while '"run_transcript_sql"' is found once in each (the embedded schema). So neither binary carries even the arm's name (INFERRED: those builds may predate the arm); the tag build must come from the final HEAD, whose schema still lacks the name. DECISION, recorded as mine: OBJ4FK2T is in human_review and has NOT been reviewed by the owner; no rule lets a human_review card ship unreviewed. I let it ship under the owner orders «complete all pending tasks and publish/install/deploy» and «on other things decide yourself» (2026-11-16), because its acceptance is met and its one unmeasured reader is not shipped. The owner can veto it before the tag. Wording fix: 'the release is now blocked only by 735Q3JF4' means blocked-by names only 735Q3JF4; CHANGELOG, PR, CI, the full suite and the merge are still owed.
+2026-11-19T06:35+0100 main agent: blocked-by is now TRDD-ER88PXNB (the 14-day summary-window stopgap carved out of 735Q3JF4, which stays open for the resident bound). The tag waits for ER88PXNB's production-cap evidence.
 
 ## Release full-suite pair — gate rules
 
