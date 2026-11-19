@@ -3,7 +3,7 @@ trdd-id: M2VK8T4P
 title: Deploying alcore needs an ad-hoc codesign that no script performs
 column: todo
 created: 2026-09-04T09:24:56+0200
-updated: 2026-09-04T09:24:56+0200
+updated: 2026-11-19T07:45:27+0100
 current-owner: main-session
 task-type: infra
 project-id: agentlenspro
@@ -105,3 +105,4 @@ this card's word — measure first.
 link between the running binary and a commit. The live `alcore` as of 2026-09-04 09:00 is the tree
 at 08:54, equivalent to `7a4810e1`; the only rollback copy is `/tmp/alcore.rollback.085452`, which
 will not survive a reboot.
+2026-11-19 — CORRECTION of the tell's command: alcore (2.34.0 tree) has no --version flag; its usage lists 'alcore version'. A signed binary given --version exits 64 (usage), not 0, so a check that demands exit 0 from --version fails on a healthy build (it did: TRDD-ER88PXNB build-4, reports_dev/ER88PXNB/20261119_074207+0100-build-4-iso.md). Use 'alcore version' (exit 0, prints the version) for the codesign check; exit 137 still means SIGKILL before main. The CLAUDE.md deploy gotcha that names --version needs the same fix.
