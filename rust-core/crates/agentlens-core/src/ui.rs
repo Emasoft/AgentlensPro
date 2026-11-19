@@ -341,7 +341,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
 
 /// TRDD-ER88PXNB: `summary_now` plus the card window of the summary it returns. Both come from the one cache slot, read
 /// under one lock, and `store_summary` clears the window whenever a new summary lands, so a stale serve keeps its own window.
-/// That holds because rebuild_gate serializes every rebuild from snapshot to store; an ungated store could be refused and hand back its own build beside the window of the summary still in the cache.
+/// That holds because rebuild_gate serializes every production rebuild from snapshot to store; an ungated store could be refused and hand back its own build beside the window of the summary still in the cache.
 pub fn summary_now_windowed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Value>, Option<crate::SummaryWindow>) {
     // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
     // essentially always (see `cached_any`), so `stale` is what actually answers the request.
@@ -491,6 +491,132 @@ pub fn summary_now_windowed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64,
     // TRDD-ER88PXNB: the window lands with its summary, under the same lock.
     st.store_summary_window(inputs.version, inputs.window.take());
     (inputs.version, summary, st.summary_window.clone())
+}
+
+/// TRDD-ER88PXNB A2: the answer of `summary_for_ids`. `attribution` is Some only when `family_built`; None means the caller
+/// reads `st.otel_attribution` as before. WHY it exists: sessions older than the card window are missing from the windowed
+/// summary, so a by-id lookup builds just that session's family. A family build is `summarize_spans` over the whole span
+/// window (every windowed OTEL session) plus ONLY the family's log cards, so it is a superset view of what the lookup reads,
+/// never stored in `summary_cache`.
+#[derive(Clone)]
+pub struct FamilySummary {
+    pub summary: Arc<Value>,
+    pub attribution: Option<indexmap::IndexMap<String, Vec<Value>>>,
+    pub family_built: bool,
+}
+
+/// TRDD-ER88PXNB A2: the one-slot memo of the last family build (`CoreState.family_summary_memo`). WHY: a dashboard polling
+/// one old session would otherwise rebuild its family on every request; the memo bounds that to one build per
+/// `data_version`, or per `STALE_BUDGET_MS` while ingest keeps moving `data_version`.
+pub struct FamilyMemo {
+    /// The family's session ids, sorted.
+    pub ids: Vec<String>,
+    /// `data_version` read when the spans of the build were snapshotted.
+    pub version: u64,
+    pub built_at: std::time::Instant,
+    pub built: FamilySummary,
+}
+
+/// TRDD-ER88PXNB A2: the summary for a by-id lookup. WHY: the cached summary covers only the cards active within the card
+/// window, so a session older than the window is missing from it and a per-session lookup would report it not found.
+/// When the family of the wanted ids (seeds, their link twins, `agent-X` partners, parents and children, to a fixpoint)
+/// holds a card older than the window cutoff, this builds a summary for just that family: `summarize_spans` over the whole
+/// span window (every windowed OTEL session) plus ONLY the family's log cards, through the same `merge_summary` as the
+/// full path. That makes it a superset view, never stored in `summary_cache`. The build runs OFF the state lock and is
+/// memoized in ONE slot by the family's sorted ids, for one `data_version` or `STALE_BUDGET_MS`, whichever the caller
+/// meets first. Otherwise (window off, unknown id, every family card inside the window) the cached summary is returned.
+/// The use-cached decision trusts the served summary's window, which under sustained ingest can be a stale `cached_any`
+/// serve that predates a very recent family card (the same staleness `summary_now` already has). COST: every call, even one
+/// answered from the cache, clones the card list (Arc clones), indexes it and walks the family before deciding; the build
+/// itself clones the whole span window under the lock. Acceptable for a by-id lookup; do not call it per card in a loop.
+pub fn summary_for_ids(state: &Arc<Mutex<CoreState>>, now_ms: f64, is_seed: &dyn Fn(&str) -> bool) -> FamilySummary {
+    use std::collections::HashMap;
+    use crate::feed_merge;
+    // Takes and drops the state lock itself; must not be called while a guard is held.
+    let (_v, summary, window) = summary_now_windowed(state, now_ms);
+    let cached = |summary: Arc<Value>| FamilySummary { summary, attribution: None, family_built: false };
+    // Window off: answer before taking any card, so this path clones no cards.
+    // The card snapshot and its data_version are read in ONE critical section: the memo stores that version, and a
+    // version read after a later write would label old cards as current (they would then hit the memo until the next write).
+    let (cards, cards_version) = {
+        let st = state.lock_timed();
+        if !st.summary_card_days.is_finite() || st.summary_card_days <= 0.0 {
+            return cached(summary);
+        }
+        (st.cards.parsed_cards(), st.data_version)
+    };
+    fn sid(c: &Value) -> &str {
+        c.get("sessionId").and_then(Value::as_str).unwrap_or("")
+    }
+    fn parent(c: &Value) -> &str {
+        c.get("parentSessionId").and_then(Value::as_str).unwrap_or("")
+    }
+    // An empty sessionId is no identity: indexing it would pair unrelated cards.
+    let index: HashMap<&str, usize> = cards.iter().enumerate().map(|(i, c)| (sid(c), i)).filter(|(id, _)| !id.is_empty()).collect();
+    let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, c) in cards.iter().enumerate() {
+        if !parent(c).is_empty() {
+            children.entry(parent(c)).or_default().push(i);
+        }
+    }
+    let mut in_family = vec![false; cards.len()];
+    let mut work: Vec<usize> = Vec::new();
+    for (i, c) in cards.iter().enumerate() {
+        let id = sid(c);
+        if !id.is_empty() && is_seed(id) {
+            in_family[i] = true;
+            work.push(i);
+        }
+    }
+    while let Some(i) = work.pop() {
+        let c = &cards[i];
+        let id = sid(c);
+        let mut found: Vec<usize> = Vec::new();
+        if !id.is_empty() {
+            if feed_merge::is_link_placeholder(c) {
+                found.extend(index.get(feed_merge::link_twin_id(c).as_str()).copied());
+            }
+            if let Some(x) = id.strip_prefix("agent-") {
+                found.extend(index.get(x).copied());
+            }
+            found.extend(children.get(id).into_iter().flatten().copied());
+        }
+        if !parent(c).is_empty() {
+            found.extend(index.get(parent(c)).copied());
+        }
+        for j in found {
+            if !in_family[j] {
+                in_family[j] = true;
+                work.push(j);
+            }
+        }
+    }
+    let family_cards: Vec<Arc<Value>> = cards.iter().zip(&in_family).filter(|(_, k)| **k).map(|(c, _)| c.clone()).collect();
+    if family_cards.is_empty() {
+        return cached(summary);
+    }
+    // A window of None while days > 0 means build: the safe direction.
+    let use_cached = window.as_ref().is_some_and(|w| family_cards.iter().all(|c| crate::log_reader::last_active_ms(c) >= w.cutoff_ms));
+    if use_cached {
+        return cached(summary);
+    }
+    let mut ids: Vec<String> = family_cards.iter().map(|c| sid(c).to_owned()).collect();
+    ids.sort();
+    let (spans, accounts) = {
+        let mut st = state.lock_timed();
+        if let Some(m) = &st.family_summary_memo {
+            if m.ids == ids && (m.version == st.data_version || m.built_at.elapsed() < std::time::Duration::from_millis(STALE_BUDGET_MS)) {
+                return m.built.clone();
+            }
+        }
+        st.family_summary_builds += 1;
+        (st.window.spans.clone(), st.accounts.snapshot())
+    };
+    let base = crate::summarize::summarizer::summarize_spans(&spans, &|sid| accounts.get(sid).cloned());
+    let (merged, attribution) = CoreState::merge_summary(base, &family_cards);
+    let built = FamilySummary { summary: Arc::new(merged), attribution: Some(attribution), family_built: true };
+    state.lock_timed().family_summary_memo = Some(FamilyMemo { ids, version: cards_version, built_at: std::time::Instant::now(), built: built.clone() });
+    built
 }
 
 /// The merged summary restricted to what the burn computation reads, built with the state lock
@@ -4636,7 +4762,7 @@ mod rebuild_admission_tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use super::{rebuild_gate, rebuild_once, summary_now, READER_WAITING, REBUILDER_ACTIVE, STALE_BUDGET_MS};
+    use super::{rebuild_gate, rebuild_once, summary_for_ids, summary_now, summary_now_windowed, READER_WAITING, REBUILDER_ACTIVE, STALE_BUDGET_MS};
     use crate::{CoreState, LockTimed};
 
     /// `REBUILDER_ACTIVE` is process-global and cargo runs these tests on parallel threads, so a
@@ -4999,6 +5125,155 @@ mod rebuild_admission_tests {
         let mut st = CoreState::open(&dir);
         assert!(st.summary_cache.is_empty(), "a fresh CoreState has no summary yet");
         assert!(st.summary_cache.cached_any().is_none(), "nothing to serve stale before the first store");
+    }
+
+    /// TRDD-ER88PXNB A2: a state at 2026-08-20T12:00Z with a 14-day card window, one recent card (new1, 1 day old) and one old
+    /// card (old1, 40 days old).
+    fn family_state(tag: &str) -> (Arc<Mutex<CoreState>>, RemoveOnDrop, f64) {
+        family_state_with(tag, &[])
+    }
+
+    /// `family_state` plus extra log cards `(id, start, parentSessionId)`; each is a claude_code log card.
+    fn family_state_with(tag: &str, extra: &[(&str, &str, Option<&str>)]) -> (Arc<Mutex<CoreState>>, RemoveOnDrop, f64) {
+        let (dir, cleanup) = unique_dir(tag);
+        let now = crate::summarize::helpers::parse_iso_ms("2026-08-20T12:00:00.000Z").unwrap();
+        let mut st = CoreState::open(&dir);
+        st.summary_card_days = 14.0;
+        for (id, start) in [("new1", "2026-08-19T12:00:00.000Z"), ("old1", "2026-07-11T12:00:00.000Z")] {
+            st.put_log_session(serde_json::json!({ "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": start, "durationMs": 1000.0, "timeline": [] }));
+        }
+        for (id, start, parent) in extra {
+            let mut c = serde_json::json!({ "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": start, "durationMs": 1000.0, "timeline": [] });
+            if let Some(p) = parent {
+                c["parentSessionId"] = serde_json::json!(p);
+            }
+            st.put_log_session(c);
+        }
+        // summary_now_windowed builds with the real clock, so the summary at the fixed `now` is stored by hand; the
+        // lookups below then read it from the cache like a rebuilder-built one.
+        let mut inputs = st.summary_snapshot_at(now);
+        let build = CoreState::summary_from(&mut inputs, now);
+        st.store_summary(inputs.version, build);
+        st.store_summary_window(inputs.version, inputs.window.take());
+        (Arc::new(Mutex::new(st)), cleanup, now)
+    }
+
+    fn ids_of(summary: &serde_json::Value) -> Vec<String> {
+        summary["sessions"].as_array().unwrap().iter().map(|s| s["sessionId"].as_str().unwrap().to_owned()).collect()
+    }
+
+    /// TRDD-ER88PXNB A2: a by-id lookup of a session older than the card window builds its family, counts the build, and
+    /// leaves the cached windowed summary untouched.
+    /// MUTATION CHECK: make the `use_cached` decision in `summary_for_ids` always true and this MUST fail.
+    #[test]
+    fn summary_for_ids_builds_the_family_of_an_old_session() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state("family-old");
+        let (_, windowed, window) = summary_now_windowed(&state, now);
+        assert_eq!(ids_of(&windowed), vec!["new1"], "precondition: the windowed summary lacks old1");
+        assert_eq!(window.map(|w| w.cards_resident), Some(2));
+        let got = summary_for_ids(&state, now, &|id| id == "old1");
+        assert!(got.family_built, "old1 is older than the cutoff, so the family is built");
+        assert!(ids_of(&got.summary).contains(&"old1".to_owned()), "the family summary carries old1: {}", got.summary);
+        assert!(got.attribution.is_some(), "a family build returns its own attribution");
+        assert_eq!(state.lock_timed().family_summary_builds, 1);
+        let (_, after, _) = summary_now_windowed(&state, now);
+        assert!(Arc::ptr_eq(&after, &windowed), "the family build was not stored in the summary cache");
+        assert_eq!(ids_of(&after), vec!["new1"]);
+    }
+
+    /// TRDD-ER88PXNB A2: a recent or unknown id is answered from the cached summary with no build.
+    #[test]
+    fn summary_for_ids_serves_the_cached_summary_for_recent_or_unknown_ids() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state("family-recent");
+        let (_, windowed, _) = summary_now_windowed(&state, now);
+        for wanted in ["new1", "nope"] {
+            let got = summary_for_ids(&state, now, &|id| id == wanted);
+            assert!(!got.family_built, "{wanted}: no family build");
+            assert!(got.attribution.is_none());
+            assert!(Arc::ptr_eq(&got.summary, &windowed), "{wanted}: the cached summary is served");
+        }
+        assert_eq!(state.lock_timed().family_summary_builds, 0);
+    }
+
+    /// TRDD-ER88PXNB A2: with the card window off the cached summary already holds every card, so nothing is built.
+    #[test]
+    fn summary_for_ids_serves_the_cache_when_the_window_is_off() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state("family-off");
+        state.lock_timed().summary_card_days = 0.0;
+        let got = summary_for_ids(&state, now, &|id| id == "old1");
+        assert!(!got.family_built);
+        assert!(got.attribution.is_none());
+        let (_, windowed, _) = summary_now_windowed(&state, now);
+        assert!(Arc::ptr_eq(&got.summary, &windowed), "window off: the cached summary is served");
+        assert_eq!(state.lock_timed().family_summary_builds, 0);
+    }
+
+    /// TRDD-ER88PXNB A2: the same family asked twice with no data change is built once; the second answer is the memo.
+    /// MUTATION CHECK: delete the memo return in `summary_for_ids` and this MUST fail.
+    #[test]
+    fn summary_for_ids_reuses_the_family_build_for_the_same_family() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state("family-memo");
+        let first = summary_for_ids(&state, now, &|id| id == "old1");
+        let second = summary_for_ids(&state, now, &|id| id == "old1");
+        assert!(first.family_built && second.family_built);
+        assert_eq!(state.lock_timed().family_summary_builds, 1, "the second lookup reuses the memo");
+        assert!(Arc::ptr_eq(&first.summary, &second.summary));
+    }
+
+    /// TRDD-ER88PXNB A2: the family closure. A recent child pulls in its old parent, an old parent pulls in its recent child,
+    /// a recent link placeholder pulls in its old `agent-X` twin, and unrelated cards stay out.
+    /// MUTATION CHECK: delete the parent lookup (`index.get(parent(c))`) and the first part of this test MUST fail.
+    #[test]
+    fn summary_for_ids_closes_the_family_over_parent_children_and_link_twin() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state_with("family-closure", &[("par1", "2026-07-11T12:00:00.000Z", None), ("kid1", "2026-08-19T13:00:00.000Z", Some("par1"))]);
+        for seed in ["kid1", "par1"] {
+            let got = summary_for_ids(&state, now, &|id| id == seed);
+            assert!(got.family_built, "{seed}: par1 is older than the cutoff, so the family is built");
+            let mut ids = ids_of(&got.summary);
+            ids.sort();
+            assert_eq!(ids, vec!["kid1", "par1"], "{seed}: exactly the parent and its child, not new1 or old1");
+        }
+        let (state, _cleanup, now) =
+            family_state_with("family-twin", &[("x1", "2026-08-19T14:00:00.000Z", Some("p0")), ("agent-x1", "2026-07-11T12:00:00.000Z", None)]);
+        let got = summary_for_ids(&state, now, &|id| id == "x1");
+        assert!(got.family_built, "x1 is recent; only its old agent-x1 twin can make this a family build");
+        let mut ids = ids_of(&got.summary);
+        ids.sort();
+        // The link merge folds the placeholder x1 into its transcript agent-x1; without the twin lookup the old twin is not
+        // in the family and the summary would show x1 alone.
+        assert_eq!(ids, vec!["agent-x1"], "the old twin was pulled into the family and linked");
+        assert_eq!(state.lock_timed().family_summary_builds, 1);
+        // The `agent-` partner branch: seed the old transcript; its placeholder x2 is found only by stripping "agent-", and
+        // x2 then pulls in its own child kx (the link merge hides x2 itself, so the child is what shows the partner was found).
+        let (state, _cleanup, now) = family_state_with(
+            "family-partner",
+            &[("x2", "2026-08-19T14:00:00.000Z", Some("p0")), ("agent-x2", "2026-07-11T12:00:00.000Z", None), ("kx", "2026-08-19T15:00:00.000Z", Some("x2"))],
+        );
+        let got = summary_for_ids(&state, now, &|id| id == "agent-x2");
+        assert!(got.family_built);
+        assert!(ids_of(&got.summary).contains(&"kx".to_owned()), "kx reached through agent-x2 -> x2 -> kx: {}", got.summary);
+    }
+
+    /// TRDD-ER88PXNB A2: the memo misses for a different family, and for a bumped data_version once STALE_BUDGET_MS has passed.
+    /// MUTATION CHECK: make the memo hit ignore `ids` (or ignore the version/age test) and this MUST fail.
+    #[test]
+    fn summary_for_ids_rebuilds_for_another_family_and_after_the_memo_expires() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state_with("family-miss", &[("old2", "2026-07-12T12:00:00.000Z", None)]);
+        assert!(summary_for_ids(&state, now, &|id| id == "old1").family_built);
+        assert_eq!(state.lock_timed().family_summary_builds, 1);
+        assert!(summary_for_ids(&state, now, &|id| id == "old2").family_built);
+        assert_eq!(state.lock_timed().family_summary_builds, 2, "another family is not served from the memo");
+        // Move data_version and wait the memo out: same family, different version, older than STALE_BUDGET_MS.
+        state.lock_timed().put_log_session(serde_json::json!({ "sessionId": "late", "source": "claude_code", "dataSource": "log", "startTime": "2026-08-20T11:00:00.000Z", "durationMs": 1000.0, "timeline": [] }));
+        std::thread::sleep(Duration::from_millis(STALE_BUDGET_MS + 100));
+        assert!(summary_for_ids(&state, now, &|id| id == "old2").family_built);
+        assert_eq!(state.lock_timed().family_summary_builds, 3, "an expired memo of an older version is rebuilt");
     }
 
     /// TRDD-QE114936's acceptance criterion, made EXECUTABLE. Every MCP tool handler and REST

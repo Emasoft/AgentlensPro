@@ -323,6 +323,10 @@ pub struct CoreState {
     /// version lands. WHY here and not inside the summary Value: the summary engine recognises its own previous output
     /// by Arc pointer identity, and inserting a field into that Value would copy the Arc and force a full pass on every rebuild.
     pub summary_window: Option<SummaryWindow>,
+    /// TRDD-ER88PXNB A2: how many per-family summaries `ui::summary_for_ids` has built (sessions older than the card window). Never cached; counted so tests and ops can see it.
+    pub family_summary_builds: u64,
+    /// TRDD-ER88PXNB A2: the one-slot memo of the last family build, so a poll of one old session does not rebuild it every request.
+    pub family_summary_memo: Option<ui::FamilyMemo>,
     /// Set by the first `ui::summary_now` call and never cleared: "a summary reader has asked since boot".
     /// `ui::rebuild_once` builds nothing until it is true (TRDD-735Q3JF4 increment 1, item 1). Lives here, not in a
     /// process-global, so each test's fresh state starts unasked and parallel tests stay isolated.
@@ -623,7 +627,7 @@ impl CoreState {
     /// (feed collision merge, subagent link, newest-first sort). Split out so the burn path's
     /// subset builder (`burn_subset_summary`) runs THIS code and not a copy of it
     /// (TRDD-735Q3JF4 item 2).
-    fn merge_summary(mut summary: Value, log_cards: &[Arc<Value>]) -> (Value, IndexMap<String, Vec<Value>>) {
+    pub(crate) fn merge_summary(mut summary: Value, log_cards: &[Arc<Value>]) -> (Value, IndexMap<String, Vec<Value>>) {
         let mut attribution: IndexMap<String, Vec<Value>> = IndexMap::new();
         if log_cards.is_empty() {
             // No merge: every OTEL card survives into the served summary, so its entries are
@@ -956,6 +960,8 @@ impl CoreState {
             burn_subset_memo: None,
             summary_card_days: 0.0,
             summary_window: None,
+            family_summary_builds: 0,
+            family_summary_memo: None,
             summary_asked: false,
             summary_engine: Arc::new(summary_engine::SummaryEngine::default()),
             accounts: account_registry::AccountRegistry::default(),
