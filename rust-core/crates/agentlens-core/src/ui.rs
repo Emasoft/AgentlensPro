@@ -493,6 +493,20 @@ pub fn summary_now_windowed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64,
     (inputs.version, summary, st.summary_window.clone())
 }
 
+/// TRDD-ER88PXNB C2: put the card window first in an MCP answer built from the windowed summary.
+// WHY: lean shaping (lean_response.rs shape_generic) writes top-level scalars first and drops or elides objects under the token ceiling (narrow_to keeps the first N keys), and the CLI digest prints only a verdict, a text head, or the first 300 characters of the JSON. For get_window_eta and get_account_burners (verdict) and get_body_writers (text) the CLI stdout will not show it; their --out file will.
+fn with_card_window(payload: Value, window: Option<&crate::SummaryWindow>) -> Value {
+    match (window, payload) {
+        (Some(w), Value::Object(obj)) => {
+            let mut out = serde_json::Map::with_capacity(obj.len() + 1);
+            out.insert("summaryWindow".into(), Value::String(w.sentence()));
+            out.extend(obj);
+            Value::Object(out)
+        }
+        (_, p) => p,
+    }
+}
+
 /// TRDD-ER88PXNB A2: the answer of `summary_for_ids`. `attribution` is Some only when `family_built`; None means the caller
 /// reads `st.otel_attribution` as before. WHY it exists: sessions older than the card window are missing from the windowed
 /// summary, so a by-id lookup builds just that session's family. A family build is `summarize_spans` over the whole span
@@ -2434,7 +2448,7 @@ async fn handle(
                 // guard is an O(window) rebuild that measured 12–64 s holds on the live server,
                 // during which every ingest and read path queues behind it. Nothing else in this
                 // route needs `CoreState`, so the guard disappears entirely.
-                let (_, summary) = summary_now(&state, crate::now_ms() as f64);
+                let (_, summary, _) = summary_now_windowed(&state, crate::now_ms() as f64);
                 let body = {
                     // `(s.workspace ?? '') === workspace || s.workspace?.startsWith(workspace)`
                     let sessions: Vec<Value> = summary
@@ -2657,13 +2671,17 @@ async fn handle(
                         // Renamed `session_status_over` (it computes OVER a summary, it does not
                         // build one) and the summary is read off the lock and passed in.
                         // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
-                        let summary = match sid.as_deref().filter(|w| !w.is_empty()) {
-                            Some(wanted) => summary_for_ids(&state, now, &|id| id == wanted).summary,
-                            None => summary_now(&state, now).1,
+                        let (summary, card_window) = match sid.as_deref().filter(|w| !w.is_empty()) {
+                            Some(wanted) => (summary_for_ids(&state, now, &|id| id == wanted).summary, None),
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now);
+                                (read, window)
+                            }
                         };
                         let mut st = state.lock_timed();
                         let payload = st.session_status_over(&summary, sid.as_deref(), ws.as_deref(), now);
                         drop(st);
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_window_budget" => {
@@ -2681,7 +2699,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock; the guard is kept only for the
                         // lifecycle gaps, which read the live `CoreState`.
-                        let (_, summary) = summary_now(&state, now);
+                        let (_, summary, card_window) = summary_now_windowed(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let gaps = {
                             let st = state.lock_timed();
@@ -2719,6 +2737,7 @@ async fn handle(
                                 .unwrap_or_default();
                             crate::mcp_tools::get_instruction_suggestions(&sessions, ws.as_deref(), &existing)
                         };
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_image_report" | "find_resident_blobs" | "query_context_blocks" => {
@@ -2807,12 +2826,15 @@ async fn handle(
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. Both used to be O(window) rebuilds taken under the state lock.
                         // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
-                        let (timeline_summary, family_attribution) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                        let (timeline_summary, family_attribution, card_window) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
                             Some(wanted) => {
                                 let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
-                                (family.summary, family.attribution)
+                                (family.summary, family.attribution, None)
                             }
-                            None => (summary_now(&state, now as f64).1, None),
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now as f64);
+                                (read, None, window)
+                            }
                         };
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -2837,6 +2859,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("cost-by-cause scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_agent_tokens" => {
@@ -2902,9 +2925,12 @@ async fn handle(
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
                         // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
-                        let summary = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
-                            Some(wanted) => summary_for_ids(&state, now, &|id| id == wanted).summary,
-                            None => summary_now(&state, now).1,
+                        let (summary, card_window) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => (summary_for_ids(&state, now, &|id| id == wanted).summary, None),
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now);
+                                (read, window)
+                            }
                         };
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let env = state.lock_timed().log_env.clone();
@@ -2927,6 +2953,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("inflation scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "find_context_hogs" => {
@@ -2937,7 +2964,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
-                        let (_, summary) = summary_now(&state, now);
+                        let (_, summary, card_window) = summary_now_windowed(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let env = state.lock_timed().log_env.clone();
                         let a = args.clone();
@@ -2961,6 +2988,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("context hog scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_context_growth" => {
@@ -3046,13 +3074,14 @@ async fn handle(
                     "get_cost_rollup" | "predict_session_cost" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock — nothing else here needs the state.
-                        let (_, summary) = summary_now(&state, now);
+                        let (_, summary, card_window) = summary_now_windowed(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let payload = if name == "get_cost_rollup" {
                             crate::mcp_tools::get_cost_rollup(&sessions, &args, now)
                         } else {
                             crate::mcp_tools::predict_session_cost(&sessions, &args, now)
                         };
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_session_detail" => {
@@ -3127,7 +3156,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock; the guard covers only the two
                         // path/home reads that need `CoreState`.
-                        let (_, summary) = summary_now(&state, now);
+                        let (_, summary, card_window) = summary_now_windowed(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let (dir, home) = {
                             let st = state.lock_timed();
@@ -3167,6 +3196,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("body-writers scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_cache_creation_report" => {
@@ -3889,6 +3919,7 @@ async fn handle(
                             crate::account_state_timeline::account_state_timeline_path(&st.data_dir)
                         };
                         let segments = crate::account_burners::read_account_segments(&timeline_path);
+                        let mut card_window: Option<crate::SummaryWindow> = None;
                         let payload = if segments.is_empty() {
                             crate::mcp_tools::error_payload(
                                 "No account-state timeline yet (~/.agentlens/account-state.ndjson) — nothing to project against.",
@@ -3901,7 +3932,8 @@ async fn handle(
                                     crate::account_burners::known_accounts(&segments)
                                 )),
                                 Some(target) => {
-                                    let (_, summary) = summary_now(&state, now);
+                                    let (_, summary, window) = summary_now_windowed(&state, now);
+                                    card_window = window;
                                     let sessions: Vec<Value> =
                                         summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                                     let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
@@ -3922,6 +3954,7 @@ async fn handle(
                                 }
                             }
                         };
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_account_burners" => {
@@ -3942,6 +3975,7 @@ async fn handle(
                             crate::account_state_timeline::account_state_timeline_path(&st.data_dir)
                         };
                         let segments = crate::account_burners::read_account_segments(&timeline_path);
+                        let mut card_window: Option<crate::SummaryWindow> = None;
                         let payload = if segments.is_empty() {
                             crate::mcp_tools::error_payload(
                                 "No account-state timeline yet (~/.agentlens/account-state.ndjson) — the server records it on account changes; nothing to attribute against.",
@@ -3959,7 +3993,8 @@ async fn handle(
                                     match err {
                                         Some(e) => crate::mcp_tools::error_payload(&e),
                                         None => {
-                                            let (_, summary) = summary_now(&state, now);
+                                            let (_, summary, window) = summary_now_windowed(&state, now);
+                                            card_window = window;
                                             let sessions: Vec<Value> =
                                                 summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                                             let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
@@ -4002,6 +4037,7 @@ async fn handle(
                                 }
                             }
                         };
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_cache_risk_costs" => {
@@ -4014,7 +4050,7 @@ async fn handle(
                         // TRDD-QE114936: ONE off-lock summary read for the WHOLE handler — the
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. The lock is now taken only for the log env.
-                        let (_, timeline_summary) = summary_now(&state, now as f64);
+                        let (_, timeline_summary, card_window) = summary_now_windowed(&state, now as f64);
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
@@ -4062,6 +4098,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("cache-risk-cost scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_cache_break_report" => {
@@ -4087,12 +4124,15 @@ async fn handle(
                         // supplies this handler's session list, so the lock is taken only for the
                         // log env.
                         // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
-                        let (timeline_summary, family_attribution) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                        let (timeline_summary, family_attribution, card_window) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
                             Some(wanted) => {
                                 let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
-                                (family.summary, family.attribution)
+                                (family.summary, family.attribution, None)
                             }
-                            None => (summary_now(&state, now as f64).1, None),
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now as f64);
+                                (read, None, window)
+                            }
                         };
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -4140,6 +4180,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("cache-break scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "check_cache_expiry" => {
@@ -4157,12 +4198,15 @@ async fn handle(
                         // every card while holding the state lock — 10.2 s measured live. Only
                         // the TTL context still needs the guard.
                         // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
-                        let (summary, family_attribution) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                        let (summary, family_attribution, card_window) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
                             Some(wanted) => {
                                 let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
-                                (family.summary, family.attribution)
+                                (family.summary, family.attribution, None)
                             }
-                            None => (summary_now(&state, now as f64).1, None),
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now as f64);
+                                (read, None, window)
+                            }
                         };
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let ttl = {
@@ -4219,6 +4263,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("cache-expiry scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_account_status" => {
@@ -5705,6 +5750,137 @@ mod rebuild_admission_tests {
             }
         }
         assert!(failures.is_empty(), "card window disclosure:\n{}", failures.join("\n"));
+    }
+
+    /// TRDD-ER88PXNB C2: every MCP answer built from the windowed summary leads with summaryWindow on a 14-day server, and carries no such key with the window off.
+    #[test]
+    fn aggregate_mcp_answers_lead_with_the_card_window() {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        let _serial = serial();
+        let now_ms = crate::now_ms() as f64;
+        let iso = |days_ago: f64| crate::summarize::helpers::iso_from_ms(now_ms - days_ago * 86_400_000.0);
+        let start = |days: f64, tag: &str| -> (SocketAddr, RemoveOnDrop) {
+            let (dir, cleanup) = unique_dir(tag);
+            let mut st = CoreState::open(&dir);
+            st.summary_card_days = days;
+            for (id, ago) in [("new-a", 2.0), ("new-b", 3.0), ("old-c", 40.0)] {
+                st.put_log_session(serde_json::json!({
+                    "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": iso(ago), "durationMs": 1000.0,
+                    "model": "claude-opus-5", "tokensSource": "transcript", "timeline": [{ "type": "llm", "timestamp": iso(ago) }]
+                }));
+            }
+            let state = Arc::new(Mutex::new(st));
+            let (otx, orx) = std::sync::mpsc::channel();
+            let (utx, urx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let hub = Arc::new(super::SseHub::default());
+                    let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
+                    let ui = super::serve_ui("127.0.0.1:0".parse().unwrap(), state, hub, move |b| utx.send(b).unwrap());
+                    let _ = tokio::join!(otlp, ui);
+                });
+            });
+            let _otlp = orx.recv().unwrap();
+            (urx.recv().unwrap(), cleanup)
+        };
+        let request = |addr: SocketAddr, raw: String| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(600))).unwrap();
+            s.write_all(raw.as_bytes()).unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).expect("a request is answered within the read timeout");
+            out.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default()
+        };
+        let mcp = |addr: SocketAddr, tool: &str, args: serde_json::Value| -> String {
+            let body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": args } }).to_string();
+            let t0 = std::time::Instant::now();
+            eprintln!("PROBE {tool} start");
+            let resp = request(addr, format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+            eprintln!("PROBE {tool} done after {:?}", t0.elapsed());
+            let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_else(|e| panic!("{tool}: not JSON ({e}): {resp}"));
+            v["result"]["content"][0]["text"].as_str().map(str::to_owned).unwrap_or(resp)
+        };
+        let (on, _cleanup_on) = start(14.0, "agg-on");
+        let (off, _cleanup_off) = start(0.0, "agg-off");
+        let rows: [(&str, serde_json::Value); 15] = [
+            ("get_session_status", serde_json::json!({})),
+            ("get_recent_sessions", serde_json::json!({})),
+            ("get_workspace_patterns", serde_json::json!({})),
+            ("find_relevant_context", serde_json::json!({ "query": "x" })),
+            ("get_efficiency_report", serde_json::json!({})),
+            ("get_instruction_suggestions", serde_json::json!({})),
+            ("get_cost_by_cause", serde_json::json!({})),
+            ("get_context_inflation_report", serde_json::json!({})),
+            ("find_context_hogs", serde_json::json!({})),
+            ("get_cost_rollup", serde_json::json!({})),
+            ("predict_session_cost", serde_json::json!({})),
+            ("get_body_writers", serde_json::json!({})),
+            ("get_cache_risk_costs", serde_json::json!({})),
+            ("get_cache_break_report", serde_json::json!({})),
+            ("check_cache_expiry", serde_json::json!({})),
+        ];
+        let mut failures: Vec<String> = Vec::new();
+        for (tool, args) in rows {
+            let answer_on = mcp(on, tool, args.clone());
+            let answer_off = mcp(off, tool, args);
+            let Ok(v_on) = serde_json::from_str::<serde_json::Value>(&answer_on) else {
+                failures.push(format!("{tool}: window 14 d answer is not JSON: {answer_on}"));
+                continue;
+            };
+            let first = v_on.as_object().and_then(|o| o.keys().next()).map(String::as_str);
+            let text = v_on["summaryWindow"].as_str().unwrap_or_default();
+            if first != Some("summaryWindow") || !text.contains("2 of 3 resident session cards") || !text.contains("the last 14 UTC days") {
+                failures.push(format!("{tool}: window 14 d answer does not lead with summaryWindow (first key {first:?}): {answer_on}"));
+            }
+            let Ok(v_off) = serde_json::from_str::<serde_json::Value>(&answer_off) else {
+                failures.push(format!("{tool}: window off answer is not JSON: {answer_off}"));
+                continue;
+            };
+            if v_off.get("summaryWindow").is_some() {
+                failures.push(format!("{tool}: window off answer carries summaryWindow: {answer_off}"));
+            }
+        }
+        assert!(failures.is_empty(), "MCP answers without the leading card window:\n{}", failures.join("\n"));
+    }
+
+    /// TRDD-ER88PXNB C2: the windowed summary is the only summary read on the response paths, and the card window comes from the same call.
+    #[test]
+    fn the_windowed_summary_is_the_only_summary_read_on_response_paths() {
+        let src = include_str!("ui.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        // The production code is everything before the cfg(test) line that opens rebuild_admission_tests.
+        let cut = lines
+            .iter()
+            .enumerate()
+            .position(|(i, l)| l.trim_start() == "#[cfg(test)]" && lines.get(i + 1).is_some_and(|n| n.trim_start().starts_with("mod rebuild_admission_tests")))
+            .expect("rebuild_admission_tests opens with a cfg(test) line");
+        let prod: Vec<(usize, &str)> = lines[..cut]
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (i + 1, *l))
+            .filter(|(_, l)| !l.trim_start().starts_with("//"))
+            .collect();
+        // char::from(95u8) is the underscore: an identifier character, so a longer name such as burn_summary_now( does not count.
+        let is_ident = |c: char| c.is_alphanumeric() || c == char::from(95u8);
+        let is_bare_call = |l: &str| l.match_indices("summary_now(").any(|(at, _)| !l[..at].chars().next_back().is_some_and(is_ident));
+        let calls: Vec<String> = prod.iter().filter(|&&(_, l)| is_bare_call(l)).map(|&(n, l)| format!("{n}: {}", l.trim())).collect();
+        assert_eq!(calls.len(), 2, "summary_now( call sites in the production code:\n{}", calls.join("\n"));
+        assert!(
+            calls.iter().any(|c| c.contains("pub fn summary_now(")) && calls.iter().any(|c| c.contains("let _ = summary_now(&state")),
+            "the two summary_now( sites must be the definition and the warm call:\n{}",
+            calls.join("\n")
+        );
+        let line_of = |needle: &str| prod.iter().find(|(_, l)| l.contains(needle)).map(|&(n, _)| n).expect("the anchor line exists");
+        let (def, with) = (line_of("pub fn summary_now_windowed("), line_of("fn with_card_window("));
+        let outside: Vec<String> = prod
+            .iter()
+            .filter(|&&(_, l)| l.match_indices(".summary_window").any(|(at, m)| !l[at + m.len()..].chars().next().is_some_and(is_ident)))
+            .filter(|&&(n, _)| !(def..=with).contains(&n))
+            .map(|&(n, l)| format!("{n}: {}", l.trim()))
+            .collect();
+        assert!(outside.is_empty(), "summary_window is read outside summary_now_windowed (lines {def}..{with}):\n{}", outside.join("\n"));
     }
 }
 

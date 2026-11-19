@@ -226,6 +226,14 @@ impl SummaryWindow {
             "cardsResident": self.cards_resident,
         })
     }
+
+    /// TRDD-ER88PXNB C2: the one-line form MCP answers carry as their first key.
+    pub fn sentence(&self) -> String {
+        format!(
+            "covers only log sessions active since {} (the last {} UTC days): {} of {} resident session cards; older sessions are left out of these totals and are still answered when asked for by sessionId",
+            crate::summarize::helpers::iso_from_ms(self.cutoff_ms), self.card_days, self.cards_included, self.cards_resident
+        )
+    }
 }
 
 /// TRDD-ER88PXNB: the cutoff of the summary card window. WHY quantized to a UTC midnight: the summary engine reuses
