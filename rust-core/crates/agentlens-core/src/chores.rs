@@ -162,11 +162,15 @@ fn purge_tick(state: &Arc<Mutex<CoreState>>, now_ms: f64) {
         );
     }
 
-    // TRDD-OBJ4FK2T: api_calls parts older than apiCallsRetentionDays (default 31) are removed by the epoch in their name.
-    // WHY 31: the hook-events and log-events default, above the 14-day reach of every windowed reader (rate_limit_report at most
-    // 336 h, the others 48 h); readers with no window (cache_turns_sql, get_cache_event_log with window 0, untilIso, raw SQL) see at
-    // most that many days. A backlog flush can put old rows in a new part, which then outlives the age; a part removed during the
-    // bodies pass fsync barrier fails that batch once and it is retried.
+    // TRDD-OBJ4FK2T: api_calls parts older than apiCallsRetentionDays (default 90) are removed by the epoch in their name.
+    // WHY 90: the status-line retention default (statusline_store::retention_days, AGENTLENS_STATUSLINE_RETENTION_DAYS).
+    // cache_turns joins status-line turns to api_calls with no api-side time filter (cache_turns_relation in
+    // cache_turns_sql.rs), so a shorter age would drop the API side of turns the status line still holds;
+    // raise this knob when that retention is raised.
+    // Windowed readers reach less: rate_limit_report at most 336 h plus a 5 h investigate window, investigate_burn 48 h
+    // before its end time; list_prefix_rows takes the newest rows. Readers with no window (cache_event_log window 0,
+    // cache_turns raw SQL, an old untilIso) see at most this many days. A backlog flush can put old rows in a new part,
+    // which then outlives the age; a part removed during the bodies pass fsync barrier keeps that batch for the next pass.
     let api_days = crate::retention_config::resolve_knob(&data_dir, &crate::retention_config::API_CALLS_RETENTION_DAYS);
     match agentlens_store::purge_api_call_parts(&data_dir.join("store"), api_days, now_ms as u64) {
         Ok(outcome) => {

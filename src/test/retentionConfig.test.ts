@@ -77,14 +77,14 @@ suite('retentionConfig (TRDD-ZAV74M8Q — persistent, discoverable retention con
       assert.deepStrictEqual(resolveRetention(dir, {}), {
         spansRetentionDays: 30, summaryWindowHours: 24, bodiesMaxGb: 8, bodiesRetentionDays: 31,
         logEventsRetentionDays: 31, // TRDD-AMEA4O4Z — the log-event sink's bucket lifetime
-        apiCallsRetentionDays: 31,
+        apiCallsRetentionDays: 90,
       })
     } finally { cleanup() }
   })
 
-  test('apiCallsRetentionDays resolves to 31 by default and to the env value when set', () => {
+  test('apiCallsRetentionDays resolves to 90 by default and to the env value when set', () => {
     const apiCalls = findMeta('apiCallsRetentionDays')!
-    assert.strictEqual(resolveKnob(apiCalls, {}, {}), 31)
+    assert.strictEqual(resolveKnob(apiCalls, {}, {}), 90)
     assert.strictEqual(resolveKnob(apiCalls, {}, { AGENTLENS_API_CALLS_RETENTION_DAYS: '7' }), 7)
   })
 
