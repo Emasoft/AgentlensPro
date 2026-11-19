@@ -1,9 +1,9 @@
 ---
 trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
-column: blocked
+column: todo
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T07:47:09+0100
+updated: 2026-11-19T13:17:53+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,12 +12,15 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [ER88PXNB]
+blocked-by: []
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
 assignee: main-agent@agentlenspro
 status: tasked
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-19T13:17:52+0100
 ---
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-03
@@ -104,6 +107,7 @@ this card can close.
 
 - 2026-09-03T10:48:30+0200 — APPROVED by USER (verbatim order above).
 - 2026-11-15 — blocked-by pruned per this card's own STATE rule (ids outside dev|testing|todo|blocked|plan|dispatch): removed 7NHUU6GK (backburner), ZSX34J8F (backburner), 2R0AXCKL (backburner), 2TQHNMEC (backburner), 9SYRK6SW (deploy); 13 remain.
+- 2026-11-19T13:17:52+0100 — column → todo by main-agent@agentlenspro. blocked-by drained: ER88PXNB complete
 
 ## Blocking cards (must reach a terminal column before this gate opens)
 > SUPERSEDED 2026-11-15: this list is historical; the live gate is the frontmatter blocked-by field (13 ids after the 2026-11-15 prune).
@@ -326,6 +330,7 @@ VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version change
 2026-11-19T06:25+0100 main agent, re-checked myself (harness review): grep -c run_cache_turns_sql on assets/mcp-tools.json = 0; the only non-test include of that file is mcp.rs:23 (tests/ui.rs:1662 is a test); the arm is at ui.rs:3332; grep -c -a run_cache_turns_sql = 0 in builds_dev/rel-2.34.0-3736dd88/alcore and in bin-native/darwin-arm64/alcore, while '"run_transcript_sql"' is found once in each (the embedded schema). So neither binary carries even the arm's name (INFERRED: those builds may predate the arm); the tag build must come from the final HEAD, whose schema still lacks the name. DECISION, recorded as mine: OBJ4FK2T is in human_review and has NOT been reviewed by the owner; no rule lets a human_review card ship unreviewed. I let it ship under the owner orders «complete all pending tasks and publish/install/deploy» and «on other things decide yourself» (2026-11-16), because its acceptance is met and its one unmeasured reader is not shipped. The owner can veto it before the tag. Wording fix: 'the release is now blocked only by 735Q3JF4' means blocked-by names only 735Q3JF4; CHANGELOG, PR, CI, the full suite and the merge are still owed.
 2026-11-19T06:35+0100 main agent: blocked-by is now TRDD-ER88PXNB (the 14-day summary-window stopgap carved out of 735Q3JF4, which stays open for the resident bound). The tag waits for ER88PXNB's production-cap evidence.
 2026-11-19 — docs item for the pre-release pass: in CLAUDE.md's codesign gotcha replace the flag in './bin-native/darwin-arm64/alcore --version' with 'alcore version' (--version is not an alcore command: it exits 64, usage). The tell itself (exit 137 = SIGKILL before main) stays. Source: TRDD-M2VK8T4P note of 2026-11-19. Also: alcore's own error text 'command required (serve or statusline-seal)' omits 'version', which its usage lists.
+2026-11-19T13:17+0100 main agent: blocked-by drained. ER88PXNB is complete (final isolated run at the production cap on a release build of 5443dcbb: 23 of 23 with the corrected family check; prediction met; footprint at stop 1412-1495 MB against the 6144 MB backstop). NEXT, in this card's order: gates (pnpm run compile, cargo test store and core, clippy -D warnings), the full-suite pair under the section rules, version bump plus CHANGELOG in one commit, PR fix/setup-agent-preflight to main with CI green, merge --no-ff, tag v2.34.0, OIDC publish verification, then IXMB2JVD and the post-release checks.
 
 ## Release full-suite pair — gate rules
 
