@@ -4,7 +4,7 @@ title: One invalid parquet file in store api_calls blinds investigate_burn and t
 column: todo
 status: tasked
 created: 2026-11-19T04:39:02+0100
-updated: 2026-11-19T04:39:02+0100
+updated: 2026-11-19T05:26:58+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,7 @@ MEASURED in the 2.34.0 isolated run (reports_dev/iso-run/20261119_033859+0100/dr
 ## Approval log
 
 - 2026-11-19T04:39:02+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes and lessons learned
+
+2026-11-19T05:26+0100 main agent MEASURED SILENT WRONG ANSWER on the 2.34.0 build (isolated readers run reports_dev/iso-run/20261119_051611+0100, driver.log and server-readers.log read by the main agent): on an intact store (no purge had run yet; the purge line came at 05:19:04+0100) investigate_burn for the window ending 2026-10-21T12:20:31Z returned resp 0, calls 0, blind no-bodies-dir and a BLIND note (no store-first prefix) at 04:18:30Z, while DuckDB on the same copy counts 112010 response rows there and the same server answered store-first 63953 for another window 27 s later. load_store_window turns every DuckDB error into None (investigator_scan.rs:376-420), so the error is not visible; the server was at memory pressure stage 3 at that time. Same verdict family as TRDD-TGOT9OOX (an empty purged window).
