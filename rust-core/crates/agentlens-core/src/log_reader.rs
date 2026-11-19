@@ -1408,7 +1408,16 @@ impl DurableState {
                 }
             }
             Ok(_) => {}
-            Err(e) => eprintln!("{} alcore: could not save log cards: {e}", crate::log_ts()),
+            Err(e) => {
+                eprintln!("{} alcore: could not save log cards: {e}", crate::log_ts());
+                // TRDD-PGMMB2QG box 9: a failed save is retried by the next timed tick, for every caller. WHY both
+                // lines: `DeltaLog::save_from` marks its keys written (and drops the tombstoned ones from the hashes)
+                // BEFORE the write, so without the file pass a retry finds nothing to write and the lines never reach
+                // the card log; and `tick` clears `cards_dirty` before calling here, so without the dirty mark no
+                // retry runs at all. The pass reseeds the hashes from the files, so the retry writes the difference.
+                self.seed_from_files_pending = true;
+                self.cards_dirty = true;
+            }
         }
         self.last_cards_save = Instant::now();
         ok
@@ -2428,6 +2437,40 @@ mod sweeper_backstop_tests {
         let out = durable.restore(&mut tailer, &mut state.lock().unwrap(), &env);
         assert!(out.is_err(), "the unreadable card log fails the start: {out:?}");
         drop(state);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-PGMMB2QG box 9: a pending clear, a failed clear attempt, then a timed tick whose card save fails too (card log
+    /// read-only), then the card log is writable again and NO other event happens (no `mark_dirty`, no new card): the
+    /// next timed tick must bring the card log level with the store (b and the files-only ghost tombstoned). WHY it can
+    /// fail without the re-arm in `save_cards`: the failed save has already marked its keys written (and dropped the
+    /// tombstoned ones from the hashes), and the tick cleared the dirty mark, so the later tick finds nothing to write.
+    /// The later save is a TICK on purpose: `finish_clear_after_save` rewrites without the hashes and would pass anyway.
+    #[cfg(unix)]
+    #[test]
+    fn two_failed_card_saves_in_a_row_keep_the_clear_flag_and_the_pass_armed() {
+        let root = seed_test_root("clear-box9");
+        let (data, state, mut durable) = cleared_and_rescanned(&root);
+        // Set explicitly (1 ms, so the later tick is past the card save timer): the environment must not change what this proves.
+        durable.cards_save = Duration::from_millis(1);
+        durable.offsets_save = Duration::from_millis(1);
+        set_card_log_mode(&data, 0o555, 0o444);
+        let control_unwritable = std::fs::File::create(data.join("probe")).is_err();
+        let first = durable.finish_clear_after_save(&state, store_epoch(&state));
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&LogTailer::default(), &state, false);
+        let (early_save_spent, pass_armed, dirty) = (durable.first_cards_saved, durable.seed_from_files_pending, durable.cards_dirty);
+        set_card_log_mode(&data, 0o755, 0o644);
+        assert!(control_unwritable, "control: the card-log directory really refuses a write (not running as root)");
+        assert!(!first, "the first attempt fails on the rewrite");
+        assert!(early_save_spent, "control: the timed tick ran its early card save, and it failed");
+        assert!(card_log_keys(&data).contains(&"b".to_string()), "control: the failed saves wrote nothing, the cleared key b is still in the card log");
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&LogTailer::default(), &state, false);
+        assert_eq!(card_log_keys(&data), ["a"], "the later timed tick, with nothing else marked, tombstoned b and the files-only ghost");
+        assert!(pass_armed && dirty, "the failed save re-armed the file pass and the cards dirty mark");
+        drop(state);
+        assert_eq!(clear_flag(&data.join("a")), "1", "ticks never reset the clear flag");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
