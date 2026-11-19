@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T05:41:18+0100
+updated: 2026-11-19T05:47:52+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -12,7 +12,7 @@ created-by: main-session
 npt: []
 eht: []
 pre-block-column: todo
-blocked-by: [OBJ4FK2T, 735Q3JF4]
+blocked-by: [735Q3JF4]
 post-release-verification: [IXMB2JVD]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
@@ -320,6 +320,7 @@ VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version change
 2026-11-19T05:21+0100 main agent RELEASE RISK under review: on a copy of this machine's data the 2.34.0 build sits near its 2048 MB mimalloc commit cap after boot (1928 MB at first_summary_build) and one investigate_burn over a 112010-row window pushed it to 2712 MB and the server exited (OBJ4FK2T note of this time). Decision pending: whether this blocks the tag.
 2026-11-19T05:29+0100 main agent DECISION: the tag is BLOCKED by the memory cap. Isolated readers run v5 (reports_dev/iso-run/20261119_052636+0100; driver and server-readers.log saved there; read by the main agent) ran ALONE at load 15.5: both 2.34.0 servers exited on the cap with NO read in flight, during a 30 s idle wait after boot: R0 'RSS HARD CAP — mimalloc commit 2058 MB > cap 2048 MB' at uptime 27.3 s, R1 '2048 MB > cap 2048 MB' at 21.4 s (exit code 1 both; so a cap exit is code 1, and v2's R0 exit 1 was likely a cap exit too, server log not kept). Commit after first_summary_build 1995-2013 MB, pressure ladder stage 3 within 15 s, as TRDD-735Q3JF4 records. v2.33.1 has no process memory cap (git grep -i hard.cap, rss_hard, memory guard, RSS_HARD_CAP over rust-core, src, standalone at the tag: only per-reader parse and row caps; read whole). Data: a copy of this machine's cards.duckdb (110619 cards), offsets and store; no transcripts, so this is not the box-169 upgrade boot with cold rescan, which is still open. Upgrading the live server would make it exit about every 25 s. blocked-by gains TRDD-563B8WYH (crash-loop on the 2 GB cap with real-world data). Corrections of earlier turn text: v2 has its driver saved but NO server log; the observed idle commit range is 1928 to 2075 MB (v4 R1 logged 2075 MB at uptime 35 s without an exit before its SIGTERM, not explained).
 2026-11-19T05:41+0100 main agent CORRECTION of the blocker set an hour ago: blocked-by is now [OBJ4FK2T, 735Q3JF4], not 563B8WYH. Reason, from TRDD-735Q3JF4 lines 39, 194 and 211 (read by the main agent) and worker W100's report reports_dev/W100/20261119_0535-memory-cards.md: 735Q3JF4 holds the 2026-11-18 live measurement (a capped build with its increments 1-3, sha256 65e2ceca, exits on the 2048 MB cap once one full summary is built over 110619 cards; collection off, 0 resident spans) and the plan (increment 4: answers from DuckDB SQL, a bounded resident card set); 563B8WYH (last updated 2026-10-20) is the older umbrella with no plan. CORRECTION of the turn text 'upgrading the live server would make it exit every 25 s': the live server already runs a post-2.33.1 capped build and already exits on the cap; it is held down by the revive brake (~/.agentlens/NO_REVIVE since 2026-11-18 04:58:05, per 735Q3JF4 line 194); agentlenspro server status today: not running. 735Q3JF4 was parked 2026-11-18 by owner order «windows is not a priority now. i need the search option asap!»; agentlenspro search has since shipped, so the release path now resumes 735Q3JF4. Other review corrections: the 2.33.1 claim is 'no process memory cap found under hard.cap, rss_hard, memory guard, RSS_HARD_CAP'; the v5 server-log read cut the composition lines after 'mi committed' (those fields unread).
+2026-11-19T05:47+0100 main agent: OBJ4FK2T leaves blocked-by: its three boxes are met and readers run v6 passed 17/17 (OBJ4FK2T note of this time); it waits in human_review, which does not gate the tag. The release is blocked only by TRDD-735Q3JF4 (the 2048 MB cap is reached by the first summary build: v6 mi_commit 1955 and 2004 MB at first_summary_build on 110619 cards).
 
 ## Release full-suite pair — gate rules
 
