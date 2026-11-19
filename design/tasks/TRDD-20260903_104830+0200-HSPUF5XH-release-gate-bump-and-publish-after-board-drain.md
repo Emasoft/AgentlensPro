@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: blocked
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-19T01:48:43+0100
+updated: 2026-11-19T02:56:21+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -292,6 +292,7 @@ VERSION BUMP STEP (from TRDD-YL3EWT6N item 5): after package.json version change
 2026-10-17: O8MGRU72 complete (commits 3a9ec263, 45a7711a, 14e33321) and removed from blocked-by; its open residue (one intermittent watcher test, one SIGKILLed full run) is recorded on its STATE block.
 2026-11-19 lock count redone with one pattern (\.lock() or \.lock_timed() on any binding) over the whole start_sweeper: v2.33.1 lines 950-1064 hold 3 (965, 983, 1051); HEAD lines 1769-2045 hold 6 (1788, 1824, 1895, 1946, 1980, 2017). Same counts; the earlier tag span 950-1067 is corrected to 950-1064.
 2026-11-19 the original lock-comparison spans were corrected in place to 950-1064 (v2.33.1) and 1769-2045 (HEAD): both now end at the column-0 closing brace of start_sweeper, read by the main agent with git show of each revision. The earlier ends, 1067 and 2048, fell on the doc comment of the next function, last_active_ms, past the closing brace.
+2026-11-19T12:40+0100 main agent SESSION STATE (before a compaction; never run /janitor-write-handoff). GATE: MUZ04JYU and PGMMB2QG in human_review (AI review read whole: transcript lines 66493 and 66928, PASS); OBJ4FK2T in ai_review (commits d195661b..32f9618b, 918224a3; its harness review must be read whole before human_review); AXJH3WTU testing, box 3 open; 6MG5N1ZF testing, box 2 is post-tag (RISK ACCEPTED candidate). NEXT, per the advisor pass of 12:35 (Fable): (1) docs worker: CHANGELOG entry in user terms (alcore now deletes store/api_calls parts older than apiCallsRetentionDays, default 90 days, env AGENTLENS_API_CALLS_RETENTION_DAYS; a store younger than 90 days loses nothing at first boot) and fix ARCHITECTURE.md:364 'a single RETENTION_META table' (there are two, kept equal by retention_config tests). (2) version bump + node scripts/stamp-surfaces.js --write. (3) alcore release build in builds_dev or a worktree (NOT copied over the running bin-native file), codesign -s - --force, --version not exit 137, grep the binary for 'api_calls retention'. (4) Isolated <=4 GB run (own HOME, DATA_DIR, ports, OTLP not 4318; copied sample with a current log-delta-version.json): AXJH3WTU box 3 size; purge chain: count sample parts older than N days and unparsable names, start with AGENTLENS_API_CALLS_RETENTION_DAYS=N, the 'purged K part(s)' line must equal the count, foreign names untouched, a cache-turns query and a windowed reader without repeated errors, one bodies pass, restart with the env unset: zero removed; record on OBJ4FK2T. Plus the replaced live gates (line 326). (5) CI green on main via the PR, full-suite pair, merge --no-ff, tag. Each blocker gets CLEARED or RISK ACCEPTED written here first. CI cargo test (ci.yml:305) runs from a full checkout, so the parity test finds src/retentionConfig.ts; the Dockerfile only builds alcore.
 
 ## Release full-suite pair — gate rules
 
