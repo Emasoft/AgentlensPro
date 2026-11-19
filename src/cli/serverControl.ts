@@ -620,7 +620,7 @@ export async function stopServer(): Promise<void> {
   // never a stale holder from an earlier, unrelated stop.
   const holder = stopHolderFromLog(logTail(40, logStart))
   const holderNote = holder !== null ? ` — stuck behind ${holder}` : ''
-  throw new Error(`server (pid ${pid}) is still running 15s after SIGTERM${holderNote} — a large store can take longer to flush; watch it before escalating to SIGKILL (see server.log for "alcore: stop waiting on <holder>")`)
+  throw new Error(`server (pid ${pid}) is still running 15s after SIGTERM${holderNote} — a large store can take longer to flush; watch it before escalating to SIGKILL (see server.log for the "alcore: stop timed out after" line)`)
 }
 
 /** The capture-liveness line for `server status` (TRDD-0SA5QZTG).
