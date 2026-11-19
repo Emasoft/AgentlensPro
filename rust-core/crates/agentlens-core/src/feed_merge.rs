@@ -168,6 +168,7 @@ pub fn link_twin_id(p: &Value) -> String {
 /// May placeholder `p` link to the candidate transcript `t`? Everything `link_subagent_transcripts`
 /// checks about the PAIR (not about list membership or an earlier winner). Shared with the summary
 /// engine, which links one pair at a time, so the two cannot drift.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn link_pair_ok(p: &Value, t: &Value) -> bool {
     if s(t, "source") != "claude_code" || s(t, "dataSource") != "log" {
         return false;
@@ -183,11 +184,10 @@ pub fn link_pair_ok(p: &Value, t: &Value) -> bool {
     // `!(x > 0.0)` is NOT `x <= 0.0` here and must not be "simplified" into it: the
     // negated form is TRUE for NaN, which is the TS `!(t > 0)` this ports and the only
     // reason a NaN-token feed loses to a real-traffic one instead of winning by accident.
-    #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    if !(t_traffic > 0.0) && p_traffic > 0.0 {
-        return false;
-    }
-    true
+    // One expression, not an `if` returning a bool literal (clippy::needless_bool, rust 1.100).
+    // De Morgan of the old `!(!(t > 0) && p > 0)`; same result for NaN. The fn-level allow above
+    // exists because an attribute on a tail expression is unstable and a `let x = ..; x` trips let_and_return.
+    t_traffic > 0.0 || !(p_traffic > 0.0)
 }
 
 /// The merged card that replaces transcript `t` once placeholder `p` linked to it (the transcript

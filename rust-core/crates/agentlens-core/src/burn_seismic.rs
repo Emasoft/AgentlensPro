@@ -1247,8 +1247,9 @@ pub fn burn_seismic(opts: &BurnSeismicOptions<'_>, query: Query<'_>, now_ms: f64
     let mut raw_events: Vec<(f64, Value)> = Vec::new();
     for seg in &pelt.segments {
         let (mut first, mut last) = (None, 0usize);
-        for i in seg.from..=seg.to {
-            if bh.rejected[i] {
+        // Iterator, not an index range: clippy::needless_range_loop (rust 1.100).
+        for (i, &rejected) in bh.rejected.iter().enumerate().take(seg.to + 1).skip(seg.from) {
+            if rejected {
                 if first.is_none() {
                     first = Some(i);
                 }
