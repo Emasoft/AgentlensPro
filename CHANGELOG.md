@@ -4,7 +4,7 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
-## [Unreleased]
+## [2.34.0] - 2026-11-19
 
 ### Upgrade notes
 
