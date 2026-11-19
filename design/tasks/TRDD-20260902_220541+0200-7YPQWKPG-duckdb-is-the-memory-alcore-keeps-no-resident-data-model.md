@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-11-16T18:48:15+0100
+updated: 2026-11-19T01:25:03+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -370,3 +370,7 @@ Step S amendment f (step 9): per-shape memory budgets are tested, and the whole-
 Step A result 2026-11-01 (data in reports_dev/7ypqwkpg/stepA/ and the arm-c samples on the frozen copy): peak footprint arm a (default warm) 2477 MB at 243 s, arm b (no log scan) 2186 MB at 84 s, arm c (bodies moved out) 1786 MB at 65 s; arm c ran 46.8 h unattended after its fork died (its sampler had no duration bound) and held 1062-1533 MB footprint after the first hour with no crash; arm d (cold) never ran; the arm report is still to be written.
 Found by step A: TRDD-NCHQ2LWS (a chore holds the CoreState lock for minutes); its own card, not part of steps 1–9.
 Step 5a follow-up: TRDD-X0YTE00M (remaining resident lists and App signals).
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED. The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

@@ -4,7 +4,7 @@ title: A turn review deferred by the round cap is not announced to the model and
 column: human_review
 status: tasked
 created: 2026-11-17T20:30:10+0100
-updated: 2026-11-19T01:08:29+0100
+updated: 2026-11-19T01:25:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -45,6 +45,7 @@ CAUTION (2026-11-17T20:47:00+0100, main agent, after the harness review of the t
 ## Notes
 
 OWNER DIRECTIVE 2026-11-18 00:00 (verbatim): «mods are too complex. only the mods-expert-developer agent can be consulted on them, and developing must be delegated to it.» From here the mod work of this card is designed, written and tested by the agent mods-expert-developer-plugin:mods-expert-developer-agent. The main agent writes no mod code and takes mod questions to that agent.
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED (not in the npm package). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.
 
 ## Result 2026-11-19
 

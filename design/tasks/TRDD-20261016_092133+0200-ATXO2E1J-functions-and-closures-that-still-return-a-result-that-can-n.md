@@ -4,7 +4,7 @@ title: Functions and closures that still return a Result that can no longer fail
 column: todo
 status: tasked
 created: 2026-10-16T09:21:33+0200
-updated: 2026-10-16T09:40:31+0200
+updated: 2026-11-19T01:25:05+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -34,3 +34,7 @@ After aa61b49d made lock_timed infallible and 4ebb9196 cleaned five functions, c
 ## Notes and lessons learned
 
 2026-10-16: created from the accepted review finding on 4ebb9196 (TRDD-TYJSS45N); acceptance added after the review of c5136f6d.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED. The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

@@ -4,7 +4,7 @@ title: The card-log file pass slows 5 to 59 times under host load, more than a f
 column: backburner
 status: tasked
 created: 2026-11-17T17:30:40+0100
-updated: 2026-11-17T17:58:15+0100
+updated: 2026-11-19T01:25:05+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: spike
@@ -38,3 +38,7 @@ Second source for the tombstone-removal cost (2026-11-17 17:58): the read-only r
 ## Approval log
 
 - 2026-11-17T17:30:40+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED. The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

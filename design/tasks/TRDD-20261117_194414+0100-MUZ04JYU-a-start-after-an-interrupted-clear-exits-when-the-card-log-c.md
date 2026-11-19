@@ -1,10 +1,10 @@
 ---
 trdd-id: MUZ04JYU
 title: A start after an interrupted clear exits when the card log cannot be read although that branch discards the log
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-17T19:44:14+0100
-updated: 2026-11-17T19:47:04+0100
+updated: 2026-11-19T01:25:08+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -33,3 +33,4 @@ Whether this has ever happened on a real folder. Whether the same holds for an u
 ## Approval log
 
 - 2026-11-17T19:44:14+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T01:25:08+0100 — column → todo by main-agent@agentlenspro. release blocker of TRDD-HSPUF5XH (Release list decision 2026-11-19)

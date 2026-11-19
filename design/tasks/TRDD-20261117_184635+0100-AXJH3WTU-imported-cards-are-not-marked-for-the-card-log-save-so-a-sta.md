@@ -1,10 +1,10 @@
 ---
 trdd-id: AXJH3WTU
 title: Imported cards are not marked for the card log save, so a start that refuses the store loses them
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-17T18:46:35+0100
-updated: 2026-11-17T18:52:25+0100
+updated: 2026-11-19T01:25:08+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -35,3 +35,4 @@ CORRECTION 2026-11-17T18:52:24+0100 (after the harness review): only IMPORTED ca
 ## Approval log
 
 - 2026-11-17T18:46:35+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T01:25:08+0100 — column → todo by main-agent@agentlenspro. release blocker of TRDD-HSPUF5XH (Release list decision 2026-11-19)

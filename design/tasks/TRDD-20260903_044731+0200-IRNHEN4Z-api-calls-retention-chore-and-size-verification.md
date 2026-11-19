@@ -4,7 +4,7 @@ status: tasked
 title: api_calls part compaction by count, retention chore, and 24h-survives-restart verification
 column: planned
 created: 2026-09-03T04:47:31+0200
-updated: 2026-09-03T04:59:59+0200
+updated: 2026-11-19T01:25:08+0100
 current-owner: main-session
 task-type: feature
 priority: high
@@ -81,3 +81,7 @@ sweep must compact by COUNT first, prune by AGE second.
 ## Approval log
 
 ## Notes and lessons learned
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: the retention by age is split out to TRDD-OBJ4FK2T, which gates the release (TRDD-HSPUF5XH). This card keeps the part compaction by count and the 24h-survives-restart verification; it does not gate the release.

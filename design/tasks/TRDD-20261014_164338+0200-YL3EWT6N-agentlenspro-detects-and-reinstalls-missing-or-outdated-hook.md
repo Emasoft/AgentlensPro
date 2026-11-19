@@ -4,7 +4,7 @@ title: agentlenspro detects and reinstalls missing or outdated hooks skills agen
 column: dev
 status: tasked
 created: 2026-10-14T16:43:38+0200
-updated: 2026-11-19T00:50:21+0100
+updated: 2026-11-19T01:25:04+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: feature
@@ -196,3 +196,7 @@ T2 executor runVersionCheck(deps), every effect injectable (env, dataDir, readPi
 T3 wiring main.ts: cliMainBody records that maybeAutoSetup ran and returned null (not the force-install path, not an excluded verb). cliMain runs (deps.versionCheck ?? runVersionCheck) after cliMainBody returns and before the finally flushes the notices, only when that record is set and AGENTLENS_NO_AUTOSETUP and AGENTLENS_NO_REVIVE are not 1; its lines go through the launch-notice say; the verb exit code is unchanged. Verbs that never return (watch, the foreground server) never reach it.
 T4 tests src/test/versionRestart.test.ts: each plan value; memoHit makes zero fetch and zero probe calls; gave-up blocks a second restart after a non-converged one even with a new pid; other-dir never restarts; DISABLED present still plans a restart; lock (live holder skips, dead holder taken over by rename, two takers: one proceeds); three-way restarts and warns once; probe exit 64 and 137 give probe-failed once, then memo. A cliMain test with an injected versionCheck: it runs after the verb output, and not for help, server or a hook verb. Every test file that calls cliMain without injecting versionCheck is listed by the worker; each must run with AGENTLENS_DATA_DIR or DATA_DIR at a temp dir, else it gets a no-op versionCheck. One test: with AGENTLENS_DATA_DIR at a temp dir with no server.pid, the default runVersionCheck returns none-no-server with zero fetch and probe calls.
 NOT COVERED: a rebuilt binary with the same package.json version (the version is compiled in); a real two-build restart; a server with no pidfile; a supervisor running old CLI JavaScript (only the alcore child is replaced); verbs that never return; the restart wall time (unmeasured). Live effect today: none (server down, NO_REVIVE armed). Deploy needs the alcore rebuild plus codesign of the HSPUF5XH release.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED (Dockerfile split to 6MG5N1ZF, symlink follow-up split to C59VAPT8; jq check post-release). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

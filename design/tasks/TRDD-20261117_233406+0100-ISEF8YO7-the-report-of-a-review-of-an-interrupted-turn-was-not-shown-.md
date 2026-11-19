@@ -4,7 +4,7 @@ title: The report of a review of an interrupted turn was not shown in the four S
 column: human_review
 status: tasked
 created: 2026-11-17T23:34:06+0100
-updated: 2026-11-19T01:20:16+0100
+updated: 2026-11-19T01:25:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -65,3 +65,5 @@ FACTS READ 2026-11-17 23:50 to 23:57 by the main agent, before the directive abo
 - 2026-11-19T01:15:30+0100 main agent: box 3 TICKED on tests and earlier probes, not seen live. Shown at the next Stop after a compaction (probe 1, 0.7.12); one dropped row after /clear (probe 3, 0.7.12); the three cases that left neither box nor line (a module reload then a leaving command, a failed drop, a display file older than 120 s) are TRDD-0IFG1B11, whose four boxes are ticked on the tests of 0.7.13 (commit 1266d508, tests/held-interrupted.test.ts, tests/deferred-review.test.ts, tests/test_show.py: 23 TypeScript and 10 Python tests passing, run by the main agent). STATED LIMIT, not met by any version: when the session ENDS before its next Stop (case b of 0IFG1B11), the user gets neither the box nor a line. Live sessions run 0.7.10, so nothing of this reaches the user until the owner installs 0.7.13. Blocker 0IFG1B11 cleared: its work is delivered and it waits only on the owner in human_review. Moved to human_review.
 - 2026-11-19T01:19:59+0100 main agent CORRECTION of my entry above (after the harness review): box 3 is UNTICKED. Its text is unconditional ('shown at the next Stop, or the user gets one line'), and in case b (the session ends before its next Stop) neither happens on any version. OWNER QUESTION: accept the box reworded to 'except when the session ends before its next Stop, a limit stated in the mod README', or keep it open. The card stays in human_review for that question.
 - 2026-11-19T01:20:15+0100 main agent, second correction: my earlier note of this night says 'box 3 TICKED', but that command never ran check-box; box 3 was never ticked and stays [ ] (trddgrep refused the untick as a no-op). The owner question above stands.
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED (not in the npm package). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.
+- 2026-11-19T01:25:02+0100 main agent: the clear of blocker 0IFG1B11 earlier tonight stands on its own: 0IFG1B11's four boxes are ticked on the tests of 0.7.13 and it waits only on the owner in human_review. It does not rest on box 3 of this card, which is open.

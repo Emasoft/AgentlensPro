@@ -4,7 +4,7 @@ status: tasked
 title: Durable cache-event history that joins the OTEL ledger with the statusline feed
 column: todo
 created: 2026-09-02T21:52:02+0200
-updated: 2026-11-19T01:15:37+0100
+updated: 2026-11-19T01:25:03+0100
 current-owner: main-session
 task-type: feature
 priority: high
@@ -132,3 +132,7 @@ eht: lists six ids (9SYRK6SW, IRNHEN4Z, GVA8TTJF, QSFYIHUO, N6A8VX3G, TP3BA3ED),
 
 Box 3's joined query exists in design (worker in flight): the statusline join keys are session_id + interval (turn min/max ts ±60s) — NOT the token-column equality the WHAT wording implied — because statusline's per-tick cumulative counters and api_call's per-request buckets are different units that never compare equal. The token facts the box wanted are the join's OUTPUT columns (cache_read/creation/miss_reason alongside writePct), which is the intent of box 3 satisfied. Recorded here so the deviation is visible from the parent.
 2026-11-19T01:15:36+0100 main agent CORRECTION: 'worker in flight' above is stale. No worker runs for this card (no agent of this session, none listed). The eht id TP3BA3ED is complete and archived (design/archived/, column complete). Open: all four ACCEPTANCE boxes; its compaction child IRNHEN4Z is in column planned (HSPUF5XH RELEASE-LIST FACTS round 2, item 1).
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED (growth bound split to OBJ4FK2T). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

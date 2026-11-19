@@ -3,7 +3,7 @@ trdd-id: N60JUWU3
 title: The graceful shutdown needs the state lock and has no timeout, so a long holder starves the stop into a SIGKILL
 column: todo
 created: 2026-09-02T16:36:33+0200
-updated: 2026-11-19T00:56:59+0100
+updated: 2026-11-19T01:25:06+0100
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -208,3 +208,7 @@ cooperative request path.
 2026-11-19T00:50+0100 main agent, correction to the entry above: box 3 was not done when that line was written, the worker had only been dispatched. Box 2: 17a0667b landed (record_stop_from_disk after both runtimes stop, unit test timed_out_stop_from_disk_reads_as_shutdown, 5 lib tests and the alcore build passing on the combined tree). Box 2 stays UNTICKED: the flag and the call site are covered only by the build, and a thread abandoned by shutdown_timeout (the stuck holder) can still persist the in-memory store over the marker. A real proof needs the same out-of-process lock-holder hook as box 1, so boxes 1 and 2 both WAIT ON THE OWNER's decision recorded above. Box 3: the holder regex fix and its tests are in dev (worker w66, not committed).
 2026-11-19T00:55+0100 main agent: box 3 ticked on d52cebab. stopHolderFromLog extracts the holder from the alcore 'stop timed out after N ms waiting on <holder>' line (capture stops before the ' — ' tail), and stopServer appends ' — stuck behind <holder>'. 9 unit tests, one of them reading the format string out of alcore.rs; serverStopBoundedWait 1 passing. Not shown end to end: a real held lock producing that line needs the box 1 hook (owner decision above). implementation-commits gains d52cebab.
 2026-11-19T00:56+0100 main agent, correction to the box 3 entry: serverStopBoundedWait runs an idle server with no lock holder, so it never prints the holder line; box 3 rests on the 9 unit tests of stopHolderFromLog (read whole by the main agent: real format, format read from alcore.rs, unknown, no tail, first of two, holder containing 'waiting on') and on the message composition in stopServer. The box text says 'after 10s'; the CLI waits 15 s.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED. The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

@@ -4,7 +4,7 @@ title: The burn tick holds the state lock across bodies.poll, for 130-576 s on t
 column: testing
 status: tasked
 created: 2026-10-15T00:41:29+0200
-updated: 2026-11-17T06:59:22+0100
+updated: 2026-11-19T01:25:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -49,3 +49,7 @@ Evidence: live server.log lock_a 534087-587855 ms with bodies_poll within 17-41 
 Not guarded by a test: the merge-then-commit order inside run_bodies_scan_with (comment and review only); the poisoned-poller recovery is reachable only in test binaries (production panic hook exits).
 NEXT: (1) commit-2 review follow-ups in flight (poll doc-hidden, TS BurnRiskReport.bodiesScan + digest line, CHANGELOG, full agentlens-core suite incl shutdown_flush); (2) delete the frozen OracleTracker and its oracle-comparison asserts (keep the delta-level and rescan tests); (3) [RAN 2026-11-15, INCONCLUSIVE: scan 8.4 s < 10 s, log scan OFF, see the Approval log line of that date; settle with a cold-cache or larger-corpus run, log scan ON] real-data boot measurement on an APFS clone (cp -cpR, mtimes preserved, 60 GB free guard) with otel-bodies present, AGENTLENS_LOCK_TRACE_MS=250: pass/fail = burn-tick lock A and merge holds <= 1 s with bodies scan > 10 s; report-only = the /api/burn-risk hold (guard.rs:215 read_dir), peak phys_footprint and mimalloc commit vs TRDD-735Q3JF4 baselines, and server stop time; (4) deploy blocked by TRDD-12FGMAEP.
 2026-11-17T06:59+0100 main agent, DECISION on NEXT (3), which supersedes its wording above. The gate as written (a clone of the real otel-bodies folder, 147 GB when measured) is no longer allowed: owner order 2026-11-16, no test or measurement creates or copies more than 4 GB, never a full-size data clone, and a clone counts in full. Facts the new gate rests on: the first-pass cost follows the NUMBER of files, not their bytes (Findings 2026-10-18: the poll stats every unseen name; 588k files gave 130 to 576 s, 185,636 files gave 7.4 to 8.4 s). NEW GATE: an isolated alcore (own DATA_DIR, HOME and ports, AGENTLENS_LOCK_TRACE_MS=250, run through scripts/test-data-cap.sh) over a GENERATED otel-bodies folder of small files, enough of them for the scan to exceed 10 s on the day (start at 600,000 files of a few bytes, well under 4 GB; raise the count, not the size, if the scan is under 10 s); pass = burn-tick lock A and merge holds of at most 1 s while the bodies scan runs longer than 10 s, with at least one trace line that shows the hold; real files and a real scan, no mock. Report-only figures as before. It must be built from a tree that holds no other task's uncommitted Rust change, so it waits for the TRDD-JDQR0HDT worker to finish and for its change to be committed or set aside. NEXT (1) and (2) are unchanged and need no data.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as POST-RELEASE CHECK (NEXT 3 and 4). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.
