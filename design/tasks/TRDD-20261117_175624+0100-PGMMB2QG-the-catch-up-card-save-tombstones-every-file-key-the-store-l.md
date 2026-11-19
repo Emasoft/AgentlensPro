@@ -1,10 +1,10 @@
 ---
 trdd-id: PGMMB2QG
 title: The catch-up card save tombstones every file key the store lacks with no ceiling and three paths have no test
-column: ai_review
+column: human_review
 status: tasked
 created: 2026-11-17T17:56:24+0100
-updated: 2026-11-19T01:51:17+0100
+updated: 2026-11-19T02:33:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -62,6 +62,7 @@ CORRECTION TO THE INCREMENT B SPEC (2026-11-17T20:47:00+0100, main agent). Point
 - 2026-11-19T01:20:00+0100 — column → todo by main-agent@agentlenspro. box 9 not met: save_cards does not re-arm on Err (log_reader.rs:1363-1409); revert of my human_review move
 - 2026-11-19T01:19:59+0100 — human_review → todo by main-agent@agentlenspro: same-session revert. The move to human_review at 01:2x skipped ai_review and rested on a box whose fix was never built; the harness review of that turn found it.
 - 2026-11-19T01:51:17+0100 — column → ai_review by main-agent@agentlenspro. box 9 committed in 40af6326 with its test; direct move from todo, dev was W75 and testing the main-agent module run; the harness review of this turn is the AI review
+- 2026-11-19T02:33:07+0100 — column → human_review by main-agent@agentlenspro. harness review of the ai_review turn: VERDICT PASS, no blocker (session 2cae0ae7 transcript lines 66928-66929, 2026-11-19T00:52Z); owner moves to complete
 
 ## Notes
 

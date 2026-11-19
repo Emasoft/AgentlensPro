@@ -1,10 +1,10 @@
 ---
 trdd-id: MUZ04JYU
 title: A start after an interrupted clear exits when the card log cannot be read although that branch discards the log
-column: ai_review
+column: human_review
 status: tasked
 created: 2026-11-17T19:44:14+0100
-updated: 2026-11-19T01:43:18+0100
+updated: 2026-11-19T02:33:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -36,6 +36,7 @@ Whether this has ever happened on a real folder. Whether the same holds for an u
 - 2026-11-19T01:25:08+0100 — column → todo by main-agent@agentlenspro. release blocker of TRDD-HSPUF5XH (Release list decision 2026-11-19)
 - 2026-11-19T01:38:19+0100 — column → ai_review by main-agent@agentlenspro. code and tests committed; the harness review of this turn is the AI review
 2026-11-19 main-agent@agentlenspro: the move todo to ai_review was direct; dev was worker W73 and testing was the main-agent run of sweeper_backstop_tests (23 passed), with no stop in the dev or testing column.
+- 2026-11-19T02:33:07+0100 — column → human_review by main-agent@agentlenspro. harness review of the ai_review turn: VERDICT PASS, no blocker (session 2cae0ae7 transcript lines 66493-66494, 2026-11-19T00:40Z); owner moves to complete
 
 ## Notes
 
