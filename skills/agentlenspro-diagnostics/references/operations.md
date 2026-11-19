@@ -58,7 +58,7 @@ whether or not the server is up.
 
 ### `agentlenspro config` — persistent data retention
 
-Retention is tunable by five `AGENTLENS_*` env vars, but env vars are ephemeral and never reach the
+Retention is tunable by six `AGENTLENS_*` env vars, but env vars are ephemeral and never reach the
 launchd daemon. `config` persists them to `~/.agentlens/config.json` (in the data dir, so a value set
 once survives an uninstall / upgrade / CLI-path change, and the always-on daemon re-reads it every
 boot). Each knob resolves at boot as **env var > config.json > built-in default**, min-floored.
@@ -71,7 +71,7 @@ agentlenspro server restart                       # apply it
 ```
 
 Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxGb` (8) ·
-`bodiesRetentionDays` (31). Raw-body capture is mandatory (no knob): bodies land directly on the SSD at
+`bodiesRetentionDays` (31) · `logEventsRetentionDays` (31) · `apiCallsRetentionDays` (90). Raw-body capture is mandatory (no knob): bodies land directly on the SSD at
 `~/.agentlens/otel-bodies` and the drain ingests them every 60 s (the RAM-disk spool and the
 `bodiesMaxAgeHours`/72h batching wait were removed in TRDD-Z53IJFE9). A
 `set` on a corrupt config file REFUSES to write rather than clobbering it. Recipe — keep a year of
