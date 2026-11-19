@@ -4,7 +4,7 @@ title: The Docker image still copies and runs the retired standalone server bund
 column: testing
 status: tasked
 created: 2026-11-19T01:23:56+0100
-updated: 2026-11-19T01:57:44+0100
+updated: 2026-11-19T03:33:00+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -42,3 +42,4 @@ Split out of TRDD-YL3EWT6N (its OPEN item "the Dockerfile repair") on 2026-11-19
 2026-11-19 decision on box 2, owner may veto: no workflow_dispatch run before the tag. A dispatch run pushes ghcr.io/emasoft/agentlenspro:sha-SHORTSHA (the type=sha rule of docker.yml), a public image of an unreleased commit, and needs the branch pushed; push is lifted for the release only. A local amd64 build is not run because it compiles alcore under QEMU on this host, far heavier than the 461 s native arm64 build. So the amd64 check is the docker.yml run of the release tag: a red run publishes no image, and publish.yml (npm) does not wait on docker.yml. Box 2 stays open until that run is green, plus one OTLP request to a container of the published image; both are post-release checks of TRDD-HSPUF5XH.
 2026-11-19 the five pin bumps are minor or patch releases; compatibility rests on semver only, their release notes were not read, and pinact was not run (the SHAs were resolved with gh api). The move todo to dev to testing passed through dev in one step: the work was done by workers before the card moved.
 2026-11-19 limit of the box 2 decision (harness review): docker.yml fails only when the build fails. An amd64 image that builds but does not start (a runtime library missing on amd64, for example) is still pushed as latest and as the semver tags. Post-release check added for TRDD-HSPUF5XH: pull ghcr.io/emasoft/agentlenspro at the release version for linux/amd64, start it with its own ports, and probe the UI root, one dashboard bundle and one OTLP request; if it fails, move latest back or yank the tags and reopen this card.
+2026-11-19T03:33+0100 main agent POINTER. The release decision for this card lives on TRDD-HSPUF5XH: RISK ACCEPTED for boxes 1 and 2 (commit 8073fbe1); this card left the HSPUF5XH blocked-by list and its boxes run as POST-RELEASE CHECKS after the docker.yml tag run. Box 1 evidence so far: the arm64 container answered the UI root only; the dashboard bundles were not fetched on either platform.
