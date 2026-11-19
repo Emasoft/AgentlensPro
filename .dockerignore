@@ -28,3 +28,20 @@ TEST_DATA.md
 # OS / editor
 .DS_Store
 .vscode/
+
+# TRDD-6MG5N1ZF: keep the build context small; none of these is a COPY source.
+rust-core/target/
+reports/
+reports_dev/
+docs_dev/
+scripts_dev/
+tests_dev/
+samples_dev/
+examples_dev/
+downloads_dev/
+libs_dev/
+builds_dev/
+agents_dev/
+design/
+.trashcan/
+.claude/

@@ -14,21 +14,22 @@ permissions:
 jobs:
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # TRDD-6MG5N1ZF: the Rust release build of alcore runs inside the image build.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Nothing here pushes to git; registry auth is docker/login-action's own token flow.
           persist-credentials: false
 
       # Third-party actions pinned to full commit SHAs (tag-rewrite protection).
       - name: Set up QEMU (for cross-platform builds)
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # GHCR only. The fork inherited a Docker Hub push to `agentlens/agentlens` —
       # that is the UPSTREAM project's Docker Hub repository, and this repo carries
@@ -36,7 +37,7 @@ jobs:
       # would be wrong even with credentials). GHCR authenticates with the ephemeral
       # GITHUB_TOKEN and needs no stored secret.
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -56,10 +57,11 @@ jobs:
             type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # TRDD-6MG5N1ZF: the image compiles alcore (bundled DuckDB, thin LTO); under QEMU the arm64 leg would compile emulated and overrun the job. amd64 only until TRDD-6J96UCTJ adds a native arm64 runner.
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
