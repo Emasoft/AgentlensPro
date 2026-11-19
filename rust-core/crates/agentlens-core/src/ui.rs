@@ -5763,6 +5763,8 @@ mod rebuild_admission_tests {
         let start = |days: f64, tag: &str| -> (SocketAddr, RemoveOnDrop) {
             let (dir, cleanup) = unique_dir(tag);
             let mut st = CoreState::open(&dir);
+            // The log env is the process environment, so the pool scans would read the real home of this machine. Each server gets an empty home inside its own test directory.
+            st.log_env = agentlens_logscan::discovery::Env { home: dir.clone(), vars: std::collections::HashMap::new(), ..agentlens_logscan::discovery::Env::from_process() };
             st.summary_card_days = days;
             for (id, ago) in [("new-a", 2.0), ("new-b", 3.0), ("old-c", 40.0)] {
                 st.put_log_session(serde_json::json!({
@@ -5787,7 +5789,7 @@ mod rebuild_admission_tests {
         };
         let request = |addr: SocketAddr, raw: String| -> String {
             let mut s = TcpStream::connect(addr).unwrap();
-            s.set_read_timeout(Some(Duration::from_secs(600))).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
             s.write_all(raw.as_bytes()).unwrap();
             let mut out = String::new();
             s.read_to_string(&mut out).expect("a request is answered within the read timeout");
@@ -5795,10 +5797,7 @@ mod rebuild_admission_tests {
         };
         let mcp = |addr: SocketAddr, tool: &str, args: serde_json::Value| -> String {
             let body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": args } }).to_string();
-            let t0 = std::time::Instant::now();
-            eprintln!("PROBE {tool} start");
             let resp = request(addr, format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
-            eprintln!("PROBE {tool} done after {:?}", t0.elapsed());
             let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_else(|e| panic!("{tool}: not JSON ({e}): {resp}"));
             v["result"]["content"][0]["text"].as_str().map(str::to_owned).unwrap_or(resp)
         };
