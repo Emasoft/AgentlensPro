@@ -311,13 +311,12 @@ Loading is incremental and runs in the background, sorted newest-first so recent
 
 All ingested data lives under the data directory: **`$AGENTLENS_DATA_DIR`** if set, else `$DATA_DIR`, else `~/.agentlens`. Prefer the namespaced variable — `DATA_DIR` is a name Docker images, CI systems and data tooling also use, so a stray value in your environment would silently relocate the whole store; it is still honoured because it is a shipped contract, and `agentlenspro server status` reports which one won. This directory is **independent of where the package is installed** — it survives an uninstall, a version upgrade, and a CLI-path change, so your history is never lost when you update. Deletion is always logged, never silent, and only ever removes whole expired segments/volumes (spans and OTEL bodies are archived, never truncated mid-window).
 
-Seven knobs control how long each kind of data is kept:
+Six knobs control how long each kind of data is kept:
 
 | Knob | Default | Environment variable | What it governs |
 | --- | --- | --- | --- |
 | `spansRetentionDays` | 30 days | `AGENTLENS_SPANS_RETENTION_DAYS` | span segments (the trace DB) kept on disk |
 | `summaryWindowHours` | 24 hours | `AGENTLENS_SUMMARY_WINDOW_HOURS` | in-memory rolling summary window (disk keeps everything) |
-| `bodiesMaxAgeHours` | 72 hours | `AGENTLENS_BODIES_MAX_AGE_HOURS` | raw OTEL bodies kept as plain files before being ingested into the content-addressed store (below) |
 | `bodiesMaxGb` | 8 GB | `AGENTLENS_BODIES_MAX_GB` | live-bodies size cap — an emergency valve that forces immediate ingestion of everything when exceeded (never deletes) |
 | `bodiesRetentionDays` | 31 days | `AGENTLENS_BODIES_RETENTION_DAYS` | legacy `.wad` archive volumes kept before whole-volume deletion (new bodies no longer archive there — see below) |
 | `logEventsRetentionDays` | 31 days | `AGENTLENS_LOG_EVENTS_RETENTION_DAYS` | gated-out OTEL log events kept as daily NDJSON buckets |

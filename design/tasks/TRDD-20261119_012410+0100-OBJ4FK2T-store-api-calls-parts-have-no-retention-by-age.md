@@ -4,7 +4,7 @@ title: store api_calls parts have no retention by age
 column: dev
 status: tasked
 created: 2026-11-19T01:24:10+0100
-updated: 2026-11-19T02:32:04+0100
+updated: 2026-11-19T02:48:30+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-19T01:24:10+0100
-implementation-commits: [d195661b]
+implementation-commits: [d195661b, 43cce6bf, 07d7f536, 1793ba8f, 26838862]
 ---
 
 # store api_calls parts have no retention by age
@@ -41,3 +41,4 @@ Split out of TRDD-IRNHEN4Z on 2026-11-19 as a release blocker of TRDD-HSPUF5XH: 
 2026-11-19: docs gap found for the release docs gate: README.md:314-322 says 'Five knobs' and its table lacks logEventsRetentionDays and apiCallsRetentionDays; skills/agentlenspro-diagnostics/references/operations.md:74 lists retention defaults without either. configCli.ts:37,67,95 lists and validates keys from RETENTION_META, so the TS mirror alone makes 'agentlenspro config' accept the key (read by the main agent).
 2026-11-19: W83 (uncommitted until verified): PurgeOutcome { removed, failed } in agentlens-store lib.rs:774; the loop records a failed remove_file or an unreadable entry and continues, a NotFound remove is skipped (another remover got it); purge_tick prints the removed count and one stderr line per failure on every tick. New test: three undeletable directories named like old parts plus three old files; all three files go and all three dirs are reported, so a purge that stops at the first failure cannot pass in any read_dir order. Store target 4/4 per W83; agentlens-core build, chores_purge, clippy and the TS mirror's tests (43cce6bf) wait for load <= 30, in one background run by the main agent. Docs gap also at skills/agentlenspro-diagnostics/SKILL.md:478 (per W82) and the bundle standalone/cli.js lacks the key until the release build.
 2026-11-19 DECISION, default 90 days not 31 (worker W85 assigned; box 3 rests on this): cache_turns joins status-line turns to api_calls with no api-side time filter (cache_turns_sql.rs:125, :286-287) and the status line is kept 90 days (statusline_store.rs:58, env AGENTLENS_STATUSLINE_RETENTION_DAYS), so 31 would drop the API side of turns aged 31-90 days. Other readers, read by the main agent: rate_limit_report reads the store (ui.rs:3461), at most 336 h plus a 5 h investigate (rate_limit_report.rs:124, :161); investigate_burn at most 48 h before an unclamped end time (investigator_scan.rs:482-483); list_prefix_rows with no window takes the newest k rows (bodies_evidence.rs:387-405), so it needs no old rows; cache_event_log with no window reads all history (cache_event_log.rs:426, :233) and so sees at most the retention, by design. The coupling to the status-line retention is stated in the chores.rs comment and the README row; nothing derives one from the other. Live store, read-only on 2026-11-19: 10,080 parts, 163 MB, spanning 2026-09-24 to 2026-10-21 (about 376 parts and 6 MB a day while ingestion ran); nothing written since 2026-10-21, so with ingestion off the 90-day purge starts removing parts about 2026-12-23 and all 10,080 are gone by about 2027-01-19; a 31-day default would have removed 4,752 at the first boot. UNMEASURED: the cache_turns scan cost at about 34,000 parts (90 days of full ingestion) against about 11,600 (31 days). W83 committed separately as 07d7f536 after a main-agent run at load 22 (api_call_retention 4, chores_purge 4, clippy 0, compile-tests 0, retentionConfig 12 passing).
+2026-11-19 corrections: (1) the note above about a docs gap at skills/agentlenspro-diagnostics/SKILL.md:478 is wrong for the repo copy: that file has 255 lines and no knob list with defaults (only a mention at line 34); W82 may have read another copy. (2) 26838862 counted bodiesMaxAgeHours as a live knob 'set elsewhere'; it was removed in TRDD-Z53IJFE9 (src/cli/setup.ts:520 calls it removed, spoolMigration.test.ts:134 tests that it is ignored), so the README row is stale: worker W87 removes it and the count becomes six. (3) 1793ba8f's checks are W85's: every check except the retention_config filter (BLOCKED-ON-LOAD, it would run 0 tests); the chores.rs comment was re-wrapped after those runs; the main agent re-ran nothing before committing at load 56. W86's parity test run re-checks the crate.
