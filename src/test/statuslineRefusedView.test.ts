@@ -97,4 +97,18 @@ suite('statusline-history refused — refused write-ahead files are listed from 
     assert.strictEqual(r.code, 0)
     assert.strictEqual(r.out, 'no write-ahead file is refused')
   })
+
+  test('a stray file in a stream folder is skipped, not read as a day folder', async () => {
+    marker('main', '2026-11-17', 'wal-ok.ndjson', JSON.stringify({
+      file: 'wal-ok.ndjson', firstFailMs: 1000, lastFailMs: 2000, attempts: 1, reason: 'r',
+    }))
+    fs.writeFileSync(path.join(dir, 'statusline', 'main', '.DS_Store'), '')
+    fs.mkdirSync(path.join(dir, 'statusline', 'subagent'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'statusline', 'subagent', 'notes.txt'), 'stray')
+
+    const r = await run(['refused', '--json'])
+    assert.strictEqual(r.code, 0)
+    const rows = JSON.parse(r.out) as Array<Record<string, unknown>>
+    assert.deepStrictEqual(rows, [{ stream: 'main', day: '2026-11-17', file: 'wal-ok.ndjson', attempts: 1, firstFailMs: 1000, lastFailMs: 2000, reason: 'r' }])
+  })
 })

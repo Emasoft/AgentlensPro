@@ -437,8 +437,6 @@ Failure modes accepted for this release, none of them fixed in it.
 
 - **A single-card read can hold the state lock while it parses one transcript (TRDD-058RS3FB).** Everything else that needs the state lock waits for that read.
 
-- **`agentlenspro statusline-history refused` fails with `ENOTDIR` when a stream folder under `<data dir>/statusline/` (`main` or `subagent`) holds a stray file such as `.DS_Store`.** The view reads every entry of those folders as a day folder and only tolerates a missing one. It works on a data folder with no stray files; until it is fixed, remove the stray file to read the refusals.
-
 ## [2.33.2] - 2026-09-01
 
 Never published to npm; these changes ship in 2.34.0.

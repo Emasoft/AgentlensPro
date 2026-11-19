@@ -605,6 +605,17 @@ function listDirOrEmpty(dir: string): string[] {
   }
 }
 
+/** True when p is a directory, following a symlink as readdir does; false when p no longer exists (removed after
+ *  the listing that named it). Any other error propagates. */
+function isDirectory(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory()
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw e
+  }
+}
+
 /** One row per `sealfail-<file>.json` marker under `<root>/<stream>/<day>/`. A marker that does not parse
  *  or lacks a field is listed with reason 'unreadable marker', never skipped: a refused file that the view
  *  hides is the failure this view exists to show. The next retry of a refused file is the sealer's own
@@ -614,6 +625,9 @@ export function readRefusedMarkers(root: string): Array<Record<string, unknown>>
   for (const stream of ['main', 'subagent']) {
     for (const day of listDirOrEmpty(path.join(root, stream)).sort()) {
       const dayDir = path.join(root, stream, day)
+      // Only day folders hold sealfail markers: a stray non-directory entry such as .DS_Store holds no markers, so it is
+      // skipped, and so is a day folder removed after the listing (TRDD-HSPUF5XH).
+      if (!isDirectory(dayDir)) continue
       for (const name of listDirOrEmpty(dayDir).sort()) {
         if (!name.startsWith('sealfail-') || !name.endsWith('.json')) continue
         const row: Record<string, unknown> = { stream, day, file: name.slice('sealfail-'.length, -'.json'.length) }
