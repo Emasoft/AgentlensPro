@@ -3,7 +3,7 @@ trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
 column: blocked
 created: 2026-09-02T16:08:27+0200
-updated: 2026-11-19T01:25:04+0100
+updated: 2026-11-19T07:41:23+0100
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -301,6 +301,7 @@ the off-lock summary through its callers.
 - **A rename is a cheaper guardrail than either.** `session_status_over` / `burn_status_over` take
   the summary as a parameter, so the obligation is visible AT THE CALL SITE and the type system
   carries it. `live_session_status` hid the same work behind a name that promised nothing.
+2026-11-19 — the carried-forward site (hook_events.rs StopFailure calibration calling build_session_summary under the state lock) is closed by 35a88eda (TRDD-ER88PXNB): calibration now reads the memoized burn subset, and the ui.rs guard test no longer pins a known-open site. Covered by tests/no_collection_ingest.rs lines 43-45 and 79-80 (stop_failure_calibrations == 1 on both ingest paths). INFERRED gap, no test: a session with an empty timeline and no OTEL twin is not in the subset, so calibration falls back to the live account (burn_calibration.rs, verified by reading).
 
 ## Review 2026-10-05 (in the owner's stead)
 
