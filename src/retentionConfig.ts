@@ -15,6 +15,7 @@ export interface RetentionConfig {
   bodiesMaxGb?: number
   bodiesRetentionDays?: number
   logEventsRetentionDays?: number
+  apiCallsRetentionDays?: number
 }
 
 export interface RetentionKeyMeta {
@@ -36,6 +37,7 @@ export const RETENTION_META: readonly RetentionKeyMeta[] = [
   // TRDD-AMEA4O4Z: gated-out OTEL log events (user_prompt, tool_decision, hook_execution_*, ...)
   // persisted as daily NDJSON buckets instead of being dropped — this bounds how long they live.
   { key: 'logEventsRetentionDays', env: 'AGENTLENS_LOG_EVENTS_RETENTION_DAYS', def: 31, min: 1, unit: 'days', desc: 'gated-out OTEL log events kept as daily NDJSON buckets' },
+  { key: 'apiCallsRetentionDays', env: 'AGENTLENS_API_CALLS_RETENTION_DAYS', def: 31, min: 1, unit: 'days', desc: 'api_calls parquet parts (per-call usage rows) kept on disk; removed by the alcore purge chore' },
 ]
 
 export function configPath(dataDir: string): string {
