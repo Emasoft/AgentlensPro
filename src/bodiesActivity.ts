@@ -231,7 +231,8 @@ export class BodiesActivityTracker {
   poll(now: number = Date.now()): void {
     let names: string[]
     try {
-      names = fs.readdirSync(this.dir)
+      // Sorted explicitly: the scan order decides first-seen fields (a sender's model); the Rust port sorts too (TRDD-HSPUF5XH).
+      names = fs.readdirSync(this.dir).sort()
     } catch {
       return // dir absent — report() will say available:false
     }
