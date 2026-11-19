@@ -69,6 +69,16 @@ const CASES = [
     expect: 0,
   },
   { name: 'an empty corpus passes', body: '', expect: 0 },
+  {
+    name: 'a quoted desc value that holds [^3] does not cut the block: keywords after it are read',
+    body: '[^1]: [id:ATOM-AAAA-BBBB, status:valid, desc:"amends [^3] lesson", keywords:"a_symptom", ocd:2026-07-30, lmd:2026-07-30]\n  DO NOT x, BECAUSE y. DO z instead.\n',
+    expect: 0,
+  },
+  {
+    name: 'a quoted desc value that holds [^3] with no keywords after it is still caught',
+    body: '[^1]: [id:ATOM-AAAA-BBBB, status:valid, desc:"amends [^3] lesson", ocd:2026-07-30, lmd:2026-07-30]\n  DO NOT x, BECAUSE y. DO z instead.\n',
+    expect: 1, expectText: 'missing keywords:',
+  },
 ]
 
 function run(dir) {
