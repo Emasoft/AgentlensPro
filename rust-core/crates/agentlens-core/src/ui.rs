@@ -692,7 +692,7 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
     if hub.client_count() == 0 {
         return;
     }
-    let (_, summary) = summary_now(state, now_ms);
+    let (_, summary, window) = summary_now_windowed(state, now_ms);
     // The lock covers ONLY the three cheap reads; the payload assembly (which walks every span
     // and re-strips every card) runs after it is released.
     let (spans, gaps, build_id) = {
@@ -700,7 +700,7 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
         (st.window.spans.clone(), gaps, st.build_id.clone())
     };
-    let payload = build_update_payload(&summary, &spans, &build_id, gaps, now_ms).to_string();
+    let payload = build_update_payload(&summary, window.as_ref(), &spans, &build_id, gaps, now_ms).to_string();
     hub.broadcast(sse_frame(&payload));
 }
 
@@ -796,20 +796,43 @@ pub struct StrippedView<'a>(pub &'a Value);
 
 const EMPTY_TIMELINE: &[Value] = &[];
 
+fn stripped_entries<M: serde::ser::SerializeMap>(m: &mut M, obj: &serde_json::Map<String, Value>) -> Result<(), M::Error> {
+    for (k, v) in obj {
+        if k == "sessions" {
+            if let Some(arr) = v.as_array() {
+                m.serialize_entry(k, &StrippedSessions(arr))?;
+                continue;
+            }
+        }
+        m.serialize_entry(k, v)?;
+    }
+    Ok(())
+}
+
 impl serde::Serialize for StrippedView<'_> {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let Some(obj) = self.0.as_object() else { return self.0.serialize(ser) };
         let mut m = ser.serialize_map(Some(obj.len()))?;
-        for (k, v) in obj {
-            if k == "sessions" {
-                if let Some(arr) = v.as_array() {
-                    m.serialize_entry(k, &StrippedSessions(arr))?;
-                    continue;
-                }
-            }
-            m.serialize_entry(k, v)?;
-        }
+        stripped_entries(&mut m, obj)?;
+        m.end()
+    }
+}
+
+/// TRDD-ER88PXNB C1: `StrippedView` plus a trailing `summaryWindow` key when the card window is on; with None it writes
+/// exactly what `StrippedView` writes.
+// WHY a serialization wrapper and not a key inside the summary Value: the summary engine recognises its own previous
+// output by Arc identity, so inserting into the cached Value would copy it and force a full pass on every build; and
+// the window must come from the same summary_now_windowed call as the summary (card section "Step C constraint").
+pub struct StrippedViewWindowed<'a>(pub &'a Value, pub Option<&'a crate::SummaryWindow>);
+
+impl serde::Serialize for StrippedViewWindowed<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let (Some(obj), Some(w)) = (self.0.as_object(), self.1) else { return StrippedView(self.0).serialize(ser) };
+        let mut m = ser.serialize_map(Some(obj.len() + 1))?;
+        stripped_entries(&mut m, obj)?;
+        m.serialize_entry("summaryWindow", &w.to_json())?;
         m.end()
     }
 }
@@ -1472,13 +1495,13 @@ fn json_response(status: StatusCode, body: String) -> Response<SseBody> {
 /// frame for as long as the client stays connected.
 fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Response<SseBody> {
     use http_body_util::BodyExt;
-    let (_, summary) = summary_now(state, now_ms);
+    let (_, summary, window) = summary_now_windowed(state, now_ms);
     let (spans, gaps, build_id) = {
         let st = state.lock_timed();
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
         (st.window.spans.clone(), gaps, st.build_id.clone())
     };
-    let first = build_update_payload(&summary, &spans, &build_id, gaps, now_ms).to_string();
+    let first = build_update_payload(&summary, window.as_ref(), &spans, &build_id, gaps, now_ms).to_string();
     let mut rx = hub.subscribe();
     let (tx, frames) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
     // Pump the broadcast into this client's own queue; the pump ends when the client drops the
@@ -1568,7 +1591,7 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     let now = crate::now_ms() as f64;
     // Read per request, like the TS: 28 KB, and a dev can edit the shell without a restart.
     let tmpl = std::fs::read_to_string(media_dir.join("index.html")).map_err(|e| format!("index.html: {e}"))?;
-    let (_, summary) = summary_now(state, now);
+    let (_, summary, window) = summary_now_windowed(state, now);
     let (spans, build_id) = {
         let st = state.lock_timed();
         // The SAME build_id the update frames carry — the dashboard reloads on a mismatch, so a
@@ -1580,7 +1603,7 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     } else {
         crate::update_payload::compute_sidebar_payload(&summary, &spans, now)
     };
-    let summary_json = safe_json_text(serde_json::to_string(&StrippedView(&summary)).expect("stripped summary serializes: string keys only"));
+    let summary_json = safe_json_text(serde_json::to_string(&StrippedViewWindowed(&summary, window.as_ref())).expect("stripped summary serializes: string keys only"));
     let sidebar_json = safe_json(&sidebar);
     // The mount prefix is EMPTY here, deliberately, and not read from AGENTLENS_BASE_PATH: the
     // base-path STRIP in handle() is still on this module's deferred list, and a shell that emits
@@ -1787,8 +1810,8 @@ async fn handle(
     } else if path == "/events" {
         sse_response(&state, &hub, crate::now_ms() as f64)
     } else if method == Method::GET && path == "/api/summary" {
-        let (_, summary) = summary_now(&state, crate::now_ms() as f64);
-        let body = serde_json::to_string(&StrippedView(&summary)).expect("stripped summary serializes: string keys only");
+        let (_, summary, window) = summary_now_windowed(&state, crate::now_ms() as f64);
+        let body = serde_json::to_string(&StrippedViewWindowed(&summary, window.as_ref())).expect("stripped summary serializes: string keys only");
         json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/server-stats" {
         let body = {
@@ -5579,6 +5602,109 @@ mod rebuild_admission_tests {
             );
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// TRDD-ER88PXNB C1: the card window is disclosed on the three dashboard read paths: `GET /api/summary`, the
+    /// `window.__S__` value `GET /` writes into the shell, and the first `update` frame of `GET /events`. Two real servers hold
+    /// identical cards, one with `summary_card_days = 14.0` and one with `0.0`: with the window on, every path carries the same
+    /// `summaryWindow` object, and with it off none carries the key.
+    #[test]
+    fn the_card_window_is_disclosed_on_summary_html_and_the_first_sse_frame() {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        let _serial = serial();
+        let now_ms = crate::now_ms() as f64;
+        let iso = |days_ago: f64| crate::summarize::helpers::iso_from_ms(now_ms - days_ago * 86_400_000.0);
+        let (media_dir, _media_cleanup) = unique_dir("c1-media");
+        std::fs::write(media_dir.join("index.html"), "<script>window.__S__ = @@SESSION_SUMMARY_JSON@@;</script>").unwrap();
+        let start = |days: f64, tag: &str| -> (SocketAddr, RemoveOnDrop) {
+            let (dir, cleanup) = unique_dir(tag);
+            let mut st = CoreState::open(&dir);
+            st.summary_card_days = days;
+            st.media_dir = Some(media_dir.clone());
+            for (id, ago) in [("new-a", 2.0), ("new-b", 3.0), ("old-c", 40.0)] {
+                st.put_log_session(serde_json::json!({
+                    "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": iso(ago), "durationMs": 1000.0,
+                    "model": "claude-opus-5", "tokensSource": "transcript", "timeline": [{ "type": "llm", "timestamp": iso(ago) }]
+                }));
+            }
+            let state = Arc::new(Mutex::new(st));
+            let (otx, orx) = std::sync::mpsc::channel();
+            let (utx, urx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let hub = Arc::new(super::SseHub::default());
+                    let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
+                    let ui = super::serve_ui("127.0.0.1:0".parse().unwrap(), state, hub, move |b| utx.send(b).unwrap());
+                    let _ = tokio::join!(otlp, ui);
+                });
+            });
+            let _otlp = orx.recv().unwrap();
+            (urx.recv().unwrap(), cleanup)
+        };
+        let request = |addr: SocketAddr, raw: String| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            s.write_all(raw.as_bytes()).unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).expect("a request is answered within the read timeout");
+            out.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default()
+        };
+        let get = |addr: SocketAddr, path: &str| request(addr, format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nConnection: close\r\n\r\n"));
+        let page = |addr: SocketAddr| -> serde_json::Value {
+            let html = get(addr, "/");
+            let after = html.split_once("window.__S__ = ").expect("the shell assigns window.__S__").1;
+            let json = after.split_once(";</script>").expect("window.__S__ ends at </script>").0;
+            serde_json::from_str(json).expect("window.__S__ is JSON")
+        };
+        let first_update = |addr: SocketAddr| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+            s.write_all(b"GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(8);
+            let mut buf: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 65536];
+            loop {
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                let update = text.find("\"type\":\"update\"").and_then(|at| text[at..].find("\n\n").map(|end| (at, end)));
+                if let Some((at, end)) = update {
+                    let data = text[..at].rfind("data: ").expect("an update frame starts with `data: `");
+                    return text[data + 6..at + end].to_owned();
+                }
+                assert!(Instant::now() < deadline, "no complete update frame within 8 s: {text}");
+                let n = s.read(&mut chunk).expect("the SSE stream is read within the timeout");
+                assert!(n > 0, "the SSE stream closed before an update frame: {text}");
+                buf.extend_from_slice(&chunk[..n]);
+            }
+        };
+        let (ui_on, _cleanup_on) = start(14.0, "c1-on");
+        let (ui_off, _cleanup_off) = start(0.0, "c1-off");
+        let mut failures: Vec<String> = Vec::new();
+        for (label, ui, windowed) in [("window 14 d", ui_on, true), ("window off", ui_off, false)] {
+            let summary: serde_json::Value = serde_json::from_str(&get(ui, "/api/summary")).expect("/api/summary is JSON");
+            let shell = page(ui);
+            let frame: serde_json::Value = serde_json::from_str(&first_update(ui)).expect("the update frame is JSON");
+            let sse = frame["sessionSummary"].clone();
+            for (path, value) in [("/api/summary", &summary), ("GET /", &shell), ("first SSE frame", &sse)] {
+                let has = value.get("summaryWindow").is_some();
+                if has != windowed {
+                    failures.push(format!("{label}: {path} has summaryWindow = {has}"));
+                }
+            }
+            if windowed {
+                let w = &summary["summaryWindow"];
+                if w["cardDays"] != 14.0 || w["cardsIncluded"] != 2 || w["cardsResident"] != 3 {
+                    failures.push(format!("{label}: summaryWindow is {w}, expected cardDays 14.0, cardsIncluded 2, cardsResident 3"));
+                }
+                for (path, value) in [("GET /", &shell), ("first SSE frame", &sse)] {
+                    if value["summaryWindow"] != *w {
+                        failures.push(format!("{label}: {path} summaryWindow differs from /api/summary"));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "card window disclosure:\n{}", failures.join("\n"));
     }
 }
 

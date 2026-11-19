@@ -257,7 +257,7 @@ pub fn compute_analytics_data(sessions: &[Value]) -> Value {
 
 /// buildUpdatePayload — the `update` SSE frame body. `collector_gaps` is the lifecycle-derived
 /// downtime list (collector_lifecycle::compute_gaps — both frame sites pass it).
-pub fn build_update_payload(summary: &Value, all_spans: &[std::sync::Arc<Value>], build_id: &str, collector_gaps: Vec<Value>, now_ms: f64) -> Value {
+pub fn build_update_payload(summary: &Value, window: Option<&crate::SummaryWindow>, all_spans: &[std::sync::Arc<Value>], build_id: &str, collector_gaps: Vec<Value>, now_ms: f64) -> Value {
     // Borrow instead of clone: `.cloned()` deep-copied every session Value
     // on every SSE update frame only to lend a slice to
     // compute_analytics_data; a borrow is the same data (TRDD-MBQ9LXAN).
@@ -270,7 +270,12 @@ pub fn build_update_payload(summary: &Value, all_spans: &[std::sync::Arc<Value>]
         s.insert("toolCalls".into(), Value::Object(Map::new()));
         p.insert("summary".into(), Value::Object(s));
     }
-    p.insert("sessionSummary".into(), strip_session_detail(summary));
+    // TRDD-ER88PXNB C1: the same trailing key StrippedViewWindowed writes, so the SSE frame and /api/summary agree byte for byte.
+    let mut session_summary = strip_session_detail(summary);
+    if let (Some(w), Value::Object(o)) = (window, &mut session_summary) {
+        o.insert("summaryWindow".into(), w.to_json());
+    }
+    p.insert("sessionSummary".into(), session_summary);
     p.insert("sidebar".into(), compute_sidebar_data(summary));
     p.insert("analyticsData".into(), compute_analytics_data(sessions));
     p.insert("collectorGaps".into(), Value::Array(collector_gaps));

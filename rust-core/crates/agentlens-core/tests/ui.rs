@@ -2421,3 +2421,27 @@ fn stripped_view_matches_strip_session_detail_byte_for_byte() {
         );
     }
 }
+
+/// TRDD-ER88PXNB C1: the windowed view and the SSE session summary write the same trailing `summaryWindow` key, and with no
+/// window the windowed view writes exactly what `StrippedView` writes.
+#[test]
+fn stripped_view_windowed_matches_the_sse_session_summary_byte_for_byte() {
+    let s = serde_json::json!({
+        "sessions": [
+            { "id": "s1", "timeline": [{"t": 1}], "fileOps": [{"op": "write"}], "cost": 1.5, "model": "opus" },
+            { "id": "s2", "fileOps": [{"op": "read"}] }
+        ],
+        "outer": "a"
+    });
+    let w = agentlens_core::SummaryWindow { card_days: 14.0, cutoff_ms: 1_763_000_000_000.0, cards_included: 2, cards_resident: 5 };
+    assert_eq!(
+        serde_json::to_string(&agentlens_core::ui::StrippedViewWindowed(&s, None)).unwrap(),
+        serde_json::to_string(&agentlens_core::ui::StrippedView(&s)).unwrap()
+    );
+    let mut expected = agentlens_core::ui::strip_session_detail(&s);
+    expected.as_object_mut().unwrap().insert("summaryWindow".into(), w.to_json());
+    let expected = expected.to_string();
+    assert_eq!(serde_json::to_string(&agentlens_core::ui::StrippedViewWindowed(&s, Some(&w))).unwrap(), expected);
+    let payload = agentlens_core::update_payload::build_update_payload(&s, Some(&w), &[], "b", vec![], 0.0);
+    assert_eq!(payload["sessionSummary"].to_string(), expected);
+}
