@@ -8,7 +8,7 @@ import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, autoSetupOnServerStart, claudeCodePresent, detectDrift, ensureInstalled, forceInstallTelemetry, maybeAutoSetup } from '../cli/autoSetup'
+import { AUTOSETUP_EXCLUDED_VERBS, LOCK_STALE_MS, RepairOutcome, Step, autoSetupOnServerStart, claudeCodePresent, detectDrift, ensureInstalled, firstFailedStep, forceInstallTelemetry, maybeAutoSetup } from '../cli/autoSetup'
 import { EXIT } from '../cli/cliErrors'
 import { ensureServer } from '../cli/serverControl'
 import { runDisableCli, runEnableCli } from '../cli/disableCli'
@@ -17,7 +17,7 @@ import { AGENT_NAMES, REVIEW_CMD, REVIEW_EVENTS, SKILL_NAMES, SUPERVISOR_CMD, SU
 import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, noRevivePath, overrideKillSwitchEnv } from '../cli/killSwitch'
 import { beginLaunchNotices, endLaunchNotices, pushNotice, takeNotices } from '../cli/launchNotices'
 import { DISPATCHED_VERBS, HOT_PATH_BUDGET_MS, cliMain } from '../cli/main'
-import { Ctx, REPAIR_STEPS, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
+import { Ctx, REPAIR_STEPS, StepResult, hookDriftList, hooksConverged, resolveCtx, runSetup } from '../cli/setup'
 import { freePort } from './helpers/freePort'
 import { makeFakeAlcore, spawnCliModule, stopChild, waitFor } from './helpers/fakeAlcore'
 import { startMcpStub } from './helpers/mcpStub'
@@ -404,10 +404,10 @@ suite('autoSetup — every launch checks presence + drift and repairs only what 
     try {
       let full = 0
       const r = recorder()
-      await maybeAutoSetup(['budget'], { ctx: empty.ctx, repair: r.repair, fullSetup: async () => { full++; return true }, stderr: lines().say })
+      await maybeAutoSetup(['budget'], { ctx: empty.ctx, repair: r.repair, fullSetup: async () => { full++; return { ok: true } }, stderr: lines().say })
       assert.strictEqual(full, 1)
       assert.deepStrictEqual(r.calls, [])
-      await maybeAutoSetup([], { ctx: empty.ctx, repair: r.repair, fullSetup: async () => { full++; return true }, stderr: lines().say })
+      await maybeAutoSetup([], { ctx: empty.ctx, repair: r.repair, fullSetup: async () => { full++; return { ok: true } }, stderr: lines().say })
       assert.strictEqual(full, 1, 'a bare launch must not start a full setup')
       assert.deepStrictEqual(r.calls, ['otel-env', 'hooks', 'skill'])
     } finally { empty.cleanup() }
@@ -1582,7 +1582,7 @@ suite('server start — the install heals itself when the server is started (TRD
       // runSetup — which would start a real collector on the fixture's data dir.
       let full = 0
       const r2 = recorder()
-      await autoSetupOnServerStart(['server', 'start'], { ctx, repair: r2.repair, stderr: lines().say, fullSetup: async () => { full++; return true } })
+      await autoSetupOnServerStart(['server', 'start'], { ctx, repair: r2.repair, stderr: lines().say, fullSetup: async () => { full++; return { ok: true } } })
       assert.strictEqual(full, 0, 'a server start never runs the first-run full setup (it starts a server)')
       assert.deepStrictEqual(r2.calls, ['otel-env', 'hooks', 'skill'], 'nothing installed + Claude present: the per-piece repairs, never a full setup')
     } finally { e.cleanup() }
@@ -2340,5 +2340,20 @@ suite('get_account_status --all works while DISABLED — and the singular form p
     await maybeAutoSetup(['get_account_status'], { ctx: f.ctx, repair: r.repair, stderr: quiet })
     assert.deepStrictEqual(r.calls, ['skill'])
     assert.ok(fs.existsSync(path.join(skill, 'SKILL.md')), 'the skill was written back')
+  })
+})
+
+suite('first-run setup outcome — the notice names the first failing step (TRDD-HSPUF5XH)', () => {
+  const row = (step: string, verify: StepResult['verify'], found: string, detail?: string): StepResult => ({ step, found, action: 'none', verify, detail })
+
+  test('the first FAIL row is named "<step>: <detail>", and found stands in when the row has no detail', () => {
+    assert.strictEqual(firstFailedStep([row('otel-env', 'PASS', 'ok'), row('hooks', 'FAIL', 'absent', 'exit 2 from the hook'), row('server', 'FAIL', 'down', 'port busy')]), 'hooks: exit 2 from the hook')
+    assert.strictEqual(firstFailedStep([row('skill', 'FAIL', 'stale copy')]), 'skill: stale copy')
+    assert.strictEqual(firstFailedStep([row('hooks', 'FAIL', 'x', 'line one\nline two')]), 'hooks: line one line two')
+    assert.strictEqual(firstFailedStep([row('hooks', 'FAIL', 'x', 'y'.repeat(300))]), 'hooks: ' + 'y'.repeat(160))
+  })
+
+  test('no FAIL row means no failed step', () => {
+    assert.strictEqual(firstFailedStep([row('otel-env', 'PASS', 'ok'), row('hooks', 'SKIP', 'x')]), undefined)
   })
 })

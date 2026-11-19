@@ -46,7 +46,7 @@ import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfF
 import { agentlensDisabled, killSwitchHalf, overrideKillSwitchEnv } from "./killSwitch"
 import { pushNotice } from "./launchNotices"
 import { SurfaceDirs, formatSkippedSurfaces, restoreParkedSurfaces } from "./surfaces"
-import { Ctx, REPAIR_STEPS, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
+import { Ctx, REPAIR_STEPS, StepResult, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
 import { TelemetryConflict, TelemetryVerdictRow, formatTelemetryConflicts, rawBodiesHeldAbsent } from "../telemetryConfig"
 import { RAW_BODIES_KEY } from "../captureConfig"
 
@@ -84,6 +84,9 @@ export interface Detection {
 }
 export interface RepairOutcome { ok: boolean; detail: string }
 
+/** What the first-run full setup reports: ok, or the first failing step as "<step>: <detail>" (TRDD-HSPUF5XH). */
+export interface FullSetupOutcome { ok: boolean; failed?: string }
+
 export interface AutoSetupDeps {
   ctx?: Ctx
   env?: NodeJS.ProcessEnv
@@ -92,8 +95,8 @@ export interface AutoSetupDeps {
   stderr?: (line: string) => void
   /** Repairs one step. Default: the real setup step, run against ctx. */
   repair?: (step: Step, ctx: Ctx) => Promise<RepairOutcome>
-  /** Full `setup --yes`; true = exit 0. Default: the real runSetup. */
-  fullSetup?: (ctx: Ctx) => Promise<boolean>
+  /** Full `setup --yes`; ok = exit 0, failed = the first failing step. Default: the real runSetup. */
+  fullSetup?: (ctx: Ctx) => Promise<FullSetupOutcome>
   /** Set ONLY by runEnableCli: this ensureInstalled run IS the operator's own `agentlenspro enable`, so a foreign setup that
    *  refuses it re-arms the flag with FOREIGN_REASON (D10). Keyed on a flag, not on trigger "enable" (forceInstallTelemetry
    *  passes that trigger too) and not on the verb (`--force-install-telemetry enable` makes the verb "enable" there as well). That
@@ -216,7 +219,14 @@ async function defaultRepair(step: Step, ctx: Ctx): Promise<RepairOutcome> {
   return { ok: result.verify === "PASS", detail: result.detail ?? result.found }
 }
 
-async function defaultFullSetup(ctx: Ctx): Promise<boolean> {
+/** The first failing step of a setup run as "<step>: <detail>" (the detail falls back to what was found); undefined when no step failed. */
+export function firstFailedStep(steps: StepResult[]): string | undefined {
+  const row = steps.find(s => s.verify === "FAIL")
+  // One line, at most 160 characters: the notice is one stderr line and one JSON notice, so a multi-line detail would break its shape.
+  return row ? `${row.step}: ${(row.detail ?? row.found).replace(/\s+/g, " ").slice(0, 160)}` : undefined
+}
+
+async function defaultFullSetup(ctx: Ctx): Promise<FullSetupOutcome> {
   // pathEnv is forwarded on purpose: without it runSetup falls back to process.env.PATH, so the hooks step
   // looked for agentlenspro on the ambient PATH instead of the context's (CI on Linux has no global install:
   // "refusing: agentlenspro is not on PATH", first-run setup failed; CI run 44592701995, 2026-11-19).
@@ -224,7 +234,9 @@ async function defaultFullSetup(ctx: Ctx): Promise<boolean> {
     yes: true, forceInstall: ctx.forceInstall, home: ctx.home, dataDir: ctx.dataDir, settingsPath: ctx.settingsPath,
     skillsDir: ctx.skillsDir, agentsDir: ctx.agentsDir, repoRoot: ctx.repoRoot, pathEnv: ctx.pathEnv, log: () => { /* quiet: one summary line only */ },
   })
-  return outcome.exitCode === 0
+  // Return the failing step too: a bare "failed" cannot say which setup step broke, and the notice must name it.
+  const failed = firstFailedStep(outcome.steps)
+  return { ok: outcome.exitCode === 0, failed }
 }
 
 /** Called by the CLI dispatcher before any verb. Returns null to let the verb run, or an exit code when
@@ -396,10 +408,11 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       // start a collector from inside a collector start. The server trigger falls through to the per-piece repairs
       // below, which install everything except the server (which the verb itself is starting).
       if (nothingInstalled && trigger === "launch" && verb !== "") {
-        const ok = await (deps.fullSetup ?? defaultFullSetup)(ctx)
+        const res = await (deps.fullSetup ?? defaultFullSetup)(ctx)
+        const ok = res.ok
         say(ok
           ? "agentlenspro: first run — nothing was installed; ran setup (skills, agents, hooks 120s, telemetry env, server)"
-          : "agentlenspro: first-run setup failed — run `agentlenspro setup` to see why")
+          : "agentlenspro: first-run setup failed" + (res.failed ? " at " + res.failed : "") + " — run `agentlenspro setup` to see why")
         return ok || conflicts.length === 0 ? null : EXIT.CONFIG
       }
       const repair = deps.repair ?? defaultRepair
