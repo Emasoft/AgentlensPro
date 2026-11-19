@@ -4,7 +4,7 @@ title: get_cache_risk_costs ran past a 60 s read timeout over a 64 GiB transcrip
 column: backburner
 status: tasked
 created: 2026-11-19T12:01:58+0100
-updated: 2026-11-19T12:01:58+0100
+updated: 2026-11-19T12:21:37+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -24,3 +24,7 @@ Found 2026-11-19 while verifying TRDD-ER88PXNB C2. A test server whose log env w
 ## Approval log
 
 - 2026-11-19T12:01:58+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Progress log
+
+- 2026-11-19 12:21: measured once each, debug test build, real store of 71,040 transcript files (about 64 GiB): get_cache_risk_costs answered after 595.687 s (14-day server, first call) and 423.393 s (window-off server, second call); the other 28 calls of that run took 3.67 s together. The 172 s gap between the two calls is unexplained. Release-build timing on the live server is still to do. Evidence: reports_dev/ER88PXNB/20261119_112650+0100-c2.md section 3.
