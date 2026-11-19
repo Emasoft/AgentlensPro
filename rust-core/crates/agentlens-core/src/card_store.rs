@@ -284,6 +284,12 @@ pub struct CardStore {
     /// Bumped by every `clear`; slots restart from 0 after one, so a consumer that remembers slot
     /// positions (the summary engine) can tell a restart from ordinary growth.
     epoch: u64,
+    /// TRDD-AXJH3WTU: the store write generation. Bumped by `put_arc` (the one card write path, so also every `CoreState::put_log_session`)
+    /// and by `discard_cards`; NOT by `clear` (the clear path has `epoch` and `finish_clear_after_save`) nor `demote_cold` (it adds,
+    /// replaces and removes no card). WHY: `DurableState` compares it with the generation its last card save covered, so a writer that
+    /// never calls `mark_dirty` (the `/api/import` handler, the on-demand reparse in ui.rs) still reaches the card log at the next
+    /// timed tick. A plain `u64`: every writer holds `&mut CardStore` (under the CoreState mutex), so no atomic is needed.
+    write_generation: u64,
 
     /// TRDD-T0G38TZ4 — the corpus byte total, TRACKED on the write path instead of scanned.
     /// WHY a counter: `corpus_bytes` used to run `SELECT count(*), SUM(strlen(card))` over the
@@ -454,6 +460,7 @@ impl CardStore {
             // `load_resident`); for a fresh one it is 0, because the table is empty.
             card_bytes: resident.bytes,
             epoch: 0,
+            write_generation: 0,
             outcome,
         }
     }
@@ -753,6 +760,8 @@ impl CardStore {
         self.conn
             .execute_batch("DELETE FROM cards; UPDATE meta SET value = '0' WHERE key = 'restore_complete'")
             .expect("discard the stale card store");
+        // TRDD-AXJH3WTU: a removal outside the clear path moves the generation too (see the field).
+        self.write_generation += 1;
         self.next_seq = 0;
         self.parsed.clear();
         // TRDD-T0G38TZ4: the table is empty, so the tracked byte total is 0.
@@ -858,6 +867,8 @@ impl CardStore {
         self.next_seq += 1;
         // `IndexMap::insert` on an existing key replaces the value and KEEPS the slot, like the
         // table keeps `seq`.
+        // TRDD-AXJH3WTU: every card put moves the generation, see the field.
+        self.write_generation += 1;
         self.parsed.insert(id, ResidentCard { card, stored_len: new_len });
         // TRDD-T0G38TZ4 — the tracked total follows the table: the old card's bytes leave, the
         // new card's bytes enter. A first insert adds; an upsert replaces.
@@ -958,6 +969,11 @@ impl CardStore {
         // TRDD-T0G38TZ4: the table is empty, so the tracked byte total is 0.
         self.card_bytes = 0;
         self.epoch += 1;
+    }
+
+    /// TRDD-AXJH3WTU: see the field. `DurableState::tick` and `save_cards` read it under the state lock.
+    pub fn write_generation(&self) -> u64 {
+        self.write_generation
     }
 
     /// Bumped by every `clear`; see the field.

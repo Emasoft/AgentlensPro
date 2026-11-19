@@ -859,6 +859,9 @@ pub struct DurableState {
     first_cards_saved: bool,
     offsets_dirty: bool,
     cards_dirty: bool,
+    /// TRDD-AXJH3WTU: the `CardStore::write_generation` the last Ok card save (or the restore) covered. `tick` marks the cards dirty when the
+    /// store is ahead of it, which is how a card put by a writer that never calls `mark_dirty` reaches the card log.
+    saved_generation: u64,
     /// TRDD-YR6WX7VQ: the card log file pass is owed. SET by a successful `restore_reused`; CLEARED by the first
     /// non-forced timed `tick` (it runs the pass once, see there for why not at restore) and by
     /// `finish_clear_after_save` (its rewrite of the card log makes the hashes the store ones, so the pass is
@@ -914,6 +917,7 @@ impl DurableState {
             first_cards_saved: false,
             offsets_dirty: false,
             cards_dirty: false,
+            saved_generation: 0,
             seed_from_files_pending: false,
             cards_tombstoned: 0,
             pending_1h_backfill: Vec::new(),
@@ -1101,6 +1105,9 @@ impl DurableState {
         }
         let out = if state.cards.reused() { self.restore_reused(tailer, state, env)? } else { self.restore_from_snapshot(state, env)? };
         state.cards.mark_restore_complete();
+        // TRDD-AXJH3WTU: what the restore put (the snapshot cards) is what the card log already holds, so it is not pending. WHY: without this
+        // the first timed tick would see a generation ahead of 0 and spend the early card save on a start whose card log is level.
+        self.saved_generation = state.cards.write_generation();
         Ok(out)
     }
 
@@ -1378,9 +1385,9 @@ impl DurableState {
         // the sweeper while it held the lock and poisoned the mutex (2026-10-03 and 2026-10-14). The
         // resident layer is the same corpus in the same order, so the records are built from the snapshot
         // after the lock is released.
-        let snap = {
+        let (snap, generation) = {
             let st = state.lock_timed();
-            st.cards.persist_snapshot()
+            (st.cards.persist_snapshot(), st.cards.write_generation())
         };
         // TRDD-2JOIAH2G: the records are streamed from the Arc snapshot, each stripped card built and
         // dropped in turn (twice when the save compacts), instead of collected into a map first — a
@@ -1389,6 +1396,11 @@ impl DurableState {
         drop(snap);
         // TRDD-PGMMB2QG: whether the save failed, for `finish_clear_after_save` (the other callers ignore it).
         let ok = saved.is_ok();
+        // TRDD-AXJH3WTU: the generation is stored only when the save returned Ok, so a card put during or after a failed save stays pending
+        // (the Err arm below re-arms the retry, TRDD-PGMMB2QG box 9). It was read BEFORE the records were built, so a put during the build is not claimed.
+        if ok {
+            self.saved_generation = generation;
+        }
         match saved {
             Ok(r) if r.bytes > 0 => {
                 // TRDD-YR6WX7VQ (review of eef01b1d): a card save that tombstones says so, with the counts. WHY: after
@@ -1523,7 +1535,7 @@ impl DurableState {
     /// the rewritten files (hashes, version stamp, counters) and sets the dirty mark again, so the next save
     /// brings the card log level with the store.
     pub fn finish_clear_after_save(&mut self, state: &std::sync::Mutex<crate::CoreState>, sweep_epoch: u64) -> bool {
-        let snap = {
+        let (snap, generation) = {
             let st = state.lock_timed();
             // TRDD-PGMMB2QG increment B: first epoch comparison, under the same lock hold as the snapshot. A clear
             // since the last `Msg::Clear` was drained emptied the store and the rescan has not put its cards back: rewriting the card
@@ -1532,7 +1544,7 @@ impl DurableState {
                 eprintln!("{} alcore: another clear landed during the rescan of the previous one; the card log is not rewritten and the clear stays pending", crate::log_ts());
                 return false;
             }
-            st.cards.persist_snapshot()
+            (st.cards.persist_snapshot(), st.cards.write_generation())
         };
         let rewritten = self.cards.rewrite_from(|| snap.iter().map(persist_record));
         drop(snap);
@@ -1544,6 +1556,9 @@ impl DurableState {
             }
         };
         self.seed_from_files_pending = false;
+        // TRDD-AXJH3WTU: the rewrite wrote exactly the snapshot taken at `generation`, so the saved generation follows it; a put after the
+        // snapshot keeps the store ahead and the next timed tick marks the cards dirty.
+        self.saved_generation = generation;
         self.cards_dirty = false;
         self.last_cards_save = Instant::now();
         self.stamp_version();
@@ -1597,6 +1612,13 @@ impl DurableState {
         // made worse, the ruling of TRDD-WCG7I5D8). The forced tick (stop) skips the pass: a shutdown must not
         // wait for it.
         self.run_pending_file_pass();
+        // TRDD-AXJH3WTU: a card put by a writer that never calls `mark_dirty` (`/api/import`, the on-demand reparse in ui.rs) moves the
+        // store write generation; when it differs from the one the last card save covered, the cards are dirty. WHY here and not in the
+        // writers: they run on request threads that hold no `DurableState`, and the generation is the one signal every `put_arc` gives.
+        // This takes ONE `lock_timed()` per timed tick (this point holds no state lock), only when nothing else marked the cards dirty.
+        if !self.cards_dirty && state.lock_timed().cards.write_generation() != self.saved_generation {
+            self.cards_dirty = true;
+        }
         // WHY `!self.first_cards_saved`: last_cards_save starts at boot, so without it the timer
         // path saves no cards in a run's first 300 s, and most runs killed by the RSS hard cap
         // ended before that (counts on TRDD-WCG7I5D8), leaving a card snapshot days old. One early
@@ -2471,6 +2493,35 @@ mod sweeper_backstop_tests {
         assert!(pass_armed && dirty, "the failed save re-armed the file pass and the cards dirty mark");
         drop(state);
         assert_eq!(clear_flag(&data.join("a")), "1", "ticks never reset the clear flag");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TRDD-AXJH3WTU box 1: an imported card (`import_card::import_sessions`, the `/api/import` path, no transcript behind it) is put in
+    /// the store through `put_log_session` and nothing marks the cards dirty. WHY it matters: a start that refuses the store restores its
+    /// cards from the card log, so an imported card the log never received is lost. The startup saves are spent first (control), then the
+    /// card is imported and NOTHING else happens (no `mark_dirty`, no other card): the next timed tick must put it in the card log.
+    #[test]
+    fn an_imported_card_reaches_the_card_log_at_the_next_timed_tick() {
+        let root = seed_test_root("import-card-log");
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let state = std::sync::Mutex::new(crate::CoreState::open(&data.join("a")));
+        let mut durable = DurableState::open(&data);
+        // Set explicitly (1 ms): AGENTLENS_CARDS_SAVE_MS and AGENTLENS_OFFSETS_SAVE_MS in the environment must not change what this proves.
+        durable.cards_save = Duration::from_millis(1);
+        durable.offsets_save = Duration::from_millis(1);
+        state.lock().unwrap().cards.put(&seed_test_card("swept"));
+        durable.mark_dirty();
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&LogTailer::default(), &state, false);
+        assert!(durable.first_cards_saved && !durable.cards_dirty, "control: the startup card saves are spent and nothing is dirty");
+        assert_eq!(card_log_keys(&data), ["swept"], "control: the card log holds the swept card only");
+        let counts = crate::import_card::import_sessions(&mut state.lock().unwrap(), &[seed_test_card("imported")], 1_000);
+        assert_eq!(counts, (1, 0), "control: the card was imported");
+        std::thread::sleep(Duration::from_millis(5));
+        durable.tick(&LogTailer::default(), &state, false);
+        assert!(card_log_keys(&data).contains(&"imported".to_string()), "the next timed tick put the imported card in the card log");
+        drop(state);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
