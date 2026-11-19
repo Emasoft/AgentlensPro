@@ -4,7 +4,7 @@ title: summary built over a 14-day card window so the 2048 MB cap holds
 column: todo
 status: tasked
 created: 2026-11-19T06:34:46+0100
-updated: 2026-11-19T09:58:18+0100
+updated: 2026-11-19T10:03:11+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -45,6 +45,7 @@ Stopgap carved out of TRDD-735Q3JF4 so the release (TRDD-HSPUF5XH) can unblock; 
 ## Known limitations
 
 2026-11-19 (A2 worker finding, by its report): summary_now / summary_now_windowed take the card cutoff from summary_snapshot(), which reads the REAL clock, while summary_from receives the caller's now_ms. In production now_ms is the real clock, so the two agree; a test or caller passing a fixed now gets a cutoff from the real clock (A2 tests store the summary by hand with summary_snapshot_at(now) for this reason). Fix only if a caller ever needs a fixed now: pass now_ms into the snapshot. Also: the family memo (CoreState.family_summary_memo) keeps one family summary resident; the A3 worker adds a shed on the stage-2 pressure ladder, and the final isolated run must sample commit after one family build.
+2026-11-19 10:20 BEHAVIOUR CHANGE, not yet in the CHANGELOG: the aggregate MCP tools that read the summary now see only log cards inside summaryCardDays (14). Tools whose own window is longer undercount older activity: get_cost_rollup (windowHours up to 1080 h or sinceIso), get_cost_by_cause aggregate branch (days up to 90), get_efficiency_report (default 30 days), get_workspace_patterns with no days, get_recent_sessions, find_relevant_context, predict_session_cost, and the 20-25-session pools of find_context_hogs, get_context_inflation_report and get_cache_break_report. Step C must disclose the window on every such answer AND add this to the CHANGELOG entry; widening any of them is a separate decision. Also unguarded by tests: arm 6 (get_context_history) and the stage-2 shed of family_summary_memo (no ladder test asserts what stage 2 drops). A3 load evidence: every A3 check ran at a 1-minute load of 8.4-27.6 (worker report lines 31-81).
 
 ## Progress log
 
