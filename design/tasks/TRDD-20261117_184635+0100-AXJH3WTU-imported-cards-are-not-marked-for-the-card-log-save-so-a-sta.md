@@ -1,10 +1,10 @@
 ---
 trdd-id: AXJH3WTU
 title: Imported cards are not marked for the card log save, so a start that refuses the store loses them
-column: dev
+column: testing
 status: tasked
 created: 2026-11-17T18:46:35+0100
-updated: 2026-11-19T01:57:44+0100
+updated: 2026-11-19T01:59:06+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -28,8 +28,8 @@ Found while deciding the acceptance box of TRDD-WCG7I5D8. Size of the loss: not 
 CORRECTION 2026-11-17T18:52:24+0100 (after the harness review): only IMPORTED cards have no file behind them. A card stored by the on-demand reparse comes from reparse_session (ui.rs:1110) on an existing transcript, so a start that refuses the store builds it again; it falls under item 3 only. The grep for mark_dirty and cards_dirty was rerun over all of rust-core: src/log_reader.rs and two test files of the same crate (tests/log_reader_parity.rs, tests/card_reuse.rs), nothing else.
 
 ## Acceptance
-- [ ] An imported card is in the card log after the next timed tick, shown by a test that fails on the code of today.
-- [ ] The on-demand reparse (ui.rs:1124) is decided in writing: its card is rebuilt from its transcript by a start that refuses the store (the transcript existed at reparse time), so it is lost only when that file is gone later; either it is marked for the save too, or this is accepted.
+- [x] An imported card is in the card log after the next timed tick, shown by a test that fails on the code of today.
+- [x] The on-demand reparse (ui.rs:1124) is decided in writing: its card is rebuilt from its transcript by a start that refuses the store (the transcript existed at reparse time), so it is lost only when that file is gone later; either it is marked for the save too, or this is accepted.
 - [ ] Item 3 is either accepted in writing with its size measured on a copy, or closed by a keyed card append.
 
 ## Approval log
@@ -37,6 +37,7 @@ CORRECTION 2026-11-17T18:52:24+0100 (after the harness review): only IMPORTED ca
 - 2026-11-17T18:46:35+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T01:25:08+0100 — column → todo by main-agent@agentlenspro. release blocker of TRDD-HSPUF5XH (Release list decision 2026-11-19)
 - 2026-11-19T01:57:44+0100 — column → dev by main-agent@agentlenspro. W78 code in the working tree; module, card_reuse and clippy runs queued for load at or below 30
+- 2026-11-19T01:59:06+0100 — column → testing by main-agent@agentlenspro. code committed in 2bac623a with its tests; box 3 waits on the measurement of the isolated pre-tag run
 
 ## Notes and lessons learned
 
@@ -44,3 +45,4 @@ CORRECTION 2026-11-17T18:52:24+0100 (after the harness review): only IMPORTED ca
 2026-11-19 PLAN for box 3: measure the exposure on the isolated pre-tag run (own HOME, DATA_DIR and ports, a copied sample of at most 4 GB): count the cards in the store that differ from or are missing in the card log AND whose transcript file does not exist. Until that number exists, box 3 stays open.
 2026-11-19 W78 result, read by the main agent (diff of card_store.rs and log_reader.rs, tick read whole, run1/run2 read): the counter went into CardStore (bumped in put_arc and discard_cards) instead of CoreState. ACCEPTED: put_arc is the one card write path, so direct cards.put callers (ingest_scanned, the restore loop, tests) cannot bypass it, which a CoreState counter would allow. The three open points: (1) the compare sits after the offsets timer gate and the forced tick returns before it, so it takes one lock_timed() per offsets period and none on the stop path; the sweeper loop calls tick with no guard held (log_reader.rs 2070). (2) A reused restore marks its generation as saved; a card the store holds and the card log lacks is still appended, because the reused start arms the file pass and the first timed tick marks the cards dirty when the file hashes differ (YR6WX7VQ comment in tick; by reading, no test). (3) The new test failed before the fix on its last assertion with every control passing (run1), and passed after (run2, load 40.9, before the last comment move). A separate mutation run is skipped: the tick compare is the only change that marks an import dirty, so the before-fix run is that mutation. Not tested: discard_cards then restore, a failed save keeping the generation pending, a put between snapshot and save. Pending: module, card_reuse and clippy runs on the final tree, queued until the load is at or below 30.
 2026-11-19 main-agent reads after the harness review: (a) box 2 path by reading: ui.rs:1124 calls st.put_log_session, and lib.rs:370-372 put_log_session calls cards.put_arc, which bumps the generation; import_card.rs:89 takes the same call. (b) discard_cards has one caller, log_reader.rs:1128, inside restore_reused on the stale-version branch, so its bump always lands before restore() syncs saved_generation and can never mark an empty store dirty after boot. (c) Every reused restore that returns Ok passes log_reader.rs:1174 (seed_from_files_pending = true) or takes restore_from_snapshot, so the file pass of the first timed tick is armed on the reused path (read of restore_reused 1118-1178; still no test). (d) The Err arm of the rewrite match in finish_clear_after_save returns false before saved_generation is set. The mutation equivalence in the earlier note is reasoning, not a run.
+2026-11-19 boxes 1 and 2 met by 2bac623a: box 1 by the new test (failed first, passes now; main-agent runs: sweeper_backstop_tests 25 passed, card_reuse 24 passed, clippy exit 0, load 24); box 2 decided in writing: the reparse card is marked for the save too, through the same put_arc generation (path read by the main agent). Box 3 stays open: the exposure count on the isolated pre-tag sample.
