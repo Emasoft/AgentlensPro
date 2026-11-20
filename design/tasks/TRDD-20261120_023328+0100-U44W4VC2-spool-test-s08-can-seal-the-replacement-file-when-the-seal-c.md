@@ -4,7 +4,7 @@ title: spool test s08 can seal the replacement file when the seal child starts l
 column: todo
 status: tasked
 created: 2026-11-20T02:33:28+0100
-updated: 2026-11-20T02:33:28+0100
+updated: 2026-11-20T02:38:15+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -26,3 +26,7 @@ Seen once on 2026-11-20 in a full run of rust-core/crates/agentlens-spool/tests/
 ## Approval log
 
 - 2026-11-20T02:33:28+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Process log
+
+2026-11-20 correction: the cause above is INFERRED, not read in full. Only assert_blocked (spool.rs:105-108, a fixed sleep plus a not-exited check) and the s08 body were read; hold_lock and alspool's seal path (open, lock, re-check the path) were not. Evidence of the failure and of 5 of 5 solo passes comes from the worker report reports_dev/JCUXA6Z4/20261120_023207+0100-deterministic.md, read by the main agent.
