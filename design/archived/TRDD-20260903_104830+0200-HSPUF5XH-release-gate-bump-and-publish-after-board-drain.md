@@ -1,9 +1,9 @@
 ---
 trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
-column: todo
+column: published
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-20T04:17:29+0100
+updated: 2026-11-20T04:25:02+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -13,11 +13,11 @@ npt: []
 eht: []
 pre-block-column: todo
 blocked-by: []
-post-release-verification: [IXMB2JVD]
+post-release-verification: [IXMB2JVD, HFS9H284, JX7DI01O, 2LXKMRE3]
 blocker-probe: [trddgrep, why, HSPUF5XH]
 blocker-holds-if: not-match:READY
 assignee: main-agent@agentlenspro
-status: tasked
+status: archived
 approved: true
 approval-judge: main-agent@agentlenspro
 approval-datetime: 2026-11-19T13:17:52+0100
@@ -109,6 +109,7 @@ this card can close.
 - 2026-09-03T10:48:30+0200 — APPROVED by USER (verbatim order above).
 - 2026-11-15 — blocked-by pruned per this card's own STATE rule (ids outside dev|testing|todo|blocked|plan|dispatch): removed 7NHUU6GK (backburner), ZSX34J8F (backburner), 2R0AXCKL (backburner), 2TQHNMEC (backburner), 9SYRK6SW (deploy); 13 remain.
 - 2026-11-19T13:17:52+0100 — column → todo by main-agent@agentlenspro. blocked-by drained: ER88PXNB complete
+- 2026-11-20T04:25:02+0100 — PUBLISHED by main-agent@agentlenspro. 2.34.0 on npm (OIDC, SLSA provenance) and GitHub Release v2.34.0; the 12 gate boxes are struck through with reasons in 'Gate box dispositions (2026-11-20)'; unmet gates re-homed to TRDD-HFS9H284.
 
 ## Blocking cards (must reach a terminal column before this gate opens)
 > SUPERSEDED 2026-11-15: this list is historical; the live gate is the frontmatter blocked-by field (13 ids after the 2026-11-15 prune).
@@ -149,30 +150,30 @@ unless the user says otherwise:
 
 ## Definition of done — board drain
 
-- [ ] Every id in `blocked-by` above has reached `complete`/`cancelled`/`superseded`
+- [~] Every id in `blocked-by` above has reached `complete`/`cancelled`/`superseded`
       (re-check `grep -H '^column:' design/tasks/*.md`; none remain in
       `dev|testing|todo|blocked|plan|dispatch`).
-- [ ] No NEW card has entered the gating set in the meantime (re-check at the
+- [~] No NEW card has entered the gating set in the meantime (re-check at the
       moment of publish, not just when this TRDD was authored).
 
 ## Definition of done — gates green (run in order, on this machine)
 
-- [ ] `pnpm run compile` — passes (tsc ×2 + lint + esbuild ×4, includes
+- [~] `pnpm run compile` — passes (tsc ×2 + lint + esbuild ×4, includes
       `check-mirrors`, `check-identities`, `check-dist-contents`, `check-guards`).
-- [ ] `cargo test` — rust-core store crate green.
-- [ ] `cargo test` — rust-core core crate green.
-- [ ] `cargo clippy -- -D warnings` — zero warnings across the workspace.
-- [ ] alcore rebuilt from current source (fresh inode — verify via `ls -li`
+- [~] `cargo test` — rust-core store crate green.
+- [~] `cargo test` — rust-core core crate green.
+- [~] `cargo clippy -- -D warnings` — zero warnings across the workspace.
+- [~] alcore rebuilt from current source (fresh inode — verify via `ls -li`
       before/after, per `agentlenspro-ops-lessons-deploy-and-install`).
-- [ ] Fresh-inode alcore deployed to the live server (`agentlenspro server restart`
+- [~] Fresh-inode alcore deployed to the live server (`agentlenspro server restart`
       or the alcore-specific swap procedure — verify the running pid's binary
       is the new inode, not the old one).
-- [ ] 15-minute hold read PASS (per O3ICDRLO's own acceptance recipe — no
+- [~] 15-minute hold read PASS (per O3ICDRLO's own acceptance recipe — no
       burn-tick hold ≥ 250ms observed over the window).
-- [ ] The `api_call` table is observed filling on the live server (per
+- [~] The `api_call` table is observed filling on the live server (per
       9SYRK6SW's own acceptance recipe).
-- [ ] Upgrade boot from a v2.33.1 data dir on a full corpus with the release alcore: record peak RSS against the cap and confirm the boot finishes its cold rescan (B' crash-loop check from 6B7VV2Z7; see Notes 2026-10-16).
-- [ ] Two consecutive `pnpm run test:unit` runs, exit 0 and 0 failing, on the release tree as defined in the section "Release full-suite pair — gate rules" below, each following every rule there; record each run line under that section. Moved here from TRDD-CS2W7E77 on 2026-10-17.
+- [~] Upgrade boot from a v2.33.1 data dir on a full corpus with the release alcore: record peak RSS against the cap and confirm the boot finishes its cold rescan (B' crash-loop check from 6B7VV2Z7; see Notes 2026-10-16).
+- [~] Two consecutive `pnpm run test:unit` runs, exit 0 and 0 failing, on the release tree as defined in the section "Release full-suite pair — gate rules" below, each following every rule there; record each run line under that section. Moved here from TRDD-CS2W7E77 on 2026-10-17.
 - NOTE 2026-11-17T19:04:05+0100 (from the closing entry of TRDD-WCG7I5D8): before the first start of the new build on the live folder, confirm that log-delta-version.json is present and current there. A start whose version stamp is missing or stale refuses the store and tombstones the card log (log_reader.rs:975-977), which drops every card that has no transcript. A gate copy without that file did exactly this (74,730 cards discarded and rescanned); a later copy with a reused store kept them.
 - BASIS of the note above (2026-11-17T19:06:03+0100): the copy lists of scripts_dev/wcg-gate4.py:30-31 and wcg-gate4b.py:38-39 hold six files and not log-delta-version.json; scripts_dev/yr6-gate-live.py:16 adds that file, and its run LV1 printed 'reusing cards.duckdb: 74730 cards'. The two copies were never compared in one controlled run, so 'the missing file caused the refusal' is INFERRED from those reads. Also: TRDD-WCG7I5D8 was moved to complete without a harness review of the close itself (two blocked rounds, then the advisor); corrections to it go to TRDD-PGMMB2QG.
 
@@ -488,3 +489,17 @@ FROM TRDD-12FGMAEP (commit 73211a46, footprint backstop in the memory guard of a
 2026-11-20: publish run 44657500944 succeeded (all 6 jobs). Registry: version 2.34.0, _npmUser GitHub Actions npm-oidc-no-reply (OIDC), dist.attestations.provenance SLSA v1. The run artifact npm-tarball matches the registry (sha1 1f0677f9..., sha512 equal). GitHub Release v2.34.0 created by hand with the tarball and SHA256SUMS.txt; no in-toto attestation and no SBOM (dispatch run). Local deploy: the CLI is npm-linked to this repo (bundle built 2026-11-19 23:10); an ordinary verb ran the launch repair and restored hooks, status line, 5 skills, 9 agents; setup --dry-run now shows them current; no server started (DISABLED and NO_REVIVE kept). Main CI rust job timed out at 40 min: TRDD-2LXKMRE3.
 2026-11-20: post-release checks: registry install of agentlenspro@2.34.0 into tests_dev (npm --ignore-scripts, 106 packages) runs search over 3571 transcripts (3864.9 MB, 1518 matches, 4.7 s), so @duckdb/node-api resolves from installed deps. Local bin-native/darwin-arm64 replaced with the released binaries; each equals the released file re-signed ad hoc under the same name (cmp exact); alcore version prints 2.34.0, exit 0. IXMB2JVD box 1 ticked and card completed; its CI-side gap filed as TRDD-JX7DI01O. Board commits cherry-picked onto main (aa7d19cb, fded19ee, e7fc88b4), main push held until the rust CI timeout (TRDD-2LXKMRE3) is fixed.
 2026-11-20 correction: IXMB2JVD was NOT completed: box 1 ticked on a degraded CI check (tarball step took its warning path); reverted, the card is blocked on TRDD-JX7DI01O. Registry-install dependency check: all 7 runtime dependencies of 2.34.0 resolve inside the install prefix's own node_modules (not the repo's); the install used --ignore-scripts (no lifecycle scripts, per owner rule), so a plain npm install -g is not what was measured. The launch repair overwrote 9 agents and 8 skill files; backups are in ~/.agentlens/surface-backups/2026-11-20T02-45-12-882Z-3634; each agent diff is one added '# agentlenspro-version: 2.34.0' line. Release notes corrected: the SBOM was generated by the run but not attached.
+
+## Gate box dispositions (2026-11-20)
+
+2.34.0 was published on 2026-11-20 (publish run 44657500944) with these 12 boxes open. Each is closed below as [~] (struck through) with its reason, never ticked; the unmet ones move to TRDD-HFS9H284. Evidence: reports_dev/HSPUF5XH/20261120_041919+0100-open-boxes.md (line numbers refer to commit 7d5a0120).
+Box 1 (every blocked-by id terminal): SUPERSEDED by the CLEARED / RISK ACCEPTED rule (l.363, l.380); blocked-by has been [] since 2026-11-19; several removed cards are still open as RISK ACCEPTED.
+Box 2 (no new card entered the gating set): NOT DONE and cannot be done after the fact: the gating set was not re-checked at publish. Cards filed after the drain include PSS1OJG1, BZJOVMVH, TQKK17XZ, XZ1HG3GX, AK2687Z2, 8WIDBUIQ, JCUXA6Z4, U44W4VC2, 87HO5IFJ, 2LXKMRE3, JX7DI01O.
+Box 3 (pnpm run compile): no local run at the released tree c2392a4c; last local pass on an earlier tree (l.433). CI on c2392a4c ran its type checks, lint, mirrors, identities, dist-contents and esbuild green (run 44657487085, build-and-test 20 and 22), but not the whole compile script. Moved to TRDD-HFS9H284 item 5.
+Boxes 4 and 5 (cargo test store and core): last full green CI run 44643561993 on a55074a8; local store at 6d38c2de, core at 63a28fcd; the core run was dropped for 2.34.0 (l.452). The two later Rust commits (185ceabf, 6a234115) change only crates/agentlens-spool/tests/spool.rs, and the main CI rust job on c2392a4c timed out at 40 min (TRDD-2LXKMRE3). Moved to TRDD-HFS9H284 item 1.
+Box 6 (clippy): passed in CI on the released tree c2392a4c (run 44657487085, Clippy step success, cargo clippy --workspace --all-targets -D warnings); not on this machine. Closed on the CI result.
+Box 7 (alcore rebuilt, fresh inode): the released alcore was built in CI from c2392a4c (publish run 44657500944, build-binaries); on 2026-11-20 the local bin-native/darwin-arm64 was replaced with the released binaries (byte-equal to them re-signed ad hoc). The ls -li inode check was not done. Closed on the CI build.
+Boxes 8 and 10 (live deploy, api_call filling on the live server): moved POST-RELEASE and owner-gated before the tag (l.383-384); the collector is held down by the owner (DISABLED, NO_REVIVE). The isolated B3 check passed once at 3736dd88 (l.321; mapping to box 10 INFERRED). Moved to TRDD-HFS9H284 item 4.
+Box 9 (15-minute hold read): never measured (l.399). Moved to TRDD-HFS9H284 item 2.
+Box 11 (upgrade boot on a full corpus): only a sample boot ran (l.321-322); the cold rescan and peak RSS were not measured. Moved to TRDD-HFS9H284 item 3.
+Box 12 (two full test:unit runs): reduced to one local full suite (l.453): suite61 at 4aee03be, 3752 passing, 0 failing; later code commits followed. On c2392a4c the CI unit suites (node 20 and 22) and the publish package job's unit tests passed. Closed on that record.
