@@ -4,7 +4,7 @@ title: 2.34.0 post-release gates that were not run before the publish
 column: todo
 status: tasked
 created: 2026-11-20T04:23:57+0100
-updated: 2026-11-20T06:04:40+0100
+updated: 2026-11-20T06:08:10+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: audit
@@ -30,3 +30,4 @@ TRDD-HSPUF5XH published 2.34.0 on 2026-11-20 (publish run 44657500944) with thes
 ## Process log
 
 2026-11-20: Docker post-release check (handed off by TRDD-HSPUF5XH, tracked on TRDD-6MG5N1ZF): docker.yml run 44651312460 on v2.34.0 succeeded; the published ghcr.io/emasoft/agentlenspro:2.34.0 for linux/amd64 (emulated on an aarch64 host) starts alcore, answers GET / (200) and /dashboard.js (200, 464,401 bytes), and accepts an empty OTLP POST (200); health reads healthy. Open: /sidebar.js and /dashboard.css (probe dispatched), ingestion with a real span. Defect found: the image never creates /data/otel-bodies, so every start logs a failed bodies sink (TRDD-A88PF0WA). Report: reports_dev/6MG5N1ZF/20261120_055157+0100-amd64-image-probe.md.
+2026-11-20: Docker asset follow-up (supersedes 'open: /sidebar.js and /dashboard.css' above): a fresh emulated-amd64 container of the published 2.34.0 image returned 200 for /, /dashboard.js, /dashboard.css, /sidebar.js, /help-mascot.png and /mascot.png, each with its own size and content type (report reports_dev/6MG5N1ZF/20261120_060452+0100-amd64-assets.md). Scope: the page's script and link tags; img, runtime and CSS url() references not probed. Still open: ingestion with a real span, and TRDD-A88PF0WA.
