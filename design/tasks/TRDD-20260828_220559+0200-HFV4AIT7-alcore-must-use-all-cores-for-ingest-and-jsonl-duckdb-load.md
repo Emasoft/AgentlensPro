@@ -3,7 +3,7 @@ trdd-id: HFV4AIT7
 title: Measure and guarantee that alcore uses all CPU cores for telemetry and hook ingest and for the JSONL to DuckDB load
 column: todo
 created: 2026-08-28T22:05:59+0200
-updated: 2026-11-01T02:38:46+0100
+updated: 2026-11-19T23:30:54+0100
 current-owner: claude-agentlenspro
 task-type: audit
 project-id: agentlenspro
@@ -517,3 +517,7 @@ most likely finding.
 ## Approval log
 
 - 2026-10-16T11:13:16+0200 — column → todo by main-agent@agentlenspro. work stalled mid-way or never started; no one works it now; triage row 33; its 2026-09-05 AI review rejected it; box 1, the script, does not exist
+
+## Owner directives
+
+Owner directive 2026-11-19T23:30+0100 (verbatim): "duckdb doesn't need to load the jsonl transcripts into its own db. for duckdb, jsonl is already a native db format it can query against. there is no need to digest jsonl files at all, only indexing them." Tracked as its own card (Query the transcript JSONL files in place); this card must not add a JSONL-to-DuckDB load.

@@ -3,7 +3,7 @@ trdd-id: 7YPQWKPG
 title: DuckDB is the memory and alcore keeps no resident data model
 column: dev
 created: 2026-09-02T22:05:41+0200
-updated: 2026-11-19T13:01:40+0100
+updated: 2026-11-19T23:30:50+0100
 current-owner: main-session
 task-type: refactor
 priority: critical
@@ -378,3 +378,7 @@ Step 5a follow-up: TRDD-X0YTE00M (remaining resident lists and App signals).
 ## Progress log
 
 2026-11-19 (between 12:59 and 13:09; the clock was not read) — TRDD-569BMAGD routed scripts_dev/7yp-step2/arm.sh's copy of BASE (a clone of ~/.agentlens) through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). The size of BASE was not measured; re-running the arm may need a sample of at most 4 GB.
+
+## Owner directives
+
+Owner directive 2026-11-19T23:30+0100 (verbatim): "duckdb doesn't need to load the jsonl transcripts into its own db. for duckdb, jsonl is already a native db format it can query against. there is no need to digest jsonl files at all, only indexing them." Tracked as its own card (Query the transcript JSONL files in place); this card must not add a JSONL-to-DuckDB load.

@@ -1,7 +1,8 @@
 ---
 prrd-version: 1.0
-updated: "2026-11-18T01:43:36+0100"
-project: unnamed-project
+updated: "2026-11-19T23:25:36+0100"
+project: agentlenspro
+project-id: agentlenspro
 canonical-source: design/requirements/PRRD.md
 mirrors: []
 ---
