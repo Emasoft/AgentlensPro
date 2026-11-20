@@ -1,21 +1,22 @@
 ---
 trdd-id: IXMB2JVD
 title: The post-publish verify races the CDN and reports a successful release as a failed workflow run
-column: complete
+column: blocked
 created: 2026-08-29T14:19:15+0200
-updated: 2026-11-20T04:09:21+0100
+updated: 2026-11-20T04:17:02+0100
 current-owner: main-session
 task-type: infra
 scope: project
 project-id: agentlenspro
 relevant-rules: []
 implementation-commits: []
-blocked-by: []
+blocked-by: [JX7DI01O]
 unblock-when: []
-status: archived
 approved: true
 approval-judge: main-agent@agentlenspro
-approval-datetime: 2026-11-20T04:09:21+0100
+approval-datetime: 2026-11-20T04:17:02+0100
+status: tasked
+pre-block-column: testing
 ---
 
 # The post-publish verify races the CDN
@@ -79,7 +80,7 @@ still the right guard for its own step.
 
 ## Acceptance
 
-- [x] **POST-RELEASE — this box does NOT gate the release, and cannot.** The next release's
+- [ ] **POST-RELEASE — this box does NOT gate the release, and cannot.** The next release's
       `publish-npm` job goes green end-to-end, including the registry-tarball verification, with no
       manual intervention.
 
@@ -107,8 +108,8 @@ still the right guard for its own step.
 ## Notes and lessons learned
 
 2026-10-16: stays in testing: its last box is post-release verification (the next release's publish-npm job green end to end), so it cannot block or be blocked by the release card TRDD-HSPUF5XH; it closes after that release.
-2026-11-20: box 1 ticked from publish run 44657500944 (2.34.0): publish-npm went green with no manual intervention, all steps success. The registry-tarball step did NOT positively verify: it exhausted its 30 x 20 s retry and took the designed warning path (annotation: metadata is live but its tarball was not fetchable within 10 min). Checked by hand afterwards: curl of dist.tarball HTTP 200, 148959179 bytes, sha1 equal to dist.shasum; a registry install has 16/16 bin-native files mode 755. So box 3 (delay gives a warning, never a failed job) is now measured on a real release, and the CI check itself verified nothing this time: follow-up TRDD filed.
+2026-11-20: box 1 stays OPEN after the 2.34.0 release (publish run 44657500944). publish-npm went green with no manual intervention, but the registry-tarball step exhausted its 30 x 20 s retry and took the designed warning path, so the box's 'including the registry-tarball verification' was not met in CI; the tarball was checked by hand afterwards (HTTP 200, 148959179 bytes, 16/16 binaries mode 755 in a registry install). Box 3 (a delay gives a warning, never a failed job) is now measured on a real release. The CI check gap is TRDD-JX7DI01O; this card closes when a release verifies the tarball inside CI. An earlier commit (7d5a0120) ticked box 1 and archived the card on the degraded check; that was wrong and is reverted here.
 
 ## Approval log
 
-- 2026-11-20T04:09:21+0100 — COMPLETE by main-agent@agentlenspro. box 1 ticked from publish run 44657500944; tarball verified by hand; CI-side gap filed as TRDD-JX7DI01O.
+- 2026-11-20T04:17:02+0100 — column → blocked by main-agent@agentlenspro. box 1 needs a release whose CI verifies the registry tarball; that check is fixed by TRDD-JX7DI01O
