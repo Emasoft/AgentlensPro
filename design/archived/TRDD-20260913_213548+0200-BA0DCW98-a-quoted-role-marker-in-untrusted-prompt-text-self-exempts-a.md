@@ -1,9 +1,9 @@
 ---
 trdd-id: BA0DCW98
 title: A quoted role marker in untrusted prompt text self-exempts an agent from its own review gate
-column: todo
+column: complete
 created: 2026-09-13T21:35:48+0200
-updated: 2026-11-17T19:48:21+0100
+updated: 2026-11-20T05:48:47+0100
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: security
@@ -21,7 +21,7 @@ pre-block-column:
 unblock-when: [trdd:8YM21R5X]
 blocker-probe: [trddgrep, why, BA0DCW98]
 blocker-holds-if: not-match:READY
-status: tasked
+status: archived
 ---
 
 # A quoted role marker in untrusted prompt text self-exempts an agent from its own review gate
@@ -60,7 +60,7 @@ flagged it as a genuine trust boundary rather than an acceptable residual.
 - [x] A test asserts the marker is NOT honoured when it appears after 50+ lines of quoted
       external material preceding it in the same prompt (i.e. buried past any reasonable
       boilerplate bound).
-- [ ] Whichever mitigation is chosen is implemented in `exemptRoleStrict` (and, if it changes the
+- [x] Whichever mitigation is chosen is implemented in `exemptRoleStrict` (and, if it changes the
       marker's own text/shape, in `creditRoleLoose` and the `MEASURE_ROLE_RULE`/`REVIEW_ROLE_RULE`
       directive strings the harness publishes to agents).
 - [x] Existing tests in reviewGate.test.ts covering the marker anchoring (including the new
@@ -80,6 +80,8 @@ rather than an in-place fix.
 - 2026-09-24T09:47:45+0200 — column → ai_review by main-session. first-line credit anchoring landed in 25113e6d and 7ecc6ad7; box 2 residual carded as 8YM21R5X
 - 2026-10-05T11:47:09+0200 — column → blocked by main-agent@agentlenspro. review of 2026-10-05 in the owner's stead, see the Review section
 - 2026-11-17T19:48:21+0100 — column → todo by main-agent@agentlenspro. blocker TRDD-8YM21R5X is complete and archived (validator BLOCKER-RELEASED); it stood in ai_review before the block; to todo, not ai_review, because nobody is reviewing it now; by this card's own review note the open box must be ticked on 8YM21R5X's evidence, unblocking alone does not close it Cleared blocked-by (--clear-blocker override).
+- 2026-11-20T05:48:44+0100 — column → ai_review by main-agent@agentlenspro. all three acceptance boxes ticked; both role predicates anchored at HEAD, 201 passing
+- 2026-11-20T05:48:47+0100 — COMPLETE by main-agent@agentlenspro. reviewed: code read at HEAD, test file run once (201 passing), deployed with 8YM21R5X's bundle rebuild at e424e236.
 
 ## Notes
 
@@ -87,6 +89,7 @@ rather than an in-place fix.
 2026-09-24: review-fork correction to the note above -- the directive's self-exemption sentence (line ~138, describing subagentExempt/ownRole via declaredRoleOwnTranscript) WAS wrong and DID need a fix (my first pass wrongly called it already-correct): it borrowed declaredRole's first-line wording for a check that is deliberately unanchored. Fixed to state the two checks separately, with the residual pointed at TRDD-8YM21R5X. Also fixed a self-contradictory demandText() parenthetical ('nothing before it, not even blank lines with text' vs the code's actual leading-blank-line tolerance) and corrected the mutation report's list of which tests actually failed (verified from the log: 6 failures were the buried-marker, second-marker, short-preceding-prose, first-line-anchor MUTATION CHECK, one scanTranscriptLines test, and the new parity test -- NOT the trailing-prose or dollar-anchor tests as first written). Added a supervisor-side parity test. Full detail: reports/ba0dcw98/20260924_092919+0200-predeploy-review-fixes.md. types/lint/compile-tests/mocha all still green (137/137).
 2026-10-04: worker wA re-ran the gate suites (scoped run reviewGate|reviewSupervisor: 105 passing, 0 failing). Box 2 is re-scoped to TRDD-8YM21R5X (declaredRoleOwnTranscript anchoring) and stays unticked here.
 2026-10-04: code and tests done at 90446356; effective only after the installed hook bundle is rebuilt (owner).
+2026-11-20 (main agent): box 2 ticked on TRDD-8YM21R5X's evidence plus a read of HEAD. The names exemptRoleStrict and creditRoleLoose in box 2 are the old names of declaredRoleOwnTranscript (self-exemption) and declaredRole (credit). At HEAD (main 47c7d11a) src/cli/reviewGate.ts:94-120: declaredRole compares only the first non-blank line with whole-line equality, and declaredRoleOwnTranscript returns declaredRole(prompt), so the self-exemption path is anchored the same way (8YM21R5X, commit e424e236, measured shapes 2026-11-01). The marker text is unchanged, so the directive strings needed no change. Tests: src/test/reviewGate.test.ts suite 'declaredRoleOwnTranscript: self-exemption anchored to the first non-blank line' (buried marker after prose returns null, line 745) and the stop-gate test at line 1301. Run once, singly, under scripts/test-data-cap.sh after tsc -p tsconfig.test.json (exit 0): 201 passing, 0 failing. Not re-measured: the shape of a real roled non-fork agent's first transcript entry (none exists under the current rules; role agents are forks).
 
 ## Review 2026-10-05 (in the owner's stead)
 
