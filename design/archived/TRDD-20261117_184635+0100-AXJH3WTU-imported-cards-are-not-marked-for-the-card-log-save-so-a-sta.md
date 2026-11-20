@@ -1,0 +1,51 @@
+---
+trdd-id: AXJH3WTU
+title: Imported cards are not marked for the card log save, so a start that refuses the store loses them
+column: complete
+status: archived
+created: 2026-11-17T18:46:35+0100
+updated: 2026-11-19T03:22:35+0100
+current-owner: main-agent@agentlenspro
+created-by: main-agent@agentlenspro
+task-type: bugfix
+min-approval-requirement: none
+assignee: main-agent@agentlenspro
+mandate: true
+mandated-by: none
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-17T18:46:35+0100
+---
+
+# Imported cards are not marked for the card log save, so a start that refuses the store loses them
+
+## Problem
+Read by the main agent on 2026-11-17 at HEAD 57de4499 (crate rust-core/crates/agentlens-core).
+1. Two writers put a card in the store without telling the saver of the card log: `import_card.rs:89` and `ui.rs:1124` (`stamp_and_store_reparsed`) call `CoreState::put_log_session` and nothing else. `mark_dirty` and `cards_dirty` occur only in `src/log_reader.rs` (grep of `src/`, 0 hits elsewhere). So such a card reaches the card log only when another change marks the cards dirty, or at a graceful stop (forced tick, `log_reader.rs:1437`).
+2. An imported card has no transcript file. The store holds it at once (`card_store.rs:839`, one committed statement), so a start that REUSES the store keeps it. A start that REFUSES the store takes its cards from the card log and re-reads the transcripts (`log_reader.rs:1053`); an imported card that never reached the card log is then gone.
+3. The same refused start loses any card that changed after the last card save (timer of 300 s, `log_reader.rs:897` and `:1483`; longer while the 1h backfill runs, `:1415`) when its transcript no longer exists.
+Found while deciding the acceptance box of TRDD-WCG7I5D8. Size of the loss: not measured.
+CORRECTION 2026-11-17T18:52:24+0100 (after the harness review): only IMPORTED cards have no file behind them. A card stored by the on-demand reparse comes from reparse_session (ui.rs:1110) on an existing transcript, so a start that refuses the store builds it again; it falls under item 3 only. The grep for mark_dirty and cards_dirty was rerun over all of rust-core: src/log_reader.rs and two test files of the same crate (tests/log_reader_parity.rs, tests/card_reuse.rs), nothing else.
+
+## Acceptance
+- [x] An imported card is in the card log after the next timed tick, shown by a test that fails on the code of today.
+- [x] The on-demand reparse (ui.rs:1124) is decided in writing: its card is rebuilt from its transcript by a start that refuses the store (the transcript existed at reparse time), so it is lost only when that file is gone later; either it is marked for the save too, or this is accepted.
+- [x] Item 3 is either accepted in writing with its size measured on a copy, or closed by a keyed card append.
+
+## Approval log
+
+- 2026-11-17T18:46:35+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T01:25:08+0100 — column → todo by main-agent@agentlenspro. release blocker of TRDD-HSPUF5XH (Release list decision 2026-11-19)
+- 2026-11-19T01:57:44+0100 — column → dev by main-agent@agentlenspro. W78 code in the working tree; module, card_reuse and clippy runs queued for load at or below 30
+- 2026-11-19T01:59:06+0100 — column → testing by main-agent@agentlenspro. code committed in 2bac623a with its tests; box 3 waits on the measurement of the isolated pre-tag run
+- 2026-11-19T03:22:35+0100 — COMPLETE by main-agent@agentlenspro. boxes 1 and 2 met by 2bac623a and the W80 follow-up; box 3 measured on a copy (0 cards at rest) and accepted in writing; version-bump loss split to TRDD-CEILX9YW.
+
+## Notes and lessons learned
+
+2026-11-19 DESIGN decided by the main agent, given to worker W78: a plain u64 write generation on the core state, incremented by every method that adds, replaces or removes a log-session card outside the clear path; DurableState keeps the generation of its last Ok save (read before the records are built); tick sets cards_dirty when the two differ. One mechanism covers box 1 (import) and box 2 (the on-demand reparse goes through put_log_session). Not yet checked by the main agent: the list of incremented methods, how often tick takes the state lock for the compare, and whether marking the reused restore as saved can skip a card put before a crash (the file pass plus the first early card save should append it; to be shown by a read or a test).
+2026-11-19 PLAN for box 3: measure the exposure on the isolated pre-tag run (own HOME, DATA_DIR and ports, a copied sample of at most 4 GB): count the cards in the store that differ from or are missing in the card log AND whose transcript file does not exist. Until that number exists, box 3 stays open.
+2026-11-19 W78 result, read by the main agent (diff of card_store.rs and log_reader.rs, tick read whole, run1/run2 read): the counter went into CardStore (bumped in put_arc and discard_cards) instead of CoreState. ACCEPTED: put_arc is the one card write path, so direct cards.put callers (ingest_scanned, the restore loop, tests) cannot bypass it, which a CoreState counter would allow. The three open points: (1) the compare sits after the offsets timer gate and the forced tick returns before it, so it takes one lock_timed() per offsets period and none on the stop path; the sweeper loop calls tick with no guard held (log_reader.rs 2070). (2) A reused restore marks its generation as saved; a card the store holds and the card log lacks is still appended, because the reused start arms the file pass and the first timed tick marks the cards dirty when the file hashes differ (YR6WX7VQ comment in tick; by reading, no test). (3) The new test failed before the fix on its last assertion with every control passing (run1), and passed after (run2, load 40.9, before the last comment move). A separate mutation run is skipped: the tick compare is the only change that marks an import dirty, so the before-fix run is that mutation. Not tested: discard_cards then restore, a failed save keeping the generation pending, a put between snapshot and save. Pending: module, card_reuse and clippy runs on the final tree, queued until the load is at or below 30.
+2026-11-19 main-agent reads after the harness review: (a) box 2 path by reading: ui.rs:1124 calls st.put_log_session, and lib.rs:370-372 put_log_session calls cards.put_arc, which bumps the generation; import_card.rs:89 takes the same call. (b) discard_cards has one caller, log_reader.rs:1128, inside restore_reused on the stale-version branch, so its bump always lands before restore() syncs saved_generation and can never mark an empty store dirty after boot. (c) Every reused restore that returns Ok passes log_reader.rs:1174 (seed_from_files_pending = true) or takes restore_from_snapshot, so the file pass of the first timed tick is armed on the reused path (read of restore_reused 1118-1178; still no test). (d) The Err arm of the rewrite match in finish_clear_after_save returns false before saved_generation is set. The mutation equivalence in the earlier note is reasoning, not a run.
+2026-11-19 boxes 1 and 2 met by 2bac623a: box 1 by the new test (failed first, passes now; main-agent runs: sweeper_backstop_tests 25 passed, card_reuse 24 passed, clippy exit 0, load 24); box 2 decided in writing: the reparse card is marked for the save too, through the same put_arc generation (path read by the main agent). Box 3 stays open: the exposure count on the isolated pre-tag sample.
+2026-11-19 follow-up (harness review of 2bac623a): demote_cold DOES change the persisted record: strip_timeline_value sets timelineTruncatedCount and timelineRetainedBytes, and strip_card_for_persist keeps both (log_reader.rs read by the main agent). W80 makes demote_cold bump the generation once per card it rewrites, inside the loop so a later ? return still counts the cards already changed, and corrects the field comment. Callers, read by the main agent: ingest_scanned (lib.rs:414-433) puts its cards and then demotes, so a demotion with no put happens only when every scanned file carried zero cards, and its save is intended because the record changed; the two restore calls (log_reader.rs:1066, 1151) run before restore() syncs saved_generation. Main-agent runs on the edited tree (load 18): card_store:: 22 passed, sweeper_backstop_tests 25 passed, card_reuse 24 passed, clippy -D warnings exit 0; the diff of card_store.rs at test time equals the one committed.
+2026-11-19T03:22+0100 main agent, BOX 3 measured on a copy by W92 (report reports_dev/W92/20261119_031613+0100-box3-exposure.md, read whole by the main agent; script scripts_dev/box3-exposure.mjs run inside scripts/test-data-cap.sh on copies of cards.duckdb+wal, the card log and the offsets log, 758,232 KB, server stopped). Comparator: last_active_ms = startTime + durationMs (log_reader.rs:2080-2084, read by the main agent); all 110,619 card-log records carry both fields. Numbers: store 110,619 = log 110,619; store cards absent from the log 0; store and log differ for 4 cards (store ahead by 13.3, 13.6, 35.1 and 75.3 s), identical on three fresh copies; store cards with no transcript found on disk 65,072 (claude_code 65,043 of 110,555, codex 29 unchecked); of those, absent from the log 0 and differing 0. So item 3 (a refused start loses a card changed after the last card save whose transcript is gone) measures 0 cards at rest: the 4 changed cards all have transcripts. ACCEPTED in writing with that size. Limits: the copy was taken at rest, so it measures the state at the last stop, not the window between card saves while running (300 s, longer during backfill); the comparator checks one derived number, not card content; the transcript matcher was spot-checked on 5 ids only, so 65,072 is an upper bound. W92 read live ~/.agentlens files read-only against its prompt (disclosed). Separate finding filed as its own card: a log-ingest version bump or an interrupted clear tombstones both logs and would drop every card with no transcript (up to 65,072 here); not a 2.34.0 risk, because LOG_INGEST_VERSION is 7 at v2.33.1 and at HEAD (git show v2.33.1 log_reader.rs:603, HEAD :751) and the live stamp is v7.

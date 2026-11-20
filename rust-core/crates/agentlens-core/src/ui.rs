@@ -325,13 +325,24 @@ fn rebuild_once(state: &Arc<Mutex<CoreState>>) {
     {
         let mut st = state.lock_timed();
         st.store_summary(inputs.version, build);
+        // TRDD-ER88PXNB: the window lands with its summary, under the same lock.
+        st.store_summary_window(inputs.version, inputs.window.take());
     }
     // Recorded even if the store above failed on a poisoned lock: the CPU and the allocation churn
     // were spent either way, and that is what the back-off rations.
     flight.last = Some((std::time::Instant::now(), took));
 }
 
+/// TRDD-ER88PXNB: the summary, as before. A caller that must know which cards it covers uses `summary_now_windowed`.
 pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Value>) {
+    let (version, summary, _) = summary_now_windowed(state, now_ms);
+    (version, summary)
+}
+
+/// TRDD-ER88PXNB: `summary_now` plus the card window of the summary it returns. Both come from the one cache slot, read
+/// under one lock, and `store_summary` clears the window whenever a new summary lands, so a stale serve keeps its own window.
+/// That holds because rebuild_gate serializes every production rebuild from snapshot to store; an ungated store could be refused and hand back its own build beside the window of the summary still in the cache.
+pub fn summary_now_windowed(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Value>, Option<crate::SummaryWindow>) {
     // Fast path: a warm cache never queues behind a rebuild. Under sustained ingest this misses
     // essentially always (see `cached_any`), so `stale` is what actually answers the request.
     let stale = {
@@ -341,9 +352,9 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
         st.summary_asked = true;
         let version = st.data_version;
         if let Some(cached) = st.summary_cache.current(version) {
-            return (version, cached);
+            return (version, cached, st.summary_window.clone());
         }
-        st.summary_cache.cached_any()
+        st.summary_cache.cached_any().map(|(v, a)| (v, a, st.summary_window.clone()))
     };
 
     // ADMISSION IS NON-BLOCKING — `try_lock`, never `lock`. This is the whole fix for
@@ -388,7 +399,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
                     let mut st = state.lock_timed();
                     let version = st.data_version;
                     if let Some(cached) = st.summary_cache.current(version) {
-                        return (version, cached);
+                        return (version, cached, st.summary_window.clone());
                     }
                 }
                 if std::time::Instant::now() >= deadline {
@@ -397,7 +408,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
                     // and serving it is free.
                     let newest = {
                         let mut st = state.lock_timed();
-                        st.summary_cache.cached_any()
+                        st.summary_cache.cached_any().map(|(v, a)| (v, a, st.summary_window.clone()))
                     };
                     return newest.unwrap_or(stale_pair);
                 }
@@ -436,7 +447,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
                     let mut st = state.lock_timed();
                     let version = st.data_version;
                     if let Some(cached) = st.summary_cache.current(version) {
-                        return (version, cached);
+                        return (version, cached, st.summary_window.clone());
                     }
                 }
                 match rebuild_gate().try_lock() {
@@ -451,7 +462,7 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
                     // serving the newer one is free.
                     let newest = {
                         let mut st = state.lock_timed();
-                        st.summary_cache.cached_any()
+                        st.summary_cache.cached_any().map(|(v, a)| (v, a, st.summary_window.clone()))
                     };
                     if let Some(pair) = newest.or(stale) {
                         return pair;
@@ -470,13 +481,156 @@ pub fn summary_now(state: &Arc<Mutex<CoreState>>, now_ms: f64) -> (u64, Arc<Valu
         let version = st.data_version;
         // Re-check under the gate — the rebuild we waited for very likely stored this version.
         if let Some(cached) = st.summary_cache.current(version) {
-            return (version, cached);
+            return (version, cached, st.summary_window.clone());
         }
         st.summary_snapshot()
     };
     let build = CoreState::summary_from(&mut inputs, now_ms);
     let mut st = state.lock_timed();
-    (inputs.version, st.store_summary(inputs.version, build))
+    let summary = st.store_summary(inputs.version, build);
+    // TRDD-ER88PXNB: the window lands with its summary, under the same lock.
+    st.store_summary_window(inputs.version, inputs.window.take());
+    (inputs.version, summary, st.summary_window.clone())
+}
+
+/// TRDD-ER88PXNB C2: put the card window first in an MCP answer built from the windowed summary.
+// WHY: lean shaping (lean_response.rs shape_generic) writes top-level scalars first and drops or elides objects under the token ceiling (narrow_to keeps the first N keys), and the CLI digest prints only a verdict, a text head, or the first 300 characters of the JSON. For get_window_eta and get_account_burners (verdict) and get_body_writers (text) the CLI stdout will not show it; their --out file will.
+fn with_card_window(payload: Value, window: Option<&crate::SummaryWindow>) -> Value {
+    match (window, payload) {
+        (Some(w), Value::Object(obj)) => {
+            let mut out = serde_json::Map::with_capacity(obj.len() + 1);
+            out.insert("summaryWindow".into(), Value::String(w.sentence()));
+            out.extend(obj);
+            Value::Object(out)
+        }
+        (_, p) => p,
+    }
+}
+
+/// TRDD-ER88PXNB A2: the answer of `summary_for_ids`. `attribution` is Some only when `family_built`; None means the caller
+/// reads `st.otel_attribution` as before. WHY it exists: sessions older than the card window are missing from the windowed
+/// summary, so a by-id lookup builds just that session's family. A family build is `summarize_spans` over the whole span
+/// window (every windowed OTEL session) plus ONLY the family's log cards, so it is a superset view of what the lookup reads,
+/// never stored in `summary_cache`.
+#[derive(Clone)]
+pub struct FamilySummary {
+    pub summary: Arc<Value>,
+    pub attribution: Option<indexmap::IndexMap<String, Vec<Value>>>,
+    pub family_built: bool,
+}
+
+/// TRDD-ER88PXNB A2: the one-slot memo of the last family build (`CoreState.family_summary_memo`). WHY: a dashboard polling
+/// one old session would otherwise rebuild its family on every request; the memo bounds that to one build per
+/// `data_version`, or per `STALE_BUDGET_MS` while ingest keeps moving `data_version`.
+pub struct FamilyMemo {
+    /// The family's session ids, sorted.
+    pub ids: Vec<String>,
+    /// `data_version` read when the spans of the build were snapshotted.
+    pub version: u64,
+    pub built_at: std::time::Instant,
+    pub built: FamilySummary,
+}
+
+/// TRDD-ER88PXNB A2: the summary for a by-id lookup. WHY: the cached summary covers only the cards active within the card
+/// window, so a session older than the window is missing from it and a per-session lookup would report it not found.
+/// When the family of the wanted ids (seeds, their link twins, `agent-X` partners, parents and children, to a fixpoint)
+/// holds a card older than the window cutoff, this builds a summary for just that family: `summarize_spans` over the whole
+/// span window (every windowed OTEL session) plus ONLY the family's log cards, through the same `merge_summary` as the
+/// full path. That makes it a superset view, never stored in `summary_cache`. The build runs OFF the state lock and is
+/// memoized in ONE slot by the family's sorted ids, for one `data_version` or `STALE_BUDGET_MS`, whichever the caller
+/// meets first. Otherwise (window off, unknown id, every family card inside the window) the cached summary is returned.
+/// The use-cached decision trusts the served summary's window, which under sustained ingest can be a stale `cached_any`
+/// serve that predates a very recent family card (the same staleness `summary_now` already has). COST: every call, even one
+/// answered from the cache, clones the card list (Arc clones), indexes it and walks the family before deciding; the build
+/// itself clones the whole span window under the lock. Acceptable for a by-id lookup; do not call it per card in a loop.
+pub fn summary_for_ids(state: &Arc<Mutex<CoreState>>, now_ms: f64, is_seed: &dyn Fn(&str) -> bool) -> FamilySummary {
+    use std::collections::HashMap;
+    use crate::feed_merge;
+    // Takes and drops the state lock itself; must not be called while a guard is held.
+    let (_v, summary, window) = summary_now_windowed(state, now_ms);
+    let cached = |summary: Arc<Value>| FamilySummary { summary, attribution: None, family_built: false };
+    // Window off: answer before taking any card, so this path clones no cards.
+    // The card snapshot and its data_version are read in ONE critical section: the memo stores that version, and a
+    // version read after a later write would label old cards as current (they would then hit the memo until the next write).
+    let (cards, cards_version) = {
+        let st = state.lock_timed();
+        if !st.summary_card_days.is_finite() || st.summary_card_days <= 0.0 {
+            return cached(summary);
+        }
+        (st.cards.parsed_cards(), st.data_version)
+    };
+    fn sid(c: &Value) -> &str {
+        c.get("sessionId").and_then(Value::as_str).unwrap_or("")
+    }
+    fn parent(c: &Value) -> &str {
+        c.get("parentSessionId").and_then(Value::as_str).unwrap_or("")
+    }
+    // An empty sessionId is no identity: indexing it would pair unrelated cards.
+    let index: HashMap<&str, usize> = cards.iter().enumerate().map(|(i, c)| (sid(c), i)).filter(|(id, _)| !id.is_empty()).collect();
+    let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, c) in cards.iter().enumerate() {
+        if !parent(c).is_empty() {
+            children.entry(parent(c)).or_default().push(i);
+        }
+    }
+    let mut in_family = vec![false; cards.len()];
+    let mut work: Vec<usize> = Vec::new();
+    for (i, c) in cards.iter().enumerate() {
+        let id = sid(c);
+        if !id.is_empty() && is_seed(id) {
+            in_family[i] = true;
+            work.push(i);
+        }
+    }
+    while let Some(i) = work.pop() {
+        let c = &cards[i];
+        let id = sid(c);
+        let mut found: Vec<usize> = Vec::new();
+        if !id.is_empty() {
+            if feed_merge::is_link_placeholder(c) {
+                found.extend(index.get(feed_merge::link_twin_id(c).as_str()).copied());
+            }
+            if let Some(x) = id.strip_prefix("agent-") {
+                found.extend(index.get(x).copied());
+            }
+            found.extend(children.get(id).into_iter().flatten().copied());
+        }
+        if !parent(c).is_empty() {
+            found.extend(index.get(parent(c)).copied());
+        }
+        for j in found {
+            if !in_family[j] {
+                in_family[j] = true;
+                work.push(j);
+            }
+        }
+    }
+    let family_cards: Vec<Arc<Value>> = cards.iter().zip(&in_family).filter(|(_, k)| **k).map(|(c, _)| c.clone()).collect();
+    if family_cards.is_empty() {
+        return cached(summary);
+    }
+    // A window of None while days > 0 means build: the safe direction.
+    let use_cached = window.as_ref().is_some_and(|w| family_cards.iter().all(|c| crate::log_reader::last_active_ms(c) >= w.cutoff_ms));
+    if use_cached {
+        return cached(summary);
+    }
+    let mut ids: Vec<String> = family_cards.iter().map(|c| sid(c).to_owned()).collect();
+    ids.sort();
+    let (spans, accounts) = {
+        let mut st = state.lock_timed();
+        if let Some(m) = &st.family_summary_memo {
+            if m.ids == ids && (m.version == st.data_version || m.built_at.elapsed() < std::time::Duration::from_millis(STALE_BUDGET_MS)) {
+                return m.built.clone();
+            }
+        }
+        st.family_summary_builds += 1;
+        (st.window.spans.clone(), st.accounts.snapshot())
+    };
+    let base = crate::summarize::summarizer::summarize_spans(&spans, &|sid| accounts.get(sid).cloned());
+    let (merged, attribution) = CoreState::merge_summary(base, &family_cards);
+    let built = FamilySummary { summary: Arc::new(merged), attribution: Some(attribution), family_built: true };
+    state.lock_timed().family_summary_memo = Some(FamilyMemo { ids, version: cards_version, built_at: std::time::Instant::now(), built: built.clone() });
+    built
 }
 
 /// The merged summary restricted to what the burn computation reads, built with the state lock
@@ -497,6 +651,10 @@ pub(crate) fn burn_summary_now(state: &Arc<Mutex<CoreState>>) -> Arc<Value> {
         (st.data_version, st.burn_snapshot())
     };
     let built = Arc::new(CoreState::burn_subset_summary(&inputs.spans, &inputs.cards, &inputs.accounts));
+    // TRDD-ER88PXNB D7: one boot-phase reading after the first burn-subset build. WHY: the burn subset and the first
+    // summary build both land in the first seconds of a boot, and the isolated run needs to attribute commit to each.
+    static FIRST_BURN_SUBSET: std::sync::Once = std::sync::Once::new();
+    FIRST_BURN_SUBSET.call_once(|| crate::rss_guard::log_boot_phase("first_burn_subset_build", None));
     let mut st = state.lock_timed();
     if st.data_version == version {
         st.burn_subset_memo = Some((version, built.clone()));
@@ -552,7 +710,7 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
     if hub.client_count() == 0 {
         return;
     }
-    let (_, summary) = summary_now(state, now_ms);
+    let (_, summary, window) = summary_now_windowed(state, now_ms);
     // The lock covers ONLY the three cheap reads; the payload assembly (which walks every span
     // and re-strips every card) runs after it is released.
     let (spans, gaps, build_id) = {
@@ -560,7 +718,7 @@ pub fn push_update(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) {
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
         (st.window.spans.clone(), gaps, st.build_id.clone())
     };
-    let payload = build_update_payload(&summary, &spans, &build_id, gaps, now_ms).to_string();
+    let payload = build_update_payload(&summary, window.as_ref(), &spans, &build_id, gaps, now_ms).to_string();
     hub.broadcast(sse_frame(&payload));
 }
 
@@ -656,20 +814,43 @@ pub struct StrippedView<'a>(pub &'a Value);
 
 const EMPTY_TIMELINE: &[Value] = &[];
 
+fn stripped_entries<M: serde::ser::SerializeMap>(m: &mut M, obj: &serde_json::Map<String, Value>) -> Result<(), M::Error> {
+    for (k, v) in obj {
+        if k == "sessions" {
+            if let Some(arr) = v.as_array() {
+                m.serialize_entry(k, &StrippedSessions(arr))?;
+                continue;
+            }
+        }
+        m.serialize_entry(k, v)?;
+    }
+    Ok(())
+}
+
 impl serde::Serialize for StrippedView<'_> {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let Some(obj) = self.0.as_object() else { return self.0.serialize(ser) };
         let mut m = ser.serialize_map(Some(obj.len()))?;
-        for (k, v) in obj {
-            if k == "sessions" {
-                if let Some(arr) = v.as_array() {
-                    m.serialize_entry(k, &StrippedSessions(arr))?;
-                    continue;
-                }
-            }
-            m.serialize_entry(k, v)?;
-        }
+        stripped_entries(&mut m, obj)?;
+        m.end()
+    }
+}
+
+/// TRDD-ER88PXNB C1: `StrippedView` plus a trailing `summaryWindow` key when the card window is on; with None it writes
+/// exactly what `StrippedView` writes.
+// WHY a serialization wrapper and not a key inside the summary Value: the summary engine recognises its own previous
+// output by Arc identity, so inserting into the cached Value would copy it and force a full pass on every build; and
+// the window must come from the same summary_now_windowed call as the summary (card section "Step C constraint").
+pub struct StrippedViewWindowed<'a>(pub &'a Value, pub Option<&'a crate::SummaryWindow>);
+
+impl serde::Serialize for StrippedViewWindowed<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let (Some(obj), Some(w)) = (self.0.as_object(), self.1) else { return StrippedView(self.0).serialize(ser) };
+        let mut m = ser.serialize_map(Some(obj.len() + 1))?;
+        stripped_entries(&mut m, obj)?;
+        m.serialize_entry("summaryWindow", &w.to_json())?;
         m.end()
     }
 }
@@ -1071,7 +1252,13 @@ fn light_session(session: &Value) -> Value {
 /// TRDD-MVR6PXC0: the body is now four steps — three cheap ones that need the state, and ONE
 /// (`reparse_session_card`) that needs only `&Env`. That is the split `resolve_session_card_offlock`
 /// exploits; the pieces are shared so the two drivers cannot drift into two different answers.
-fn resolve_session_card(st: &mut CoreState, summary: &Value, session_id: &str, now: i64) -> Option<Value> {
+fn resolve_session_card(
+    st: &mut CoreState,
+    summary: &Value,
+    session_id: &str,
+    now: i64,
+    attribution: Option<&indexmap::IndexMap<String, Vec<Value>>>,
+) -> Option<Value> {
     let mut session = summary_card(summary, session_id);
     if timeline_empty(session.as_ref()) && st.cards.contains(session_id) {
         if let Some(card) = reparse_session_card(&st.log_env, session_id, now) {
@@ -1079,7 +1266,7 @@ fn resolve_session_card(st: &mut CoreState, summary: &Value, session_id: &str, n
         }
     }
     if let Some(s) = session.as_mut() {
-        graft_otel_attribution_onto(st, s, session_id);
+        graft_otel_attribution_onto(st, s, session_id, attribution);
     }
     session
 }
@@ -1128,13 +1315,21 @@ fn stamp_and_store_reparsed(st: &mut CoreState, mut card: Value) -> Value {
 /// TRDD-5GFSFX0Q's graft, onto the SERVED copy only — it runs AFTER `put_log_session`, so the
 /// STORED card stays pure. Cheap and state-bound: one IndexMap read plus a merge of two Vecs already
 /// sized to a single session's timeline, so this half keeps the guard.
-fn graft_otel_attribution_onto(st: &CoreState, session: &mut Value, session_id: &str) {
+fn graft_otel_attribution_onto(
+    st: &CoreState,
+    session: &mut Value,
+    session_id: &str,
+    attribution: Option<&indexmap::IndexMap<String, Vec<Value>>>,
+) {
     let claude_log = session.get("source").and_then(Value::as_str) == Some("claude_code")
         && session.get("dataSource").and_then(Value::as_str) == Some("log");
     if !claude_log {
         return;
     }
-    if let Some(entries) = st.otel_attribution.get(session_id).filter(|e| !e.is_empty()) {
+    // TRDD-ER88PXNB A3: a family build (summary_for_ids) carries its own attribution, because `st.otel_attribution` is the
+    // attribution of the cached summary and does not cover the family's cards; None reads the state's map as before.
+    let attribution = attribution.unwrap_or(&st.otel_attribution);
+    if let Some(entries) = attribution.get(session_id).filter(|e| !e.is_empty()) {
         let log_tl: Vec<Value> = session.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default();
         let grafted = crate::feed_merge::graft_otel_attribution(&log_tl, Some(entries));
         if let Some(obj) = session.as_object_mut() {
@@ -1173,6 +1368,19 @@ fn resolve_session_card_offlock(
     summary: &Value,
     session_id: &str,
     now: i64,
+    attribution: Option<&indexmap::IndexMap<String, Vec<Value>>>,
+) -> Option<Value> {
+    resolve_session_card_offlock_with(st2, summary, session_id, attribution, || reparse_session_card(env, session_id, now))
+}
+
+/// The body of `resolve_session_card_offlock`, with the reparse injected. The seam exists so a test can prove the
+/// reparse runs with no CoreState guard held (TRDD-MVR6PXC0); production passes `reparse_session_card`.
+fn resolve_session_card_offlock_with(
+    st2: &Arc<Mutex<CoreState>>,
+    summary: &Value,
+    session_id: &str,
+    attribution: Option<&indexmap::IndexMap<String, Vec<Value>>>,
+    reparse: impl FnOnce() -> Option<Value>,
 ) -> Option<Value> {
     let mut session = summary_card(summary, session_id);
     if timeline_empty(session.as_ref()) {
@@ -1183,7 +1391,7 @@ fn resolve_session_card_offlock(
         };
         if has_log {
             // NO GUARD IS ALIVE HERE — this is the multi-MB disk read + JSONL parse.
-            if let Some(card) = reparse_session_card(env, session_id, now) {
+            if let Some(card) = reparse() {
                 // Lock 2: the accountId stamp + the store.
                 let mut st = st2.lock_timed();
                 session = Some(stamp_and_store_reparsed(&mut st, card));
@@ -1193,7 +1401,7 @@ fn resolve_session_card_offlock(
     if let Some(s) = session.as_mut() {
         // Lock 3: the OTEL graft's one map read and in-memory merge.
         let st = st2.lock_timed();
-        graft_otel_attribution_onto(&st, s, session_id);
+        graft_otel_attribution_onto(&st, s, session_id, attribution);
     }
     session
 }
@@ -1305,13 +1513,13 @@ fn json_response(status: StatusCode, body: String) -> Response<SseBody> {
 /// frame for as long as the client stays connected.
 fn sse_response(state: &Arc<Mutex<CoreState>>, hub: &SseHub, now_ms: f64) -> Response<SseBody> {
     use http_body_util::BodyExt;
-    let (_, summary) = summary_now(state, now_ms);
+    let (_, summary, window) = summary_now_windowed(state, now_ms);
     let (spans, gaps, build_id) = {
         let st = state.lock_timed();
         let gaps = crate::collector_lifecycle::compute_gaps(&st.lifecycle, crate::collector_lifecycle::MIN_GAP_MS);
         (st.window.spans.clone(), gaps, st.build_id.clone())
     };
-    let first = build_update_payload(&summary, &spans, &build_id, gaps, now_ms).to_string();
+    let first = build_update_payload(&summary, window.as_ref(), &spans, &build_id, gaps, now_ms).to_string();
     let mut rx = hub.subscribe();
     let (tx, frames) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
     // Pump the broadcast into this client's own queue; the pump ends when the client drops the
@@ -1401,7 +1609,7 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     let now = crate::now_ms() as f64;
     // Read per request, like the TS: 28 KB, and a dev can edit the shell without a restart.
     let tmpl = std::fs::read_to_string(media_dir.join("index.html")).map_err(|e| format!("index.html: {e}"))?;
-    let (_, summary) = summary_now(state, now);
+    let (_, summary, window) = summary_now_windowed(state, now);
     let (spans, build_id) = {
         let st = state.lock_timed();
         // The SAME build_id the update frames carry — the dashboard reloads on a mismatch, so a
@@ -1413,7 +1621,7 @@ fn dashboard_html(state: &Arc<Mutex<CoreState>>, media_dir: &std::path::Path, re
     } else {
         crate::update_payload::compute_sidebar_payload(&summary, &spans, now)
     };
-    let summary_json = safe_json_text(serde_json::to_string(&StrippedView(&summary)).expect("stripped summary serializes: string keys only"));
+    let summary_json = safe_json_text(serde_json::to_string(&StrippedViewWindowed(&summary, window.as_ref())).expect("stripped summary serializes: string keys only"));
     let sidebar_json = safe_json(&sidebar);
     // The mount prefix is EMPTY here, deliberately, and not read from AGENTLENS_BASE_PATH: the
     // base-path STRIP in handle() is still on this module's deferred list, and a shell that emits
@@ -1620,8 +1828,8 @@ async fn handle(
     } else if path == "/events" {
         sse_response(&state, &hub, crate::now_ms() as f64)
     } else if method == Method::GET && path == "/api/summary" {
-        let (_, summary) = summary_now(&state, crate::now_ms() as f64);
-        let body = serde_json::to_string(&StrippedView(&summary)).expect("stripped summary serializes: string keys only");
+        let (_, summary, window) = summary_now_windowed(&state, crate::now_ms() as f64);
+        let body = serde_json::to_string(&StrippedViewWindowed(&summary, window.as_ref())).expect("stripped summary serializes: string keys only");
         json_response(StatusCode::OK, body)
     } else if method == Method::GET && path == "/api/server-stats" {
         let body = {
@@ -2126,14 +2334,19 @@ async fn handle(
 
             // PreToolUse (default): decide before the launch happens. SendMessage takes the
             // NARROWER evaluator, and its deny further requires the TARGET to resolve dead.
-            if !st.hook_runtime.gate_enabled {
+            let tool_name = p.get("tool_name").and_then(Value::as_str);
+            // B8 (TRDD-RBBEX59R): `Read` is matched ONLY for the image cache-guard, which is governed by
+            // its OWN switch (cache_guard_enabled), never by the Burn gate. The gate_enabled early return
+            // used to sit above this branch, so turning Burn gate off silently also turned the image
+            // guard off, with no panel switch that named it. Read must therefore be decided BEFORE the
+            // gate_enabled return; every other tool keeps gate_enabled as its default switch.
+            if tool_name != Some("Read") && !st.hook_runtime.gate_enabled {
                 return no_content();
             }
-            let tool_name = p.get("tool_name").and_then(Value::as_str);
             let d = if tool_name == Some("Read") {
-                // Read is matched ONLY for the image cache-guard, which has its own runtime
-                // switch: it rides a hot path, so "the image warning annoys me" must never cost
-                // the user the agent-launch disaster gate. Warn-only by construction.
+                // The guard rides a hot path: "the image warning annoys me" must never cost the user the
+                // agent-launch disaster gate, and (B8) turning the gate off must not cost the image
+                // warning either. Warn-only by construction.
                 if !st.hook_runtime.cache_guard_enabled {
                     return no_content();
                 }
@@ -2239,7 +2452,7 @@ async fn handle(
                 // guard is an O(window) rebuild that measured 12–64 s holds on the live server,
                 // during which every ingest and read path queues behind it. Nothing else in this
                 // route needs `CoreState`, so the guard disappears entirely.
-                let (_, summary) = summary_now(&state, crate::now_ms() as f64);
+                let (_, summary, _) = summary_now_windowed(&state, crate::now_ms() as f64);
                 let body = {
                     // `(s.workspace ?? '') === workspace || s.workspace?.startsWith(workspace)`
                     let sessions: Vec<Value> = summary
@@ -2461,10 +2674,18 @@ async fn handle(
                         // eighteen direct sites, one call deep where a grep here could not see it.
                         // Renamed `session_status_over` (it computes OVER a summary, it does not
                         // build one) and the summary is read off the lock and passed in.
-                        let (_, summary) = summary_now(&state, now);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let (summary, card_window) = match sid.as_deref().filter(|w| !w.is_empty()) {
+                            Some(wanted) => (summary_for_ids(&state, now, &|id| id == wanted).summary, None),
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now);
+                                (read, window)
+                            }
+                        };
                         let mut st = state.lock_timed();
                         let payload = st.session_status_over(&summary, sid.as_deref(), ws.as_deref(), now);
                         drop(st);
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_window_budget" => {
@@ -2482,7 +2703,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock; the guard is kept only for the
                         // lifecycle gaps, which read the live `CoreState`.
-                        let (_, summary) = summary_now(&state, now);
+                        let (_, summary, card_window) = summary_now_windowed(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let gaps = {
                             let st = state.lock_timed();
@@ -2520,6 +2741,7 @@ async fn handle(
                                 .unwrap_or_default();
                             crate::mcp_tools::get_instruction_suggestions(&sessions, ws.as_deref(), &existing)
                         };
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_image_report" | "find_resident_blobs" | "query_context_blocks" => {
@@ -2607,7 +2829,17 @@ async fn handle(
                         // TRDD-QE114936: ONE off-lock summary read for the WHOLE handler — the
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. Both used to be O(window) rebuilds taken under the state lock.
-                        let (_, timeline_summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let (timeline_summary, family_attribution, card_window) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => {
+                                let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
+                                (family.summary, family.attribution, None)
+                            }
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now as f64);
+                                (read, None, window)
+                            }
+                        };
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-MVR6PXC0: the log env, cloned off the lock ONCE for the whole scan.
@@ -2623,7 +2855,7 @@ async fn handle(
                                 // Held across it, this site measured 1,475 ms, and the state mutex is
                                 // the ingest path's mutex: every posting session stalls for exactly
                                 // as long as we hold it, so a 4 s hold is 4 s of blocked ingest.
-                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now, family_attribution.as_ref())
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -2631,6 +2863,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("cost-by-cause scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_agent_tokens" => {
@@ -2641,13 +2874,20 @@ async fn handle(
                         // TRDD-QE114936: summary and id selection happen OFF the lock; the guard
                         // below covers only the `resolve_session_card` loop, which needs
                         // `&mut CoreState` for its reparse-on-demand fallback.
-                        let (_, summary) = summary_now(&state, now as f64);
-                        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // The matched card is not known until the shaper runs, so resolve only
                         // the ONE id the query can possibly name — the normalized equivalence
                         // class is a pure string test, so it is safe to precompute here.
                         let q = args.get("agentId").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
                         let q_bare = q.strip_prefix("agent-").unwrap_or(&q).to_owned();
+                        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                        // Seed = the same agent-id equivalence the tool applies (lowercase, agent- prefix stripped);
+                        // the same expression as `strip_agent_prefix` in mcp_tools.rs (private there) — keep the two in step.
+                        let family = summary_for_ids(&state, now as f64, &|id| {
+                            let lower = id.to_lowercase();
+                            lower.strip_prefix("agent-").unwrap_or(&lower) == q_bare
+                        });
+                        let summary = family.summary.clone();
+                        let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let ids: Vec<String> = sessions
                             .iter()
                             .filter_map(|s| s.get("sessionId").and_then(Value::as_str))
@@ -2661,7 +2901,7 @@ async fn handle(
                             let mut st = state.lock_timed();
                             let mut timelines = std::collections::HashMap::new();
                             for id in ids {
-                                let tl = resolve_session_card(&mut st, &summary, &id, now)
+                                let tl = resolve_session_card(&mut st, &summary, &id, now, family.attribution.as_ref())
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default();
                                 timelines.insert(id, tl);
@@ -2688,7 +2928,14 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
-                        let (_, summary) = summary_now(&state, now);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let (summary, card_window) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => (summary_for_ids(&state, now, &|id| id == wanted).summary, None),
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now);
+                                (read, window)
+                            }
+                        };
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let env = state.lock_timed().log_env.clone();
                         let a = args.clone();
@@ -2710,6 +2957,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("inflation scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "find_context_hogs" => {
@@ -2720,7 +2968,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock (it was an O(window) rebuild held
                         // under the guard); the lock is now taken only for the log env.
-                        let (_, summary) = summary_now(&state, now);
+                        let (_, summary, card_window) = summary_now_windowed(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let env = state.lock_timed().log_env.clone();
                         let a = args.clone();
@@ -2744,6 +2992,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("context hog scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_context_growth" => {
@@ -2752,14 +3001,16 @@ async fn handle(
                         // TRDD-QE114936: the summary is read OFF the lock; the guard covers only
                         // the resolved timeline (the same reparse-on-demand + OTEL graft path
                         // row 30 uses), which needs `&mut CoreState`.
-                        let (_, summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                        let family = summary_for_ids(&state, now as f64, &|id| id == session_id);
+                        let summary = family.summary.clone();
                         let card = summary
                             .get("sessions")
                             .and_then(Value::as_array)
                             .and_then(|v| v.iter().find(|c| c.get("sessionId").and_then(Value::as_str) == Some(session_id.as_str())).cloned());
                         let timeline: Vec<Value> = {
                             let mut st = state.lock_timed();
-                            resolve_session_card(&mut st, &summary, &session_id, now)
+                            resolve_session_card(&mut st, &summary, &session_id, now, family.attribution.as_ref())
                                 .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                 .unwrap_or_default()
                         };
@@ -2774,9 +3025,11 @@ async fn handle(
                     "get_subagent_tree" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock — nothing else here needs the state.
-                        let (_, summary) = summary_now(&state, now);
+                        let session_id = s("sessionId").unwrap_or_default();
+                        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                        let summary = summary_for_ids(&state, now, &|id| id == session_id).summary;
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
-                        let payload = crate::mcp_tools::get_subagent_tree(&sessions, &s("sessionId").unwrap_or_default(), now);
+                        let payload = crate::mcp_tools::get_subagent_tree(&sessions, &session_id, now);
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_loaded_plugin_versions" => {
@@ -2825,13 +3078,14 @@ async fn handle(
                     "get_cost_rollup" | "predict_session_cost" => {
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock — nothing else here needs the state.
-                        let (_, summary) = summary_now(&state, now);
+                        let (_, summary, card_window) = summary_now_windowed(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let payload = if name == "get_cost_rollup" {
                             crate::mcp_tools::get_cost_rollup(&sessions, &args, now)
                         } else {
                             crate::mcp_tools::predict_session_cost(&sessions, &args, now)
                         };
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_session_detail" => {
@@ -2842,11 +3096,13 @@ async fn handle(
                         // uses — reparse-on-demand + OTEL graft) and the fork-ancestor walk, both
                         // of which need `CoreState`. The multi-GB transcript parse then runs with
                         // the lock RELEASED.
-                        let (_, summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                        let family = summary_for_ids(&state, now as f64, &|id| id == session_id);
+                        let summary = family.summary.clone();
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let (timeline, env, ancestor) = {
                             let mut st = state.lock_timed();
-                            let timeline: Vec<Value> = resolve_session_card(&mut st, &summary, &session_id, now)
+                            let timeline: Vec<Value> = resolve_session_card(&mut st, &summary, &session_id, now, family.attribution.as_ref())
                                 .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                 .unwrap_or_default();
                             let parent_of = |sid: &str| -> Option<String> {
@@ -2904,7 +3160,7 @@ async fn handle(
                         let now = crate::now_ms() as f64;
                         // TRDD-QE114936: summary OFF the lock; the guard covers only the two
                         // path/home reads that need `CoreState`.
-                        let (_, summary) = summary_now(&state, now);
+                        let (_, summary, card_window) = summary_now_windowed(&state, now);
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let (dir, home) = {
                             let st = state.lock_timed();
@@ -2944,6 +3200,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("body-writers scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_cache_creation_report" => {
@@ -3524,7 +3781,12 @@ async fn handle(
                         } else {
                             // TRDD-QE114936: summary OFF the lock; the guard covers only the
                             // bodies-dir path read.
-                            let (_, summary) = summary_now(&state, now);
+                            // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                            // a prefix shorter than 8 chars would seed most of the corpus into one family build
+                            let summary = summary_for_ids(&state, now, &|id| {
+                                id == session_id || (session_id.len() >= 8 && id.starts_with(session_id.as_str()))
+                            })
+                            .summary;
                             let sessions: Vec<Value> =
                                 summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                             let bodies_dir = {
@@ -3661,6 +3923,7 @@ async fn handle(
                             crate::account_state_timeline::account_state_timeline_path(&st.data_dir)
                         };
                         let segments = crate::account_burners::read_account_segments(&timeline_path);
+                        let mut card_window: Option<crate::SummaryWindow> = None;
                         let payload = if segments.is_empty() {
                             crate::mcp_tools::error_payload(
                                 "No account-state timeline yet (~/.agentlens/account-state.ndjson) — nothing to project against.",
@@ -3673,7 +3936,8 @@ async fn handle(
                                     crate::account_burners::known_accounts(&segments)
                                 )),
                                 Some(target) => {
-                                    let (_, summary) = summary_now(&state, now);
+                                    let (_, summary, window) = summary_now_windowed(&state, now);
+                                    card_window = window;
                                     let sessions: Vec<Value> =
                                         summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                                     let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
@@ -3694,6 +3958,7 @@ async fn handle(
                                 }
                             }
                         };
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_account_burners" => {
@@ -3714,6 +3979,7 @@ async fn handle(
                             crate::account_state_timeline::account_state_timeline_path(&st.data_dir)
                         };
                         let segments = crate::account_burners::read_account_segments(&timeline_path);
+                        let mut card_window: Option<crate::SummaryWindow> = None;
                         let payload = if segments.is_empty() {
                             crate::mcp_tools::error_payload(
                                 "No account-state timeline yet (~/.agentlens/account-state.ndjson) — the server records it on account changes; nothing to attribute against.",
@@ -3731,7 +3997,8 @@ async fn handle(
                                     match err {
                                         Some(e) => crate::mcp_tools::error_payload(&e),
                                         None => {
-                                            let (_, summary) = summary_now(&state, now);
+                                            let (_, summary, window) = summary_now_windowed(&state, now);
+                                            card_window = window;
                                             let sessions: Vec<Value> =
                                                 summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                                             let events = crate::burn::monitor::gather_consumption_events(&sessions, &[], now);
@@ -3774,6 +4041,7 @@ async fn handle(
                                 }
                             }
                         };
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_cache_risk_costs" => {
@@ -3786,7 +4054,7 @@ async fn handle(
                         // TRDD-QE114936: ONE off-lock summary read for the WHOLE handler — the
                         // session list here and every candidate's timeline inside `timeline_of`
                         // below. The lock is now taken only for the log env.
-                        let (_, timeline_summary) = summary_now(&state, now as f64);
+                        let (_, timeline_summary, card_window) = summary_now_windowed(&state, now as f64);
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
@@ -3818,7 +4086,7 @@ async fn handle(
                                 // the lock above. This site held the mutex 1,234–3,948 ms across that
                                 // reparse, and the state mutex is the ingest path's mutex — a 4 s hold
                                 // blocks every session posting to this server for 4 s.
-                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now, None)
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3834,6 +4102,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("cache-risk-cost scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_cache_break_report" => {
@@ -3858,7 +4127,17 @@ async fn handle(
                         // benefit) and threaded into every candidate instead. The SAME read also
                         // supplies this handler's session list, so the lock is taken only for the
                         // log env.
-                        let (_, timeline_summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let (timeline_summary, family_attribution, card_window) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => {
+                                let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
+                                (family.summary, family.attribution, None)
+                            }
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now as f64);
+                                (read, None, window)
+                            }
+                        };
                         let sessions: Vec<Value> =
                             timeline_summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         // TRDD-ZQQYRYBO I6c2: no TTL-context fetch here any more — the
@@ -3890,7 +4169,7 @@ async fn handle(
                                 // lock above). Held across the reparse this site measured 1,037 and
                                 // 1,274 ms; the state mutex is the ingest path's mutex, so every one
                                 // of those milliseconds is blocked ingest for every posting session.
-                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now)
+                                resolve_session_card_offlock(&st2, &env, &timeline_summary, sid, now, family_attribution.as_ref())
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3905,6 +4184,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("cache-break scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "check_cache_expiry" => {
@@ -3921,7 +4201,17 @@ async fn handle(
                         // this guard rebuilt the summary inline on a miss and then deep-cloned
                         // every card while holding the state lock — 10.2 s measured live. Only
                         // the TTL context still needs the guard.
-                        let (_, summary) = summary_now(&state, now as f64);
+                        // TRDD-ER88PXNB B: a sessionId lookup reaches sessions older than the card window; the aggregate path stays windowed.
+                        let (summary, family_attribution, card_window) = match args.get("sessionId").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+                            Some(wanted) => {
+                                let family = summary_for_ids(&state, now as f64, &|id| id == wanted);
+                                (family.summary, family.attribution, None)
+                            }
+                            None => {
+                                let (_, read, window) = summary_now_windowed(&state, now as f64);
+                                (read, None, window)
+                            }
+                        };
                         let sessions: Vec<Value> = summary.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
                         let ttl = {
                             let mut st = state.lock_timed();
@@ -3945,7 +4235,7 @@ async fn handle(
                                 // This site never surfaced a ≥1000 ms line in the measured window, but
                                 // it probes the same multi-MB transcripts under the same mutex the
                                 // ingest path takes; a hold here blocks every posting session too.
-                                resolve_session_card_offlock(&st2, &log_env, &summary, sid, now)
+                                resolve_session_card_offlock(&st2, &log_env, &summary, sid, now, family_attribution.as_ref())
                                     .and_then(|c| c.get("timeline").and_then(Value::as_array).cloned())
                                     .unwrap_or_default()
                             };
@@ -3977,6 +4267,7 @@ async fn handle(
                         })
                         .await
                         .map_err(|e| format!("cache-expiry scan join failed: {e}"))?;
+                        let payload = with_card_window(payload, card_window.as_ref());
                         crate::mcp_tools::tool_ok_lean(&id, &payload, &args)
                     }
                     "get_account_status" => {
@@ -4055,7 +4346,8 @@ async fn handle(
                         // branch that needs it — the other two tools never read a card model, so
                         // they must not pay for a summary read at all.
                         let card_model = if name == "get_context_history" {
-                            let (_, summary) = summary_now(&state, crate::now_ms() as f64);
+                            // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+                            let summary = summary_for_ids(&state, crate::now_ms() as f64, &|id| id == session_id).summary;
                             summary
                                 .get("sessions")
                                 .and_then(Value::as_array)
@@ -4159,7 +4451,8 @@ async fn handle(
         // CoreState would stall every other request on the server.
         let session_id = percent_decode(&path["/api/composition-index/".len()..]);
         let now = crate::now_ms() as f64;
-        let (_, comp_summary) = summary_now(&state, now);
+        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+        let comp_summary = summary_for_ids(&state, now, &|id| id == session_id).summary;
         let comp_projects = crate::composition_project_map(&comp_summary);
         let comp = composition_for(&state, &session_id, now, &comp_projects).await?;
         let summary = crate::context_composition_index::session_composition_summary(&comp);
@@ -4202,10 +4495,12 @@ async fn handle(
         let now = crate::now_ms();
         // TRDD-QE114936: summary read OFF the lock before the guard below, instead of
         // resolve_session_card rebuilding it inline while holding `st`.
-        let (_, summary) = summary_now(&state, now as f64);
+        // TRDD-ER88PXNB A3: by-id lookup reaches sessions older than the card window.
+        let family = summary_for_ids(&state, now as f64, &|id| id == session_id);
+        let summary = family.summary.clone();
         let body = {
             let mut st = state.lock_timed();
-            let session = resolve_session_card(&mut st, &summary, &session_id, now);
+            let session = resolve_session_card(&mut st, &summary, &session_id, now, family.attribution.as_ref());
             // `session?.<k> ?? <default>` — nullish: an explicit null falls back too.
             let field = |k: &str, default: Value| {
                 session.as_ref().and_then(|s| s.get(k)).filter(|v| !v.is_null()).cloned().unwrap_or(default)
@@ -4606,7 +4901,7 @@ mod rebuild_admission_tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use super::{rebuild_gate, rebuild_once, summary_now, READER_WAITING, REBUILDER_ACTIVE, STALE_BUDGET_MS};
+    use super::{rebuild_gate, rebuild_once, summary_for_ids, summary_now, summary_now_windowed, READER_WAITING, REBUILDER_ACTIVE, STALE_BUDGET_MS};
     use crate::{CoreState, LockTimed};
 
     /// `REBUILDER_ACTIVE` is process-global and cargo runs these tests on parallel threads, so a
@@ -4798,6 +5093,51 @@ mod rebuild_admission_tests {
         (dir.clone(), RemoveOnDrop(dir))
     }
 
+    /// TRDD-MVR6PXC0: the reparse in `resolve_session_card_offlock` must run with NO CoreState guard held — the state
+    /// mutex is the ingest path's mutex, and the reparse is a multi-MB parse. Thread A is parked INSIDE the injected
+    /// reparse; while it is parked, the main thread must be able to take the state mutex.
+    ///
+    /// MUTATION CHECK: move the `reparse()` call in `resolve_session_card_offlock_with` inside the first lock
+    /// section (before `st` is dropped) and this MUST fail on the try_lock assertion.
+    #[test]
+    fn offlock_reparse_runs_without_the_state_guard() {
+        const S: &str = "offlock-sid";
+        let (dir, _cleanup) = unique_dir("offlock-reparse");
+        let state = Arc::new(Mutex::new(CoreState::open(&dir)));
+        let empty_card = serde_json::json!({ "sessionId": S, "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": [] });
+        state.lock_timed().put_log_session(empty_card.clone());
+        let summary = serde_json::json!({ "sessions": [empty_card] });
+
+        let (in_reparse_tx, in_reparse_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let worker_state = Arc::clone(&state);
+        let worker = std::thread::spawn(move || {
+            super::resolve_session_card_offlock_with(&worker_state, &summary, S, None, move || {
+                in_reparse_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).expect("the main thread never released the reparse");
+                Some(serde_json::json!({ "sessionId": S, "startTime": "2026-08-01T10:00:00.000Z", "durationMs": 1000.0, "timeline": [{ "kind": "turn" }] }))
+            })
+        });
+
+        in_reparse_rx.recv_timeout(Duration::from_secs(5)).expect("the reparse closure never started");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut lock_free_during_reparse = false;
+        while Instant::now() < deadline {
+            if state.try_lock().is_ok() {
+                lock_free_during_reparse = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        release_tx.send(()).unwrap();
+        let resolved = worker.join().expect("the resolving thread panicked");
+
+        assert!(lock_free_during_reparse, "the state mutex stayed held for 2 s while the reparse was running: the guard is not dropped before the reparse");
+        let resolved = resolved.expect("the reparsed card must be returned");
+        assert!(resolved["timeline"].as_array().is_some_and(|t| !t.is_empty()), "the returned card must carry the reparsed timeline, got {resolved}");
+        assert!(state.lock_timed().cards.contains(S), "the reparsed card must be stored");
+    }
+
     /// TRDD-735Q3JF4 item 1: the loop must not pre-build for nobody. A fresh state that no reader has
     /// asked about stays unbuilt across a pass, even with the back-off record empty (the boot condition).
     ///
@@ -4926,6 +5266,155 @@ mod rebuild_admission_tests {
         assert!(st.summary_cache.cached_any().is_none(), "nothing to serve stale before the first store");
     }
 
+    /// TRDD-ER88PXNB A2: a state at 2026-08-20T12:00Z with a 14-day card window, one recent card (new1, 1 day old) and one old
+    /// card (old1, 40 days old).
+    fn family_state(tag: &str) -> (Arc<Mutex<CoreState>>, RemoveOnDrop, f64) {
+        family_state_with(tag, &[])
+    }
+
+    /// `family_state` plus extra log cards `(id, start, parentSessionId)`; each is a claude_code log card.
+    fn family_state_with(tag: &str, extra: &[(&str, &str, Option<&str>)]) -> (Arc<Mutex<CoreState>>, RemoveOnDrop, f64) {
+        let (dir, cleanup) = unique_dir(tag);
+        let now = crate::summarize::helpers::parse_iso_ms("2026-08-20T12:00:00.000Z").unwrap();
+        let mut st = CoreState::open(&dir);
+        st.summary_card_days = 14.0;
+        for (id, start) in [("new1", "2026-08-19T12:00:00.000Z"), ("old1", "2026-07-11T12:00:00.000Z")] {
+            st.put_log_session(serde_json::json!({ "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": start, "durationMs": 1000.0, "timeline": [] }));
+        }
+        for (id, start, parent) in extra {
+            let mut c = serde_json::json!({ "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": start, "durationMs": 1000.0, "timeline": [] });
+            if let Some(p) = parent {
+                c["parentSessionId"] = serde_json::json!(p);
+            }
+            st.put_log_session(c);
+        }
+        // summary_now_windowed builds with the real clock, so the summary at the fixed `now` is stored by hand; the
+        // lookups below then read it from the cache like a rebuilder-built one.
+        let mut inputs = st.summary_snapshot_at(now);
+        let build = CoreState::summary_from(&mut inputs, now);
+        st.store_summary(inputs.version, build);
+        st.store_summary_window(inputs.version, inputs.window.take());
+        (Arc::new(Mutex::new(st)), cleanup, now)
+    }
+
+    fn ids_of(summary: &serde_json::Value) -> Vec<String> {
+        summary["sessions"].as_array().unwrap().iter().map(|s| s["sessionId"].as_str().unwrap().to_owned()).collect()
+    }
+
+    /// TRDD-ER88PXNB A2: a by-id lookup of a session older than the card window builds its family, counts the build, and
+    /// leaves the cached windowed summary untouched.
+    /// MUTATION CHECK: make the `use_cached` decision in `summary_for_ids` always true and this MUST fail.
+    #[test]
+    fn summary_for_ids_builds_the_family_of_an_old_session() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state("family-old");
+        let (_, windowed, window) = summary_now_windowed(&state, now);
+        assert_eq!(ids_of(&windowed), vec!["new1"], "precondition: the windowed summary lacks old1");
+        assert_eq!(window.map(|w| w.cards_resident), Some(2));
+        let got = summary_for_ids(&state, now, &|id| id == "old1");
+        assert!(got.family_built, "old1 is older than the cutoff, so the family is built");
+        assert!(ids_of(&got.summary).contains(&"old1".to_owned()), "the family summary carries old1: {}", got.summary);
+        assert!(got.attribution.is_some(), "a family build returns its own attribution");
+        assert_eq!(state.lock_timed().family_summary_builds, 1);
+        let (_, after, _) = summary_now_windowed(&state, now);
+        assert!(Arc::ptr_eq(&after, &windowed), "the family build was not stored in the summary cache");
+        assert_eq!(ids_of(&after), vec!["new1"]);
+    }
+
+    /// TRDD-ER88PXNB A2: a recent or unknown id is answered from the cached summary with no build.
+    #[test]
+    fn summary_for_ids_serves_the_cached_summary_for_recent_or_unknown_ids() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state("family-recent");
+        let (_, windowed, _) = summary_now_windowed(&state, now);
+        for wanted in ["new1", "nope"] {
+            let got = summary_for_ids(&state, now, &|id| id == wanted);
+            assert!(!got.family_built, "{wanted}: no family build");
+            assert!(got.attribution.is_none());
+            assert!(Arc::ptr_eq(&got.summary, &windowed), "{wanted}: the cached summary is served");
+        }
+        assert_eq!(state.lock_timed().family_summary_builds, 0);
+    }
+
+    /// TRDD-ER88PXNB A2: with the card window off the cached summary already holds every card, so nothing is built.
+    #[test]
+    fn summary_for_ids_serves_the_cache_when_the_window_is_off() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state("family-off");
+        state.lock_timed().summary_card_days = 0.0;
+        let got = summary_for_ids(&state, now, &|id| id == "old1");
+        assert!(!got.family_built);
+        assert!(got.attribution.is_none());
+        let (_, windowed, _) = summary_now_windowed(&state, now);
+        assert!(Arc::ptr_eq(&got.summary, &windowed), "window off: the cached summary is served");
+        assert_eq!(state.lock_timed().family_summary_builds, 0);
+    }
+
+    /// TRDD-ER88PXNB A2: the same family asked twice with no data change is built once; the second answer is the memo.
+    /// MUTATION CHECK: delete the memo return in `summary_for_ids` and this MUST fail.
+    #[test]
+    fn summary_for_ids_reuses_the_family_build_for_the_same_family() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state("family-memo");
+        let first = summary_for_ids(&state, now, &|id| id == "old1");
+        let second = summary_for_ids(&state, now, &|id| id == "old1");
+        assert!(first.family_built && second.family_built);
+        assert_eq!(state.lock_timed().family_summary_builds, 1, "the second lookup reuses the memo");
+        assert!(Arc::ptr_eq(&first.summary, &second.summary));
+    }
+
+    /// TRDD-ER88PXNB A2: the family closure. A recent child pulls in its old parent, an old parent pulls in its recent child,
+    /// a recent link placeholder pulls in its old `agent-X` twin, and unrelated cards stay out.
+    /// MUTATION CHECK: delete the parent lookup (`index.get(parent(c))`) and the first part of this test MUST fail.
+    #[test]
+    fn summary_for_ids_closes_the_family_over_parent_children_and_link_twin() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state_with("family-closure", &[("par1", "2026-07-11T12:00:00.000Z", None), ("kid1", "2026-08-19T13:00:00.000Z", Some("par1"))]);
+        for seed in ["kid1", "par1"] {
+            let got = summary_for_ids(&state, now, &|id| id == seed);
+            assert!(got.family_built, "{seed}: par1 is older than the cutoff, so the family is built");
+            let mut ids = ids_of(&got.summary);
+            ids.sort();
+            assert_eq!(ids, vec!["kid1", "par1"], "{seed}: exactly the parent and its child, not new1 or old1");
+        }
+        let (state, _cleanup, now) =
+            family_state_with("family-twin", &[("x1", "2026-08-19T14:00:00.000Z", Some("p0")), ("agent-x1", "2026-07-11T12:00:00.000Z", None)]);
+        let got = summary_for_ids(&state, now, &|id| id == "x1");
+        assert!(got.family_built, "x1 is recent; only its old agent-x1 twin can make this a family build");
+        let mut ids = ids_of(&got.summary);
+        ids.sort();
+        // The link merge folds the placeholder x1 into its transcript agent-x1; without the twin lookup the old twin is not
+        // in the family and the summary would show x1 alone.
+        assert_eq!(ids, vec!["agent-x1"], "the old twin was pulled into the family and linked");
+        assert_eq!(state.lock_timed().family_summary_builds, 1);
+        // The `agent-` partner branch: seed the old transcript; its placeholder x2 is found only by stripping "agent-", and
+        // x2 then pulls in its own child kx (the link merge hides x2 itself, so the child is what shows the partner was found).
+        let (state, _cleanup, now) = family_state_with(
+            "family-partner",
+            &[("x2", "2026-08-19T14:00:00.000Z", Some("p0")), ("agent-x2", "2026-07-11T12:00:00.000Z", None), ("kx", "2026-08-19T15:00:00.000Z", Some("x2"))],
+        );
+        let got = summary_for_ids(&state, now, &|id| id == "agent-x2");
+        assert!(got.family_built);
+        assert!(ids_of(&got.summary).contains(&"kx".to_owned()), "kx reached through agent-x2 -> x2 -> kx: {}", got.summary);
+    }
+
+    /// TRDD-ER88PXNB A2: the memo misses for a different family, and for a bumped data_version once STALE_BUDGET_MS has passed.
+    /// MUTATION CHECK: make the memo hit ignore `ids` (or ignore the version/age test) and this MUST fail.
+    #[test]
+    fn summary_for_ids_rebuilds_for_another_family_and_after_the_memo_expires() {
+        let _serial = serial();
+        let (state, _cleanup, now) = family_state_with("family-miss", &[("old2", "2026-07-12T12:00:00.000Z", None)]);
+        assert!(summary_for_ids(&state, now, &|id| id == "old1").family_built);
+        assert_eq!(state.lock_timed().family_summary_builds, 1);
+        assert!(summary_for_ids(&state, now, &|id| id == "old2").family_built);
+        assert_eq!(state.lock_timed().family_summary_builds, 2, "another family is not served from the memo");
+        // Move data_version and wait the memo out: same family, different version, older than STALE_BUDGET_MS.
+        state.lock_timed().put_log_session(serde_json::json!({ "sessionId": "late", "source": "claude_code", "dataSource": "log", "startTime": "2026-08-20T11:00:00.000Z", "durationMs": 1000.0, "timeline": [] }));
+        std::thread::sleep(Duration::from_millis(STALE_BUDGET_MS + 100));
+        assert!(summary_for_ids(&state, now, &|id| id == "old2").family_built);
+        assert_eq!(state.lock_timed().family_summary_builds, 3, "an expired memo of an older version is rebuilt");
+    }
+
     /// TRDD-QE114936's acceptance criterion, made EXECUTABLE. Every MCP tool handler and REST
     /// route in this file must reach the summary through `summary_now` / `burn_status_now` (off
     /// the lock); rebuilding it inline under a guard is an O(window) hold that measured 12.6 s,
@@ -4985,9 +5474,10 @@ mod rebuild_admission_tests {
     /// `&mut CoreState` from a caller who is holding the lock — which is exactly what
     /// `hook_events::ingest_hook_event` does, called with the guard live from `ui.rs`.
     ///
-    /// So: scan every other source file in the crate, and name the one site that is known and
-    /// still open. Naming it is the point. An allowlist entry is a debt the test forces someone to
-    /// look at; silence is a debt nobody can see — and silence is what let site 20 through.
+    /// So: scan every other source file in the crate. No site is known and open today: the last one, the
+    /// StopFailure calibration in hook_events.rs, reads the memoized burn subset since TRDD-ER88PXNB. If one has to
+    /// be allowed again, name it here: an allowlist entry is a debt the test forces someone to look at; silence is
+    /// a debt nobody can see — and silence is what let site 20 through.
     #[test]
     fn no_other_file_rebuilds_the_summary_from_a_caller_holding_the_lock() {
         let rebuilders = ["build_session_summary", "live_burn_status", "session_summary"];
@@ -4996,19 +5486,9 @@ mod rebuild_admission_tests {
         // walk straight past a needle that only knows the dot.
         let needles: Vec<String> =
             rebuilders.iter().flat_map(|n| [format!(".{n}("), format!("CoreState::{n}(")]).collect();
-        // THE ONE KNOWN, STILL-OPEN SITE — pinned to its exact line text, not skipped by filename.
-        // Skipping the FILE would blind this test to a second rebuild appearing in it, which is the
-        // same "the guard could not see it" failure this whole card is about. TRDD-QE114936 carried
-        // it forward rather than fixing it: it is on the INGEST path (POST /api/hook-events →
-        // `ingest_hook_event`, StopFailure branch), not the MCP read path this card covers, and
-        // moving it changes where capacity calibration reads its sessions. DELETE THIS when it
-        // lands — the assertion below then requires the count to be 0 and fails until you do.
-        // Assembled at runtime for the same reason the needles are: spelled out in full, this pin
-        // is itself a `.build_session_summary(` occurrence in ui.rs, and the test above rightly
-        // fails on it. (It did — which is a free demonstration that that test is live.)
-        let known_open = ("hook_events.rs", format!("let sessions = st.build_{}(now_ms as f64);", "session_summary"));
+        // TRDD-ER88PXNB: the hook_events.rs StopFailure calibration now reads the memoized burn subset, so no known-open caller remains.
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let (mut hits, mut known_seen): (Vec<String>, usize) = (Vec::new(), 0);
+        let mut hits: Vec<String> = Vec::new();
         let mut stack = vec![src];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).expect("the crate's own src dir is readable") {
@@ -5028,16 +5508,400 @@ mod rebuild_admission_tests {
                     if trimmed.starts_with("//") || !needles.iter().any(|n| line.contains(n.as_str())) {
                         continue;
                     }
-                    if (name.as_str(), trimmed) == (known_open.0, known_open.1.as_str()) {
-                        known_seen += 1;
-                        continue;
-                    }
                     hits.push(format!("{name}:{}: {trimmed}", i + 1));
                 }
             }
         }
         assert!(hits.is_empty(), "a summary rebuild appeared in a file that can be called with the state lock held:\n{hits:#?}");
-        assert_eq!(known_seen, 1, "the one allowed rebuild ({known_open:?}) is no longer where this test expects it — if it was FIXED, delete the `known_open` entry; if it MOVED, this test must be re-pinned");
+    }
+
+    /// TRDD-ER88PXNB A3: the by-id MCP tools and routes switched to `summary_for_ids` (all but arm 6, see below) answer an old
+    /// session (older than `summary_card_days`) as it does with the window off. Two real servers (OTLP + UI/MCP over sockets)
+    /// hold identical cards, one with
+    /// `summary_card_days = 14.0` and one with `0.0`; dates are relative to the real clock because `summary_now_windowed`
+    /// snapshots with it. `old-s` is 40 days old with a recent parent and an `agent-ag1` child. `old-twin` is its own 40-day
+    /// family with a live OTEL twin (an api_request span an hour old); the twin sits on a separate id so that no OTEL card of
+    /// `old-s` hides the miss, and `/api/timeline/old-twin` must carry the attribution grafted from the family build.
+    /// Guard coverage (measured by mutation, each arm made to seed nothing): arms 1-5 and 8 fail this test (arm 2 on `old-s`
+    /// only); arm 7 (composition-index) fails on `old-twin` only; arm 6 (get_context_history) is NOT guarded, because it
+    /// reads only the card model for a step cost and this fixture has no transcript to make that visible. TRDD-ER88PXNB B arms
+    /// (an optional sessionId): get_session_status and check_cache_expiry fail on `old-s` and `old-twin`; get_cost_by_cause,
+    /// get_context_inflation_report and get_cache_break_report fail on `old-s` only. NOT guarded: the family attribution that
+    /// get_cost_by_cause, get_cache_break_report and check_cache_expiry pass to their per-session timeline (measured: setting it to
+    /// `None` at each of the three sites still passes this test); and get_context_inflation_report on `old-twin`,
+    /// which answers "No local composition available for this session." for an old and for a missing id alike, so it is left out
+    /// of the not-found check. check_cache_expiry is compared without `idleMs`/`marginMs`, which come from each request's clock.
+    /// MUTATION CHECK: switch the `get_session_detail` arm back to `summary_now` and this MUST fail.
+    #[test]
+    fn by_id_lookups_answer_old_sessions_as_with_the_window_off() {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        let _serial = serial();
+        let now_ms = crate::now_ms() as f64;
+        let iso = |days_ago: f64| crate::summarize::helpers::iso_from_ms(now_ms - days_ago * 86_400_000.0);
+        let start = |days: f64, tag: &str| -> (SocketAddr, SocketAddr, RemoveOnDrop) {
+            let (dir, cleanup) = unique_dir(tag);
+            let mut st = CoreState::open(&dir);
+            st.summary_card_days = days;
+            for (id, ago, parent) in [("recent-root", 1.0, None), ("old-s", 40.0, Some("recent-root")), ("agent-ag1", 41.0, Some("old-s")), ("old-twin", 40.0, None)] {
+                let mut c = serde_json::json!({
+                    "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": iso(ago), "durationMs": 1000.0,
+                    "model": "claude-opus-5", "tokensSource": "transcript", "timeline": [{ "type": "llm", "timestamp": iso(ago) }]
+                });
+                if let Some(p) = parent {
+                    c["parentSessionId"] = serde_json::json!(p);
+                }
+                st.put_log_session(c);
+            }
+            let state = Arc::new(Mutex::new(st));
+            let (otx, orx) = std::sync::mpsc::channel();
+            let (utx, urx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                // Sized from the core cap like alcore's own runtime: core_cap_guard flags a bare
+                // Runtime::new() anywhere under src/, test modules included (TRDD-HSPUF5XH).
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(crate::cores::max_cores())
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async move {
+                    let hub = Arc::new(super::SseHub::default());
+                    let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
+                    let ui = super::serve_ui("127.0.0.1:0".parse().unwrap(), state, hub, move |b| utx.send(b).unwrap());
+                    let _ = tokio::join!(otlp, ui);
+                });
+            });
+            (orx.recv().unwrap(), urx.recv().unwrap(), cleanup)
+        };
+        let request = |addr: SocketAddr, raw: String| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            // Fail fast: a hung server must fail this test, not stall the whole lib test run.
+            s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            s.write_all(raw.as_bytes()).unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).expect("a by-id request must be answered within the read timeout");
+            out.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default()
+        };
+        let get = |addr: SocketAddr, path: String| request(addr, format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nConnection: close\r\n\r\n"));
+        let mcp = |addr: SocketAddr, tool: &str, args: serde_json::Value| -> String {
+            let body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": args } }).to_string();
+            let resp = request(addr, format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+            let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_else(|e| panic!("{tool}: not JSON ({e}): {resp}"));
+            v["result"]["content"][0]["text"].as_str().map(str::to_owned).unwrap_or(resp)
+        };
+        // The OTEL twin of old-twin: an interaction plus an api_request span an hour old, so it is inside the span window.
+        let ns = |ago_ms: f64| format!("{}", ((now_ms - ago_ms) * 1e6) as u64);
+        let twin = serde_json::json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": [
+            { "name": "claude_code.interaction", "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "aaaaaaaaaaaaaaaa",
+              "startTimeUnixNano": ns(3_700_000.0), "endTimeUnixNano": ns(3_690_000.0),
+              "attributes": [ { "key": "session.id", "value": { "stringValue": "old-twin" } }, { "key": "user_prompt", "value": { "stringValue": "Fix the bug" } } ] },
+            { "name": "claude_code.api_request", "traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "cccccccccccccccc", "parentSpanId": "aaaaaaaaaaaaaaaa",
+              "startTimeUnixNano": ns(3_699_000.0), "endTimeUnixNano": ns(3_698_000.0),
+              "attributes": [ { "key": "session.id", "value": { "stringValue": "old-twin" } }, { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-5" } }, { "key": "input_tokens", "value": { "intValue": "70" } } ] }
+        ] }] }] })
+        .to_string();
+        // The server threads run `serve_otlp` + `serve_ui`, which never return; they end with the test process, as in tests/ui.rs.
+        let (otlp_on, ui_on, dir_on) = start(14.0, "byid-on");
+        let (otlp_off, ui_off, dir_off) = start(0.0, "byid-off");
+        for otlp in [otlp_on, otlp_off] {
+            // The body is not asserted: the api_request graft check below fails when the twin was not ingested.
+            request(otlp, format!("POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{twin}", twin.len()));
+        }
+        let ask = |ui: SocketAddr, arm: &str, sid: &str, missing: bool| -> String {
+            let agent = if sid == "old-s" { "agent-ag1" } else { sid };
+            let (asked, asked_agent) = if missing { ("missing-s", "agent-missing") } else { (sid, agent) };
+            let out = match arm {
+                "get_agent_tokens" => mcp(ui, arm, serde_json::json!({ "agentId": asked_agent })),
+                "composition-index" => get(ui, format!("/api/composition-index/{asked}")),
+                "timeline" => get(ui, format!("/api/timeline/{asked}")),
+                _ => mcp(ui, arm, serde_json::json!({ "sessionId": asked })),
+            };
+            // check_cache_expiry reports idleMs/marginMs from the clock of each request, so two requests a millisecond apart differ.
+            let out = match serde_json::from_str::<serde_json::Value>(&out) {
+                Ok(mut v) if arm == "check_cache_expiry" => {
+                    for s in v["sessions"].as_array_mut().into_iter().flatten().filter_map(|s| s.as_object_mut()) {
+                        s.remove("idleMs");
+                        s.remove("marginMs");
+                    }
+                    v.to_string()
+                }
+                _ => out,
+            };
+            // A not-found text embeds the id it was asked for; spell it as the real one so the two answers can be compared.
+            out.replace(asked_agent, agent).replace(asked, sid)
+        };
+        let mut failures: Vec<String> = Vec::new();
+        // `old-s` has a recent parent and an old child and no OTEL data; `old-twin` is its own family with a live OTEL twin.
+        for sid in ["old-s", "old-twin"] {
+            for arm in ["get_agent_tokens", "get_context_growth", "get_subagent_tree", "get_session_detail", "get_session_burn_profile", "get_context_history", "composition-index", "timeline", "get_session_status", "get_cost_by_cause", "get_context_inflation_report", "get_cache_break_report", "check_cache_expiry"] {
+                // get_session_burn_profile names the data dir in its `coverage` text; the two servers have different ones.
+                let (on, off) = (
+                    ask(ui_on, arm, sid, false).replace(&*dir_on.0.to_string_lossy(), "<dir>"),
+                    ask(ui_off, arm, sid, false).replace(&*dir_off.0.to_string_lossy(), "<dir>"),
+                );
+                if on != off {
+                    failures.push(format!("{sid} {arm}: window 14 d answers differently from window off\n  on : {on}\n  off: {off}"));
+                }
+                // Arms 6 and 7 answer the same for a missing id on this fixture, and so does get_context_inflation_report on old-twin
+                // ("No local composition available for this session."), so the not-found test cannot apply to them.
+                if !matches!(arm, "get_context_history" | "composition-index") && !(arm == "get_context_inflation_report" && sid == "old-twin") && on == ask(ui_on, arm, sid, true).replace(&*dir_on.0.to_string_lossy(), "<dir>") {
+                    failures.push(format!("{sid} {arm}: window 14 d answers the old session as it answers a missing id: {on}"));
+                }
+            }
+        }
+        for ui in [ui_on, ui_off] {
+            let tl: serde_json::Value = serde_json::from_str(&ask(ui, "timeline", "old-twin", false)).unwrap();
+            assert!(
+                tl["timeline"].as_array().unwrap().iter().any(|e| e["type"] == "api_request"),
+                "the OTEL twin attribution must be grafted onto old-twin: {tl}"
+            );
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// TRDD-ER88PXNB C1: the card window is disclosed on the three dashboard read paths: `GET /api/summary`, the
+    /// `window.__S__` value `GET /` writes into the shell, and the first `update` frame of `GET /events`. Two real servers hold
+    /// identical cards, one with `summary_card_days = 14.0` and one with `0.0`: with the window on, every path carries the same
+    /// `summaryWindow` object, and with it off none carries the key.
+    #[test]
+    fn the_card_window_is_disclosed_on_summary_html_and_the_first_sse_frame() {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        let _serial = serial();
+        let now_ms = crate::now_ms() as f64;
+        let iso = |days_ago: f64| crate::summarize::helpers::iso_from_ms(now_ms - days_ago * 86_400_000.0);
+        let (media_dir, _media_cleanup) = unique_dir("c1-media");
+        std::fs::write(media_dir.join("index.html"), "<script>window.__S__ = @@SESSION_SUMMARY_JSON@@;</script>").unwrap();
+        let start = |days: f64, tag: &str| -> (SocketAddr, RemoveOnDrop) {
+            let (dir, cleanup) = unique_dir(tag);
+            let mut st = CoreState::open(&dir);
+            st.summary_card_days = days;
+            st.media_dir = Some(media_dir.clone());
+            for (id, ago) in [("new-a", 2.0), ("new-b", 3.0), ("old-c", 40.0)] {
+                st.put_log_session(serde_json::json!({
+                    "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": iso(ago), "durationMs": 1000.0,
+                    "model": "claude-opus-5", "tokensSource": "transcript", "timeline": [{ "type": "llm", "timestamp": iso(ago) }]
+                }));
+            }
+            let state = Arc::new(Mutex::new(st));
+            let (otx, orx) = std::sync::mpsc::channel();
+            let (utx, urx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                // Sized from the core cap like alcore's own runtime: core_cap_guard flags a bare
+                // Runtime::new() anywhere under src/, test modules included (TRDD-HSPUF5XH).
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(crate::cores::max_cores())
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async move {
+                    let hub = Arc::new(super::SseHub::default());
+                    let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
+                    let ui = super::serve_ui("127.0.0.1:0".parse().unwrap(), state, hub, move |b| utx.send(b).unwrap());
+                    let _ = tokio::join!(otlp, ui);
+                });
+            });
+            let _otlp = orx.recv().unwrap();
+            (urx.recv().unwrap(), cleanup)
+        };
+        let request = |addr: SocketAddr, raw: String| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            s.write_all(raw.as_bytes()).unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).expect("a request is answered within the read timeout");
+            out.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default()
+        };
+        let get = |addr: SocketAddr, path: &str| request(addr, format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nConnection: close\r\n\r\n"));
+        let page = |addr: SocketAddr| -> serde_json::Value {
+            let html = get(addr, "/");
+            let after = html.split_once("window.__S__ = ").expect("the shell assigns window.__S__").1;
+            let json = after.split_once(";</script>").expect("window.__S__ ends at </script>").0;
+            serde_json::from_str(json).expect("window.__S__ is JSON")
+        };
+        let first_update = |addr: SocketAddr| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+            s.write_all(b"GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(8);
+            let mut buf: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 65536];
+            loop {
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                let update = text.find("\"type\":\"update\"").and_then(|at| text[at..].find("\n\n").map(|end| (at, end)));
+                if let Some((at, end)) = update {
+                    let data = text[..at].rfind("data: ").expect("an update frame starts with `data: `");
+                    return text[data + 6..at + end].to_owned();
+                }
+                assert!(Instant::now() < deadline, "no complete update frame within 8 s: {text}");
+                let n = s.read(&mut chunk).expect("the SSE stream is read within the timeout");
+                assert!(n > 0, "the SSE stream closed before an update frame: {text}");
+                buf.extend_from_slice(&chunk[..n]);
+            }
+        };
+        let (ui_on, _cleanup_on) = start(14.0, "c1-on");
+        let (ui_off, _cleanup_off) = start(0.0, "c1-off");
+        let mut failures: Vec<String> = Vec::new();
+        for (label, ui, windowed) in [("window 14 d", ui_on, true), ("window off", ui_off, false)] {
+            let summary: serde_json::Value = serde_json::from_str(&get(ui, "/api/summary")).expect("/api/summary is JSON");
+            let shell = page(ui);
+            let frame: serde_json::Value = serde_json::from_str(&first_update(ui)).expect("the update frame is JSON");
+            let sse = frame["sessionSummary"].clone();
+            for (path, value) in [("/api/summary", &summary), ("GET /", &shell), ("first SSE frame", &sse)] {
+                let has = value.get("summaryWindow").is_some();
+                if has != windowed {
+                    failures.push(format!("{label}: {path} has summaryWindow = {has}"));
+                }
+            }
+            if windowed {
+                let w = &summary["summaryWindow"];
+                if w["cardDays"] != 14.0 || w["cardsIncluded"] != 2 || w["cardsResident"] != 3 {
+                    failures.push(format!("{label}: summaryWindow is {w}, expected cardDays 14.0, cardsIncluded 2, cardsResident 3"));
+                }
+                for (path, value) in [("GET /", &shell), ("first SSE frame", &sse)] {
+                    if value["summaryWindow"] != *w {
+                        failures.push(format!("{label}: {path} summaryWindow differs from /api/summary"));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "card window disclosure:\n{}", failures.join("\n"));
+    }
+
+    /// TRDD-ER88PXNB C2: every MCP answer built from the windowed summary leads with summaryWindow on a 14-day server, and carries no such key with the window off.
+    #[test]
+    fn aggregate_mcp_answers_lead_with_the_card_window() {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        let _serial = serial();
+        let now_ms = crate::now_ms() as f64;
+        let iso = |days_ago: f64| crate::summarize::helpers::iso_from_ms(now_ms - days_ago * 86_400_000.0);
+        let start = |days: f64, tag: &str| -> (SocketAddr, RemoveOnDrop) {
+            let (dir, cleanup) = unique_dir(tag);
+            let mut st = CoreState::open(&dir);
+            // The log env is the process environment, so the pool scans would read the real home of this machine. Each server gets an empty home inside its own test directory.
+            st.log_env = agentlens_logscan::discovery::Env { home: dir.clone(), vars: std::collections::HashMap::new(), ..agentlens_logscan::discovery::Env::from_process() };
+            st.summary_card_days = days;
+            for (id, ago) in [("new-a", 2.0), ("new-b", 3.0), ("old-c", 40.0)] {
+                st.put_log_session(serde_json::json!({
+                    "sessionId": id, "source": "claude_code", "dataSource": "log", "startTime": iso(ago), "durationMs": 1000.0,
+                    "model": "claude-opus-5", "tokensSource": "transcript", "timeline": [{ "type": "llm", "timestamp": iso(ago) }]
+                }));
+            }
+            let state = Arc::new(Mutex::new(st));
+            let (otx, orx) = std::sync::mpsc::channel();
+            let (utx, urx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                // Sized from the core cap like alcore's own runtime: core_cap_guard flags a bare
+                // Runtime::new() anywhere under src/, test modules included (TRDD-HSPUF5XH).
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(crate::cores::max_cores())
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async move {
+                    let hub = Arc::new(super::SseHub::default());
+                    let otlp = crate::serve_otlp("127.0.0.1:0".parse().unwrap(), state.clone(), move |b| otx.send(b).unwrap());
+                    let ui = super::serve_ui("127.0.0.1:0".parse().unwrap(), state, hub, move |b| utx.send(b).unwrap());
+                    let _ = tokio::join!(otlp, ui);
+                });
+            });
+            let _otlp = orx.recv().unwrap();
+            (urx.recv().unwrap(), cleanup)
+        };
+        let request = |addr: SocketAddr, raw: String| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            s.write_all(raw.as_bytes()).unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).expect("a request is answered within the read timeout");
+            out.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default()
+        };
+        let mcp = |addr: SocketAddr, tool: &str, args: serde_json::Value| -> String {
+            let body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": args } }).to_string();
+            let resp = request(addr, format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:3000\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+            let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_else(|e| panic!("{tool}: not JSON ({e}): {resp}"));
+            v["result"]["content"][0]["text"].as_str().map(str::to_owned).unwrap_or(resp)
+        };
+        let (on, _cleanup_on) = start(14.0, "agg-on");
+        let (off, _cleanup_off) = start(0.0, "agg-off");
+        let rows: [(&str, serde_json::Value); 15] = [
+            ("get_session_status", serde_json::json!({})),
+            ("get_recent_sessions", serde_json::json!({})),
+            ("get_workspace_patterns", serde_json::json!({})),
+            ("find_relevant_context", serde_json::json!({ "query": "x" })),
+            ("get_efficiency_report", serde_json::json!({})),
+            ("get_instruction_suggestions", serde_json::json!({})),
+            ("get_cost_by_cause", serde_json::json!({})),
+            ("get_context_inflation_report", serde_json::json!({})),
+            ("find_context_hogs", serde_json::json!({})),
+            ("get_cost_rollup", serde_json::json!({})),
+            ("predict_session_cost", serde_json::json!({})),
+            ("get_body_writers", serde_json::json!({})),
+            ("get_cache_risk_costs", serde_json::json!({})),
+            ("get_cache_break_report", serde_json::json!({})),
+            ("check_cache_expiry", serde_json::json!({})),
+        ];
+        let mut failures: Vec<String> = Vec::new();
+        for (tool, args) in rows {
+            let answer_on = mcp(on, tool, args.clone());
+            let answer_off = mcp(off, tool, args);
+            let Ok(v_on) = serde_json::from_str::<serde_json::Value>(&answer_on) else {
+                failures.push(format!("{tool}: window 14 d answer is not JSON: {answer_on}"));
+                continue;
+            };
+            let first = v_on.as_object().and_then(|o| o.keys().next()).map(String::as_str);
+            let text = v_on["summaryWindow"].as_str().unwrap_or_default();
+            if first != Some("summaryWindow") || !text.contains("2 of 3 resident session cards") || !text.contains("the last 14 UTC days") {
+                failures.push(format!("{tool}: window 14 d answer does not lead with summaryWindow (first key {first:?}): {answer_on}"));
+            }
+            let Ok(v_off) = serde_json::from_str::<serde_json::Value>(&answer_off) else {
+                failures.push(format!("{tool}: window off answer is not JSON: {answer_off}"));
+                continue;
+            };
+            if v_off.get("summaryWindow").is_some() {
+                failures.push(format!("{tool}: window off answer carries summaryWindow: {answer_off}"));
+            }
+        }
+        assert!(failures.is_empty(), "MCP answers without the leading card window:\n{}", failures.join("\n"));
+    }
+
+    /// TRDD-ER88PXNB C2: the windowed summary is the only summary read on the response paths, and the card window comes from the same call.
+    #[test]
+    fn the_windowed_summary_is_the_only_summary_read_on_response_paths() {
+        let src = include_str!("ui.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        // The production code is everything before the cfg(test) line that opens rebuild_admission_tests.
+        let cut = lines
+            .iter()
+            .enumerate()
+            .position(|(i, l)| l.trim_start() == "#[cfg(test)]" && lines.get(i + 1).is_some_and(|n| n.trim_start().starts_with("mod rebuild_admission_tests")))
+            .expect("rebuild_admission_tests opens with a cfg(test) line");
+        let prod: Vec<(usize, &str)> = lines[..cut]
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (i + 1, *l))
+            .filter(|(_, l)| !l.trim_start().starts_with("//"))
+            .collect();
+        // char::from(95u8) is the underscore: an identifier character, so a longer name such as burn_summary_now( does not count.
+        let is_ident = |c: char| c.is_alphanumeric() || c == char::from(95u8);
+        let is_bare_call = |l: &str| l.match_indices("summary_now(").any(|(at, _)| !l[..at].chars().next_back().is_some_and(is_ident));
+        let calls: Vec<String> = prod.iter().filter(|&&(_, l)| is_bare_call(l)).map(|&(n, l)| format!("{n}: {}", l.trim())).collect();
+        assert_eq!(calls.len(), 2, "summary_now( call sites in the production code:\n{}", calls.join("\n"));
+        assert!(
+            calls.iter().any(|c| c.contains("pub fn summary_now(")) && calls.iter().any(|c| c.contains("let _ = summary_now(&state")),
+            "the two summary_now( sites must be the definition and the warm call:\n{}",
+            calls.join("\n")
+        );
+        let line_of = |needle: &str| prod.iter().find(|(_, l)| l.contains(needle)).map(|&(n, _)| n).expect("the anchor line exists");
+        let (def, with) = (line_of("pub fn summary_now_windowed("), line_of("fn with_card_window("));
+        let outside: Vec<String> = prod
+            .iter()
+            .filter(|&&(_, l)| l.match_indices(".summary_window").any(|(at, m)| !l[at + m.len()..].chars().next().is_some_and(is_ident)))
+            .filter(|&&(n, _)| !(def..=with).contains(&n))
+            .map(|&(n, l)| format!("{n}: {}", l.trim()))
+            .collect();
+        assert!(outside.is_empty(), "summary_window is read outside summary_now_windowed (lines {def}..{with}):\n{}", outside.join("\n"));
     }
 }
 

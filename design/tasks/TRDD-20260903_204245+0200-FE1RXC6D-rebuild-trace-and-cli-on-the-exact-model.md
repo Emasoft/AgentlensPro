@@ -1,5 +1,6 @@
 ---
 trdd-id: FE1RXC6D
+status: tasked
 title: Rebuild the dashboard trace and the CLI views on the exact turn model
 column: blocked
 pre-block-column: todo

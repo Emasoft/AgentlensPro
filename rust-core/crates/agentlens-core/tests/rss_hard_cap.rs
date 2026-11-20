@@ -15,7 +15,8 @@
 //! the process is not.
 
 use agentlens_core::rss_guard::{
-    check_and_enforce, check_and_enforce_with, format_diagnostic, mimalloc_info, rss_hard_cap_bytes, CulpritSnapshot, MimallocInfo,
+    check_and_enforce, check_and_enforce_both_with, check_and_enforce_with, enforce_footprint_backstop_with, format_diagnostic, mimalloc_info, resolve_footprint_backstop,
+    rss_hard_cap_bytes, CulpritSnapshot, MimallocInfo,
 };
 
 fn snap(cap_bytes: u64) -> CulpritSnapshot {
@@ -362,4 +363,219 @@ fn real_alcore_binary_breaches_a_1mb_cap_on_mimalloc_commit() {
         "mimalloc commit ({commit_mb} MB) must not exceed the {evidence} evidence ({evidence_mb} MB) by more than its margin (bound {bound} MB = evidence + max(4 MB, evidence / 4)); got:\n{log}"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// TRDD-12FGMAEP: the commit cap does not charge memory outside mimalloc, so a runaway there would end in an OS
+/// kill with no log. The footprint backstop is the guard against that: above its limit it must flush, write
+/// a culprit log and exit 1. Runs the real `enforce_footprint_backstop_with` in a re-exec of this test binary
+/// (the pattern of `breach_flushes_writes_the_culprit_log_and_exits_1`), because the exit would kill the runner.
+/// The footprint is injected: a test binary cannot stage a real 6 GB footprint.
+#[test]
+fn footprint_backstop_breach_flushes_writes_the_culprit_log_and_exits_1() {
+    const MARKER: &str = "AGENTLENS_FOOTPRINT_BACKSTOP_CHILD";
+    const MB: u64 = 1024 * 1024;
+
+    if let Ok(child_log) = std::env::var(MARKER) {
+        let log = std::path::PathBuf::from(&child_log);
+        let sentinel = log.with_extension("flushed");
+        // Footprint 7168 MB over a backstop of 6144 MB, commit 1024 MB under a cap of 2048 MB. The flush closure
+        // does not unwrap: a panic would skip the log write and fail several assertions at once with exit 101.
+        enforce_footprint_backstop_with(
+            || Some(7168 * MB),
+            6144 * MB,
+            1024 * MB,
+            || { let _ = std::fs::write(&sentinel, b"1"); },
+            &log,
+            &snap(2048 * MB),
+        );
+        unreachable!("enforce_footprint_backstop_with must never return on breach");
+    }
+
+    let log = tmp_log("footprint-breach");
+    let sentinel = log.with_extension("flushed");
+    let _ = std::fs::remove_file(&sentinel);
+    // Ground state asserted, not assumed: the log is opened in append mode, so a leftover file would satisfy the
+    // `contains` checks below even if this child wrote nothing.
+    assert!(!log.exists() && !sentinel.exists(), "stale fixtures: the assertions below would pass vacuously");
+
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["footprint_backstop_breach_flushes_writes_the_culprit_log_and_exits_1", "--exact", "--nocapture"])
+        .env(MARKER, &log)
+        .output()
+        .expect("re-exec this test binary as a child");
+
+    assert_eq!(
+        out.status.code(), Some(1),
+        "a footprint above the backstop must exit(1) (101 = the child panicked on the unreachable! because the call returned); stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(sentinel.exists(), "flush_before_exit must run BEFORE exit(1)");
+
+    let body = std::fs::read_to_string(&log).expect("culprit log must exist on disk after the child exits");
+    assert!(body.contains("FOOTPRINT BACKSTOP"), "log must be the backstop diagnostic; got:\n{body}");
+    assert!(
+        body.contains("phys_footprint 7168 MB > backstop 6144 MB, exiting (mimalloc commit 1024 MB is at or under the cap 2048 MB; outside mimalloc commit: 6144 MB)"),
+        "the first line must name the footprint, the backstop, the commit and the cap with exact values; got:\n{body}"
+    );
+    assert!(body.contains("resident spans: 42"), "the caller snapshot must reach the log, or it names no culprit; got:\n{body}");
+    assert!(!body.contains("RSS HARD CAP"), "the backstop log must not carry the commit-cap label; got:\n{body}");
+
+    let _ = std::fs::remove_file(&log);
+    let _ = std::fs::remove_file(&sentinel);
+}
+
+/// The backstop bound is INCLUSIVE, like the cap: a footprint exactly AT the backstop is not a breach. Only the
+/// exact value discriminates a `>` flipped to `>=`. The detector is the flush closure panicking, because it runs
+/// first on the breach path, so the mutation fails by unwinding and not by killing the test runner.
+#[test]
+fn footprint_equal_to_the_backstop_is_a_no_op() {
+    const AT_BACKSTOP: u64 = 6 * 1024 * 1024 * 1024;
+    let log = tmp_log("footprint-boundary");
+    enforce_footprint_backstop_with(
+        || Some(AT_BACKSTOP),
+        AT_BACKSTOP,
+        0,
+        || panic!("flush must NOT run when the footprint merely EQUALS the backstop"),
+        &log,
+        &snap(2048 * 1024 * 1024),
+    );
+    assert!(!log.exists(), "footprint == backstop is not a breach; no culprit log may be written");
+}
+
+/// A footprint that cannot be read (not macOS, or the syscall failed) must never trigger the backstop.
+#[test]
+fn unreadable_footprint_is_a_no_op() {
+    let log = tmp_log("footprint-none");
+    enforce_footprint_backstop_with(
+        || None,
+        6 * 1024 * 1024 * 1024,
+        0,
+        || panic!("flush must NOT run when the footprint cannot be read"),
+        &log,
+        &snap(2048 * 1024 * 1024),
+    );
+    assert!(!log.exists(), "no footprint reading is not a breach; no culprit log may be written");
+}
+
+/// The backstop value rule, with the commit cap at 2048 MB: unset is 3 x the cap; an override above the cap wins;
+/// an override of 0, garbage or at the cap is ignored; half of the physical memory lowers the value only when it
+/// is known, below 3 x the cap and above the cap.
+#[test]
+fn resolve_footprint_backstop_follows_the_value_rule() {
+    const MB: u64 = 1024 * 1024;
+    const GIB: u64 = 1024 * MB;
+    let cap = 2048 * MB;
+    assert_eq!(resolve_footprint_backstop(None, cap, 0), 6144 * MB, "unset gives 3 x the cap");
+    assert_eq!(resolve_footprint_backstop(Some("8192"), cap, 0), 8192 * MB, "an override above the cap wins");
+    assert_eq!(resolve_footprint_backstop(Some("0"), cap, 0), 6144 * MB, "a zero override is ignored");
+    assert_eq!(resolve_footprint_backstop(Some("garbage"), cap, 0), 6144 * MB, "an unparseable override is ignored");
+    assert_eq!(resolve_footprint_backstop(Some("2048"), cap, 0), 6144 * MB, "an override equal to the cap is ignored");
+    assert_eq!(resolve_footprint_backstop(None, cap, 8 * GIB), 4096 * MB, "half of 8 GiB lowers the value");
+    assert_eq!(resolve_footprint_backstop(None, cap, 0), 6144 * MB, "unknown physical memory keeps 3 x the cap");
+    assert_eq!(resolve_footprint_backstop(None, cap, 2 * GIB), 6144 * MB, "half of 2 GiB is below the cap, so it is not used");
+    assert_eq!(resolve_footprint_backstop(None, cap, 4 * GIB), 6144 * MB, "half of 4 GiB equals the cap, so it is not used");
+}
+
+/// Re-executes this test binary so that it runs only `test_name`, with `marker` set to `log`: the child branch of
+/// that test sees the variable and runs the exiting call, which would kill the test runner if run in process.
+fn reexec_child(test_name: &str, marker: &str, log: &std::path::Path) -> std::process::Output {
+    std::process::Command::new(std::env::current_exe().unwrap())
+        .args([test_name, "--exact", "--nocapture"])
+        .env(marker, log)
+        .output()
+        .expect("re-exec this test binary as a child")
+}
+
+/// TRDD-12FGMAEP: the wiring of the two guards through `check_and_enforce_both_with` (the real readers cannot stage
+/// a breach). Commit 1024 MB is under the 2048 MB cap and the footprint 7168 MB is over the 6144 MB backstop, so the
+/// footprint branch must run: exit 1, flush, and a log that is the backstop log and not the commit-cap log.
+/// Deleting the else-branch of `check_and_enforce_both_with`, or choosing the branch by another rule, fails this.
+#[test]
+fn both_guards_commit_under_cap_and_footprint_over_backstop_runs_the_backstop() {
+    const MARKER: &str = "AGENTLENS_BOTH_GUARDS_BACKSTOP_CHILD";
+    const MB: u64 = 1024 * 1024;
+    const NAME: &str = "both_guards_commit_under_cap_and_footprint_over_backstop_runs_the_backstop";
+
+    if let Ok(child_log) = std::env::var(MARKER) {
+        let log = std::path::PathBuf::from(&child_log);
+        let sentinel = log.with_extension("flushed");
+        check_and_enforce_both_with(
+            || 1024 * MB,
+            || Some(7168 * MB),
+            6144 * MB,
+            || 0,
+            || { let _ = std::fs::write(&sentinel, b"1"); },
+            &log,
+            snap(2048 * MB),
+        );
+        unreachable!("the backstop must exit when the footprint is over it");
+    }
+
+    let log = tmp_log("both-backstop");
+    let sentinel = log.with_extension("flushed");
+    let _ = std::fs::remove_file(&sentinel);
+    assert!(!log.exists() && !sentinel.exists(), "stale fixtures: the assertions below would pass vacuously");
+    let out = reexec_child(NAME, MARKER, &log);
+    assert_eq!(out.status.code(), Some(1), "the backstop must exit(1); stderr:\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(sentinel.exists(), "flush_before_exit must run BEFORE exit(1)");
+    let body = std::fs::read_to_string(&log).expect("culprit log must exist on disk after the child exits");
+    assert!(body.contains("FOOTPRINT BACKSTOP"), "log must be the backstop diagnostic; got:\n{body}");
+    assert!(!body.contains("RSS HARD CAP"), "the commit cap must not have fired; got:\n{body}");
+    let _ = std::fs::remove_file(&log);
+    let _ = std::fs::remove_file(&sentinel);
+}
+
+/// When BOTH limits are exceeded (commit 4096 MB over the 2048 MB cap, footprint 7168 MB over the 6144 MB backstop),
+/// the commit cap must win: the log is the commit-cap log and carries no backstop line.
+#[test]
+fn both_guards_over_both_limits_the_commit_cap_wins() {
+    const MARKER: &str = "AGENTLENS_BOTH_GUARDS_COMMIT_CHILD";
+    const MB: u64 = 1024 * 1024;
+    const NAME: &str = "both_guards_over_both_limits_the_commit_cap_wins";
+
+    if let Ok(child_log) = std::env::var(MARKER) {
+        let log = std::path::PathBuf::from(&child_log);
+        let sentinel = log.with_extension("flushed");
+        check_and_enforce_both_with(
+            || 4096 * MB,
+            || Some(7168 * MB),
+            6144 * MB,
+            || 0,
+            || { let _ = std::fs::write(&sentinel, b"1"); },
+            &log,
+            snap(2048 * MB),
+        );
+        unreachable!("the commit cap must exit when the commit is over it");
+    }
+
+    let log = tmp_log("both-commit");
+    let sentinel = log.with_extension("flushed");
+    let _ = std::fs::remove_file(&sentinel);
+    assert!(!log.exists() && !sentinel.exists(), "stale fixtures: the assertions below would pass vacuously");
+    let out = reexec_child(NAME, MARKER, &log);
+    assert_eq!(out.status.code(), Some(1), "the commit cap must exit(1); stderr:\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(sentinel.exists(), "flush_before_exit must run BEFORE exit(1)");
+    let body = std::fs::read_to_string(&log).expect("culprit log must exist on disk after the child exits");
+    assert!(body.contains("RSS HARD CAP"), "log must be the commit-cap diagnostic; got:\n{body}");
+    assert!(!body.contains("FOOTPRINT BACKSTOP"), "the backstop must not have fired when the commit cap did; got:\n{body}");
+    let _ = std::fs::remove_file(&log);
+    let _ = std::fs::remove_file(&sentinel);
+}
+
+/// Both boundaries are inclusive through the combined entry: a commit equal to the cap and a footprint equal to the
+/// backstop are not breaches. The flush closure panics if either guard fires, since it runs first on a breach.
+#[test]
+fn both_guards_at_the_cap_and_at_the_backstop_is_a_no_op() {
+    const MB: u64 = 1024 * 1024;
+    let log = tmp_log("both-boundary");
+    check_and_enforce_both_with(
+        || 2048 * MB,
+        || Some(6144 * MB),
+        6144 * MB,
+        || panic!("the fallback must not be read when nothing is breached"),
+        || panic!("flush must NOT run when the commit equals the cap and the footprint equals the backstop"),
+        &log,
+        snap(2048 * MB),
+    );
+    assert!(!log.exists(), "no limit is exceeded; no culprit log may be written");
 }

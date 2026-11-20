@@ -1,10 +1,10 @@
 ---
 trdd-id: 2JOIAH2G
 title: alcore crash-loops under the RSS cap because the ingest pass and boot churn transiently spike the heap and mimalloc never returns the pages
-column: dev
+column: todo
 status: tasked
 created: 2026-09-27T00:23:04+0200
-updated: 2026-10-22T13:08:59+0200
+updated: 2026-11-18T14:04:03+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -47,6 +47,7 @@ RELATED: TRDD-563B8WYH (the discovery card, measurements live there), TRDD-5JZQF
 - 2026-09-27T00:23:04+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-09-27T00:23:27+0200 — column → todo by main-agent@agentlenspro. owner directive 2026-09-26: fix the crashes, verified facts in body
 - 2026-09-27T20:53:29+0200 — column → todo by main-agent@agentlenspro. STATE block written; probe work continues
+- 2026-11-18T14:04:03+0100 — column → todo by main-agent@agentlenspro. no work and no commit naming it since 2026-10-22; dev must mean someone is on it
 
 ## Review amendments (gate round 1, 2026-09-27, applied)
 

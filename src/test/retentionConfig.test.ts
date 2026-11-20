@@ -15,11 +15,11 @@ function tmpDir(): { dir: string; cleanup: () => void } {
 const spans = findMeta('spansRetentionDays')! // present by construction; the meta table is the source of truth
 
 suite('retentionConfig (TRDD-ZAV74M8Q — persistent, discoverable retention config)', () => {
-  test('RETENTION_META has 5 knobs with unique keys and env names', () => {
+  test('RETENTION_META has 7 knobs with unique keys and env names', () => {
     // The single source of truth both server and CLI read — a duplicate key/env would silently shadow.
-    assert.strictEqual(RETENTION_META.length, 5)
-    assert.strictEqual(new Set(RETENTION_META.map((m) => m.key)).size, 5)
-    assert.strictEqual(new Set(RETENTION_META.map((m) => m.env)).size, 5)
+    assert.strictEqual(RETENTION_META.length, 7)
+    assert.strictEqual(new Set(RETENTION_META.map((m) => m.key)).size, 7)
+    assert.strictEqual(new Set(RETENTION_META.map((m) => m.env)).size, 7)
     for (const m of RETENTION_META) assert.ok(m.def >= m.min, `${m.key} default must be ≥ its min`)
     // TRDD-AMEA4O4Z: the log-event sink's retention knob must exist with the documented default.
     const le = RETENTION_META.find((m) => m.key === 'logEventsRetentionDays')
@@ -71,14 +71,29 @@ suite('retentionConfig (TRDD-ZAV74M8Q — persistent, discoverable retention con
     } finally { cleanup() }
   })
 
-  test('resolveRetention resolves all 5 knobs at once (defaults when nothing set)', () => {
+  test('resolveRetention resolves all 7 knobs at once (defaults when nothing set)', () => {
     const { dir, cleanup } = tmpDir()
     try {
       assert.deepStrictEqual(resolveRetention(dir, {}), {
         spansRetentionDays: 30, summaryWindowHours: 24, bodiesMaxGb: 8, bodiesRetentionDays: 31,
         logEventsRetentionDays: 31, // TRDD-AMEA4O4Z — the log-event sink's bucket lifetime
+        apiCallsRetentionDays: 90,
+        summaryCardDays: 14,
       })
     } finally { cleanup() }
+  })
+
+  test('apiCallsRetentionDays resolves to 90 by default and to the env value when set', () => {
+    const apiCalls = findMeta('apiCallsRetentionDays')!
+    assert.strictEqual(resolveKnob(apiCalls, {}, {}), 90)
+    assert.strictEqual(resolveKnob(apiCalls, {}, { AGENTLENS_API_CALLS_RETENTION_DAYS: '7' }), 7)
+  })
+
+  test('summaryCardDays resolves to 14 by default, keeps an explicit 0, and takes the env value', () => {
+    const m = findMeta('summaryCardDays')!
+    assert.strictEqual(resolveKnob(m, {}, {}), 14)
+    assert.strictEqual(resolveKnob(m, {}, { AGENTLENS_SUMMARY_CARD_DAYS: '0' }), 0)
+    assert.strictEqual(resolveKnob(m, {}, { AGENTLENS_SUMMARY_CARD_DAYS: '30' }), 30)
   })
 
   test('resolveRetention layers env over the on-disk file', () => {

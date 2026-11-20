@@ -18,6 +18,11 @@ session's leftover); a younger one is kept, because it may be another session in
 write and its own Stop hook. A `*` .gitignore keeps the folder out of git status. Nothing outside the folder is
 touched, and a project where the mod never wrote has no folder and is left alone. Exactly one JSON object, or nothing,
 goes to stdout, and the exit code is always 0 (non-zero takes the hook error path, not the display path).
+
+Held interrupted-turn boxes (0.7.13, TRDD-IT5KUORN): a main Stop display may open with the boxes of reviewed interrupted
+turns, ended by a HELD_END line. That line is never printed, and over the hook output cap the held part is cut before any row
+of the Stop's own turn (fit_held), so this turn's verdict and findings come first. A display file of this stop older than
+STALE_SECONDS that has text is not shown as this stop's: one STALE line says it was dropped (0.7.13, TRDD-0IFG1B11 case e).
 """
 import json
 import os
@@ -36,6 +41,12 @@ BUDGET = 9000
 RESET = "\x1b[0m"
 NOTE = RESET + "\n(truncated)"
 TRUNCATED = "… report truncated"
+# CONTRACT with register.js (HELD_END there; 0.7.13, TRDD-IT5KUORN): a line that is exactly U+001E ends the held interrupted-turn
+# boxes at the top of a main Stop display; the lines after it are that Stop's own turn. It is never printed (main, fit_held).
+HELD_END = "\x1e"
+HELD_TRUNCATED = "… held interrupted-turn report truncated: this turn's report comes first (that review's verdict and cost are in the row printed when it ended)"
+# The one line printed instead of a display file older than STALE_SECONDS (0.7.13, TRDD-0IFG1B11 case e).
+STALE = "review-mod: a review display {age} s old was dropped, not shown: past the {limit} s limit a display file is taken to be left by an earlier stop"
 ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 # CONTRACT with register.js (usageTable, RED + barSegs): the cache bar's miss run is exactly one `ESC[91m` span of U+2588 closed by
 # `ESC[0m`. That shape is what MISS_RUN matches; changing the colour code or the glyph there breaks the monochrome bar here.
@@ -68,6 +79,11 @@ def monochrome(text):
     return ANSI_SGR.sub("", MISS_RUN.sub(lambda m: MONO_MISS * len(m.group(1)), text))
 
 
+def fits(text):
+    """True when the payload of `text`, serialized as it is printed, is within BUDGET."""
+    return len(json.dumps({"systemMessage": text})) <= BUDGET
+
+
 def fit(text):
     """Drop whole trailing lines until the serialized payload fits BUDGET; the usage box is never cut.
 
@@ -90,17 +106,65 @@ def fit(text):
         while head:
             head.pop()
             candidate = "\n".join(head + [TRUNCATED] + box)
-            if len(json.dumps({"systemMessage": candidate})) <= BUDGET:
+            if fits(candidate):
                 return candidate
         candidate = "\n".join([TRUNCATED] + box)
-        if len(json.dumps({"systemMessage": candidate})) <= BUDGET:
+        if fits(candidate):
             return candidate
     while lines:
         candidate = "\n".join(lines) + NOTE
-        if len(json.dumps({"systemMessage": candidate})) <= BUDGET:
+        if fits(candidate):
             return candidate
         lines.pop()
     return NOTE.lstrip("\n")
+
+
+def cut_units(lines):
+    """The held lines as cut units, in order: (True, a usage box) or (False, [one line]).
+
+    A box runs from a line whose ANSI-stripped text starts with "╭" to the next one that starts with "╰"; it is dropped whole,
+    never left half drawn. A "╭" with no "╰" after it is a plain line."""
+    units, i = [], 0
+    while i < len(lines):
+        if ANSI_SGR.sub("", lines[i]).startswith("╭"):
+            end = next((j for j in range(i + 1, len(lines)) if ANSI_SGR.sub("", lines[j]).startswith("╰")), None)
+            if end is not None:
+                units.append((True, lines[i:end + 1]))
+                i = end + 1
+                continue
+        units.append((False, [lines[i]]))
+        i += 1
+    return units
+
+
+def fit_held(held, current):
+    """Fit a main Stop display whose held interrupted-turn boxes (`held`, the lines before HELD_END) come before this turn's
+    own rows (`current`), cutting the held part first (0.7.13, TRDD-IT5KUORN).
+
+    Up to 0.7.12 fit() ran on the whole message: it kept the last usage box (this turn's) and cut the lines before it from
+    their end, which is THIS turn's report, so a held box cut the current verdict and findings. Now the held usage boxes go
+    first, newest first (each one's cost is in the row printed when its review ended), then the other held lines from the end;
+    HELD_TRUNCATED marks the cut. Only when no held line is left is this turn's part cut, by fit(), which never cuts its box."""
+    units = cut_units(held)
+
+    def joined(kept):
+        return "\n".join(kept + [HELD_TRUNCATED, current])
+
+    for i in range(len(units) - 1, -1, -1):
+        if units[i][0]:
+            del units[i]
+            candidate = joined([line for _, unit in units for line in unit])
+            if fits(candidate):
+                return candidate
+    kept = [line for _, unit in units for line in unit]
+    while kept:
+        kept.pop()
+        candidate = joined(kept)
+        if fits(candidate):
+            return candidate
+    candidate = joined([])
+    # fit() drops a line before it measures, so a message that already fits must not reach it.
+    return candidate if fits(candidate) else fit(candidate)
 
 
 def sweep(folder, now):
@@ -151,6 +215,7 @@ def main():
     else:
         base = session_id
     text = ""
+    stale_age = None  # set when this stop's display file is older than STALE_SECONDS and had text
     if base is not None:
         if base != session_id:
             try:
@@ -164,17 +229,35 @@ def main():
                 text = fh.read()
             os.remove(path)
             if age > STALE_SECONDS:
+                # Case e of TRDD-0IFG1B11 (0.7.13): up to 0.7.12 such a display was dropped with no word. The mod writes this
+                # file just before this hook runs, so one older than STALE_SECONDS is taken to be left by an earlier stop: it is
+                # not shown as this stop's, and one line says so. The mod writes an empty file on every quiet Stop, so an empty
+                # leftover says nothing.
+                stale_age = age if text.strip() != "" else None
                 text = ""
         except OSError:  # no file this Stop (the usual case when the mod wrote nothing), or unreadable
             pass
     sweep(folder, now)
+    if stale_age is not None:
+        text = STALE.format(age=int(stale_age), limit=STALE_SECONDS)
     text = text.rstrip("\n")
+    # A main Stop display may open with held interrupted-turn boxes ended by a HELD_END line (register.js, 0.7.13): the line is
+    # never printed, and over the budget the held part is cut before this turn's own rows (fit_held).
+    lines = text.split("\n")
+    held, current = None, text
+    if HELD_END in lines:
+        k = lines.index(HELD_END)
+        held = lines[:k]
+        current = "\n".join(line for line in lines[k + 1:] if line != HELD_END)
+        text = "\n".join(held + ([current] if current != "" else []))
     if text.strip() == "":
         return 0
     if colour_off(os.environ):
         text = monochrome(text)
-    if len(json.dumps({"systemMessage": text})) > BUDGET:
-        text = fit(text)
+        if held is not None:
+            held, current = [monochrome(line) for line in held], monochrome(current)
+    if not fits(text):
+        text = fit_held(held, current) if held and current.strip() != "" else fit(text)
     print(json.dumps({"systemMessage": text}))
     return 0
 

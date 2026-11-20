@@ -5,6 +5,14 @@
 //!
 //!   <root>/<stream>/YYYY-MM-DD/part-<epochMs>-<pid>-<seq>.parquet   sealed, immutable
 //!   <root>/<stream>/YYYY-MM-DD/wal-<pid>.ndjson                     active, un-sealed
+//!   <root>/<stream>/YYYY-MM-DD/wal-cli.ndjson                       appended by the status-line hook when no server took the sample
+//!   <root>/<stream>/YYYY-MM-DD/wal-cli.rot-<pid>-<base36><seq>.ndjson   wal-cli.ndjson renamed by a sealer, then sealed
+//!   <root>/.seal.lock                                               flock: one sealer per store, in any process
+//!   <root>/.seal-kick                                               time of the last sealer start by the hook
+//!   <root>/<stream>/YYYY-MM-DD/sealfail-<file name>.json            marker of a file the seal REFUSED: file, firstFailMs, lastFailMs, attempts, nextRetryMs, reason (TRDD-RTHA7EWK)
+//!
+//! TRDD-VS1FCUMU: `alcore statusline-seal --data-dir DIR` runs `maybe_seal` with no server (no port,
+//! no pidfile, no purge); the 60 s chore of the server runs the same function.
 //!
 //! Every layout choice is the TS module's measured one (parquet+zstd over zstd-NDJSON, flat
 //! dotted keys, no row packing, no UUID typing, large SEAL_ROWS) — the header there carries the
@@ -48,6 +56,69 @@ pub fn retention_days(vars: &HashMap<String, String>) -> f64 {
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|v| v.is_finite() && *v > 0.0)
         .unwrap_or(90.0)
+}
+
+/// Bytes at which TODAY's CLI write-ahead file (`wal-cli.ndjson`, appended by the status-line
+/// hook when no server takes a sample) is sealed. A size, not a row count, so the test is O(1)
+/// whatever the file holds. The hook applies the SAME variable and default before it starts the
+/// sealer (src/cli/statuslineCapture.ts `cliSealBytes`), so a started sealer always finds work.
+/// TRDD-VS1FCUMU.
+pub fn cli_seal_bytes(vars: &HashMap<String, String>) -> u64 {
+    vars.get("AGENTLENS_STATUSLINE_CLI_SEAL_BYTES")
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(16 * 1024 * 1024)
+}
+
+/// Wall-clock budget of ONE maybe_seal call: no new seal starts after it (the one in flight
+/// finishes). A backlog is drained over several calls instead of one long DuckDB burst, which
+/// is what made collection engulf the machine before. TRDD-VS1FCUMU.
+pub fn seal_budget_ms(vars: &HashMap<String, String>) -> u64 {
+    vars.get("AGENTLENS_STATUSLINE_SEAL_BUDGET_MS")
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(20_000)
+}
+
+/// After the CLI write-ahead file is renamed, wait this long before counting its lines: a hook
+/// process that opened the OLD name just before the rename still writes its one line into the
+/// renamed file, and that write must land before the count the seal is verified against.
+const CLI_ROTATE_SETTLE_MS: u64 = 150;
+
+/// The store's cross-process seal lock: ONE sealer per store at a time, whether it is the
+/// server's 60 s chore or the standalone `alcore statusline-seal`. flock is released when the
+/// returned File is dropped or its process dies, so a crashed sealer never leaves it held.
+/// None = another sealer holds it (or the store root does not exist): the caller seals nothing.
+fn try_seal_lock(root: &Path) -> Option<std::fs::File> {
+    use fs2::FileExt;
+    let f = std::fs::OpenOptions::new().create(true).append(true).open(root.join(".seal.lock")).ok()?;
+    f.try_lock_exclusive().ok()?;
+    Some(f)
+}
+
+/// What the name of a `wal-*.ndjson` file says about who may still append to it.
+enum WalOwner {
+    /// `wal-cli.ndjson`: any number of status-line hook processes append to it at any time.
+    Cli,
+    /// `wal-<our pid>.ndjson`: this process's own flush appends to it.
+    Own,
+    /// `wal-<pid>.ndjson` of the live server that owns this data dir, seen from ANOTHER process
+    /// (the standalone sealer): never touched here, that server rotates and seals its own.
+    ForeignLive,
+    /// Nobody appends any more: a dead server's file, or a rotated `wal-*.rot-*.ndjson`.
+    Orphan,
+}
+
+fn wal_owner(name: &str, live_server: Option<u32>) -> WalOwner {
+    if name == "wal-cli.ndjson" {
+        return WalOwner::Cli;
+    }
+    let pid = name.strip_prefix("wal-").and_then(|s| s.strip_suffix(".ndjson")).and_then(|s| s.parse::<u32>().ok());
+    match pid {
+        Some(pid) if pid == std::process::id() => WalOwner::Own,
+        Some(pid) if Some(pid) == live_server => WalOwner::ForeignLive,
+        _ => WalOwner::Orphan,
+    }
 }
 
 const FLUSH_MAX_RECORDS: usize = 32;
@@ -221,10 +292,13 @@ pub fn relation_for(root: &Path, stream: &str, since_ms: Option<f64>, until_ms: 
     let (parts, wals) = files_in_window(root, stream, since_ms, until_ms);
     let rels: Vec<String> = parts
         .iter()
-        .map(|p| varchar_session_id(&format!("SELECT * FROM read_parquet({})", q(&p.to_string_lossy()))))
+        .map(|p| varchar_session_id(&format!("SELECT * FROM read_parquet({})", agentlens_store::sq_path(&p.to_string_lossy()))))
         .chain(
+            // WHY (TRDD-ZKNP5IJY): sample_size=-1 infers the schema from the whole file. DuckDB samples only the first
+            // 20,480 rows by default, so a key first sent after them was no column and a query naming it failed with a
+            // Binder Error. The seal path already does this (TRDD-VS1FCUMU); the reader must match it.
             wals.iter()
-                .map(|w| varchar_session_id(&format!("SELECT * FROM read_json_auto({}, ignore_errors=true)", q(&w.to_string_lossy())))),
+                .map(|w| varchar_session_id(&format!("SELECT * FROM read_json_auto({}, sample_size=-1, ignore_errors=true)", agentlens_store::sq_path(&w.to_string_lossy())))),
         )
         .collect();
     if rels.is_empty() {
@@ -252,8 +326,32 @@ fn open_duck(root: &Path, vars: &HashMap<String, String>) -> Result<Connection, 
     Ok(con)
 }
 
+/// Non-empty lines of a write-ahead file. STREAMED, never read whole: a CLI write-ahead file
+/// can hold hundreds of MB (TRDD-VS1FCUMU), and loading it as one String is what would push the
+/// process past its memory cap. Bytes, not UTF-8: a file with an invalid byte still counts its
+/// lines (it used to count 0, which let a past-day file be deleted as "empty").
 fn count_lines(file: &Path) -> usize {
-    std::fs::read_to_string(file).map(|raw| raw.split('\n').filter(|l| !l.is_empty()).count()).unwrap_or(0)
+    use std::io::BufRead;
+    let Ok(f) = std::fs::File::open(file) else { return 0 };
+    let mut reader = std::io::BufReader::with_capacity(1 << 16, f);
+    let mut line: Vec<u8> = Vec::new();
+    let mut n = 0usize;
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                if line.last() == Some(&b'\n') {
+                    line.pop();
+                }
+                if !line.is_empty() {
+                    n += 1;
+                }
+            }
+            Err(_) => return 0,
+        }
+    }
+    n
 }
 
 /// The seal/durability counters — shared with the seal task, surfaced by stats().
@@ -263,6 +361,102 @@ pub struct SealCounters {
     /// WALs (or lump counts) the seal REFUSED or lost — non-zero means raw JSON sits unsealed
     /// or a torn line became a NULL row; visible here rather than silent.
     pub corrupt_wals: std::sync::atomic::AtomicU64,
+    /// TRDD-RTHA7EWK item 5: seal attempts that ended in a REFUSAL (the file stays unsealed and a
+    /// `sealfail-*.json` marker was written or updated). One count per attempt, not per file.
+    pub refused_files: std::sync::atomic::AtomicU64,
+    /// TRDD-RTHA7EWK item 5: files skipped because their marker is younger than its backoff.
+    pub backoff_skips: std::sync::atomic::AtomicU64,
+}
+
+/// What one seal attempt came to (TRDD-RTHA7EWK item 5). Before this, every failure was a bare
+/// `false`: the reason was dropped, so a refused file was retried at full DuckDB cost on every tick
+/// and left no trace outside one stderr line.
+enum SealOutcome {
+    Sealed,
+    /// The file changed length during the seal (a late append): transient, the next call seals it
+    /// whole. No marker: it is not a refusal.
+    Kept,
+    /// The attempt failed; the text says why. The caller records it in a marker file.
+    Refused(String),
+}
+
+/// A refused file waits this long before its first retry; each further refusal doubles the wait.
+/// The numbers are a choice: the cost of one refused attempt was never measured (TRDD-RTHA7EWK).
+const SEAL_RETRY_BASE_MS: u64 = 5 * 60 * 1000;
+const SEAL_RETRY_CAP_MS: u64 = 6 * 60 * 60 * 1000;
+const SEAL_MARKER_PREFIX: &str = "sealfail-";
+const SEAL_MARKER_SUFFIX: &str = ".json";
+const SEAL_MARKER_REASON_MAX_CHARS: usize = 500;
+
+/// Backoff base of a refused file: `AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS`, default 5 minutes.
+/// 0 turns the backoff off (every call retries every refused file). TRDD-RTHA7EWK item 5.
+pub fn seal_retry_base_ms(vars: &HashMap<String, String>) -> u64 {
+    vars.get("AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS").and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(SEAL_RETRY_BASE_MS)
+}
+
+/// How long a file refused `attempts` times waits after its last failure: base, doubling per
+/// attempt, capped at 6 hours; base 0 = no wait. TRDD-RTHA7EWK item 5.
+pub fn seal_backoff_ms(base_ms: u64, attempts: u64) -> u64 {
+    if base_ms == 0 {
+        return 0;
+    }
+    let doublings = attempts.saturating_sub(1).min(32) as u32;
+    base_ms.saturating_mul(1u64 << doublings).min(SEAL_RETRY_CAP_MS)
+}
+
+/// File name of the marker that records the refusals of `file_name`, in the same directory.
+/// Keyed on the name of the file that is SEALED: a `wal-cli.ndjson` is renamed to a `.rot-` name
+/// before its seal, and a `.rot-` name is an Orphan on every later pass (it fails the pid parse in
+/// `wal_owner`), so it is never renamed again and the name stays stable across retries. A dead
+/// server's `wal-<pid>.ndjson` is an Orphan too. TRDD-RTHA7EWK item 5.
+pub fn seal_marker_name(file_name: &str) -> String {
+    format!("{SEAL_MARKER_PREFIX}{file_name}{SEAL_MARKER_SUFFIX}")
+}
+
+/// The file a marker name belongs to (inverse of `seal_marker_name`).
+fn seal_marker_target(marker_name: &str) -> Option<&str> {
+    marker_name.strip_prefix(SEAL_MARKER_PREFIX)?.strip_suffix(SEAL_MARKER_SUFFIX)
+}
+
+struct SealMarker {
+    first_fail_ms: f64,
+    last_fail_ms: f64,
+    attempts: u64,
+}
+
+/// A missing or unreadable marker reads as None: the file is attempted again at once, which is
+/// the safe direction (a lost marker costs one more attempt, never a lost file).
+fn read_seal_marker(marker: &Path) -> Option<SealMarker> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(marker).ok()?).ok()?;
+    Some(SealMarker { first_fail_ms: v.get("firstFailMs")?.as_f64()?, last_fail_ms: v.get("lastFailMs")?.as_f64()?, attempts: v.get("attempts")?.as_u64()? })
+}
+
+/// Write or update the marker of a refused file (tmp, then rename) and print one stderr line:
+/// path, reason, attempt number, next retry. TRDD-RTHA7EWK item 5.
+fn record_seal_refusal(target: &Path, reason: &str, now_ms: f64, base_ms: u64) {
+    let dir = target.parent().expect("wal lives in a partition dir");
+    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let marker = dir.join(seal_marker_name(name));
+    let (first, attempts) = match read_seal_marker(&marker) {
+        Some(m) => (m.first_fail_ms, m.attempts + 1),
+        None => (now_ms, 1),
+    };
+    let reason: String = reason.chars().take(SEAL_MARKER_REASON_MAX_CHARS).collect();
+    let wait = seal_backoff_ms(base_ms, attempts);
+    // nextRetryMs is for readers (the statusline-history refused view); the sealer decides from lastFailMs, attempts and its own current base.
+    let body = serde_json::json!({ "file": name, "firstFailMs": first as i64, "lastFailMs": now_ms as i64, "attempts": attempts, "nextRetryMs": (now_ms + wait as f64) as i64, "reason": reason });
+    let tmp = dir.join(format!("{}.tmp", seal_marker_name(name)));
+    let written = std::fs::write(&tmp, body.to_string()).and_then(|_| std::fs::rename(&tmp, &marker));
+    let next = match wait {
+        0 => "the next call".to_owned(),
+        wait => iso_from_ms(now_ms + wait as f64),
+    };
+    eprintln!("{} alcore: statusline seal refused {}: {reason} (attempt {attempts}, next retry {next})", crate::log_ts(), target.display());
+    if let Err(e) = written {
+        eprintln!("{} alcore: statusline seal: marker {} not written: {e}", crate::log_ts(), marker.display());
+        // A failed write or rename must not leave the tmp file behind: its name is not a marker name, so no later pass removes it.
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 /// One instance per server process. append() runs at the full sample rate — a push onto a
@@ -415,43 +609,120 @@ pub fn maybe_seal(root: &Path, counters: &SealCounters, vars: &HashMap<String, S
     let Some(_heavy) = agentlens_store::transcript_sql::acquire_heavy_for_chore("statusline seal", &SKIPS) else {
         return 0;
     };
+    // TRDD-VS1FCUMU: ONE sealer per store across PROCESSES. The standalone `alcore
+    // statusline-seal` and a server's 60 s chore can meet on the same store; the second one
+    // seals nothing this time. Held until this function returns.
+    let Some(_seal_lock) = try_seal_lock(root) else {
+        return 0;
+    };
+    let started = std::time::Instant::now();
+    let budget = std::time::Duration::from_millis(seal_budget_ms(vars));
+    // The live server that owns this data dir (the store root is `<dataDir>/statusline`). Its
+    // own write-ahead file is off limits to every other process.
+    let live_server = root.parent().and_then(crate::pid_lock::live_owner_pid);
     let today = day_key(now_ms);
+    // TRDD-RTHA7EWK item 5: read once per call, like the budget.
+    let retry_base = seal_retry_base_ms(vars);
     let mut sealed = 0u64;
-    for stream in STATUSLINE_STREAMS {
+    'store: for stream in STATUSLINE_STREAMS {
         for (dir, _) in day_partitions(root, stream) {
             let is_past_day = dir.file_name().and_then(|n| n.to_str()) != Some(today.as_str());
+            // TRDD-RTHA7EWK item 5: a marker whose file is gone (sealed by an older build, purged,
+            // removed by hand) is removed with it, so `statusline-history refused` never lists a ghost.
+            for marker in list_files(&dir, |f| seal_marker_target(f).is_some()) {
+                let target = marker.file_name().and_then(|n| n.to_str()).and_then(seal_marker_target).unwrap_or_default();
+                if !dir.join(target).exists() {
+                    let _ = std::fs::remove_file(&marker);
+                }
+            }
             for wal in list_files(&dir, |f| f.starts_with("wal-") && f.ends_with(".ndjson")) {
-                let mut rows = count_lines(&wal);
-                if rows == 0 {
-                    if is_past_day {
-                        let _ = std::fs::remove_file(&wal); // raced — fine
-                    }
-                    continue;
+                if started.elapsed() >= budget {
+                    break 'store; // the rest waits for the next call
                 }
-                let own_live = format!("wal-{}.ndjson", std::process::id());
-                let orphan = wal.file_name().and_then(|n| n.to_str()) != Some(own_live.as_str());
-                if !is_past_day && !orphan && (rows as f64) < seal_rows(vars) {
-                    continue;
-                }
-                let mut target = wal.clone();
-                if !is_past_day && !orphan {
-                    // ROTATE our own LIVE WAL first: flush keeps appending to the fixed per-pid
-                    // name, so sealing it in place races the appender (COPY reads more rows than
-                    // counted, the verify fails, a whole DuckDB instance is wasted per tick).
-                    // After the atomic rename the file can never grow again.
-                    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let rot = dir.join(format!("wal-{}.rot-{}{seq}.ndjson", std::process::id(), to_base36(crate::now_ms() as u64)));
-                    if std::fs::rename(&wal, &rot).is_err() {
-                        continue; // raced with a purge — next tick
-                    }
-                    target = rot;
-                    rows = count_lines(&target); // appends between count and rename landed here
-                    if rows == 0 {
-                        continue;
+                let name = wal.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned();
+                // TRDD-RTHA7EWK item 5: a refused file is not attempted again before its backoff has
+                // passed. Checked on the NAME, before wal_owner: the marker is keyed on the file that is
+                // sealed (see seal_marker_name), and a renamed `.rot-` file keeps its name on every pass,
+                // so a skipped file costs one small read, never a DuckDB open.
+                if retry_base > 0 {
+                    if let Some(m) = read_seal_marker(&dir.join(seal_marker_name(&name))) {
+                        // A marker stamped in the future (the clock was stepped back since) is not honoured: the file is
+                        // retried at once, the safe direction, instead of waiting the step plus the window.
+                        if m.last_fail_ms <= now_ms && now_ms < m.last_fail_ms + seal_backoff_ms(retry_base, m.attempts) as f64 {
+                            counters.backoff_skips.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            continue;
+                        }
                     }
                 }
-                if seal_one(root, &target, rows, counters, vars) {
-                    sealed += 1;
+                let (target, rows) = match wal_owner(&name, live_server) {
+                    WalOwner::ForeignLive => continue,
+                    WalOwner::Cli => {
+                        // Today's file waits for the byte threshold; a past day's is always sealed.
+                        if !is_past_day && std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) < cli_seal_bytes(vars) {
+                            continue;
+                        }
+                        // Hook processes append to the fixed name at any moment, so it is ALWAYS
+                        // renamed first, past day included (a hook can still write yesterday's
+                        // file around midnight). The pid in the name keeps two sealer processes
+                        // from ever producing the same name; `exists` is the defence behind it,
+                        // because rename would silently replace an existing file.
+                        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let rot = dir.join(format!("wal-cli.rot-{}-{}{seq}.ndjson", std::process::id(), to_base36(crate::now_ms() as u64)));
+                        if rot.exists() || std::fs::rename(&wal, &rot).is_err() {
+                            continue;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(CLI_ROTATE_SETTLE_MS));
+                        let rows = count_lines(&rot);
+                        if rows == 0 {
+                            continue;
+                        }
+                        (rot, rows)
+                    }
+                    owner @ (WalOwner::Own | WalOwner::Orphan) => {
+                        let orphan = matches!(owner, WalOwner::Orphan);
+                        let mut rows = count_lines(&wal);
+                        if rows == 0 {
+                            if is_past_day {
+                                let _ = std::fs::remove_file(&wal); // raced — fine
+                            }
+                            continue;
+                        }
+                        if !is_past_day && !orphan && (rows as f64) < seal_rows(vars) {
+                            continue;
+                        }
+                        let mut target = wal.clone();
+                        if !is_past_day && !orphan {
+                            // ROTATE our own LIVE WAL first: flush keeps appending to the fixed per-pid
+                            // name, so sealing it in place races the appender (COPY reads more rows than
+                            // counted, the verify fails, a whole DuckDB instance is wasted per tick).
+                            // After the atomic rename the file can never grow again.
+                            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let rot = dir.join(format!("wal-{}.rot-{}{seq}.ndjson", std::process::id(), to_base36(crate::now_ms() as u64)));
+                            if std::fs::rename(&wal, &rot).is_err() {
+                                continue; // raced with a purge — next tick
+                            }
+                            target = rot;
+                            rows = count_lines(&target); // appends between count and rename landed here
+                            if rows == 0 {
+                                continue;
+                            }
+                        }
+                        (target, rows)
+                    }
+                };
+                // TRDD-RTHA7EWK item 5: a refusal is recorded in a marker beside the file (and backs off
+                // the next attempt); a seal removes the marker. `Kept` is a late append, not a refusal.
+                match seal_one(root, &target, rows, counters, vars) {
+                    SealOutcome::Sealed => {
+                        sealed += 1;
+                        let sealed_name = target.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                        let _ = std::fs::remove_file(dir.join(seal_marker_name(sealed_name)));
+                    }
+                    SealOutcome::Kept => {}
+                    SealOutcome::Refused(reason) => {
+                        counters.refused_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        record_seal_refusal(&target, &reason, now_ms, retry_base);
+                    }
                 }
             }
         }
@@ -468,10 +739,23 @@ fn inference_collapsed(cols: &[String]) -> bool {
     cols.len() == 1 && cols[0] == "json"
 }
 
+/// How many top-level keys of a write-ahead file are NOT columns of its part. The file is read
+/// as raw JSON objects, so this does not depend on schema inference; names are compared without
+/// case, as DuckDB compares column names. 0 means every key of the file has a column.
+fn keys_missing_from_part(con: &Connection, wal: &Path, part: &Path) -> Result<i64, String> {
+    let sql = format!(
+        "SELECT count(*) FROM (SELECT DISTINCT lower(k) AS k FROM (SELECT unnest(json_keys(json)) AS k FROM read_ndjson_objects({}, ignore_errors=true))) WHERE k NOT IN (SELECT lower(column_name) FROM (DESCRIBE SELECT * FROM read_parquet({})))",
+        agentlens_store::sq_path(&wal.to_string_lossy()),
+        agentlens_store::sq_path(&part.to_string_lossy())
+    );
+    con.query_row(&sql, [], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())
+}
+
 /// Convert ONE WAL to a parquet part and delete it — only after PROVING the part holds every
 /// row. Never panics out of the seal path; every failure removes the untrustworthy part and
-/// keeps the WAL for the next tick.
-fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters, vars: &HashMap<String, String>) -> bool {
+/// keeps the WAL: a late append (`Kept`) is retried on the next call, a refusal after its backoff
+/// (TRDD-RTHA7EWK item 5).
+fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters, vars: &HashMap<String, String>) -> SealOutcome {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = wal.parent().expect("wal lives in a partition dir");
     let out = dir.join(part_name(SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
@@ -479,15 +763,31 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         // Defence in depth behind the collision-free name: COPY TO silently overwrites, and an
         // overwritten part is destroyed data. Refuse; the naming invariant is broken.
         eprintln!("{} alcore: refusing to overwrite existing part {} — part naming must be collision-free", crate::log_ts(), out.display());
-        return false;
+        return SealOutcome::Refused(format!("refusing to overwrite existing part {}: part naming must be collision-free", out.display()));
     }
-    let run = || -> Result<bool, String> {
+    // TRDD-VS1FCUMU: the file's length when this seal begins. A status-line hook process that
+    // opened `wal-cli.ndjson` before the sealer renamed it can still append its one line to the
+    // renamed file at any later moment. A line that lands before the COPY reads the file makes
+    // the row count differ from `expect_rows` (the part is dropped). A line that lands AFTER the
+    // COPY is seen only by comparing this length again right before the delete.
+    let len_at_start = std::fs::metadata(wal).map(|m| m.len()).ok();
+    // TRDD-RTHA7EWK item 5: every outcome carries its reason now. The closure used to return a bare
+    // bool and the Err text was dropped at the match below, so a refused file could not say why.
+    let run = || -> Result<SealOutcome, String> {
         let con = open_duck(root, vars)?;
-        let wal_q = q(&wal.to_string_lossy());
+        let wal_q = agentlens_store::sq_path(&wal.to_string_lossy());
+        // TRDD-VS1FCUMU: sample_size=-1 makes read_json_auto infer the schema from the WHOLE file.
+        // Its default infers from the first rows only. Measured with this binary on a live
+        // 291,970-line file and on a 30,000-line one: a key first seen after that sample was not a
+        // column of the part, and an integer column whose later value was 1.5 was stored rounded,
+        // while the row count matched in both cases. Do not remove the option to save a pass.
+        // Debug builds only: the test knob below restores the default sample, so that
+        // tests/statusline_seal_cli.rs can drive a part that lacks a key into the key check.
+        let sample = if cfg!(debug_assertions) && vars.contains_key("AGENTLENS_STATUSLINE_SEAL_TEST_DEFAULT_SAMPLE") { "" } else { "sample_size=-1, " };
         let cols: Vec<String> = {
             let mut stmt = con
                 .prepare(&format!(
-                    "SELECT column_name FROM (DESCRIBE SELECT * FROM read_json_auto({wal_q}, union_by_name=true, ignore_errors=true))"
+                    "SELECT column_name FROM (DESCRIBE SELECT * FROM read_json_auto({wal_q}, {sample}union_by_name=true, ignore_errors=true))"
                 ))
                 .map_err(|e| e.to_string())?;
             let it = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
@@ -495,46 +795,85 @@ fn seal_one(root: &Path, wal: &Path, expect_rows: usize, counters: &SealCounters
         };
         if inference_collapsed(&cols) {
             counters.corrupt_wals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Ok(false); // keep the WAL: its raw JSON is the only readable copy
+            // The reason says only what was observed; it does not name a cause.
+            return Ok(SealOutcome::Refused("read_json_auto read the file as one opaque json column; raw lines kept".to_owned())); // keep the WAL: its raw JSON is the only readable copy
         }
         // ORDER BY session_id measured 1.24x better compression (clusters near-identical
         // consecutive samples into dictionary/RLE runs); sealing session_id as VARCHAR is the
         // ROOT fix for the UUID-inference trap — new parts need no read-time repair.
         con.execute_batch(&format!(
             "COPY (SELECT * FROM ({}) ORDER BY session_id, ts) TO {} (FORMAT PARQUET, COMPRESSION ZSTD)",
-            varchar_session_id(&format!("SELECT * FROM read_json_auto({wal_q}, union_by_name=true, ignore_errors=true)")),
+            varchar_session_id(&format!("SELECT * FROM read_json_auto({wal_q}, {sample}union_by_name=true, ignore_errors=true)")),
             q(&out.to_string_lossy())
         ))
         .map_err(|e| e.to_string())?;
         let count = |sql: &str| -> Result<i64, String> {
             con.query_row(sql, [], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())
         };
-        let got = count(&format!("SELECT count(*) FROM read_parquet({})", q(&out.to_string_lossy())))?;
+        let got = count(&format!("SELECT count(*) FROM read_parquet({})", agentlens_store::sq_path(&out.to_string_lossy())))?;
         if got != expect_rows as i64 {
             // Do NOT delete the WAL — remove the untrustworthy part and leave the raw rows. A
             // short part means rows LOST in conversion; count it or the WAL re-fails forever
             // while stats() shows nothing wrong.
             let _ = std::fs::remove_file(&out);
+            // TRDD-RTHA7EWK item 5: a hook line that landed after len_at_start and before the COPY read
+            // the file makes the counts differ too. That is the same transient case as the length check
+            // below, so it is Kept (retried on the next tick), not counted as corrupt, marked or backed off.
+            if std::fs::metadata(wal).map(|m| m.len()).ok() != len_at_start {
+                eprintln!("{} alcore: statusline seal: {} grew before the copy read it; kept for the next call", crate::log_ts(), wal.display());
+                return Ok(SealOutcome::Kept);
+            }
             if got < expect_rows as i64 {
                 counters.corrupt_wals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            return Ok(false);
+            return Ok(SealOutcome::Refused(format!("the part holds {got} rows, the file {expect_rows}")));
         }
         // ignore_errors lands an unparseable line as an all-NULL row (count still matches):
         // a torn line becomes a NULL row — acceptable, never silent. append() writes ts on
         // every record, so count(ts) < count(*) can only mean broken source lines.
-        let with_ts = count(&format!("SELECT count(ts) FROM read_parquet({})", q(&out.to_string_lossy())))?;
+        let with_ts = count(&format!("SELECT count(ts) FROM read_parquet({})", agentlens_store::sq_path(&out.to_string_lossy())))?;
         if with_ts < got {
             counters.corrupt_wals.fetch_add((got - with_ts) as u64, std::sync::atomic::Ordering::Relaxed);
         }
+        // TRDD-VS1FCUMU: the row count above cannot see a missing COLUMN (see `sample` above for
+        // the measured case). This check reads the file as raw JSON objects, with no schema
+        // inference, so it still holds if the reader's sampling ever changes. A part that lacks
+        // a key of the file is dropped and the file is kept: the file is the only full copy.
+        let missing = keys_missing_from_part(&con, wal, &out)?;
+        if missing > 0 {
+            eprintln!("{} alcore: statusline seal: the part of {} lacks {missing} key(s) of the file; part dropped, file kept", crate::log_ts(), wal.display());
+            counters.corrupt_wals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = std::fs::remove_file(&out);
+            return Ok(SealOutcome::Refused(format!("the part lacks {missing} key(s) of the file")));
+        }
+        // Test-only hold (tests/statusline_seal_cli.rs sets it; nothing else does): it widens the
+        // gap between the verified read above and the delete below, so that test can place a
+        // late append inside it. Unset or 0 = no wait.
+        // Debug builds only: a release binary never waits here, whatever its environment holds.
+        let hold_ms = if cfg!(debug_assertions) { vars.get("AGENTLENS_STATUSLINE_SEAL_TEST_HOLD_MS").and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0) } else { 0 };
+        if hold_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(hold_ms));
+        }
+        // The file changed length since this seal began: a late append landed after the COPY
+        // read it, so the part misses that line. Deleting the file now would delete the line.
+        // Drop the part and keep the file; the next call recounts it and seals it whole.
+        // What this cannot see is an append between this check and the delete, two syscalls
+        // apart: that needs a hook process stalled between its open and its write for longer
+        // than the settle wait plus this whole seal, and landing in that exact gap.
+        // TRDD-RTHA7EWK item 5: this is Kept, not Refused: transient, so no marker and no backoff.
+        if std::fs::metadata(wal).map(|m| m.len()).ok() != len_at_start {
+            eprintln!("{} alcore: statusline seal: {} changed length during the seal; kept for the next call", crate::log_ts(), wal.display());
+            let _ = std::fs::remove_file(&out);
+            return Ok(SealOutcome::Kept);
+        }
         std::fs::remove_file(wal).map_err(|e| e.to_string())?;
-        Ok(true)
+        Ok(SealOutcome::Sealed)
     };
     match run() {
-        Ok(ok) => ok,
-        Err(_) => {
+        Ok(outcome) => outcome,
+        Err(e) => {
             let _ = std::fs::remove_file(&out); // best effort
-            false // never panic out of the seal path — the next tick retries
+            SealOutcome::Refused(e) // never panic out of the seal path; the caller marks the file and retries it after its backoff
         }
     }
 }
@@ -641,6 +980,23 @@ mod spill_tests {
         assert_eq!(lim, "512.0 MiB");
         assert_eq!(tmp, root.join("tmp").to_string_lossy());
         assert!(root.join("tmp").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// TRDD-VS1FCUMU: the key check counts the keys of the file that the part lacks, without case.
+    #[test]
+    fn keys_missing_from_part_counts_the_keys_of_the_file_that_the_part_lacks() {
+        let root = std::env::temp_dir().join(format!("al-sl-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let con = open_duck(&root, &HashMap::new()).expect("open_duck");
+        let wal = root.join("wal-cli.ndjson");
+        std::fs::write(&wal, "{\"ts\":1,\"session_id\":\"s\",\"Late\":7}\n{\"ts\":2,\"session_id\":\"s\"}\n").unwrap();
+        let lacking = root.join("lacking.parquet");
+        let complete = root.join("complete.parquet");
+        con.execute_batch(&format!("COPY (SELECT 1 AS ts, 's' AS session_id) TO {} (FORMAT PARQUET)", q(&lacking.to_string_lossy()))).unwrap();
+        con.execute_batch(&format!("COPY (SELECT 1 AS ts, 's' AS session_id, 7 AS late) TO {} (FORMAT PARQUET)", q(&complete.to_string_lossy()))).unwrap();
+        assert_eq!(keys_missing_from_part(&con, &wal, &lacking).unwrap(), 1, "the key Late has no column in this part");
+        assert_eq!(keys_missing_from_part(&con, &wal, &complete).unwrap(), 0, "names are compared without case");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

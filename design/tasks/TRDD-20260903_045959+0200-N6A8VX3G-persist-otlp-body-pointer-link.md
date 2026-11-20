@@ -9,6 +9,8 @@ task-type: feature
 priority: high
 min-approval-requirement: none
 parent-trdd: CAJ5RCP9
+derived: true
+derived-kind: eht
 created-by: main-session
 npt: []
 eht: []

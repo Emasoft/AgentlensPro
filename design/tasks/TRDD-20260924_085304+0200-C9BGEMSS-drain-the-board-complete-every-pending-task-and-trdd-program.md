@@ -3,7 +3,7 @@ trdd-id: C9BGEMSS
 title: Drain the board, complete every pending task and TRDD (program 2026-09-24)
 column: todo
 created: 2026-09-24T08:53:04+0200
-updated: 2026-11-16T23:07:34+0100
+updated: 2026-11-16T23:17:06+0100
 current-owner: Emasoft
 created-by: Emasoft
 task-type: infra
@@ -63,3 +63,7 @@ The board held 142 open cards, many stale against a rewritten review gate; a pro
 ## Correction 2026-09-24T09:11:28+0200
 
 Commit fd4b679a overstated "every open card" and "verdicts re-checked": backburner (15 cards) was NOT covered by the first triage pass -- a backburner triage is running separately now. And "verdicts re-checked" overclaims what actually happened: AI-review verdicts were RE-READ and their cited implementation SHAs were checked by workers; the orchestrator (this session) independently verified only ONE fact itself -- that commit 268f3080 deleted src/cli/reviewGateEffects.ts and its test, the basis for superseding the review-gate cluster. Everything else rests on worker-reported checks, not orchestrator-verified ones. See the STATE block above (rewritten this pass) for the corrected commit range (cf46888e through 8f9fb461, not ".."), the withdrawn NDKKOABG push claim, the owner decisions (ALL STILL PENDING; the STATE of 84ecfed5 and later supersedes this section), 3U8AIHXK's Gen-2 supersession, the stale-approval check (finished: 14 hold, 2 sent to dev) on the ai_review->human_review moves, 4BZPAQWM moved to the front of phase 3, current disk state (97% used, 61 GB free, rust-core/target 21 GB), and that session's spend cap (session-scoped, void after /clear) (12 more worker launches, or stop at 80% of the 5h window).
+
+## Review notes
+
+- 2026-11-16 23:17 — Count update: TRDD-10NGH2BR closed (2ef69aa5). Of the 22 human_review cards: 11 closed, 4 returned to todo, 7 remain.

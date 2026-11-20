@@ -197,6 +197,54 @@ pub struct SummaryInputs {
     /// The caches previous outputs, handed over for in-place patching (see `summary_engine`).
     pub prev: summary_engine::Prev,
     pub engine: Arc<summary_engine::SummaryEngine>,
+    /// TRDD-ER88PXNB: the card-window cutoff for this pass (None = every card). The filter itself runs in
+    /// `summary_from`, OFF the state lock, because it parses one date per resident card.
+    pub card_cutoff_ms: Option<f64>,
+    /// TRDD-ER88PXNB: the summaryCardDays value the cutoff came from, for the `SummaryWindow` description.
+    pub card_days: f64,
+    /// TRDD-ER88PXNB: filled by `summary_from` when the window is on; the caller hands it to `store_summary_window`.
+    pub window: Option<SummaryWindow>,
+}
+
+/// TRDD-ER88PXNB: what the summary covers when the card window is on: the sessions whose last activity
+/// (startTime + durationMs) is at or after `cutoff_ms`. Routes that show totals add `to_json()` to their payload.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SummaryWindow {
+    pub card_days: f64,
+    pub cutoff_ms: f64,
+    pub cards_included: usize,
+    pub cards_resident: usize,
+}
+
+impl SummaryWindow {
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "cardDays": self.card_days,
+            "cutoffMs": self.cutoff_ms,
+            "basis": format!("sessions active within at least the last {} days (last activity = startTime + durationMs, cutoff at the UTC midnight that starts the window; fractional days round up to whole UTC days)", self.card_days),
+            "cardsIncluded": self.cards_included,
+            "cardsResident": self.cards_resident,
+        })
+    }
+
+    /// TRDD-ER88PXNB C2: the one-line form MCP answers carry as their first key.
+    pub fn sentence(&self) -> String {
+        format!(
+            "covers only log sessions active since {} (the last {} UTC days): {} of {} resident session cards; older sessions are left out of these totals and are still answered when asked for by sessionId",
+            crate::summarize::helpers::iso_from_ms(self.cutoff_ms), self.card_days, self.cards_included, self.cards_resident
+        )
+    }
+}
+
+/// TRDD-ER88PXNB: the cutoff of the summary card window. WHY quantized to a UTC midnight: the summary engine reuses
+/// its state only while the windowed list keeps its old cards as an id-for-id prefix, so every age-out is a full pass;
+/// a cutoff that moved with the clock would age a card out on almost every rebuild. None = no window (days <= 0 or NaN).
+pub fn summary_card_cutoff_ms(now_ms: f64, days: f64) -> Option<f64> {
+    if days.is_nan() || days <= 0.0 {
+        return None;
+    }
+    const DAY_MS: f64 = 86_400_000.0;
+    Some(((now_ms / DAY_MS).floor() - days.ceil()) * DAY_MS)
 }
 
 pub struct CoreState {
@@ -275,6 +323,18 @@ pub struct CoreState {
     pub summary_cache: derived_cache::VersionedCache<Value>,
     /// The burn subset summary memoized by `data_version` (TRDD-735Q3JF4 item 2): `ui::burn_summary_now` computes it once per version, not on every 4 s tick and burn request. Dropped with `summary_cache` under stage-2 memory pressure.
     pub burn_subset_memo: Option<(u64, Arc<Value>)>,
+    /// TRDD-ER88PXNB: the summary is built over the log cards whose last activity falls in the last
+    /// `summary_card_days` UTC days; 0 = every resident card. WHY 0 by default: only alcore's boot sets it from the
+    /// summaryCardDays knob, so tests and tools that open a CoreState keep the whole corpus.
+    pub summary_card_days: f64,
+    /// TRDD-ER88PXNB: what the stored summary covers, set by `store_summary_window` once the summary of the current
+    /// version lands. WHY here and not inside the summary Value: the summary engine recognises its own previous output
+    /// by Arc pointer identity, and inserting a field into that Value would copy the Arc and force a full pass on every rebuild.
+    pub summary_window: Option<SummaryWindow>,
+    /// TRDD-ER88PXNB A2: how many per-family summaries `ui::summary_for_ids` has built (sessions older than the card window). Never cached; counted so tests and ops can see it.
+    pub family_summary_builds: u64,
+    /// TRDD-ER88PXNB A2: the one-slot memo of the last family build, so a poll of one old session does not rebuild it every request.
+    pub family_summary_memo: Option<ui::FamilyMemo>,
     /// Set by the first `ui::summary_now` call and never cleared: "a summary reader has asked since boot".
     /// `ui::rebuild_once` builds nothing until it is true (TRDD-735Q3JF4 increment 1, item 1). Lives here, not in a
     /// process-global, so each test's fresh state starts unasked and parallel tests stay isolated.
@@ -445,6 +505,12 @@ impl CoreState {
     /// pointer copy: no card text crosses the lock and nothing is parsed (TRDD-9VX3WTGU Phase C —
     /// `cards_json()` is now only the cold-boot/CLI/parity read of the TABLE).
     pub fn summary_snapshot(&mut self) -> SummaryInputs {
+        self.summary_snapshot_at(crate::now_ms() as f64)
+    }
+
+    /// TRDD-ER88PXNB: `summary_snapshot` at a given clock, so tests can move time across a UTC midnight.
+    /// It only records the cutoff; `summary_from` applies it off the lock.
+    pub fn summary_snapshot_at(&mut self, now_ms: f64) -> SummaryInputs {
         SummaryInputs {
             version: self.data_version,
             spans: self.window.spans.clone(),
@@ -455,6 +521,9 @@ impl CoreState {
             // engine can patch them in place (see `summary_engine`). `&mut self` is for this.
             prev: summary_engine::Prev { summary: self.summary_cache.take_arc() },
             engine: self.summary_engine.clone(),
+            card_cutoff_ms: summary_card_cutoff_ms(now_ms, self.summary_card_days),
+            card_days: self.summary_card_days,
+            window: None,
         }
     }
 
@@ -463,6 +532,42 @@ impl CoreState {
     pub fn summary_from(inputs: &mut SummaryInputs, now_ms: f64) -> summary_engine::SummaryBuild {
         let _ = now_ms;
         let prev = std::mem::take(&mut inputs.prev);
+        // TRDD-ER88PXNB: the card window, applied here OFF the state lock. `retain` keeps first-insert order, which the
+        // engine needs (it indexes cards by position).
+        if let Some(cutoff_ms) = inputs.card_cutoff_ms {
+            let cards_resident = inputs.log_cards.len();
+            // TRDD-ER88PXNB: keep each link pair together. A spawn placeholder (id X) and its agent-X transcript are two
+            // cards with their own start and duration, so the cutoff can fall between them; link_subagent_transcripts needs
+            // both in the list, or the windowed summary shows the pair unlinked. Only pairs that can link come back:
+            // the X side must be a link placeholder. retain keeps first-insert order, which the engine needs.
+            fn sid(c: &Value) -> &str {
+                c.get("sessionId").and_then(Value::as_str).unwrap_or("")
+            }
+            let keep: Vec<bool> = inputs.log_cards.iter().map(|c| crate::log_reader::last_active_ms(c) >= cutoff_ms).collect();
+            let mut want_transcript: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut want_placeholder: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (c, k) in inputs.log_cards.iter().zip(&keep) {
+                if !*k || sid(c).is_empty() {
+                    continue;
+                }
+                if feed_merge::is_link_placeholder(c) {
+                    want_transcript.insert(feed_merge::link_twin_id(c));
+                }
+                if let Some(rest) = sid(c).strip_prefix("agent-").filter(|r| !r.is_empty()) {
+                    want_placeholder.insert(rest.to_owned());
+                }
+            }
+            let mut i = 0usize;
+            inputs.log_cards.retain(|c| {
+                let id = sid(c);
+                let k = keep[i]
+                    || (!id.is_empty()
+                        && (want_transcript.contains(id) || (want_placeholder.contains(id) && feed_merge::is_link_placeholder(c))));
+                i += 1;
+                k
+            });
+            inputs.window = Some(SummaryWindow { card_days: inputs.card_days, cutoff_ms, cards_included: inputs.log_cards.len(), cards_resident });
+        }
         let built = inputs.engine.build(inputs.version, &inputs.spans, &inputs.log_cards, inputs.epoch, &inputs.accounts, prev);
         // TRDD-2HRA270Y: one boot-phase reading after the first summary build through summary_from returns
         // (callers: ui::rebuild_once, ui::summary_now). Not every build passes here: summary_over is also
@@ -482,8 +587,21 @@ impl CoreState {
         let stored = self.summary_cache.store_arc_if_newer(version, build.summary);
         if will_store {
             self.otel_attribution = build.attribution;
+            // TRDD-ER88PXNB: the window describes the summary in the cache, and the cache is ONE slot. Clearing it whenever
+            // a new summary lands means a store path that never calls store_summary_window leaves None, never the previous
+            // summary's window; readers take the cached summary and the window under one lock, so the two always match.
+            self.summary_window = None;
         }
         stored
+    }
+
+    /// TRDD-ER88PXNB: record what the stored summary covers, only when the summary of `version` is the one now in the
+    /// cache: a build that lost the race is discarded whole, and so is its window.
+    pub fn store_summary_window(&mut self, version: u64, window: Option<SummaryWindow>) {
+        // WHY not `current`: it counts a served hit, and this is only an existence check on the cached summary.
+        if !self.summary_cache.is_empty() && self.summary_cache.version() == version {
+            self.summary_window = window;
+        }
     }
 
     /// Returns the merged summary AND `otelAttributionBySession` (server.ts:2245) — the OTEL
@@ -517,7 +635,7 @@ impl CoreState {
     /// (feed collision merge, subagent link, newest-first sort). Split out so the burn path's
     /// subset builder (`burn_subset_summary`) runs THIS code and not a copy of it
     /// (TRDD-735Q3JF4 item 2).
-    fn merge_summary(mut summary: Value, log_cards: &[Arc<Value>]) -> (Value, IndexMap<String, Vec<Value>>) {
+    pub(crate) fn merge_summary(mut summary: Value, log_cards: &[Arc<Value>]) -> (Value, IndexMap<String, Vec<Value>>) {
         let mut attribution: IndexMap<String, Vec<Value>> = IndexMap::new();
         if log_cards.is_empty() {
             // No merge: every OTEL card survives into the served summary, so its entries are
@@ -672,9 +790,11 @@ impl CoreState {
         // Disjoint field borrows: the cache + side-map are written, the inputs are read.
         // `accounts` joins the disjoint-borrow list for the same reason as the rest: it is READ
         // here while the cache + side-map are written (TRDD-465EXTJ6).
-        let Self { summary_cache, window, cards, data_version, otel_attribution, accounts, .. } = self;
+        let Self { summary_cache, window, cards, data_version, otel_attribution, accounts, summary_window, .. } = self;
         let accounts = accounts.snapshot();
         summary_cache.get(*data_version, || {
+            // TRDD-ER88PXNB: a full-corpus build covers every card, so no window describes it.
+            *summary_window = None;
             let (summary, attribution) = Self::summary_over(&window.spans, &cards.parsed_cards(), &accounts, now_ms);
             *otel_attribution = attribution;
             summary
@@ -846,6 +966,10 @@ impl CoreState {
             sweeper: None,
             summary_cache: derived_cache::VersionedCache::default(),
             burn_subset_memo: None,
+            summary_card_days: 0.0,
+            summary_window: None,
+            family_summary_builds: 0,
+            family_summary_memo: None,
             summary_asked: false,
             summary_engine: Arc::new(summary_engine::SummaryEngine::default()),
             accounts: account_registry::AccountRegistry::default(),
@@ -970,6 +1094,8 @@ impl CoreState {
                 // stage 1 freed the stripped twin, removed by TRDD-091Z1FU0; its new action is TRDD-VLJFJ9ZC
                 if new >= 2 {
                     self.summary_cache.clear();
+                    // TRDD-ER88PXNB A2: the family memo holds a summary too; shed it with the summary cache.
+                    self.family_summary_memo = None;
                     self.burn_subset_memo = None;
                     self.latest_resident_blobs.clear();
                     // u64::MAX over a budget of 1 forces the time window to halve (floored at 5 min).
@@ -1002,6 +1128,10 @@ impl CoreState {
         // `check_and_enforce` reads `mi_commit_bytes` at breach-check time, after the valve has run. Its
         // fallback closure is evidence only, read on breach; on macOS the footprint syscall answers first,
         // so it is never called there.
+        // TRDD-12FGMAEP: when commit is at or under the cap, `check_and_enforce` also compares the physical
+        // footprint with a backstop (3 x the cap by default; AGENTLENS_FOOTPRINT_BACKSTOP_MB overrides) and
+        // exits with its own log above it. The commit cap does not charge memory outside mimalloc (DuckDB,
+        // the system malloc), so without the backstop a runaway there would end in an OS kill with no log.
         // Snapshot fields are read into owned locals BEFORE the flush closure below, so the
         // closure's `&mut self.writer` capture (Rust 2021 disjoint field capture) never overlaps
         // an outstanding `&self.writer`/`&self.window`/`&self.cards` borrow from building the

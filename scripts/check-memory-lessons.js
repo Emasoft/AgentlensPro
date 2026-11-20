@@ -38,9 +38,17 @@ const LESSON_RE = /^\[\^([^\]]+)\]:\s*(.*)$/
 
 function metaBlock(rest) {
   // The block is `[...]` immediately after the label. Absent => the lesson has no metadata.
+  // Its closing `]` is the first one OUTSIDE double quotes: a quoted value may hold `]` (for
+  // example `desc: "Amends lesson [^11] ..."`), and stopping at the first `]` cut the block short
+  // and hid `keywords:` (TRDD-HSPUF5XH). A backslash before `"` escapes it.
   if (!rest.startsWith('[')) return null
-  const end = rest.indexOf(']')
-  return end === -1 ? null : rest.slice(1, end)
+  let inQuote = false
+  for (let i = 1; i < rest.length; i++) {
+    const ch = rest[i]
+    if (ch === '"' && rest[i - 1] !== '\\') inQuote = !inQuote
+    else if (ch === ']' && !inQuote) return rest.slice(1, i)
+  }
+  return null
 }
 
 function main() {

@@ -10,6 +10,9 @@
 //
 //   <root>/<stream>/YYYY-MM-DD/part-<epochMs>-<pid>-<seq>.parquet   sealed, immutable
 //   <root>/<stream>/YYYY-MM-DD/wal-<pid>.ndjson                     active, un-sealed
+//   <root>/<stream>/YYYY-MM-DD/wal-cli.ndjson                       appended by the status-line hook when no server took the sample
+//   <root>/<stream>/YYYY-MM-DD/wal-cli.rot-<pid>-<base36><seq>.ndjson   the same file renamed by the Rust sealer, then sealed
+//   (TRDD-VS1FCUMU: src/cli/statuslineCapture.ts appends; `alcore statusline-seal` and the server chore seal.)
 //
 // * PARQUET+ZSTD, not zstd-NDJSON. Measured over 40k real-but-perturbed samples: parquet wins at
 //   every realistic chunk size (10k rows: 823 KB vs 933 KB; 40k: 3197 KB vs 3724 KB) AND answers a
@@ -36,6 +39,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { dayKeyMs } from './ndjsonBuckets'
+import { sqPath } from './duckPath'
 
 /** The two capture surfaces. Separate trees because their schemas share almost nothing: the main
  *  stream is one sample per row, the subagent stream carries a `tasks[]` list of live agents. */
@@ -89,7 +93,7 @@ function partName(seq: number): string {
   return `part-${Date.now()}-${process.pid}-${seq}.parquet`
 }
 
-/** SQL-quote a path for a COPY / read_* literal. */
+/** SQL-quote a path for a COPY TO target. Read sites use sqPath (src/duckPath.ts), TRDD-CXNUWXX7. */
 function q(p: string): string { return `'${p.replace(/'/g, "''")}'` }
 
 function listFiles(dir: string, pred: (f: string) => boolean): string[] {
@@ -278,8 +282,11 @@ export function relationFor(
   // the reader's output is too late: the cast must be applied to each file's own relation.
   // Cheap — the file list is already bounded by the query window, and DuckDB still scans in parallel.
   const rels = [
-    ...parts.map(p => varcharSessionId(`SELECT * FROM read_parquet(${q(p)})`)),
-    ...wals.map(w => varcharSessionId(`SELECT * FROM read_json_auto(${q(w)}, ignore_errors=true)`)),
+    // TRDD-CXNUWXX7: sqPath, not plain quoting: a read function expands * ? [ in a quote-doubled path as a file pattern.
+    ...parts.map(p => varcharSessionId(`SELECT * FROM read_parquet(${sqPath(p)})`)),
+    // TRDD-ZKNP5IJY: sample_size=-1 makes read_json_auto infer the schema from the WHOLE file. The default sample is the
+    // first 20,480 rows: a key first sent after them was no column at all.
+    ...wals.map(w => varcharSessionId(`SELECT * FROM read_json_auto(${sqPath(w)}, sample_size=-1, ignore_errors=true)`)),
   ]
   if (rels.length === 0) return null
   return `(${rels.join(' UNION ALL BY NAME ')})`
@@ -507,8 +514,10 @@ export class StatuslineStore {
       duck = await openDuck()
       // Refuse a file whose record structure the reader could not infer — see inferenceCollapsed.
       // Metadata-only, and only on the seal path (a 60 s timer), never on the append path.
+      // TRDD-ZKNP5IJY: sample_size=-1 here and in the COPY below, so the sealed part holds every key of the file and
+      // the type each column needs (see relationFor).
       const cols = (await duck.con.runAndReadAll(
-        `SELECT column_name FROM (DESCRIBE SELECT * FROM read_json_auto(${q(wal)}, union_by_name=true, ignore_errors=true))`,
+        `SELECT column_name FROM (DESCRIBE SELECT * FROM read_json_auto(${sqPath(wal)}, sample_size=-1, union_by_name=true, ignore_errors=true))`,
       )).getRowObjects().map(r => String(r.column_name))
       if (this.inferenceCollapsed(cols)) {
         this.corruptWals += 1
@@ -523,10 +532,10 @@ export class StatuslineStore {
       // parts need no repair at all. Costs nothing — measured, UUID typing saved exactly 0 bytes,
       // because ZSTD already compresses the text to a UUID's 122-bit entropy.
       await duck.con.run(
-        `COPY (SELECT * FROM (${varcharSessionId(`SELECT * FROM read_json_auto(${q(wal)}, union_by_name=true, ignore_errors=true)`)}) ORDER BY session_id, ts)`
+        `COPY (SELECT * FROM (${varcharSessionId(`SELECT * FROM read_json_auto(${sqPath(wal)}, sample_size=-1, union_by_name=true, ignore_errors=true)`)}) ORDER BY session_id, ts)`
         + ` TO ${q(out)} (FORMAT PARQUET, COMPRESSION ZSTD)`,
       )
-      const got = Number((await duck.con.runAndReadAll(`SELECT count(*) c FROM read_parquet(${q(out)})`)).getRowObjects()[0].c)
+      const got = Number((await duck.con.runAndReadAll(`SELECT count(*) c FROM read_parquet(${sqPath(out)})`)).getRowObjects()[0].c)
       if (got !== expectRows) {
         // Do NOT delete the WAL. Remove the untrustworthy part instead and leave the raw rows for the
         // next attempt — a short read here would otherwise silently destroy samples.
@@ -544,7 +553,7 @@ export class StatuslineStore {
       // mid-write) into a NULL row and deletes its raw bytes. Acceptable — the line was garbage —
       // but never silently: count(ts) < count(*) can only mean broken source lines, because
       // append() writes ts on every record.
-      const withTs = Number((await duck.con.runAndReadAll(`SELECT count(ts) c FROM read_parquet(${q(out)})`)).getRowObjects()[0].c)
+      const withTs = Number((await duck.con.runAndReadAll(`SELECT count(ts) c FROM read_parquet(${sqPath(out)})`)).getRowObjects()[0].c)
       if (withTs < got) this.corruptWals += got - withTs
       fs.unlinkSync(wal)
       this.walRows.delete(wal)

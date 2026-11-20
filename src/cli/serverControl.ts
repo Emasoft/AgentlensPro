@@ -9,7 +9,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { apiRequest, ApiRequestError, dataDir, dashboardUrl, envPort, fmtGb, fmtMb, init, mcpEndpoint, sleep, CONNECT_TIMEOUT_MS, PROBE_TIMEOUT_MS, STATUS_TIMEOUT_MS } from './cliCore'
 import { dataDirSource, dataPath } from '../dataDir'
-import { agentlensDisabled, killSwitchPath, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
+import { agentlensDisabled, noRevivePath, reviveBraked, STARTED_BY_ENV } from './killSwitch'
 // resetReviveBackoff/reviveBackoffStatus (TRDD-JJLI6GEH) — a deliberate `server start`/`restart`
 // must clear the hook-reviver's crash-loop backoff, or a counter from a past incident silently
 // throttles an unrelated future one; `server status` surfaces an ACTIVE hold (FIX b2) — the gate's
@@ -208,6 +208,12 @@ export function alcoreServeArgs(env: NodeJS.ProcessEnv = process.env, dir: strin
     '--ui-port', port(env.UI_PORT, 'ui', 3000),
     '--mcp-port', port(env.MCP_PORT, 'mcp', 4316),
   ]
+  // TRDD-RBBEX59R c2: the kill-switch is computed HERE, for `dir` — the exact dir this function passes as --data-dir —
+  // and handed to alcore as --no-collection (the authoritative input; alcore's own read of <dir>/DISABLED is only a
+  // backstop for an alcore started outside the CLI, and it never reads AGENTLENS_DISABLED). Every spawner (ensureServer,
+  // the supervisor on every respawn, setup) builds its argv through this function, so a respawn after the switch is
+  // lifted collects again. agentlensDisabled() honours the --force-install-telemetry env override (killSwitch.ts).
+  if (agentlensDisabled(dir)) args.push('--no-collection')
   // The digest ingest path is OPT-IN (AGENTLENS_INGEST=on) and OFF by default: it is not yet the
   // system of record (the existing stores are), and its API-body capture is off by default because
   // of measured disk growth. When opted in but aldigest or the manifest cannot be resolved the
@@ -277,12 +283,11 @@ export function alcoreSpawnEnv(startedBy: string, baseEnv: NodeJS.ProcessEnv = p
 
 /** Start the standalone server if the MCP endpoint is unreachable; wait until it answers.
  *
- *  Honors the GLOBAL kill-switch. This is the LAST hole through which a disabled AgentlensPro could
- *  resurrect itself, and it was a wide one: every diagnostics tool call goes through here, and the
- *  project CLAUDE.md tells every Claude session to run diagnostics BEFORE any task — so a disabled
- *  install came straight back the next time any of the ~16 running sessions started work (observed
- *  2026-07-14: the server was stopped at 15:07 and was found alive again at 17:43). The hook path was
- *  already gated; the CLI path was not. A kill-switch with a bypass is not a kill-switch.
+ *  Under the GLOBAL kill-switch it STARTS the server, in no-collection mode (TRDD-RBBEX59R c2):
+ *  alcoreServeArgs adds --no-collection, so the server stores no telemetry, no raw bodies and no
+ *  hook-event log while the burn gate and the image cache-guard keep answering. It used to refuse
+ *  (2026-07-14: a disabled install came back through the diagnostics path), which also left the
+ *  guards off; the NO_REVIVE brake below is now what keeps a server from starting.
  *
  *  `startedBy` names the PATH that reached this function, for the server's boot-provenance line
  *  (TRDD-8VGQK9L9). This function cannot know it by itself — `server start`, `restart`, `dashboard`
@@ -290,17 +295,11 @@ export function alcoreSpawnEnv(startedBy: string, baseEnv: NodeJS.ProcessEnv = p
  *  The default is a truthful "unknown", never a guess: an unlabelled path in the log is a lead, a
  *  wrong label is a dead end. */
 export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { overrideBrake?: boolean; attempt?: number } = {}): Promise<void> {
-  // FIRST — before we even probe the network. A disabled AgentlensPro must cost nothing: no socket,
-  // no retry timeout, and above all no spawn.
-  if (agentlensDisabled()) {
-    throw new Error(
-      `AgentlensPro is DISABLED (${killSwitchPath()}) — refusing to start the server.\n` +
-      'Re-enable with:  agentlenspro enable',
-    )
-  }
+  // No kill-switch refusal here any more (TRDD-RBBEX59R c2): under the switch this spawns alcore in
+  // no-collection mode (alcoreServeArgs adds --no-collection), which stores nothing and keeps the
+  // spawn guards fed. Owner order 2026-11-03: «keep the guards».
   try { await init(); return } catch { /* not up — start it */ }
-  // THE BRAKE REFUSES THE SPAWN, NOT THE SERVER — hence BELOW the probe, unlike the DISABLED gate
-  // above it. `server stop --stay-down` arms this brake so an operator can swap the store with
+  // THE BRAKE REFUSES THE SPAWN, NOT THE SERVER — hence BELOW the probe. `server stop --stay-down` arms this brake so an operator can swap the store with
   // nothing writing into it, and its message promises "hooks and the supervisor will not resurrect
   // the server"; until TRDD-8VGQK9L9 that held only for the supervisor, because THIS function never
   // consulted the brake and is reachable from `dashboard` (main.ts) and from the
@@ -311,12 +310,11 @@ export async function ensureServer(startedBy = 'ensureServer:unknown', opts: { o
   // PLACEMENT IS THE FIX, and it was wrong in the first cut of this gate (caught in review before
   // it shipped): sitting ABOVE the probe, it threw whenever the brake was set even though a healthy
   // server was already answering. That prevents nothing — the writer the store was being protected
-  // from is already running — while breaking every diagnostics call against it. It also inherited
-  // the DISABLED gate's "cost nothing, not even a socket" rationale, which does not transfer:
-  // DISABLED is terminal and global, NO_REVIVE is a pause whose stated scope is resurrection.
+  // from is already running — while breaking every diagnostics call against it. (It also inherited
+  // the old DISABLED gate's "cost nothing, not even a socket" rationale, which did not transfer.)
   //
-  // NO_REVIVE ONLY, never reviveDisabledOnDisk(): DISABLED is handled by the gate above, so the
-  // pause-vs-kill split the supervisor depends on survives (see reviveBraked in killSwitch.ts).
+  // NO_REVIVE ONLY, never the global kill-switch: since TRDD-RBBEX59R c2 the switch does not refuse a
+  // start at all — the spawn below runs alcore in no-collection mode (alcoreServeArgs adds the flag).
   //
   // `overrideBrake` is passed ONLY by the explicit operator commands `server start`/`restart`, the
   // two that then clearReviveBrake() on success. Without it this gate made the brake un-liftable:
@@ -574,6 +572,20 @@ export async function findServerPid(): Promise<number | null> {
   return null
 }
 
+/** The lock holder `server stop` names in its "stuck behind" text: the FIRST line of `logText` that
+ *  matches, or null. Reads the line alcore prints when its bounded stop wait expires —
+ *  rust-core/crates/agentlens-core/src/bin/alcore.rs, format
+ *  `<log_ts> alcore: stop timed out after <N> ms waiting on <holder> — skipping the flush, releasing the pid lock anyway`.
+ *  The capture stops before the " — " tail, so the CLI prints only the holder (`<file>:<line> (holding for N ms)` or
+ *  `unknown`; neither contains " — ", see shutdown.rs flush_with_deadline and the alcore.rs fallback).
+ *  The `stop waiting on` alternative matches no line the current alcore emits; it is kept for an older deployed build.
+ *  The CLI's "stuck behind" message depends on that line shape; keep alcore.rs and this regex in lockstep
+ *  (TRDD-N60JUWU3). */
+export function stopHolderFromLog(logText: string): string | null {
+  const holderLine = logText.match(/alcore: stop (?:waiting on|timed out after \d+ ms waiting on) (.+?)(?: — .*)?$/m)
+  return holderLine ? holderLine[1] : null
+}
+
 export async function stopServer(): Promise<void> {
   const pid = await findServerPid()
   if (pid === null) {
@@ -606,9 +618,9 @@ export async function stopServer(): Promise<void> {
   // Name the lock holder if the server's own bounded-wait poll (TRDD-N60JUWU3) already logged
   // one for this attempt — scoped to bytes written since our own SIGTERM (logTail's fromOffset),
   // never a stale holder from an earlier, unrelated stop.
-  const holderLine = logTail(40, logStart).match(/alcore: stop (?:waiting on|timed out .*waiting on) (.+)/)
-  const holderNote = holderLine ? ` — stuck behind ${holderLine[1]}` : ''
-  throw new Error(`server (pid ${pid}) is still running 15s after SIGTERM${holderNote} — a large store can take longer to flush; watch it before escalating to SIGKILL (see server.log for "alcore: stop waiting on <holder>")`)
+  const holder = stopHolderFromLog(logTail(40, logStart))
+  const holderNote = holder !== null ? ` — stuck behind ${holder}` : ''
+  throw new Error(`server (pid ${pid}) is still running 15s after SIGTERM${holderNote} — a large store can take longer to flush; watch it before escalating to SIGKILL (see server.log for the "alcore: stop timed out after" line)`)
 }
 
 /** The capture-liveness line for `server status` (TRDD-0SA5QZTG).
@@ -897,8 +909,9 @@ const STDERR_TAIL_BYTES = 8 * 1024
 
 /**
  * EX_CONFIG (78) is a DELIBERATE config refusal, not a crash: the standalone server exits 78 when
- * the DISABLED kill-switch is present or the shared embed-key is unusable (corrupt, or wider than
- * 0600). The supervisor must NOT respawn such an exit — respawning just re-refuses forever, a
+ * the shared embed-key is unusable (corrupt, or wider than 0600). (Under the DISABLED kill-switch it
+ * no longer exits 78: since TRDD-RBBEX59R c1 it boots in no-collection mode.) The supervisor must NOT
+ * respawn such an exit — respawning just re-refuses forever, a
  * perpetual backed-off loop that never converges and floods crash.log. Every other non-clean exit
  * (a signal kill, a V8 OOM abort code 134, a generic error) is a real crash and still earns the
  * backoff-respawn. Extracted as a named predicate so the policy is unit-testable without spawning a
@@ -908,21 +921,31 @@ export function isTerminalExit(code: number | null): boolean {
   return code === 78
 }
 
+/** crash.log note for an exit 64 (TRDD-RBBEX59R c2 round 4). NOT terminal: alcore's usage() also covers
+ *  filesystem-state errors (a briefly absent --media-dir during an upgrade, alcore.rs:205/:207), so the supervisor
+ *  keeps respawning. The version-skew note is given ONLY when the child's stderr proves it: usage() prints
+ *  `unknown arg --no-collection` (alcore.rs:185) when an alcore older than c1 rejects the flag. Any other 64 is named
+ *  generically — claiming version skew for a missing --media-dir would send the operator to the wrong fix. */
+export function exitDiagnostic(code: number | null, stderrTail: string): string {
+  if (code !== 64) return ''
+  if (stderrTail.includes('unknown arg --no-collection')) return ' — alcore rejected its arguments (exit 64) — an alcore older than this CLI rejects --no-collection; deploy the matching alcore'
+  return ' — alcore rejected an argument or a path (exit 64); see stderr-tail'
+}
+
+/** The supervisor's default maximum respawn backoff. ONE source: runSupervise and the enable verb's respawn wait
+ *  (disableCli.ts restartIntoCollection) both read it; AGENTLENS_SUPERVISE_MAX_BACKOFF_MS overrides it in each process. */
+export const SUPERVISE_MAX_BACKOFF_DEFAULT_MS = 30_000
+
 export function runSupervise(): void {
-  // The supervisor is the one path that would out-stubborn the kill-switch: it exists to restart the
-  // server forever, so if it ignored the flag, `agentlenspro disable` would stop a server that
-  // launchd immediately brought back. Refuse to supervise a disabled install (exit non-zero so a
-  // supervising launchd surfaces it rather than silently respawning us in a loop).
-  if (agentlensDisabled()) {
-    throw new Error(
-      `AgentlensPro is DISABLED (${killSwitchPath()}) — refusing to supervise.\n` +
-      'Re-enable with:  agentlenspro enable',
-    )
-  }
+  // No kill-switch refusal any more (TRDD-RBBEX59R c2). It used to refuse a disabled install so that
+  // `agentlenspro disable` could not be undone by a launchd-respawned supervisor; now the switch means
+  // "collect nothing", not "run nothing": every child is spawned through alcoreServeArgs(), which adds
+  // --no-collection while the switch is armed for the data dir, so a supervised server keeps the spawn
+  // guards fed and stores no telemetry. The NO_REVIVE brake (below) is what keeps the process down.
   const alcore = alcoreBin(process.env, undefined, undefined, resolveBinNativeDir())
   if (!alcore) throw noServerAvailableError()
   const crashLog = path.join(dataDir(), 'crash.log')
-  const maxBackoffMs = Number(process.env.AGENTLENS_SUPERVISE_MAX_BACKOFF_MS) || 30_000
+  const maxBackoffMs = Number(process.env.AGENTLENS_SUPERVISE_MAX_BACKOFF_MS) || SUPERVISE_MAX_BACKOFF_DEFAULT_MS
 
   try { fs.mkdirSync(dataDir(), { recursive: true }) } catch { /* best effort */ }
 
@@ -946,14 +969,13 @@ export function runSupervise(): void {
    *  a repair whose quiescence scan landed in the backoff gap saw a clean process table, staged,
    *  and then had a collector appear underneath it — silent divergence that looks intermittent.
    *
-   *  Checks NO_REVIVE ONLY — deliberately NOT reviveDisabledOnDisk(), which ORs in the global
-   *  DISABLED switch. For the supervisor those two must not be equal: NO_REVIVE is a pause,
-   *  DISABLED is terminal. Under DISABLED the spawn must PROCEED so the child refuses with
-   *  EX_CONFIG 78 and the isTerminalExit path ends the supervisor; swallowing the spawn here
-   *  would make a DISABLED supervisor immortal — a perpetual backed-off loop that never
-   *  converges, the exact shape TRDD-F1VX3M7C's comment below was written to kill. (Reading the
-   *  flag directly also keeps this module out of hookHandlers, which imports alcoreBin from
-   *  HERE — importing reviveDisabledOnDisk back created a CJS cycle tsc reports as clean.)
+   *  Checks NO_REVIVE ONLY — never the global DISABLED switch. Under DISABLED the spawn PROCEEDS:
+   *  since TRDD-RBBEX59R the child boots in no-collection mode (alcoreServeArgs adds --no-collection,
+   *  recomputed on every respawn, so a respawn after the switch is lifted collects again) and keeps
+   *  the spawn guards fed. Swallowing the spawn here would leave a DISABLED supervisor with no child.
+   *  (Reading the brake from killSwitch.ts also keeps this module out of hookHandlers, which imports
+   *  alcoreBin from HERE — importing a hookHandlers predicate back created a CJS cycle tsc reports
+   *  as clean.)
    *
    *  RESCHEDULE rather than exit: a brake is a pause, not a shutdown. Exiting here would mean a
    *  stay-down stop permanently kills a launchd-supervised install, and clearing the brake would
@@ -990,18 +1012,19 @@ export function runSupervise(): void {
       const uptimeS = ((Date.now() - started) / 1000).toFixed(1)
       if (shuttingDown) return  // deliberate stop — don't restart
       // EX_CONFIG (78) is a DELIBERATE config refusal, not a crash: the server exits 78 when the
-      // DISABLED kill-switch is present or the shared embed-key is unusable (corrupt, or wider than
-      // 0600). Respawning it would just refuse again — a perpetual backed-off loop that never
+      // shared embed-key is unusable (corrupt, or wider than 0600). (It no longer exits 78 under the
+      // DISABLED kill-switch: since TRDD-RBBEX59R c1 it boots in no-collection mode instead.)
+      // Respawning it would just refuse again — a perpetual backed-off loop that never
       // converges and floods crash.log (TRDD-F1VX3M7C). Treat 78 as TERMINAL: log once, stop
       // supervising, and surface the non-zero exit so a launchd/terminal parent sees it. The
-      // operator fixes the config (chmod 600 / re-enable) and restarts.
+      // operator fixes the config (chmod 600) and restarts.
       if (isTerminalExit(code)) {
         const tail78 = stderrTail.toString('utf8').trim().split('\n').slice(-12).join(' | ')
         logCrash(`collector refused to start (EX_CONFIG 78) uptime=${uptimeS}s — a config refusal, not a crash; NOT restarting. Fix the config and restart. stderr-tail: ${tail78 || '(none)'}`)
         process.exit(78)
       }
       const tail = stderrTail.toString('utf8').trim().split('\n').slice(-12).join(' | ')
-      logCrash(`collector exited code=${code} signal=${signal} uptime=${uptimeS}s — restarting in ${backoffMs}ms. stderr-tail: ${tail || '(none)'}`)
+      logCrash(`collector exited code=${code} signal=${signal} uptime=${uptimeS}s${exitDiagnostic(code, tail)} — restarting in ${backoffMs}ms. stderr-tail: ${tail || '(none)'}`)
       // A child that ran healthily before dying gets a fresh backoff; a crash-loop backs off geometrically.
       if (Date.now() - started > HEALTHY_MS) backoffMs = 1000
       setTimeout(startUnlessBraked, backoffMs)
@@ -1135,9 +1158,11 @@ export async function serverCommand(argv: string[]): Promise<void> {
       // the hook already honoured both, and a revive is not an operator's deliberate start.
       // Refuse HERE too, not only in the hook's pre-check: this verb is runnable by hand and by any
       // stale hook build. AGENTLENS_NO_REVIVE is the env half of the brake (reviveBraked() reads the
-      // on-disk NO_REVIVE flag); ensureServer re-checks the kill-switch and the brake as a backstop.
-      if (agentlensDisabled() || reviveBraked() || process.env.AGENTLENS_NO_REVIVE === '1') {
-        throw new Error('server revive refused: the kill-switch or the NO_REVIVE brake is armed (`agentlenspro server start` is the deliberate override for the brake).')
+      // on-disk NO_REVIVE flag); ensureServer re-checks the brake as a backstop. The global kill-switch is NOT
+      // a refusal any more (TRDD-RBBEX59R c2): under it the revive starts a no-collection server
+      // (alcoreServeArgs adds --no-collection), so the spawn guards stay fed.
+      if (reviveBraked() || process.env.AGENTLENS_NO_REVIVE === '1') {
+        throw new Error('server revive refused: the NO_REVIVE brake is armed (`agentlenspro server start` is the deliberate override for the brake).')
       }
       await ensureServer(REVIVE_STARTED_BY)
       return

@@ -2,7 +2,12 @@ import * as assert from 'assert'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { installHooks, buildEventOps, HOOK_CMD } from '../cli/hookInstall'
+import { installHooks, buildEventOps, HOOK_CMD, stampedCommand } from '../cli/hookInstall'
+import { packageVersion } from '../packageVersion'
+
+// Our registrations are stamped with the running version (TRDD-YL3EWT6N item 5B); the expectations are built with the same writer.
+const RUN = packageVersion()
+const OURS = stampedCommand(HOOK_CMD, RUN)
 import { safeConfigEdit } from '../safeConfigEdit'
 
 // A temp HOME with an `agentlenspro` PATH shim so installHooks' pre-install bin probe passes. The
@@ -41,7 +46,7 @@ suite('installHooks preserves foreign hooks + is idempotent (S3-F5 TOCTOU)', () 
       // append_unique adds ours WITHOUT rebuilding the array from a stale snapshot, so the foreign
       // hook survives (a whole-array `set` from the pre-read value would have clobbered it under a race).
       assert.strictEqual(countCmd(s, 'Stop', foreign), 1, 'foreign hook preserved')
-      assert.strictEqual(countCmd(s, 'Stop', HOOK_CMD), 1, 'our hook added')
+      assert.strictEqual(countCmd(s, 'Stop', OURS), 1, 'our hook added')
     } finally { fx.cleanup() }
   })
 
@@ -52,7 +57,7 @@ suite('installHooks preserves foreign hooks + is idempotent (S3-F5 TOCTOU)', () 
       await installHooks(false, { settingsPath: fx.settingsPath, pathEnv: fx.pathEnv, log: () => { /* quiet */ } })
       await installHooks(false, { settingsPath: fx.settingsPath, pathEnv: fx.pathEnv, log: () => { /* quiet */ } })
       const s = readSettings(fx.settingsPath)
-      assert.strictEqual(countCmd(s, 'Stop', HOOK_CMD), 1, 'our hook present exactly once after two installs')
+      assert.strictEqual(countCmd(s, 'Stop', OURS), 1, 'our hook present exactly once after two installs')
     } finally { fx.cleanup() }
   })
 })
@@ -72,7 +77,7 @@ suite('installHooks strip path preserves foreign hooks (TRDD-T0CT9U4X)', () => {
   const FOREIGN = 'some-other-tool --watch'
 
   test('the strip path emits NO whole-array set — the op list is filter-based', () => {
-    const ops = buildEventOps('Stop', [{ hooks: [{ type: 'command', command: LEGACY }] }], false)
+    const ops = buildEventOps('Stop', [{ hooks: [{ type: 'command', command: LEGACY }] }], false, RUN)
     assert.ok(ops.length > 0, 'a legacy entry must produce ops')
     assert.strictEqual(ops.filter(o => o.op === 'set').length, 0, 'a whole-array set reintroduces the TOCTOU')
     assert.ok(ops.some(o => o.op === 'remove_by_substring'), 'the strip must be expressed as a filter')
@@ -83,7 +88,7 @@ suite('installHooks strip path preserves foreign hooks (TRDD-T0CT9U4X)', () => {
     const fx = fixture()
     try {
       // Ops computed from a tree that holds ONLY our legacy entry...
-      const ops = buildEventOps('Stop', [{ hooks: [{ type: 'command', command: LEGACY }] }], false)
+      const ops = buildEventOps('Stop', [{ hooks: [{ type: 'command', command: LEGACY }] }], false, RUN)
       // ...applied to the tree as it exists at COMMIT time, after a foreign tool appended its own.
       const target = path.join(path.dirname(fx.settingsPath), 'commit-time.json')
       fs.writeFileSync(target, JSON.stringify({
@@ -96,32 +101,32 @@ suite('installHooks strip path preserves foreign hooks (TRDD-T0CT9U4X)', () => {
       const s = readSettings(target)
       assert.strictEqual(countCmd(s, 'Stop', FOREIGN), 1, 'the foreign hook must survive a strip it was invisible to')
       assert.strictEqual(countCmd(s, 'Stop', LEGACY), 0, 'our legacy entry is gone')
-      assert.strictEqual(countCmd(s, 'Stop', HOOK_CMD), 1, 'ours is re-registered exactly once')
+      assert.strictEqual(countCmd(s, 'Stop', OURS), 1, 'ours is re-registered exactly once')
     } finally { fx.cleanup() }
   })
 
   test('uninstall leaves a foreign hook that arrived mid-flight, and takes the key only when empty', async () => {
     const fx = fixture()
     try {
-      const ops = buildEventOps('Stop', [{ hooks: [{ type: 'command', command: HOOK_CMD }] }], true)
+      const ops = buildEventOps('Stop', [{ hooks: [{ type: 'command', command: OURS }] }], true, RUN)
       assert.strictEqual(ops.filter(o => o.op === 'delete').length, 0, 'an unconditional delete clobbers a fresh foreign entry')
 
       const withForeign = path.join(path.dirname(fx.settingsPath), 'uninstall-foreign.json')
       fs.writeFileSync(withForeign, JSON.stringify({
         hooks: { Stop: [
-          { hooks: [{ type: 'command', command: HOOK_CMD }] },
+          { hooks: [{ type: 'command', command: OURS }] },
           { hooks: [{ type: 'command', command: FOREIGN }] },
         ] },
       }, null, 2))
       await safeConfigEdit(withForeign, 'json', ops)
       const kept = readSettings(withForeign)
       assert.strictEqual(countCmd(kept, 'Stop', FOREIGN), 1, 'the foreign hook survives our uninstall')
-      assert.strictEqual(countCmd(kept, 'Stop', HOOK_CMD), 0, 'ours is gone')
+      assert.strictEqual(countCmd(kept, 'Stop', OURS), 0, 'ours is gone')
 
       // Nothing foreign: the event key is pruned rather than left as an empty array — decided
       // INSIDE the lock, which is the whole difference from the `delete` this replaced.
       const alone = path.join(path.dirname(fx.settingsPath), 'uninstall-alone.json')
-      fs.writeFileSync(alone, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: HOOK_CMD }] }] } }, null, 2))
+      fs.writeFileSync(alone, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: OURS }] }] } }, null, 2))
       await safeConfigEdit(alone, 'json', ops)
       const empty = readSettings(alone)
       assert.strictEqual(empty.hooks?.Stop, undefined, 'an event left with nothing of ours is removed, not left as []')
@@ -136,7 +141,7 @@ suite('installHooks strip path preserves foreign hooks (TRDD-T0CT9U4X)', () => {
     // nothing. The builder falls back to the pre-existing whole-array replace for that event ALONE —
     // narrower than before, and honest about it.
     const exotic = 'agentlenspro\thook'
-    const ops = buildEventOps('Stop', [{ hooks: [{ type: 'command', command: exotic }] }], true)
+    const ops = buildEventOps('Stop', [{ hooks: [{ type: 'command', command: exotic }] }], true, RUN)
     assert.ok(ops.some(o => o.op === 'set' || o.op === 'delete'), 'an inexpressible strip must still be performed')
   })
 })

@@ -183,13 +183,25 @@ fn sizes_pool_literally(line: &str) -> bool {
     }) || line.contains("Runtime::new()")
 }
 
-/// No DuckDB thread setting in the crates alcore is built from takes a literal digit, except the allowlisted site.
+/// No DuckDB thread setting in the crates alcore is built from takes a literal digit, except the allowlisted sites.
 #[test]
 fn no_literal_duckdb_threads_outside_the_allowlist() {
     // transcript_sql.rs holds `SET threads = 1` on purpose: it is a memory bound, and 1 is at or
     // under any cap of 1 or more (TRDD-YH822LDI). Any other literal bypasses the core cap.
     let allowlist = ["agentlens-store/src/transcript_sql.rs"];
-    let hits = flagged_lines(|path, line| !allowlisted(path, &allowlist) && sets_literal_threads(line));
+    // One test-only line of agentlens-store/src/lib.rs is allowed by its exact text, not by its file:
+    // seeding_many_rows_per_body_stays_within_a_tiny_spill_cap (TRDD-R36S0PS9) needs a bare connection
+    // at 64MB and 1 thread for its pass margin, and 1 is at or under any cap. Allowing the whole file
+    // would let a production literal in lib.rs through (TRDD-HSPUF5XH).
+    let allowed_lines = [(
+        "agentlens-store/src/lib.rs",
+        "\"SET threads=1; SET memory_limit='64MB'; SET max_temp_directory_size='32MB'; SET temp_directory={};",
+    )];
+    let hits = flagged_lines(|path, line| {
+        !allowlisted(path, &allowlist)
+            && !allowed_lines.iter().any(|(file, text)| path.ends_with(file) && line.trim() == *text)
+            && sets_literal_threads(line)
+    });
     assert!(
         hits.is_empty(),
         "a DuckDB thread setting takes a literal digit; use crate::cores::duckdb_threads() instead:\n{}",

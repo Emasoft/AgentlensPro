@@ -4,7 +4,7 @@ title: Ingest goes straight into DuckDB - the spool and digest path becomes the 
 column: design
 status: tasked
 created: 2026-10-30T03:34:40+0100
-updated: 2026-11-01T02:40:02+0100
+updated: 2026-11-19T23:30:58+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: refactor
@@ -108,3 +108,7 @@ TRDD-7YPQWKPG (parent), TRDD-LHCHVK9Z, TRDD-VXD881R6 (archived, slice 1), TRDD-H
 ## Approval log
 
 - 2026-10-30T03:34:40+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Owner directives
+
+Owner directive 2026-11-19T23:30+0100 (verbatim): "duckdb doesn't need to load the jsonl transcripts into its own db. for duckdb, jsonl is already a native db format it can query against. there is no need to digest jsonl files at all, only indexing them." Tracked as its own card (Query the transcript JSONL files in place); this card must not add a JSONL-to-DuckDB load.

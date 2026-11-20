@@ -35,6 +35,7 @@ description: >-
   uninstall/upgrade; env var > file > default) and `agentlenspro env` (detect the runtime
   environment — terminal kind by process ancestry, OS, Claude Code / ai-maestro / CI / container /
   worktree context, user, network + VPN, cloud, tooling, MCP servers — one facet or one big JSON report).
+# agentlenspro-version: 2.34.0
 ---
 
 # AgentlensPro diagnostics via the global CLI
@@ -52,9 +53,9 @@ If `agentlenspro` is not on PATH, (re)install the package — `npm install -g ag
 (or the Homebrew formula; developers working from a checkout use `npm link`). This skill never
 installs the server itself; the CLI starts it on demand.
 
-If any agentlenspro command prints "agentlenspro is DISABLED", run the reactivate command it prints; do not retry the original command.
-While disabled, the reads that need no server still answer without enabling: `get_account_status --all` (every account's status; it also sends one billed probe per CLAUDE_CODE_LONG_OAUTH_KEY_* key, even while disabled, unless `--no-refresh`), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`, and the disk monitor, all four verbs (owner decision 2026-11-16): `disk`, `disk-sample`, `disk-watch`, `disk-monitor install|uninstall|status`. Server-only verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) refuse with exit 69; for account status use `get_account_status --all` instead of re-enabling.
-`server`/`daemon` restarts do not self-heal the install: run any other agentlenspro command, or `agentlenspro enable`, to repair.
+The kill-switch (`agentlenspro disable`, or AGENTLENS_DISABLED=1) stops only collection (telemetry logs, raw bodies, the hook event log); it refuses no command, so every verb runs while it is armed, and the status line keeps POSTing to the server, which stores it. To lift it: `agentlenspro enable` clears the flag file; for AGENTLENS_DISABLED=1, unset the variable (`enable` cannot clear an environment variable).
+Reads that need no server: `get_account_status --all` (every account's status; it also sends one billed probe per CLAUDE_CODE_LONG_OAUTH_KEY_* key, unless `--no-refresh`), `model-headroom`, `statusline-history`, `cache-state`, `cache-expired`, `last-compact`, `search`, and the disk monitor, all four verbs (owner decision 2026-11-16): `disk`, `disk-sample`, `disk-watch`, `disk-monitor install|uninstall|status`. Server-backed verbs (singular `get_account_status`, `investigate_burn`, `get_burn_status`, `budget`) need the running server.
+`server|daemon start|restart` self-heal the install once the server is up (`autoSetupOnServerStart`, under an operator `disable` too: the switch stops only collection). They skip it under a switch armed for a foreign telemetry setup, with `AGENTLENS_NO_AUTOSETUP=1`, or where Claude Code is absent. With a foreign setup in place and no switch armed for it, the check still runs: it is the one-line no-write path (one line says so, nothing is written, nothing is armed), not a skip.
 
 ## Version floor — check this FIRST if a command is "unknown"
 
@@ -188,6 +189,25 @@ text refers to in **bold** are listed here with the file that holds them.
 The four rules that keep a diagnosis cheap (batch, `--out`, never paste JSON) are **Rules for
 agents**, at the end of this file.
 
+## Search past transcripts with `agentlenspro search` — do not read them by hand
+
+To find what an earlier session or sub-agent did, said or got back, search the project's transcripts
+instead of opening `.jsonl` files by hand. It needs no server, reads
+every session of the current project (main and sub-agent) and prints one line per hit plus a stderr summary:
+
+```bash
+agentlenspro search "ENOENT" --since 2d                                 # an error anywhere in the project, last 2 days
+agentlenspro search "finished" --kind subagent --since 1d --limit 5     # what sub-agents reported
+agentlenspro search --show aaaaaaaa:12 --agent bbbb2222                 # one hit in full: <session>:<line> from the hit line
+agentlenspro search --kind model-change --session aaaaaaaa              # when did the model change (from -> to)
+```
+
+Narrow first with `--since`, `--session`, `--agent`, `--kind`, `--tool`, `--file`, `--commit`; use `--count` or
+`--files` first when you only need where it is. Match modes: literal (default), `--regex`, `--mask`, `--word`,
+`--fuzzy`. The cost grows with the size of the project and the load of the machine; element mode (`--kind`) and `--fuzzy`
+cost more than a plain search. `agentlenspro search --help` lists every flag. The ids above are made up; use the
+session and `#line` that a hit printed.
+
 ## Commands
 
 ```bash
@@ -205,7 +225,7 @@ read only at session start: after `agentlenspro setup` or `--install-hooks` rest
 Hook **behavior** is hot: the server re-reads the dashboard toggle file (`~/.agentlens/hook-config.json`, created when a toggle is saved) on every request, so
 `agentlenspro --hooks gate=off|warn|enforce capture=on|off advisor=on|off cacheguard=on|off` (or
 `POST /api/hook-config` with a JSON patch) takes effect in every running session immediately. The
-gate also honors the `AGENTLENS_GATE=off` environment variable, read on each invocation.
+gate also honors the `AGENTLENS_GATE=off` environment variable, read on each invocation; it silences every guard, images included, whereas the dashboard Burn gate switch and `--hooks gate=off` leave the image guard on (its own switch: "Image cache-guard" or `cacheguard=off`).
 `agentlenspro setup` ends with a read-only `memory-check` (the last 60-second composition line in
 `server.log`: live + free-in-page should equal committed within 1 MB).
 

@@ -6,6 +6,7 @@ effort: high
 tools: Bash, Read, Write, Edit, Grep, Glob
 permissionMode: auto
 color: cyan
+# agentlenspro-version: 2.34.0
 ---
 
 # JavaScript/TypeScript Test Writer Agent

@@ -144,7 +144,7 @@ impl SessionSummarySql {
         }
         let list = files
             .iter()
-            .map(|p| format!("'{}'", p.to_string_lossy().replace('\'', "''")))
+            .map(|p| agentlens_store::sq_path(&p.to_string_lossy()))
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!("CREATE OR REPLACE TABLE session_summary AS {};", aggregate_sql(&format!("[{list}]")));
@@ -197,7 +197,8 @@ impl SessionSummarySql {
 }
 
 /// The one query. `files` is a bracketed DuckDB list literal built by the caller from paths this
-/// process discovered — never from a request — and single quotes are doubled on the way in.
+/// process discovered — never from a request — single quotes are doubled and the glob characters are escaped
+/// (agentlens_store::sq_path, TRDD-C6W0SWUT).
 fn aggregate_sql(files: &str) -> String {
     format!(
         r#"

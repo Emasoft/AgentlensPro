@@ -5,8 +5,13 @@ import {
   GATE_MATCHER, HOOK_CMD, GATE_CMD, REVIEW_CMD, SUPERVISOR_CMD, SUPERVISOR_EVENTS, CLI_BIN, LEGACY_HOOK_BIN, LEGACY_GATE_BIN,
   DELEGATE_MATCHER, DELEGATE_CMD,
   HOOK_TIMEOUT_SEC,
+  parseOurCommand, stampedCommand,
   type HookMatcher,
 } from '../cli/hookInstall'
+import { packageVersion } from '../packageVersion'
+
+// Every registered command carries the running version's stamp (TRDD-YL3EWT6N item 5B); the expectations are built with the same writer.
+const RUN = packageVersion()
 
 // ── agentlenspro hook-matcher internals (TRDD-GOD0108C install/uninstall; v2 command
 // strings per TRDD-7284WCW7) ──────────────────────────────────────────────────────────
@@ -26,11 +31,11 @@ suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
     // NOT by the matcher, so this string is pinned here to make widening it a deliberate act:
     // every name added is a hook process on every one of that tool's calls.
     assert.strictEqual(GATE_MATCHER, '^(Task|Agent|Workflow|SendMessage|Read)$')
-    const r = rebuildEventMatchers([], 'PreToolUse', false, HOOK_CMD, GATE_CMD)
+    const r = rebuildEventMatchers([], 'PreToolUse', false, RUN)
     assert.strictEqual(r.installed, true)
     const gate = r.rebuilt.find(m => m.matcher === GATE_MATCHER)
     if (!gate) return assert.fail('gate matcher entry must be present after install')
-    assert.strictEqual(gate.hooks[0].command, GATE_CMD)
+    assert.strictEqual(gate.hooks[0].command, stampedCommand(GATE_CMD, RUN))
     // The pin exists so a ceiling change is a deliberate act, not drift — USER order 2026-09-08
     // raised every hook timeout to 30s, then 2026-10-02 to 120s, via the single HOOK_TIMEOUT_SEC constant.
     assert.strictEqual(gate.hooks[0].timeout, HOOK_TIMEOUT_SEC)
@@ -46,8 +51,8 @@ suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
 
   test('install is idempotent: re-running over an already-installed list yields no duplicate entries', () => {
     // Feeding the first result back in strips-then-reappends our entry → identical list, one gate matcher.
-    const first = rebuildEventMatchers([], 'PreToolUse', false, HOOK_CMD, GATE_CMD)
-    const second = rebuildEventMatchers(first.rebuilt, 'PreToolUse', false, HOOK_CMD, GATE_CMD)
+    const first = rebuildEventMatchers([], 'PreToolUse', false, RUN)
+    const second = rebuildEventMatchers(first.rebuilt, 'PreToolUse', false, RUN)
     assert.deepStrictEqual(second.rebuilt, first.rebuilt)
     assert.strictEqual(second.rebuilt.filter(m => m.matcher === GATE_MATCHER).length, 1)
   })
@@ -58,7 +63,7 @@ suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
       { hooks: [{ type: 'command', command: 'bash /x/spy-agentlens.sh', timeout: 2, async: true }] },
       { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: 'node /x/spy-agentlens-gate.mjs', timeout: 3 }] },
     ]
-    const r = rebuildEventMatchers(matchers, 'PreToolUse', true, HOOK_CMD, GATE_CMD)
+    const r = rebuildEventMatchers(matchers, 'PreToolUse', true, RUN)
     assert.strictEqual(r.removedOurs, 2, 'both the .sh and .mjs entries must be recognised as ours')
     assert.strictEqual(r.rebuilt.length, 0)
     assert.strictEqual(r.installed, false)
@@ -71,14 +76,14 @@ suite('agentlenspro — rebuildEventMatchers (hook install/uninstall)', () => {
       foreign,
       { hooks: [{ type: 'command', command: 'bash /x/spy-agentlens.sh', timeout: 2, async: true }] },
     ]
-    const un = rebuildEventMatchers(matchers, 'Stop', true, HOOK_CMD, GATE_CMD)
+    const un = rebuildEventMatchers(matchers, 'Stop', true, RUN)
     assert.strictEqual(un.removedOurs, 1)
     assert.deepStrictEqual(un.rebuilt, [foreign], 'foreign hook untouched, our entry gone')
 
-    const inst = rebuildEventMatchers(matchers, 'Stop', false, HOOK_CMD, GATE_CMD)
+    const inst = rebuildEventMatchers(matchers, 'Stop', false, RUN)
     assert.strictEqual(inst.removedOurs, 1)
     assert.ok(inst.rebuilt.some(m => JSON.stringify(m) === JSON.stringify(foreign)), 'foreign hook preserved on install')
-    assert.ok(inst.rebuilt.some(m => (m.hooks ?? []).some(h => h.command === HOOK_CMD)), 'our lifecycle forwarder re-appended')
+    assert.ok(inst.rebuilt.some(m => (m.hooks ?? []).some(h => h.command === stampedCommand(HOOK_CMD, RUN))), 'our lifecycle forwarder re-appended')
   })
 })
 
@@ -102,11 +107,11 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     // What the installer writes is exactly the subcommand string — no runner prefix, no directory.
     // The forwarder lands on LIFECYCLE events (here: Stop); the gate on PreToolUse only —
     // the forwarder is deliberately NEVER registered on the tool events.
-    const gateEv = rebuildEventMatchers([], 'PreToolUse', false, HOOK_CMD, GATE_CMD)
+    const gateEv = rebuildEventMatchers([], 'PreToolUse', false, RUN)
     const gate = gateEv.rebuilt.find(m => m.matcher === GATE_MATCHER)
     if (!gate) return assert.fail('gate matcher entry must be present after install')
-    assert.strictEqual(gate.hooks[0].command, GATE_CMD)
-    assert.ok(!gateEv.rebuilt.some(m => m.hooks.some(h => h.command === HOOK_CMD)),
+    assert.strictEqual(gate.hooks[0].command, stampedCommand(GATE_CMD, RUN))
+    assert.ok(!gateEv.rebuilt.some(m => m.hooks.some(h => parseOurCommand(h.command)?.base === HOOK_CMD)),
       'the lifecycle forwarder must NOT be registered on PreToolUse')
     // The delegate gate (Fable plans, Sonnet executes) is NOT registered: six accepted review
     // fixes from its pre-clear session were never applied (TRDD-SA99VCPZ), and an interim
@@ -114,10 +119,10 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     assert.ok(!gateEv.rebuilt.some(m => m.matcher === DELEGATE_MATCHER),
       'the delegate gate must NOT be registered until TRDD-SA99VCPZ closes')
 
-    const lifecycleEv = rebuildEventMatchers([], 'Stop', false, HOOK_CMD, GATE_CMD)
-    const lifecycle = lifecycleEv.rebuilt.find(m => m.hooks.some(h => h.command === HOOK_CMD))
+    const lifecycleEv = rebuildEventMatchers([], 'Stop', false, RUN)
+    const lifecycle = lifecycleEv.rebuilt.find(m => m.hooks.some(h => h.command === stampedCommand(HOOK_CMD, RUN)))
     if (!lifecycle) return assert.fail('lifecycle forwarder entry must be present after install on Stop')
-    assert.strictEqual(lifecycle.hooks[0].command, HOOK_CMD)
+    assert.strictEqual(lifecycle.hooks[0].command, stampedCommand(HOOK_CMD, RUN))
     // The delegate gate is deliberately NOT registered on Stop — it is PreToolUse-only.
     assert.ok(!lifecycleEv.rebuilt.some(m => m.matcher === DELEGATE_MATCHER),
       'the delegate gate must NOT be registered on Stop')
@@ -129,18 +134,18 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     const legacyStop: HookMatcher[] = [
       { hooks: [{ type: 'command', command: 'bash /usr/local/lib/node_modules/agentlenspro/scripts/spy-agentlens.sh', timeout: 2, async: true }] },
     ]
-    const rStop = rebuildEventMatchers(legacyStop, 'Stop', false, HOOK_CMD, GATE_CMD)
+    const rStop = rebuildEventMatchers(legacyStop, 'Stop', false, RUN)
     assert.strictEqual(rStop.removedOurs, 1, 'legacy absolute-path forwarder must be stripped')
     // Stop also carries the review gate (REVIEW_EVENTS) alongside the lifecycle forwarder.
-    assert.deepStrictEqual(rStop.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD, SUPERVISOR_CMD])
+    assert.deepStrictEqual(rStop.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [stampedCommand(HOOK_CMD, RUN), stampedCommand(REVIEW_CMD, RUN), stampedCommand(SUPERVISOR_CMD, RUN)])
 
     const legacyGate: HookMatcher[] = [
       { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: 'bash /usr/local/lib/node_modules/agentlenspro/scripts/spy-agentlens-gate.sh', timeout: 3 }] },
     ]
-    const rGate = rebuildEventMatchers(legacyGate, 'PreToolUse', false, HOOK_CMD, GATE_CMD)
+    const rGate = rebuildEventMatchers(legacyGate, 'PreToolUse', false, RUN)
     assert.strictEqual(rGate.removedOurs, 1, 'legacy absolute-path gate must be stripped')
     // The delegate gate is not registered (TRDD-SA99VCPZ) — PreToolUse carries only the burn gate.
-    assert.deepStrictEqual(rGate.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [GATE_CMD])
+    assert.deepStrictEqual(rGate.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [stampedCommand(GATE_CMD, RUN)])
   })
 
   test('migration: install over v1 PATH-bin entries (agentlenspro-hook/-gate) rewrites them to v2 command strings', () => {
@@ -149,9 +154,9 @@ suite('agentlenspro — v2 command-string hook registration', () => {
     const v1: HookMatcher[] = [
       { hooks: [{ type: 'command', command: LEGACY_HOOK_BIN, timeout: 2, async: true }] },
     ]
-    const r = rebuildEventMatchers(v1, 'Stop', false, HOOK_CMD, GATE_CMD)
+    const r = rebuildEventMatchers(v1, 'Stop', false, RUN)
     assert.strictEqual(r.removedOurs, 1, 'v1 PATH-bin forwarder must be stripped')
-    assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [HOOK_CMD, REVIEW_CMD, SUPERVISOR_CMD])
+    assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), [stampedCommand(HOOK_CMD, RUN), stampedCommand(REVIEW_CMD, RUN), stampedCommand(SUPERVISOR_CMD, RUN)])
   })
 
   test('migration: install over the loose review-gate .js scripts removes them — the verb replaced them (TRDD-6QV50JNN)', () => {
@@ -164,12 +169,12 @@ suite('agentlenspro — v2 command-string hook registration', () => {
         { hooks: [{ type: 'command', command: HOOK_CMD, timeout: 2, async: true }] },
         { hooks: [{ type: 'command', command: REVIEW_CMD, timeout: 10 }] },
       ]
-      const r = rebuildEventMatchers(live, ev, false, HOOK_CMD, GATE_CMD)
+      const r = rebuildEventMatchers(live, ev, false, RUN)
       assert.strictEqual(r.removedOurs, 3, `${ev}: the loose script must be stripped along with our two entries`)
       // The supervisor rides SUPERVISOR_EVENTS (UserPromptSubmit + Stop), NOT SubagentStop — so the
       // expected set is event-dependent. Asserting it flat on both arms is how a blanket edit turns
       // a green test red: SubagentStop legitimately has no supervisor entry to find.
-      const expected = [HOOK_CMD, REVIEW_CMD, ...(SUPERVISOR_EVENTS.includes(ev) ? [SUPERVISOR_CMD] : [])]
+      const expected = [stampedCommand(HOOK_CMD, RUN), stampedCommand(REVIEW_CMD, RUN), ...(SUPERVISOR_EVENTS.includes(ev) ? [stampedCommand(SUPERVISOR_CMD, RUN)] : [])]
       assert.deepStrictEqual(r.rebuilt.flatMap(m => m.hooks.map(h => h.command)), expected, `${ev}: exactly one gate remains`)
       assert.ok(!isOurHookCommand('node "$HOME/.claude/hooks/cvoice_stop.sh"'), 'a neighbouring user hook is not ours')
     }
@@ -184,7 +189,7 @@ suite('agentlenspro — v2 command-string hook registration', () => {
       { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: GATE_CMD, timeout: 3 }] },
       { matcher: GATE_MATCHER, hooks: [{ type: 'command', command: 'node C:\\old\\spy-agentlens-gate.mjs', timeout: 3 }] },
     ]
-    const r = rebuildEventMatchers(mixed, 'PreToolUse', true, HOOK_CMD, GATE_CMD)
+    const r = rebuildEventMatchers(mixed, 'PreToolUse', true, RUN)
     assert.strictEqual(r.removedOurs, 6, 'all six entries across the three generations must be recognised as ours')
     assert.strictEqual(r.rebuilt.length, 0)
   })
@@ -197,7 +202,7 @@ suite('agentlenspro — v2 command-string hook registration', () => {
       { matcher: DELEGATE_MATCHER, hooks: [{ type: 'command', command: DELEGATE_CMD, timeout: 30 }] },
     ]
     assert.ok(isOurHookCommand(DELEGATE_CMD), 'the detection regex must still recognise the delegate gate command')
-    const r = rebuildEventMatchers(existing, 'PreToolUse', true, HOOK_CMD, GATE_CMD)
+    const r = rebuildEventMatchers(existing, 'PreToolUse', true, RUN)
     assert.strictEqual(r.removedOurs, 1, 'the pre-existing delegate gate entry must be stripped on uninstall')
     assert.strictEqual(r.rebuilt.length, 0)
   })

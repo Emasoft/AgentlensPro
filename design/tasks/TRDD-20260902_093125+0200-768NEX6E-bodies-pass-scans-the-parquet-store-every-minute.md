@@ -1,9 +1,10 @@
 ---
 trdd-id: 768NEX6E
+status: tasked
 title: What does the 60 s bodies pass cost the machine, and why is alcore 7 GB resident
 column: blocked
 created: 2026-09-02T09:31:25+0200
-updated: 2026-09-03T11:00:24+0200
+updated: 2026-11-19T01:25:04+0100
 current-owner: main-session
 task-type: spike
 priority: high
@@ -234,3 +235,7 @@ blocked-by: [7YPQWKPG]
 
 - A `sample` capture triggered by a summary-dependent probe catches summary rebuilds by construction; the
   five captures here were triggered by `/api/server-stats`, which does not touch the summary.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED. The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

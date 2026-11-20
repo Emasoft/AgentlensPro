@@ -1,34 +1,30 @@
-// src/cli/foreignTelemetry.ts — what agentlenspro does when ANOTHER telemetry setup is in place, and what it
-// tells whoever runs it while it is DISABLED (owner orders 2026-10-02, TRDD-AGZ0XZKW).
+// src/cli/foreignTelemetry.ts — what agentlenspro does when ANOTHER telemetry setup is in place
+// (owner orders 2026-10-02, TRDD-AGZ0XZKW).
 //
 // Without its own telemetry and raw body dumps agentlenspro is non-functional, so it cannot carry on
-// beside a company gateway: it DISABLES itself (disableAgentlensSurfaces — kill-switch + skills parked;
-// agents stay). `--force-install-telemetry` or a manual removal of the foreign setup undoes it: the next
-// launch repairs, and disarms the switch ONLY when it was armed for this reason — an operator-armed
-// `agentlenspro disable` is never touched.
+// beside a company gateway: it arms the kill-switch with FOREIGN_REASON when no switch stands (disableForForeignTelemetry;
+// agents stay, and skills are parked). `--force-install-telemetry` or a manual removal of the foreign
+// setup undoes it: the next launch repairs, and disarms the switch ONLY when it was armed for this reason — an
+// operator-armed `agentlenspro disable` is never touched by a launch, `setup` or --force-install-telemetry (D10, D17). The
+// one exception is the operator's own `enable` (runEnableCli): it records the lift as FOREIGN_REASON, so the switch lifts
+// by itself once the foreign setup is gone. The switch refuses no verb; it stops only collection (killSwitch.ts).
 
 import * as fs from "fs"
-import { detectTelemetryConflicts } from "../telemetryConfig"
-import { EXIT } from "./cliErrors"
 import { dataDir } from "./cliCore"
-import { killSwitchHalf, killSwitchPath } from "./killSwitch"
-import { SurfaceDirs, defaultSurfaceDirs, disableAgentlensSurfaces, enableAgentlensSurfaces } from "./surfaces"
+import { killSwitchPath } from "./killSwitch"
+import { SurfaceDirs, defaultSurfaceDirs, enableAgentlensSurfaces, parkForForeign } from "./surfaces"
 
 export const FOREIGN_REASON = "foreign telemetry configuration present — run with --force-install-telemetry"
 
-/** Verbs Claude Code runs inside a turn under a timeout. hook, gate and statusline stay SILENT no-ops while disabled (a message
- *  there would land inside the session). review-gate and review-supervisor ignore the switch (killSwitch.ts). None of them is auto-repaired (a repair would blow their deadline). */
+/** Verbs Claude Code runs inside a turn under a timeout. Each handles the switch itself (killSwitch.ts)
+ *  and stays silent (a message there would land inside the session); review-gate and review-supervisor ignore it. None of them is auto-repaired (a repair would blow their deadline). */
 export const HOOK_PATH_VERBS: ReadonlySet<string> = new Set([
   "hook", "gate", "review-gate", "review-supervisor", "delegate-gate", "statusline",
 ])
 
-/** Verbs that must keep working while disabled — they are how one gets back (and the server verbs, see below). */
-// server/daemon pass through ON PURPOSE: serverControl has its own terminal DISABLED handling (ensureServer and the
-// supervisor throw BEFORE spawning anything), so a supervising launchd never sees the dispatcher's 69 as a crash to retry.
 /** Read-only diagnostics other tools poll from their hooks and loops: they never write user config, and may query
  *  the running server read-only (cache-expired asks it over MCP when no harness-reported sample exists), so they
- *  skip BOTH the per-launch check and the DISABLED stop — a diagnostic call must never write settings.json or
- *  disable anything.
+ *  skip the per-launch check — a diagnostic call must never write settings.json.
  *  WHY cache-expired is here (TRDD-CS2W7E77): 896be44a excluded this class because a read must never write
  *  settings.json, and cache-expired was missed. So on a fresh machine a polled `agentlenspro cache-expired` ran a
  *  full first-run setup that wrote settings, hooks and telemetry env and could start a server. Found by the CLI
@@ -38,14 +34,13 @@ export const HOOK_PATH_VERBS: ReadonlySet<string> = new Set([
  *  DISABLED (Recommended)"): disk-sample, disk, disk-watch and disk-monitor (install, uninstall, status). A filling disk is exactly
  *  when everything else is switched off. All of them also skip the launch self-heal: the sampler fires every 5 minutes and must never
  *  write settings.json. */
-export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history", "disk-sample", "disk", "disk-watch", "disk-monitor"])
-
-// Verbs that pass the DISABLED gate on purpose; each has its own terminal handling (see above).
-const DISABLED_PASSTHROUGH: ReadonlySet<string> = new Set(["enable", "disable", "setup", "server", "daemon"])
+// `search` (owner, 2026-11-18: «disable must disable only telemetry and event hooks logs, not jsonl parsing by duckdb»): it reads the
+// project transcripts off disk with DuckDB, needs no server and writes no user config, so the launch self-heal never runs for it.
+export const READ_ONLY_VERBS: ReadonlySet<string> = new Set(["cache-expired", "cache-state", "last-compact", "model-headroom", "statusline-history", "disk-sample", "disk", "disk-watch", "disk-monitor", "search"])
 
 /** `get_account_status --all` — the PLURAL form, assembled from files (account-state timeline + per-account
- *  usage archive) plus one probe per owner-supplied long-lived key (src/longOAuthKeys.ts); it needs no server and writes no user config (main.ts case get_account_status). ONE rule shared by the dispatcher (no server proxy), the
- *  disabled gate and the launch self-heal. WHY: a read must never be blocked by the off-switch brake nor trigger
+ *  usage archive) plus one probe per owner-supplied long-lived key (src/longOAuthKeys.ts); it needs no server and writes no user config (main.ts case get_account_status). ONE rule shared by the dispatcher (no server proxy)
+ *  and the launch self-heal. WHY: a read must never trigger
  *  writes to user config — owner directive 2026-10-29: "are you saying that in reduced mode you cannot determine the
  *  accounts status?? this is bad. fix this." The singular form needs the server and is NOT covered. Any position of
  *  `--all` counts (same rule main.ts always applied). */
@@ -60,8 +55,17 @@ export function killSwitchArmedForForeign(dir: string = dataDir()): boolean {
   return recordedReason(dir) === FOREIGN_REASON
 }
 
-export function disableForForeignTelemetry(dirs: SurfaceDirs = defaultSurfaceDirs()): string[] {
-  return disableAgentlensSurfaces(FOREIGN_REASON, dirs).moved
+/** The foreign-telemetry stop: parks the skills ALWAYS and arms FOREIGN_REASON when no flag stands in dirs.dataDir, or when
+ *  `opts.replaceReason` is set (see parkForForeign in surfaces.ts for the WHY of both). Only the operator's `enable`
+ *  (runEnableCli) sets replaceReason: it records the operator's lift as FOREIGN_REASON, so the lift waits for the foreign
+ *  setup to go. `armed` is "this call wrote the flag (it was absent, or the caller asked to replace it)"; false means a
+ *  switch already stood and its reason was kept, NEVER "not foreign": no caller may read it as that (both callers keep
+ *  parking, keep their refusal and message).
+ *  WHY replaceReason is dropped when the flag already carries FOREIGN_REASON (TRDD-RBBEX59R d2): rewriting it records nothing
+ *  new and bumps the flag's mtime, which step (e) reads as "armed at"; a refused `enable` repeated against the same foreign
+ *  setup must leave the original arming time alone. */
+export function disableForForeignTelemetry(dirs: SurfaceDirs = defaultSurfaceDirs(), opts: { replaceReason?: boolean } = {}): { moved: string[]; armed: boolean } {
+  return parkForForeign(FOREIGN_REASON, dirs, { replaceReason: opts.replaceReason === true && !killSwitchArmedForForeign(dirs.dataDir) })
 }
 
 /** Re-enable ONLY a switch this module armed — the one in dirs.dataDir (TRDD-RBBEX59R R1). Returns whether anything
@@ -77,40 +81,4 @@ function recordedReason(dir: string = dataDir()): string | null {
     const m = /^Reason: (.*)$/m.exec(fs.readFileSync(killSwitchPath(dir), "utf8"))
     return m ? m[1] : null
   } catch { return null }
-}
-
-/** When agentlenspro is DISABLED and `argv` is a verb that must not run: the stderr text (written for an AI
- *  agent as much as a human — what happened, why, the exact command to reactivate) and the exit code. Null
- *  when the verb may run. Hook-path verbs return null: they are silent no-ops and handle the switch
- *  themselves. */
-export function disabledNotice(argv: string[]): { text: string; code: number } | null {
-  const verb = argv[0] ?? ""
-  // Checked BEFORE the kill-switch stat: statusline runs on every Claude render and must cost nothing here.
-  if (HOOK_PATH_VERBS.has(verb) || READ_ONLY_VERBS.has(verb) || DISABLED_PASSTHROUGH.has(verb)) return null
-  // Needs no server and writes no user config (only its own data-dir files: key stamps, the account archive, and --out when asked): the brake must not block it
-  // (owner directive 2026-10-29, see isAllAccountsStatus).
-  if (isAllAccountsStatus(argv)) return null
-  const half = killSwitchHalf()
-  if (half === null) return null
-  const reason = recordedReason()
-  const lines = [`agentlenspro is DISABLED — ${verb || "start"} did not run.`]
-  if (half === "env") {
-    lines.push("Reason: AGENTLENS_DISABLED=1 is set in this environment.")
-    lines.push("To reactivate: unset AGENTLENS_DISABLED (agentlenspro enable cannot clear an environment variable)."
-      + (fs.existsSync(killSwitchPath()) ? " The flag file is armed too, so also run: agentlenspro enable" : ""))
-  } else if (reason === FOREIGN_REASON) {
-    const files = [...new Set(detectTelemetryConflicts().filter(c => c.scope !== "shell").map(c => c.source))]
-    lines.push("Reason: another telemetry setup is already in place, and agentlenspro cannot work without its own telemetry and raw body dumps.")
-    lines.push(`To reactivate: remove the existing telemetry setup from ${files.length ? files.join(", ") : "settings.json"}, or run: agentlenspro --force-install-telemetry <any command>`)
-  } else {
-    lines.push(`Reason: ${reason ?? "no reason recorded"} (armed with \`agentlenspro disable\`).`)
-    lines.push("To reactivate: agentlenspro enable")
-  }
-  if (verb === "get_account_status") {
-    // The singular form needs the live server; the plural answers from files, so point at it (owner directive 2026-10-29).
-    lines.push("Every account's status is available WITHOUT enabling: agentlenspro get_account_status --all (the singular form needs the server).")
-  } else {
-    lines.push("Do not retry the original command; run the reactivation command above first.")
-  }
-  return { text: lines.join("\n"), code: EXIT.DISABLED }
 }

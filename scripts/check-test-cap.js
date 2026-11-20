@@ -18,6 +18,7 @@ const ROOT = rootArg > 0 ? path.resolve(process.argv[rootArg + 1]) : path.resolv
 // mkdtempSync on a literal /tmp escapes the TMPDIR redirect of the cap script. Each entry needs a reason.
 const MKDTEMP_ALLOW = new Map([
   ['src/test/generatedFiles.test.ts', '50-byte files that must sit under /tmp/claude-* for path-matching tests'],
+  ['src/test/browser/dashboardSmoke.test.ts', 'Chrome SingletonSocket path limit; the dir holds only a symlink back into the capped TMPDIR'],
 ])
 
 const failures = []

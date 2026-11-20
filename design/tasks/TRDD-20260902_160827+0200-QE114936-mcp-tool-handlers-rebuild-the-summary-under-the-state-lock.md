@@ -3,7 +3,7 @@ trdd-id: QE114936
 title: Twenty MCP tool handlers still rebuild the session summary under the state lock
 column: blocked
 created: 2026-09-02T16:08:27+0200
-updated: 2026-10-05T02:17:38+0200
+updated: 2026-11-19T07:41:23+0100
 current-owner: main-session
 task-type: bugfix
 priority: high
@@ -301,6 +301,7 @@ the off-lock summary through its callers.
 - **A rename is a cheaper guardrail than either.** `session_status_over` / `burn_status_over` take
   the summary as a parameter, so the obligation is visible AT THE CALL SITE and the type system
   carries it. `live_session_status` hid the same work behind a name that promised nothing.
+2026-11-19 — the carried-forward site (hook_events.rs StopFailure calibration calling build_session_summary under the state lock) is closed by 35a88eda (TRDD-ER88PXNB): calibration now reads the memoized burn subset, and the ui.rs guard test no longer pins a known-open site. Covered by tests/no_collection_ingest.rs lines 43-45 and 79-80 (stop_failure_calibrations == 1 on both ingest paths). INFERRED gap, no test: a session with an empty timeline and no OTEL twin is not in the subset, so calibration falls back to the live account (burn_calibration.rs, verified by reading).
 
 ## Review 2026-10-05 (in the owner's stead)
 
@@ -309,3 +310,7 @@ the off-lock summary through its callers.
 - Box 2, run by the main agent on 2026-10-05 at a load average between 6 and 13: `cargo test -p agentlens-core -- --test-threads=4` exit 0, 119 result lines all ok, 763 passed, 0 failed, 0 ignored; `cargo clippy -p agentlens-core --all-targets -- -D warnings` clean.
 - Limits of this evidence: the guards are textual and pin the ABSENCE of the rebuild call under a guard, they do not measure hold time, and they are blind to a rebuild reached through a name not in their list. The twenty handlers were not each re-read line by line. One site still rebuilds under the lock by design and is pinned by the third guard (hook_events.rs, the StopFailure branch). The card's STATE cites the guards at ui.rs lines 4485, 4508 and 4531; they are now near 4617, 4640 and 4663.
 - CORRECTION of the column: deploy was wrong. By this card's own account its change was deployed and measured on 2026-09-05 (17 of 20 handlers clean; that figure is the card's and its report was not reopened), so nothing of its own waits on a deploy. Its one open box waits on TRDD-MVR6PXC0. Moved to blocked, blocked by MVR6PXC0.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as POST-RELEASE CHECK (its deploy box). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

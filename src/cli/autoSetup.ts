@@ -18,30 +18,35 @@
 // launch, so the order cannot diverge (`setup` reaches the same order through its step list — the
 // otel-env step runs first):
 //   1. the telemetry verdict (user settings.json + managed settings + shell env), BEFORE any action;
-//   2a. FOREIGN  -> disable again (kill-switch re-armed, skills parked), print the remedies, exit
-//       non-zero, write nothing;
-//   2b. ABSENT or OURS -> write the missing telemetry keys FIRST, then restore skills/agents/hooks, then
-//       lift the kill-switch (launch: only one armed for the foreign reason; enable: the caller does), then
-//       the verb runs. While any switch half stands the raw-body key is held ABSENT (rawBodiesHeldAbsent,
-//       TRDD-RBBEX59R), so every lift is followed by one more telemetry converge, which writes it.
+//   2a. FOREIGN  -> park the skills and arm the kill-switch with FOREIGN_REASON only when no switch stands (an operator
+//       reason is kept), print the remedies, exit non-zero, write nothing;
+//   2b. ABSENT or OURS -> put back skills a pre-d2 `disable` parked (P1, a move, never a repair), write the missing
+//       telemetry keys FIRST, then restore skills/agents/hooks, then lift the kill-switch (launch: only one armed for the
+//       foreign reason; enable: the caller does), then the verb runs. While any switch half stands the raw-body key is held
+//       ABSENT (rawBodiesHeldAbsent, TRDD-RBBEX59R), so every lift is followed by one more telemetry converge, which writes it.
+//
+// THE SWITCH STOPS ONLY COLLECTION (owner rule 2026-11-03, TRDD-RBBEX59R): an operator `agentlenspro disable` or
+// AGENTLENS_DISABLED=1 does not stop this repair — it runs under the switch, with the raw-body key held absent. It does
+// not park or move anything either.
 //
 // FOREIGN TELEMETRY (owner orders 2026-10-02): another telemetry setup in place (company gateway,
 // managed settings, shell export) makes agentlenspro non-functional and it will not touch it. Without
 // `--force-install-telemetry` the launch exits EXIT.CONFIG, the user's verb does NOT run, nothing is
-// written, and agentlenspro DISABLES itself (kill-switch + skills parked; agents stay). With the flag the
-// repair step overwrites the foreign telemetry. Removing the foreign setup by hand also works: the next
+// written, the skills are parked and the kill-switch is armed for that reason when no switch stands (agents stay). With the
+// flag the repair step overwrites the foreign telemetry. Removing the foreign setup by hand also works: the next
 // launch repairs and re-enables — but only a switch armed for THIS reason; an operator's own
-// `agentlenspro disable` is never undone here and is never auto-repaired around.
+// `agentlenspro disable` is never lifted here (its reason is kept, and so is its collection-off effect).
 
 import * as path from "path"
-import { AGENT_NAMES, SKILL_NAMES, resolveOnPath, skillFiles, skillTreeHash } from "./hookInstall"
+import { AGENT_NAMES, KeptSurface, SKILL_NAMES, agentSurfaceState, announceKeptSurfaces, hooksVerdict, keptHooksSurface, keptStatuslineSurface, resolveOnPath, skillFiles, skillSurfaceState, skillTreeHash, statuslineDrift } from "./hookInstall"
+import { packageVersion } from "../packageVersion"
 import * as fs from "fs"
 import { EXIT } from "./cliErrors"
 import { HOOK_PATH_VERBS, READ_ONLY_VERBS, disableForForeignTelemetry, enableIfForeign, isAllAccountsStatus, killSwitchArmedForForeign } from "./foreignTelemetry"
-import { agentlensDisabled, overrideKillSwitchEnv } from "./killSwitch"
+import { agentlensDisabled, killSwitchHalf, overrideKillSwitchEnv } from "./killSwitch"
 import { pushNotice } from "./launchNotices"
-import { SurfaceDirs, enableAgentlensSurfaces } from "./surfaces"
-import { Ctx, REPAIR_STEPS, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
+import { SurfaceDirs, formatSkippedSurfaces, restoreParkedSurfaces } from "./surfaces"
+import { Ctx, REPAIR_STEPS, StepResult, hooksConverged, otelDrift, readSettingsFresh, resolveCtx, runSetup } from "./setup"
 import { TelemetryConflict, TelemetryVerdictRow, formatTelemetryConflicts, rawBodiesHeldAbsent } from "../telemetryConfig"
 import { RAW_BODIES_KEY } from "../captureConfig"
 
@@ -63,8 +68,9 @@ export const AUTOSETUP_EXCLUDED_VERBS: ReadonlySet<string> = new Set([
 
 export const LOCK_STALE_MS = 10 * 60 * 1000
 
-// "server" = `server|daemon start|restart` (autoSetupOnServerStart): it repairs like a launch but never arms, lifts
-// or works around the kill-switch, never runs the first-run full setup (that starts a server), and reports a held lock.
+// "server" = `server|daemon start|restart` (autoSetupOnServerStart): it repairs like a launch (under an operator or environment
+// switch too: the switch stops only collection) but never arms or lifts the kill-switch, skips entirely under a switch armed for a
+// foreign setup (D13), never runs the first-run full setup (that starts a server), and reports a held lock.
 export type Trigger = "enable" | "launch" | "server"
 
 export type Step = keyof typeof REPAIR_STEPS
@@ -73,8 +79,13 @@ export interface Detection {
   drifts: Drift[]; conflicts: TelemetryConflict[]; nothingInstalled: boolean
   /** the full per-key telemetry verdict, user keys that will be converged, and Claude Code stale-snapshot rows */
   rows: TelemetryVerdictRow[]; converge: string[]; staleEnv: TelemetryVerdictRow[]
+  /** installed skills and agents the shipped copy does not overwrite (item 4): not drift, announced once */
+  kept: KeptSurface[]
 }
 export interface RepairOutcome { ok: boolean; detail: string }
+
+/** What the first-run full setup reports: ok, or the first failing step as "<step>: <detail>" (TRDD-HSPUF5XH). */
+export interface FullSetupOutcome { ok: boolean; failed?: string }
 
 export interface AutoSetupDeps {
   ctx?: Ctx
@@ -84,8 +95,14 @@ export interface AutoSetupDeps {
   stderr?: (line: string) => void
   /** Repairs one step. Default: the real setup step, run against ctx. */
   repair?: (step: Step, ctx: Ctx) => Promise<RepairOutcome>
-  /** Full `setup --yes`; true = exit 0. Default: the real runSetup. */
-  fullSetup?: (ctx: Ctx) => Promise<boolean>
+  /** Full `setup --yes`; ok = exit 0, failed = the first failing step. Default: the real runSetup. */
+  fullSetup?: (ctx: Ctx) => Promise<FullSetupOutcome>
+  /** Set ONLY by runEnableCli: this ensureInstalled run IS the operator's own `agentlenspro enable`, so a foreign setup that
+   *  refuses it re-arms the flag with FOREIGN_REASON (D10). Keyed on a flag, not on trigger "enable" (forceInstallTelemetry
+   *  passes that trigger too) and not on the verb (`--force-install-telemetry enable` makes the verb "enable" there as well). That
+   *  force-install leg is measured UNREACHABLE today (forceInstallTelemetry clears processEnv, so step 2a never runs for it); the flag
+   *  is defence for future callers that reach step 2a with trigger "enable" without being the operator. */
+  operatorEnable?: boolean
 }
 
 function sameBytes(a: string, b: string): boolean {
@@ -94,13 +111,14 @@ function sameBytes(a: string, b: string): boolean {
 }
 
 /** Read-only presence + drift checks. Never throws on a missing path; never writes. The drifts come out in
- *  REPAIR ORDER — telemetry first, then hooks, skills, agents — and `conflicts` is the telemetry verdict. */
+ *  REPAIR ORDER — telemetry first, then hooks, status line, skills, agents — and `conflicts` is the telemetry verdict. */
 export function detectDrift(ctx: Ctx): Detection {
   const drifts: Drift[] = []
   let conflicts: TelemetryConflict[] = []
   let rows: TelemetryVerdictRow[] = []
   let converge: string[] = []
   let staleEnv: TelemetryVerdictRow[] = []
+  const kept: KeptSurface[] = []
 
   const settings = readSettingsFresh(ctx.settingsPath)
   if (settings === "unparseable") {
@@ -115,8 +133,21 @@ export function detectDrift(ctx: Ctx): Detection {
       staleEnv = otel.staleEnv
       if (!otel.converged) drifts.push({ piece: "telemetry env", step: "otel-env", reason: otel.found })
     }
-    if (settings === "absent" || !hooksConverged(settings)) {
+    // Item 5B: hook registrations stamped newer than this CLI are kept, not drift (the repair would never touch them, so counting them would re-run it on
+    // every launch); they join the kept list that ensureInstalled announces once per (installed, running) pair.
+    const hooksV = settings === "absent" ? null : hooksVerdict(settings, packageVersion())
+    if (hooksV?.kind === "keep-newer") {
+      kept.push(keptHooksSurface(ctx.settingsPath, hooksV.newest, packageVersion()))
+    } else if (settings === "absent" || !hooksConverged(settings)) {
       drifts.push({ piece: "hooks", step: "hooks", reason: settings === "absent" ? "no settings.json" : "registration missing or stale (incl. the 120s timeout)" })
+    }
+    // Item 8b: a status line command of ours with an older stamp or none is drift; a newer one is kept and announced once. An unparseable one is
+    // skipped by the repair, so it is no drift (counting it would re-run the repair on every launch); setup reports it. Absent and foreign keys are
+    // never touched.
+    if (settings !== "absent") {
+      const sl = statuslineDrift(settings, packageVersion())
+      if (sl.stale.length > 0) drifts.push({ piece: "status line", step: "statusline", reason: sl.stale.join(", ") })
+      for (const k of sl.keptNewer) kept.push(keptStatuslineSurface(ctx.settingsPath, k.key, k.stamp, packageVersion()))
     }
   }
 
@@ -130,7 +161,15 @@ export function detectDrift(ctx: Ctx): Detection {
     // place, and hashing them made every launch re-run a repair that could never converge (see skillTreeHash).
     const installed = skillTreeHash(path.join(ctx.skillsDir, name), skillFiles(shippedDir))
     if (installed !== null) skillsPresent++
-    if (installed !== shipped) skillDrift.push(`${name} ${installed === null ? "missing" : "stale"}`)
+    if (installed === shipped) continue
+    // Item 4: a skill the verdict keeps (newer stamp, or edited in a release) is not drift: installSkill would leave it alone,
+    // so counting it would re-run the repair on every launch and never converge.
+    const state = skillSurfaceState(ctx.repoRoot, ctx.skillsDir, name)
+    if (state.verdict === "keep-newer" || state.verdict === "keep-edited") {
+      kept.push({ kind: "skill", name, verdict: state.verdict, installedStamp: state.installedStamp, shippedStamp: state.shippedStamp, path: path.join(ctx.skillsDir, name) })
+      continue
+    }
+    skillDrift.push(`${name} ${installed === null ? "missing" : "stale"}`)
   }
   if (skillDrift.length > 0) drifts.push({ piece: "skills", step: "skill", reason: skillDrift.join(", ") })
 
@@ -142,11 +181,17 @@ export function detectDrift(ctx: Ctx): Detection {
     if (!fs.existsSync(src)) continue
     if (fs.existsSync(dst)) agentsPresent++
     if (!fs.existsSync(dst)) agentDrift.push(`${name} missing`)
-    else if (!sameBytes(src, dst)) agentDrift.push(`${name} stale`)
+    else if (!sameBytes(src, dst)) {
+      // Same reason as for the skills: a kept agent is no drift.
+      const state = agentSurfaceState(ctx.repoRoot, ctx.agentsDir, name)
+      if (state.verdict === "keep-newer" || state.verdict === "keep-edited") {
+        kept.push({ kind: "agent", name, verdict: state.verdict, installedStamp: state.installedStamp, shippedStamp: state.shippedStamp, path: dst })
+      } else agentDrift.push(`${name} stale`)
+    }
   }
   if (agentDrift.length > 0) drifts.push({ piece: "agents", step: "skill", reason: agentDrift.join(", ") })
 
-  return { drifts, conflicts, rows, converge, staleEnv, nothingInstalled: skillsPresent === 0 && agentsPresent === 0 && settings === "absent" }
+  return { drifts, conflicts, rows, converge, staleEnv, kept, nothingInstalled: skillsPresent === 0 && agentsPresent === 0 && settings === "absent" }
 }
 
 /** Exclusive-create lock; the loser skips (the winner repairs). Stale after LOCK_STALE_MS by mtime. */
@@ -174,12 +219,24 @@ async function defaultRepair(step: Step, ctx: Ctx): Promise<RepairOutcome> {
   return { ok: result.verify === "PASS", detail: result.detail ?? result.found }
 }
 
-async function defaultFullSetup(ctx: Ctx): Promise<boolean> {
+/** The first failing step of a setup run as "<step>: <detail>" (the detail falls back to what was found); undefined when no step failed. */
+export function firstFailedStep(steps: StepResult[]): string | undefined {
+  const row = steps.find(s => s.verify === "FAIL")
+  // One line, at most 160 characters: the notice is one stderr line and one JSON notice, so a multi-line detail would break its shape.
+  return row ? `${row.step}: ${(row.detail ?? row.found).replace(/\s+/g, " ").slice(0, 160)}` : undefined
+}
+
+async function defaultFullSetup(ctx: Ctx): Promise<FullSetupOutcome> {
+  // pathEnv is forwarded on purpose: without it runSetup falls back to process.env.PATH, so the hooks step
+  // looked for agentlenspro on the ambient PATH instead of the context's (CI on Linux has no global install:
+  // "refusing: agentlenspro is not on PATH", first-run setup failed; CI run 44592701995, 2026-11-19).
   const outcome = await runSetup({
     yes: true, forceInstall: ctx.forceInstall, home: ctx.home, dataDir: ctx.dataDir, settingsPath: ctx.settingsPath,
-    skillsDir: ctx.skillsDir, agentsDir: ctx.agentsDir, repoRoot: ctx.repoRoot, log: () => { /* quiet: one summary line only */ },
+    skillsDir: ctx.skillsDir, agentsDir: ctx.agentsDir, repoRoot: ctx.repoRoot, pathEnv: ctx.pathEnv, log: () => { /* quiet: one summary line only */ },
   })
-  return outcome.exitCode === 0
+  // Return the failing step too: a bare "failed" cannot say which setup step broke, and the notice must name it.
+  const failed = firstFailedStep(outcome.steps)
+  return { ok: outcome.exitCode === 0, failed }
 }
 
 /** Called by the CLI dispatcher before any verb. Returns null to let the verb run, or an exit code when
@@ -215,8 +272,16 @@ const SERVER_START_SUBVERBS: ReadonlySet<string> = new Set(["start", "restart"])
  *  the per-launch check (maybeAutoSetup) because they are also reached from hooks; this runs for
  *  `server|daemon start|restart` only, and main.ts runs it AFTER the verb resolves (once the server answers, or once
  *  the `--supervise` child is spawned), so it never delays the start. Same gates as a launch — AGENTLENS_NO_AUTOSETUP,
- *  an armed kill-switch, and here also "Claude Code absent". Never throws and never blocks, delays or fails the start:
- *  every outcome is at most one stderr line. */
+ *  a switch armed for a foreign setup (an operator switch no longer gates it: it stops only collection), and here also "Claude Code absent". Never throws and never blocks, delays or fails the start:
+ *  it reports on stderr, in this order (the fourth and fifth items repeat for each repaired piece, in repair order, so the converged lines come immediately before their own otel-env step line, not before every other piece's line):
+ *  - the stale-env warning, once, first: under Claude Code (CLAUDECODE=1) the shell value of a key whose settings.json value is ours differs from it (not gated on the trigger, so it fires for trigger "server"; it follows the D13 foreign-armed skip, so a server start under a foreign-armed flag never prints it);
+ *  - one line per kept skill or agent (TRDD-YL3EWT6N item 4: the installed copy is newer than the shipped one, or an edited copy of the same version), only the first time for a given kind, name, installed stamp and shipped stamp (announceKeptSurfaces, hookInstall.ts);
+ *  - the put-back line: ONE line for all parked skills it put back, carrying the switch clause (and the left-parked clause when only some are blocked); with nothing restored, ONE "left parked" line
+ *    covering every skill a blocker holds back (a file or a non-directory symlink, dangling included);
+ *  - for a repaired otel-env step, BEFORE its step line, one line per CHANGED key in `converged` (detectDrift().converge, read under the lock; the loop `for (const key of converged)` is not gated on the trigger):
+ *    "converged <key>", or "removed <key> (off switch armed)" for the raw-body key under the switch; a key that was only missing adds no line;
+ *  - one line per repaired piece ("restored <piece> (...)") or failed piece ("could not restore <piece> ... run `agentlenspro setup`");
+ *  - one line for a skip or a thrown failure. */
 export async function autoSetupOnServerStart(argv: string[], deps: AutoSetupDeps = {}): Promise<void> {
   const [cmd, sub] = argv
   if ((cmd !== "server" && cmd !== "daemon") || !SERVER_START_SUBVERBS.has(sub ?? "")) return
@@ -240,12 +305,17 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
     const base = deps.ctx ?? resolveCtx({ log: () => { /* quiet */ } })
     const ctx: Ctx = { ...base, forceInstall: deps.forceInstall ?? base.forceInstall }
     const dirs: SurfaceDirs = { dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, ".claude", "rules") }
-    // A kill-switch an operator armed (or AGENTLENS_DISABLED) is theirs: a launch never repairs around it.
-    // `enable` IS the operator's explicit lift, so it goes on to the verdict.
-    // A server start never repairs around ANY armed switch, operator- or foreign-armed: lifting a switch is a
-    // launch's or `enable`'s decision, never a side effect of starting the collector.
-    // Both reads take ctx.dataDir, the dir being converged, never the env default (TRDD-RBBEX59R R1).
-    if (trigger !== "enable" && agentlensDisabled(ctx.dataDir) && (trigger === "server" || !killSwitchArmedForForeign(ctx.dataDir))) return null
+    // The switch stops only COLLECTION (owner rule 2026-11-03, TRDD-RBBEX59R D13): an operator `disable` or AGENTLENS_DISABLED no longer
+    // stops a launch, `enable` or a server start from repairing the install (skills, agents, hooks, telemetry env).
+    // The one skip left is a server start under a switch armed for a FOREIGN setup: the foreign lift (enableIfForeign, below) runs only
+    // for launches, so a server trigger that got on with the foreign setup gone would restore the parked skills (P1) and leave the flag
+    // saying "foreign" while they are live. Lifting a switch is a launch's or `enable`'s decision, never a side effect of starting the collector.
+    // WHY the skip still matters although a LAUNCH can leave the same mismatch (P1 also restores under a foreign-armed flag with the foreign
+    // setup gone, so a launch whose repair then fails ends with the flag foreign over live skills): that launch state is transient. The next
+    // successful launch lifts the flag, and before d2 the same launch installed fresh copies anyway, so it is accepted. A server start
+    // never lifts, so a mismatch it created would persist until some launch or `enable` ran, however long the server stays up.
+    // The read takes ctx.dataDir, the dir being converged, never the env default (TRDD-RBBEX59R R1).
+    if (trigger === "server" && killSwitchArmedForForeign(ctx.dataDir)) return null
 
     // STEP 1 — the telemetry verdict, before any other action.
     const first = detectDrift(ctx)
@@ -254,6 +324,9 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
     if (first.staleEnv.length > 0) {
       say(`agentlenspro: stale session env (restart Claude Code to pick up the new settings): ${first.staleEnv.map(r => r.key).join(", ")}`)
     }
+    // A kept surface (item 4) is no drift, so the fast path below would never mention it: the notice is announced here, once per kind,
+    // name, installed stamp and shipped stamp, before any branch can return and after the stale-env line (the order autoSetupOnServerStart documents).
+    announceKeptSurfaces(ctx.dataDir, first.kept, say)
     if (first.conflicts.length > 0) {
       // A server start never blocks, never disables and never writes over another telemetry setup: it is not the
       // place to arm the kill-switch (that would refuse the very start the operator asked for). One line, then the
@@ -264,11 +337,19 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       }
       const shell = first.conflicts.some(c => c.scope === "shell")
       if (!ctx.forceInstall || shell) {
-        // STEP 2a — FOREIGN and no (usable) --force-install-telemetry: disable AGAIN (even if `enable` was just
-        // run), write nothing, print the remedies, stop.
-        const wasArmed = killSwitchArmedForForeign(ctx.dataDir)
-        const moved = wasArmed ? [] : disableForForeignTelemetry(dirs)
-        say(`${formatTelemetryConflicts(first.conflicts, verb)}\nEvery agentlenspro hook except the review gate and the review supervisor is now a no-op`
+        // STEP 2a — FOREIGN and no (usable) --force-install-telemetry: park the skills, arm the kill-switch only if none stands,
+        // write nothing, print the remedies, stop.
+        // No "already armed, skip" shortcut (TRDD-RBBEX59R D15): disableForForeignTelemetry is idempotent on the park (a no-op when
+        // no skill is live) and keeps a standing flag's reason, so an operator reason survives a launch.
+        // replaceReason ONLY for the operator's own `enable` (D10, deps.operatorEnable, set by runEnableCli): the operator asked to
+        // lift their switch and the foreign setup refuses it, so the flag is re-armed with FOREIGN_REASON, which records that the
+        // lift waits for the foreign setup to go (the switch then lifts by itself). Not keyed on trigger "enable": forceInstallTelemetry
+        // passes that trigger too and is not an operator `enable`. Any other caller (a launch) keeps the reason that stands. The flag is
+        // defence for FUTURE callers: forceInstallTelemetry cannot reach this block at all (it clears processEnv, so no shell row exists,
+        // and forceInstall is set), which is measured, not assumed (test '--force-install-telemetry over a SHELL-scope OTEL_* export under an "ops" switch').
+        // A second reader of "foreign flag means parked" would be wrong once an operator-armed switch can stand here.
+        const { moved } = disableForForeignTelemetry(dirs, { replaceReason: deps.operatorEnable === true })
+        say(`${formatTelemetryConflicts(first.conflicts, verb)}\nCollection is off while this foreign setup stands (nothing is stored)`
           + `${moved.length ? ` and ${moved.length} skill(s) were moved to ${path.join(ctx.dataDir, "disabled-surfaces")}` : ""}; its agents stay installed.`)
         return EXIT.CONFIG
       }
@@ -284,6 +365,38 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       return null
     }
     try {
+      // P1 (TRDD-RBBEX59R D7, D14): put back the skills a pre-d2 `disable` parked, whatever the reason of the switch — after d2 the only
+      // legitimate reason for parked skills is a foreign setup. A MOVE, never a repair (a repair would install a second copy beside the
+      // parked one). The guard runs HERE, inside the lock, never on the stale `first` (computed before takeLock: a launch that waited,
+      // or a settings.json edited meanwhile, can have gained a foreign key). It uses otelDrift(ctx), the very call detectDrift takes
+      // `conflicts` from, so it cannot disagree with `first.conflicts` over user, managed and shell rows. The one difference is an
+      // unparseable settings.json: detectDrift leaves conflicts empty and this guard refuses to restore (the verdict is unknown), but that
+      // refusal does not stop the restore for good: the missing skills are a drift, so the skill step runs in the same launch and its
+      // P2 (stepSkill, setup.ts) puts them back, exactly as a fresh install did before d2: the launch still ends with live skills.
+      // The restore moves files the operator did not ask about in this run, so it is announced in ONE stderr line: how many, where to,
+      // and, except for `enable` (which prints its own switch line), what becomes of the switch (clause below).
+      const verdict = otelDrift(ctx)
+      if (verdict !== "unparseable" && verdict.conflicts.length === 0) {
+        const { restored: back, skipped } = restoreParkedSurfaces(dirs)
+        if (back.length > 0 || skipped.length > 0) {
+          // The clause says what happens to the switch per caller. `enable` gets none: it prints its own switch line (runEnableCli after its
+          // disarm, forceInstallTelemetry in its summary), so "stays armed" would be false for the operator enable. A launch over a
+          // foreign-armed flag lifts it below once its repairs succeed (a server start never reaches here with that flag: the D13 skip
+          // returned). Any other switch, operator or env, stays armed. Under the env half (AGENTLENS_DISABLED=1) lifting the flag does not turn
+          // collection on, so the lift clause says so (TRDD-RTHA7EWK item 4).
+          const switchClause = trigger === "enable" ? ""
+            : !agentlensDisabled(ctx.dataDir) ? "; no kill-switch is armed"
+            : trigger === "launch" && killSwitchArmedForForeign(ctx.dataDir) ? `; the switch armed for the foreign setup is lifted once this launch's repairs succeed${killSwitchHalf(ctx.dataDir) === "env" ? "; collection stays off while AGENTLENS_DISABLED=1 is set" : ""}`
+            : "; the kill-switch stays armed (collection stays off)"
+          // A file or a dangling/non-directory symlink at a live skill path is a LASTING state (the skill stays parked on every launch), so it is
+          // announced, never skipped silently. With nothing restored the line must not claim "put back 0", and the switch clause (which
+          // describes what happens after a restore) is dropped.
+          const skippedClause = skipped.length > 0 ? formatSkippedSurfaces(skipped) : ""
+          say(back.length > 0
+            ? `agentlenspro: put back ${back.length} parked skill(s) into ${ctx.skillsDir}${switchClause}${skippedClause ? `; ${skippedClause}` : ""}`
+            : `agentlenspro: ${skippedClause}`)
+        }
+      }
       // Re-detect under the lock: the previous holder may have just fixed everything.
       const { drifts, conflicts, nothingInstalled, converge: converged } = detectDrift(ctx)
       // Content-logging flags the user EXPLICITLY set to 0/false are about to be forced on: remember the old
@@ -295,10 +408,11 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
       // start a collector from inside a collector start. The server trigger falls through to the per-piece repairs
       // below, which install everything except the server (which the verb itself is starting).
       if (nothingInstalled && trigger === "launch" && verb !== "") {
-        const ok = await (deps.fullSetup ?? defaultFullSetup)(ctx)
+        const res = await (deps.fullSetup ?? defaultFullSetup)(ctx)
+        const ok = res.ok
         say(ok
           ? "agentlenspro: first run — nothing was installed; ran setup (skills, agents, hooks 120s, telemetry env, server)"
-          : "agentlenspro: first-run setup failed — run `agentlenspro setup` to see why")
+          : "agentlenspro: first-run setup failed" + (res.failed ? " at " + res.failed : "") + " — run `agentlenspro setup` to see why")
         return ok || conflicts.length === 0 ? null : EXIT.CONFIG
       }
       const repair = deps.repair ?? defaultRepair
@@ -326,7 +440,11 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
         if (!r.ok && d.step === "otel-env" && conflicts.length > 0) return EXIT.CONFIG
       }
       // Whatever foreign setup disabled us is gone (removed by hand, or overwritten just now): switch back
-      // on — only a switch armed for that reason, never an operator's. (`enable` lifts its own in the caller.)
+      // on — only a switch armed for that reason, never an operator's.
+      // WHY only a launch lifts (TRDD-RBBEX59R D13, D17): `enable` lifts its own switch in its caller (runEnableCli, after the
+      // verdict); forceInstallTelemetry passes trigger "enable" and lifts through enableIfForeign itself, right after the overwrite;
+      // a server start must not lift a switch as a side effect of starting the collector, and under a foreign-armed flag it
+      // returned at the narrowed skip above, before any restore or repair.
       if (trigger === "launch" && allOk && enableIfForeign(dirs)) {
         say("agentlenspro: the foreign telemetry setup is gone — hooks and skills re-enabled")
         // WHY (TRDD-RBBEX59R): the repairs above held the raw-body key absent while the switch stood; every lift is
@@ -344,10 +462,11 @@ export async function ensureInstalled(trigger: Trigger, verb: string, deps: Auto
 
 /** `--force-install-telemetry` (owner orders 2026-10-02): `enable` + overwrite + full restore in ONE invocation.
  *  The only path that ever overwrites a FOREIGN telemetry value (user settings.json, and the managed-settings
- *  file when this user can write it — backups reported). It then writes every missing key and restores skills,
- *  agents and hooks, lifts the kill-switch WHATEVER its recorded reason (an explicit command, like `enable`; the
- *  automatic repair never lifts an operator's), and converges once more, which writes the raw-body key: it is held
- *  absent while any switch half stands (rawBodiesHeldAbsent, TRDD-RBBEX59R).
+ *  file when this user can write it — backups reported). It then writes every missing key, restores skills,
+ *  agents and hooks, restores the parked skills and lifts the kill-switch ONLY when it was armed for the foreign setup
+ *  this run just overwrote (D17: an operator's `agentlenspro disable` stays armed — only `agentlenspro enable` lifts it),
+ *  and converges once more, which writes the raw-body key: it is held absent while any switch half stands (rawBodiesHeldAbsent,
+ *  TRDD-RBBEX59R) — the env half included, even though this run overrides it for everything else.
  *
  *  It also overrides the ENVIRONMENT, for this invocation only: AGENTLENS_DISABLED is ignored (an in-process
  *  flag, killSwitch.ts — process.env is not mutated) and conflicting OTEL_* shell exports are left out of the
@@ -361,18 +480,33 @@ export async function forceInstallTelemetry(verb: string, deps: AutoSetupDeps = 
   const overridden: string[] = []
   if (env.AGENTLENS_DISABLED === "1") overridden.push("AGENTLENS_DISABLED")
   for (const c of detectDrift(base).conflicts) if (c.scope === "shell") overridden.push(c.key)
+  // Read BEFORE the overwrite: whether the switch was armed for the foreign setup this run is about to remove (the message below reports it).
+  const wasForeignArmed = killSwitchArmedForForeign(base.dataDir)
   overrideKillSwitchEnv()
   const ctx: Ctx = { ...base, telemetryProbe: { ...base.telemetryProbe, processEnv: {} } }
   const code = await ensureInstalled("enable", verb, { ...deps, ctx, forceInstall: true })
   if (code !== null) return code
-  const { restored } = enableAgentlensSurfaces({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, ".claude", "rules") })
+  // WHY restore + enableIfForeign and not enableAgentlensSurfaces (TRDD-RBBEX59R D17): enableAgentlensSurfaces disarms WHATEVER
+  // the reason, so a force install lifted an operator `agentlenspro disable` and silently turned collection back on. This flag
+  // is the override of a FOREIGN setup, not the undo of the operator's disable. The overwrite above has just removed the foreign
+  // setup, so a switch armed for it is lifted here (ensureInstalled lifts only for a launch, never for trigger "enable").
+  const dirs: SurfaceDirs = { dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, ".claude", "rules") }
+  restoreParkedSurfaces(dirs)
+  enableIfForeign(dirs)
   // WHY (TRDD-RBBEX59R): the converge above held the raw-body key absent while the flag file stood; every lift is
-  // followed by one telemetry converge, so the key is written in this same run (the env half stays overridden).
+  // followed by one telemetry converge, so the key is written in this same run (an env half or an operator switch keeps it absent).
   const again = await ensureInstalled("enable", verb, { ...deps, ctx, forceInstall: true })
   if (again !== null) return again
   if (overridden.length > 0) {
-    say(`agentlenspro: --force-install-telemetry overrode ${overridden.join(", ")} for THIS run only; without the flag the next run sees ${overridden.length > 1 ? "them" : "it"} again and agentlenspro will be disabled/refuse again (a child process cannot change your shell's environment).`)
+    say(`agentlenspro: --force-install-telemetry overrode ${overridden.join(", ")} for THIS run only; without the flag the next run sees ${overridden.length > 1 ? "them" : "it"} again and agentlenspro will be disabled/refuse again (a child process cannot change your shell's environment).`
+      + (overridden.includes("AGENTLENS_DISABLED") ? ` ${RAW_BODIES_KEY} stays absent while AGENTLENS_DISABLED=1 is set: the switch stops raw-body collection.` : ""))
   }
-  say(`agentlenspro: --force-install-telemetry applied — telemetry, skills, agents and hooks are installed and current${restored.length ? `; ${restored.length} parked skill(s) restored` : ""}; the kill-switch is lifted.`)
+  // `lifted` = the switch armed for the foreign setup is gone now, whoever removed it: the real otel-env step lifts it itself once it
+  // has overwritten the foreign setup (setup.ts stepOtel), so enableIfForeign alone would report "not lifted" in the normal case.
+  const lifted = wasForeignArmed && !agentlensDisabled(ctx.dataDir)
+  const switchNote = lifted ? "; the kill-switch armed for the foreign setup was lifted"
+    // The "foreign-armed flag still standing" case (neither lifted nor operator-armed) is defensive: stepOtel and enableIfForeign lift it before this line.
+    : agentlensDisabled(ctx.dataDir) && !killSwitchArmedForForeign(ctx.dataDir) ? "; the kill-switch armed by `agentlenspro disable` stays armed (`agentlenspro enable` lifts it)" : ""
+  say(`agentlenspro: --force-install-telemetry applied — telemetry, skills, agents and hooks are installed and current${switchNote}.`)
   return null
 }

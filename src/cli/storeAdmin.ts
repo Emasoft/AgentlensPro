@@ -15,7 +15,7 @@ import { resolveBodiesReadScope } from '../captureConfig'
 import { readManifest, repairStore } from '../store/migrate'
 import { makeTsRepairStep, parkedMtimeTsMap, emptyCorrections } from '../store/tsRecovery'
 import { alstoreBin, rustUnpark } from '../rustStorePass'
-import { reviveDisabledOnDisk } from './hookHandlers'
+import { reviveBraked } from './killSwitch'
 import { apiRequest, isConnectFailure, PROBE_TIMEOUT_MS } from './cliCore'
 import { liveLockPid } from './portSelect'
 import { execFileSync } from 'child_process'
@@ -68,7 +68,12 @@ function liveStoreWriters(): string[] {
   }).map((l) => l.trim())
 }
 
-export async function runStoreCli(argv: string[]): Promise<number> {
+/** Test seams for the quiescence gates (TRDD-RBBEX59R c2): the process-table scan sees the real machine — a live
+ *  collector anywhere matches `alcore serve` and refuses before the revive-brake gate a test needs to reach — and
+ *  the alstore lookup would run a real repair. Production passes neither. */
+export interface StoreCliDeps { writers?: () => string[]; alstore?: () => string | null }
+
+export async function runStoreCli(argv: string[], deps: StoreCliDeps = {}): Promise<number> {
   const sub = argv[0]
   if (sub !== 'repair-parked') {
     console.error('usage: agentlenspro store repair-parked [--dry-run]')
@@ -146,18 +151,21 @@ export async function runStoreCli(argv: string[]): Promise<number> {
     console.error('REFUSED: the server is running — it would keep writing into the swapped-out store. Run `agentlenspro server stop --stay-down` first.')
     return 1
   }
-  const writers = liveStoreWriters()
+  const writers = (deps.writers ?? liveStoreWriters)()
   if (writers.length > 0) {
     console.error('REFUSED: a process that can write the store is still alive — it would flush parts into the swapped-out store:')
     for (const w of writers) console.error(`  ${w}`)
     console.error('Wait for it to exit (or stop it) and re-run. The HTTP ping alone cannot see a wedged server or an already-spawned pass child.')
     return 1
   }
-  if (!reviveDisabledOnDisk()) {
+  // NO_REVIVE only (TRDD-RBBEX59R c2). The global kill-switch used to count as a brake here (via the deleted
+  // reviveDisabledOnDisk()), but it no longer stops a hook revive — under it the revive starts a no-collection
+  // server, which still opens the store — so it must not satisfy this precondition either.
+  if (!reviveBraked()) {
     console.error('REFUSED: the hook revive is not braked — any tool call would resurrect the server mid-rewrite. Run `agentlenspro server stop --stay-down` first (it sets the on-disk brake).')
     return 1
   }
-  const bin = alstoreBin()
+  const bin = (deps.alstore ?? alstoreBin)()
   if (!bin) {
     console.error('REFUSED: no alstore binary — the stranded set lives in the Rust engine\'s state, and unparking it from TS would race the pass (install ~/.agentlens/bin/alstore).')
     return 1

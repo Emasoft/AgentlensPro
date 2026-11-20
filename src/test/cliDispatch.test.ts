@@ -66,7 +66,7 @@ function mkHome(): string {
 const SPAWN_SUITE_TIMEOUT_MS = 60_000
 
 /** The launch check's notice when the first-run full setup fails (autoSetup.ts, ensureInstalled). */
-const FIRST_RUN_SETUP_FAILED = 'agentlenspro: first-run setup failed — run `agentlenspro setup` to see why'
+const FIRST_RUN_SETUP_FAILED = /^agentlenspro: first-run setup failed at \S+: .+ — run `agentlenspro setup` to see why$/
 
 suite('agentlenspro — zero-side-effect global flags', function () {
   this.timeout(SPAWN_SUITE_TIMEOUT_MS)
@@ -193,7 +193,7 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
       // detached alcore. With the ports left at their defaults (isolatedEnv deletes them) that server is the
       // developer's LIVE collector. Pinned free ports leave the step's stats probe empty, so there is nothing to kill;
       // the revive brake, set in the child's own data dir, stops that step before any spawn should it be reached.
-      // The notice reads "first-run setup failed" whichever step fails first, so the test proves that setup failed
+      // The notice names the first failing step ("at <step>: <detail>"), so the test proves that setup failed
       // and no server outlived it, not that the brake fired. A pinned free port another process takes first (a second
       // suite running at once) could still be adopted and killed; only TRDD-V2HFI30L closes that.
       const env = isolatedEnv(home, {
@@ -216,7 +216,7 @@ suite('agentlenspro — diagnostics dispatch parity (absorbed agentlens-cli.js s
       assert.ok(payload.error.includes('not found'), r.stderr)
       assert.ok(Array.isArray(payload.notices) && payload.notices.length > 0 && payload.notices.every(n => n.startsWith('agentlenspro:')),
         `the first-run notice must be folded into the refusal: ${r.stderr}`)
-      assert.ok((payload.notices ?? []).includes(FIRST_RUN_SETUP_FAILED),
+      assert.ok((payload.notices ?? []).some(n => FIRST_RUN_SETUP_FAILED.test(n)),
         `the braked server step must fail the first-run setup, and the notice must say so: ${r.stderr}`)
       assert.ok(!fs.existsSync(path.join(dataDir, 'server.pid')), 'the launch setup must not have started a server')
       assertNoSurvivingServer(dataDir)

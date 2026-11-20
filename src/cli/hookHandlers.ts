@@ -28,7 +28,7 @@ import { atomicWriteFileSync, lockTakeoverVerdict, parsePidLock, processStartRef
 // reingests it) and fire a DETACHED, stampede-locked revive so the always-on ingestion comes back.
 // Every fs/spawn op here is best-effort and guarded — the hook contract is "always exit 0 fast,
 // never fail a tool call", so nothing in this file may throw or block.
-const REVIVE_LOCK_TTL_MS = Math.max(2_000, Number(process.env.AGENTLENS_REVIVE_LOCK_TTL_MS) || 15_000)
+export const REVIVE_LOCK_TTL_MS = Math.max(2_000, Number(process.env.AGENTLENS_REVIVE_LOCK_TTL_MS) || 15_000)
 // A lock written THIS millisecond can read as slightly-negative age: fs.statSync().mtimeMs carries
 // sub-ms precision while Date.now() truncates to integer ms, so (Date.now() - mtimeMs) is often a
 // small NEGATIVE fraction when the write + the check land in the same ms (measured ~97% of the time
@@ -87,22 +87,6 @@ function spoolHookEvent(payload: Buffer): void {
     const name = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}.json`
     fs.writeFileSync(path.join(dir, name), payload)
   } catch { /* best effort — a hook must never throw */ }
-}
-
-/** The out-of-band brake: `<dataDir>/NO_REVIVE` on disk stops every future hook from resurrecting the
- *  server. Needed because AGENTLENS_NO_REVIVE only reaches a hook that the agent spawned with it
- *  already in its env — an operator facing a runaway server cannot retrofit env onto a running agent,
- *  and `kill` alone is futile when the very next hook spawns it again. A file any shell can touch is
- *  the only brake that actually reaches the hook. The brake predicate is reviveBraked() — the ONE
- *  definition, fail-CLOSED on an unreadable file: this function guards a SPAWN, and a spawn during
- *  a store swap corrupts the store, while a skipped revive costs one hook's worth of latency. (An
- *  earlier fail-open existsSync here was the second, opposite-direction copy of the predicate.) */
-export function reviveDisabledOnDisk(): boolean {
-  // Either brake stops a revive: the NARROW one (NO_REVIVE — keep ingesting, just don't spawn a
-  // server) or the GLOBAL one (DISABLED — stop everything). Checked here as well as at the hook
-  // entry point on purpose: reviveDaemonDetached() spawns a detached process, and that is the one
-  // side-effect that must never slip through a missed guard.
-  return agentlensDisabled() || reviveBraked()
 }
 
 /** True when `<dataDir>/server.pid` names a process that is genuinely alive right now — the SAME
@@ -360,7 +344,10 @@ function reviveDaemonDetached(): void {
     // human (or `agentlenspro server stop --stay-down`) can set from any shell, and it is honored by
     // every future hook process because each one re-reads it from the filesystem.
     if (process.env.AGENTLENS_NO_REVIVE === '1') return
-    if (reviveDisabledOnDisk()) return
+    // NO_REVIVE only (TRDD-RBBEX59R c2): the global kill-switch no longer brakes a revive — under the switch the
+    // revived server runs in no-collection mode, which keeps the spawn guards fed. reviveDisabledOnDisk() was
+    // agentlensDisabled() || reviveBraked(); with the switch half gone it equalled reviveBraked(), so it is deleted.
+    if (reviveBraked()) return
     // alcore is the only server this package ships (TRDD-1B98LCVR box 4). A hook has no one to
     // report a corrupt/missing install to, so it simply cannot revive.
     let alcore: string | null = null
@@ -432,11 +419,13 @@ export function readStdin(stream: NodeJS.ReadableStream): Promise<Buffer> {
 /** Forward one lifecycle payload. Never throws — the fire-and-forget contract. On ANY delivery
  *  failure (server down, timeout, or a non-2xx like a 503 shed under load) the event is durably
  *  SPOOLED and a detached daemon revive is fired, so no hook a live Claude instance emits is lost
- *  (D3K7QM2P/1a) — the previous behavior silently dropped it. */
+ *  (D3K7QM2P/1a) — the previous behavior silently dropped it.
+ *  Resolves true only when the server answered 2xx (the event is ingested) and false on every other
+ *  outcome: the status-line capture stores its sample locally on false (TRDD-VS1FCUMU). */
 export async function forwardHookEvent(
   payload: Buffer,
   opts: { baseUrl?: string; timeoutMs?: number; path?: string; spool?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   const base = opts.baseUrl ?? uiBaseUrl()
   const apiPath = opts.path ?? '/api/hook-events'
   // Number(env)||default, NOT Number(env||default): a non-numeric value like "2s" must fall back to
@@ -450,17 +439,19 @@ export async function forwardHookEvent(
       body: new Uint8Array(payload),
       signal: AbortSignal.timeout(timeoutMs),
     })
-    if (res.ok) return // delivered + ingested — nothing to spool
+    if (res.ok) return true // delivered + ingested — nothing to spool
     // A non-2xx means NOT ingested (e.g. admission-control 503 under 20-instance load, or a
     // transient error). Fall through to spool + revive, exactly as for a connection failure.
   } catch { /* server down / timeout — fall through to spool + revive */ }
-  // opts.spool === false is for the status-line stream ONLY. Those arrive ~30/min PER SESSION (396/min
+  // opts.spool === false has two callers: the status-line stream, and a lifecycle hook under the global
+  // kill-switch (runHookCommand, TRDD-RBBEX59R decision 3: no spool while disabled). Status-line samples arrive ~30/min PER SESSION (396/min
   // measured across 13), so spooling them would fill the shared 20k hook-spool in under an hour and
   // start dropping its OLDEST entries — which are the lifecycle events (StopFailure, PreCompact) that
   // exist precisely because nothing else records them. A few minutes of a 3-second sample series is a
   // cheap loss; a discarded rate-limit turn death is not. The revive still fires either way.
   if (opts.spool !== false) spoolHookEvent(payload)
   reviveDaemonDetached()
+  return false
 }
 
 /** Run one gate check. Returns the server's response body ('' = allow / any failure). */
@@ -489,19 +480,23 @@ export async function runGateCheck(payload: Buffer, opts: { baseUrl?: string; ti
 
 /** Process entry for `agentlenspro hook` / `agentlenspro gate`. Always resolves 0. */
 export async function runHookCommand(kind: 'hook' | 'gate'): Promise<number> {
-  // GLOBAL kill-switch, first thing and before stdin: `<dataDir>/DISABLED` disarms the lifecycle and gate hooks in
-  // every RUNNING Claude session on the next fire — the only channel that reaches an agent whose
-  // env and config were fixed at launch (see killSwitch.ts; 13 stale sessions kept writing through
-  // a settings edit during the 2026-07-14 SSD incident). Returning 0 with no output is a no-op for
-  // a hook and an ALLOW for the gate — a disabled AgentlensPro must never block the user's work.
-  if (agentlensDisabled()) { return 0 }
   // The gate kill-switch must short-circuit BEFORE stdin is read: the runner may hold the
   // pipe open, and a disabled gate must cost nothing (matches spy-agentlens-gate.sh).
   if (kind === 'gate' && gateDisabled()) return 0
   const payload = await readStdin(process.stdin)
   if (kind === 'hook') {
-    await forwardHookEvent(payload)
+    // The GLOBAL kill-switch (`<dataDir>/DISABLED`, or AGENTLENS_DISABLED=1) no longer returns here
+    // (TRDD-RBBEX59R c2). It used to return 0 before the hook/gate split, so under the switch the
+    // in-memory hook ring the spawn guards count (RUNAWAY_FANOUT, FANOUT_HEADSUP) got nothing and the
+    // gate allowed every launch: owner order 2026-11-03, «keep the guards». The server now runs in
+    // no-collection mode under the switch and keeps the event in its ring only. What the switch
+    // still changes HERE is the spool: an undeliverable event is NOT written to hook-spool/ (decision
+    // 3, «spool no»), because the drain re-delivers a spooled record stamped with the drain time and a
+    // backlog would read as a fresh fan-out. The revive on a failed POST still runs, by design; its
+    // brakes stay (the revive lock, NO_REVIVE, the crash-loop backoff).
+    await forwardHookEvent(payload, agentlensDisabled() ? { spool: false } : {})
   } else {
+    // The gate runs normally under the switch: a server in no-collection mode still answers it.
     const out = await runGateCheck(payload)
     if (out) process.stdout.write(out)
   }

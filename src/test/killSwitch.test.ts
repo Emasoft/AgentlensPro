@@ -11,6 +11,7 @@ import * as fs from 'fs'
 import * as http from 'http'
 import * as os from 'os'
 import * as path from 'path'
+import { Readable } from 'stream'
 
 // This suite MUST resolve the data dir to a tmpdir — pointing it at the user's real ~/.agentlens
 // would arm their live kill-switch. AGENTLENS_DATA_DIR is the namespaced override and takes
@@ -23,9 +24,10 @@ import * as path from 'path'
 // call rather than capturing it at import time.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-ks-'))
 
-import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, noRevivePath, reviveBraked } from '../cli/killSwitch'
-import { runHookCommand, reviveDisabledOnDisk } from '../cli/hookHandlers'
-import { ensureServer, runSupervise, serverCommand } from '../cli/serverControl'
+import { agentlensDisabled, armKillSwitch, disarmKillSwitch, killSwitchHalf, killSwitchPath, noRevivePath, overrideKillSwitchEnv, reviveBraked } from '../cli/killSwitch'
+import { runHookCommand } from '../cli/hookHandlers'
+import { alcoreServeArgs, ensureServer, serverCommand } from '../cli/serverControl'
+import { makeFakeAlcore, spawnCliModule, stopChild, waitFor } from './helpers/fakeAlcore'
 
 suite('global kill-switch', () => {
   let savedDataDir: string | undefined
@@ -138,42 +140,119 @@ suite('global kill-switch', () => {
     assert.strictEqual(killSwitchHalf(), 'env')
   })
 
-  test('a hook is a NO-OP while disabled — and must not even read stdin', async () => {
-    // The load-bearing behavior: `agentlenspro hook` must return 0 immediately, touching nothing.
-    // If it read stdin it could block on a pipe the runner holds open; if it did work it would keep
-    // burning the disk. Returning 0 with no output is also an ALLOW for the gate, so a disabled
-    // AgentlensPro can never block the user's tool calls.
-    armKillSwitch()
-    let stdinRead = false
-    const realStdin = process.stdin
-    Object.defineProperty(process, 'stdin', {
-      configurable: true,
-      get() { stdinRead = true; return realStdin },
+  // TRDD-RBBEX59R c2: under the switch the hook and the gate keep running against a no-collection server, so the
+  // spawn guards (RUNAWAY_FANOUT, FANOUT_HEADSUP) and the image cache-guard stay on. Owner order 2026-11-03,
+  // «keep the guards». What the switch still changes on the CLI side is the spool (decision 3: no spool).
+  test('under the switch the hook still POSTs and never spools; the gate still runs', async () => {
+    const seen: string[] = []
+    const srv = http.createServer((req, res) => {
+      seen.push(req.url ?? '')
+      req.resume()
+      // The hook endpoint FAILS, so forwardHookEvent reaches its spool decision; the gate endpoint answers a verdict.
+      if (req.url === '/api/agent-gate') { res.writeHead(200); res.end('GATE-VERDICT') } else { res.writeHead(500); res.end() }
     })
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve))
+    const port = (srv.address() as { port: number }).port
+    const saved = { ui: process.env.AGENTLENS_UI_URL, noRevive: process.env.AGENTLENS_NO_REVIVE, gate: process.env.AGENTLENS_GATE }
+    const realStdin = process.stdin
+    const realWrite = process.stdout.write.bind(process.stdout)
+    const spoolDir = path.join(tmpHome, 'hook-spool')
+    const spooled = (): number => { try { return fs.readdirSync(spoolDir).filter(n => n.endsWith('.json')).length } catch { return 0 } }
+    const runWith = async (kind: 'hook' | 'gate', payload: string): Promise<string> => {
+      Object.defineProperty(process, 'stdin', { configurable: true, value: Readable.from([Buffer.from(payload)]) })
+      let out = ''
+      process.stdout.write = ((chunk: string | Uint8Array) => { out += String(chunk); return true }) as typeof process.stdout.write
+      try { assert.strictEqual(await runHookCommand(kind), 0) } finally {
+        process.stdout.write = realWrite
+        Object.defineProperty(process, 'stdin', { configurable: true, value: realStdin })
+      }
+      return out
+    }
+    process.env.AGENTLENS_UI_URL = `http://127.0.0.1:${port}`
+    process.env.AGENTLENS_NO_REVIVE = '1' // the failed POST would otherwise spawn a revive
+    delete process.env.AGENTLENS_GATE
+    fs.rmSync(spoolDir, { recursive: true, force: true })
     try {
-      assert.strictEqual(await runHookCommand('hook'), 0)
-      assert.strictEqual(await runHookCommand('gate'), 0)
-      assert.strictEqual(stdinRead, false, 'a disabled hook must not touch stdin at all')
+      armKillSwitch()
+      await runWith('hook', JSON.stringify({ hook_event_name: 'SubagentStart', session_id: 'ks-1' }))
+      assert.ok(seen.includes('/api/hook-events'), `the hook must POST under the switch: ${seen.join(',')}`)
+      assert.strictEqual(spooled(), 0, 'no spool file under the switch')
+      const verdict = await runWith('gate', JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'general-purpose' } }))
+      assert.ok(seen.includes('/api/agent-gate'), 'the gate must ask the server under the switch')
+      assert.strictEqual(verdict, 'GATE-VERDICT', 'the gate prints the server verdict verbatim under the switch')
+      // Control: the same failed POST WITHOUT the switch does spool — so the zero above is the switch, not a blind check.
+      disarmKillSwitch()
+      await runWith('hook', JSON.stringify({ hook_event_name: 'SubagentStart', session_id: 'ks-2' }))
+      assert.strictEqual(spooled(), 1, 'outside the switch a failed POST spools the event')
     } finally {
-      Object.defineProperty(process, 'stdin', { configurable: true, value: realStdin })
+      for (const [k, v] of [['AGENTLENS_UI_URL', saved.ui], ['AGENTLENS_NO_REVIVE', saved.noRevive], ['AGENTLENS_GATE', saved.gate]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v
+      }
+      fs.rmSync(spoolDir, { recursive: true, force: true })
+      srv.closeAllConnections()
+      await new Promise<void>(resolve => srv.close(() => resolve()))
     }
   })
 
-  test('the global switch also blocks server auto-revive (defence in depth)', () => {
-    assert.strictEqual(reviveDisabledOnDisk(), false)
+  test('the switch no longer blocks the auto-revive; NO_REVIVE still does', async () => {
+    // reviveDisabledOnDisk() (switch OR brake) is deleted: with the switch half gone it equalled reviveBraked().
+    // The revive verb is what the hook spawns; under the switch it must reach the spawn — with --no-collection.
     armKillSwitch()
-    // Spawning a detached server is the one side-effect that must never slip a missed guard, so it
-    // is gated independently of the hook entry point.
-    assert.strictEqual(reviveDisabledOnDisk(), true)
+    assert.strictEqual(reviveBraked(), false, 'the switch alone is not a revive brake')
+    const fake = makeFakeAlcore(path.join(tmpHome, 'fake-revive'))
+    const savedAlcore = process.env.AGENTLENS_ALCORE
+    const savedNoRevive = process.env.AGENTLENS_NO_REVIVE
+    process.env.AGENTLENS_ALCORE = fake.bin
+    delete process.env.AGENTLENS_NO_REVIVE
+    try {
+      await assert.rejects(() => serverCommand(['revive']), /exited during startup/, 'the revive reaches the (fake) spawn under the switch')
+      assert.strictEqual(fake.calls().length, 1)
+      assert.ok(fake.calls()[0].includes('--no-collection'), `the revived server runs in no-collection mode: ${fake.calls()[0].join(' ')}`)
+      armBrake()
+      await assert.rejects(() => serverCommand(['revive']), /server revive refused/, 'NO_REVIVE still refuses')
+      assert.strictEqual(fake.calls().length, 1, 'no spawn under NO_REVIVE')
+    } finally {
+      if (savedAlcore === undefined) delete process.env.AGENTLENS_ALCORE; else process.env.AGENTLENS_ALCORE = savedAlcore
+      if (savedNoRevive === undefined) delete process.env.AGENTLENS_NO_REVIVE; else process.env.AGENTLENS_NO_REVIVE = savedNoRevive
+      fs.rmSync(path.join(tmpHome, 'fake-revive'), { recursive: true, force: true })
+    }
   })
 
-  test('ensureServer REFUSES while disabled — the CLI was the kill-switch bypass', async () => {
-    // The widest hole, found by catching a live server running 2.5h AFTER `disable` stopped it: the
-    // HOOK path was gated but the CLI path was not, and every diagnostics tool call funnels through
-    // ensureServer(). The project CLAUDE.md tells every Claude session to run diagnostics BEFORE any
-    // task — so a disabled install came straight back the next time any running session started work.
+  test('ensureServer under the switch SPAWNS, with --no-collection for its data dir', async () => {
+    // It used to refuse (the 2026-07-14 diagnostics-path revival). Now the server runs, storing nothing, so the
+    // guards answer. A fake alcore records the argv and exits, so the start fails AFTER the spawn — the argv is the proof.
     armKillSwitch()
-    await assert.rejects(() => ensureServer(), /DISABLED/, 'a disabled AgentlensPro must not spawn a server')
+    const fake = makeFakeAlcore(path.join(tmpHome, 'fake-ensure'))
+    const savedAlcore = process.env.AGENTLENS_ALCORE
+    process.env.AGENTLENS_ALCORE = fake.bin
+    try {
+      await assert.rejects(() => ensureServer('test'), /exited during startup/)
+      const argv = fake.calls()[0] ?? []
+      assert.ok(argv.includes('--no-collection'), `flag expected: ${argv.join(' ')}`)
+      assert.strictEqual(argv[argv.indexOf('--data-dir') + 1], tmpHome)
+    } finally {
+      if (savedAlcore === undefined) delete process.env.AGENTLENS_ALCORE; else process.env.AGENTLENS_ALCORE = savedAlcore
+      fs.rmSync(path.join(tmpHome, 'fake-ensure'), { recursive: true, force: true })
+    }
+  })
+
+  test('alcoreServeArgs adds --no-collection exactly when the switch is armed for THAT dir (file half, env half; the env override gives none)', () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-ks-other-'))
+    const has = (dir: string): boolean => alcoreServeArgs(process.env, dir).includes('--no-collection')
+    try {
+      assert.strictEqual(has(tmpHome), false, 'no switch, no flag')
+      armKillSwitch()
+      assert.strictEqual(has(tmpHome), true, 'file half armed for this dir')
+      assert.strictEqual(has(other), false, 'the file half of ANOTHER dir does not count — keyed on the --data-dir value')
+      disarmKillSwitch()
+      process.env.AGENTLENS_DISABLED = '1'
+      assert.strictEqual(has(other), true, 'env half arms every dir')
+      overrideKillSwitchEnv(true)
+      assert.strictEqual(has(other), false, '--force-install-telemetry overrides the env half: no flag')
+    } finally {
+      overrideKillSwitchEnv(false)
+      fs.rmSync(other, { recursive: true, force: true })
+    }
   })
 
   test('the revive brake reads armed the moment the file exists — no restart, like the switch', () => {
@@ -276,19 +355,39 @@ suite('global kill-switch', () => {
     }
   })
 
-  test('brake and switch stay DISTINCT — a pause is not a kill', async () => {
-    // The supervisor depends on the difference (under DISABLED its spawn must proceed so the child
-    // exits EX_CONFIG 78 and the loop terminates). If ensureServer collapsed the two into
-    // reviveDisabledOnDisk(), this assertion would report the wrong reason and the split would rot.
+  test('brake and switch stay DISTINCT — the brake keeps the process down, the switch only stops collection', async () => {
+    // NO_REVIVE keeps the server process DOWN; DISABLED only turns collection off (TRDD-RBBEX59R c2). If ensureServer
+    // read the brake and the switch as one predicate, this assertion would report the wrong reason and the split
+    // would rot.
     armBrake()
     assert.strictEqual(agentlensDisabled(), false, 'arming the brake must not arm the global switch')
     await assert.rejects(() => ensureServer(), (e: Error) => /revive brake/.test(e.message) && !/DISABLED/.test(e.message))
   })
 
-  test('runSupervise REFUSES while disabled — a supervisor would out-stubborn the switch', () => {
-    // The supervisor exists to restart the server forever. Ungated, `disable` would stop a server
-    // that launchd instantly brought back — the flag would be decorative.
-    armKillSwitch()
-    assert.throws(() => runSupervise(), /DISABLED/)
+  test('runSupervise under the switch STARTS, and every respawn recomputes --no-collection (TRDD-RBBEX59R c2)', async function () {
+    // It used to refuse a disabled install. Now the switch means "collect nothing", not "run nothing": every child
+    // the supervisor spawns goes through alcoreServeArgs(), so it carries --no-collection while the switch is armed
+    // for the data dir — and a respawn AFTER the flag is lifted carries none (the enable verb's supervisor branch
+    // depends on exactly that). Run in a CHILD process: runSupervise installs signal handlers and never returns.
+    this.timeout(40_000)
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlens-ks-sup-'))
+    const data = path.join(dir, 'data')
+    const fake = makeFakeAlcore(path.join(dir, 'fake'))
+    armKillSwitch(undefined, data)
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: dir, AGENTLENS_DATA_DIR: data, AGENTLENS_ALCORE: fake.bin, AGENTLENS_SUPERVISE_MAX_BACKOFF_MS: '100' }
+    delete env.AGENTLENS_DISABLED
+    const child = spawnCliModule('serverControl.js', 'runSupervise', [], env)
+    const flagged = (c: string[]): boolean => c.includes('--no-collection')
+    try {
+      assert.ok(await waitFor(() => fake.calls().length >= 2, 15_000), `the supervisor must spawn and respawn: ${JSON.stringify(fake.calls())}`)
+      assert.ok(fake.calls().every(flagged), `every spawn under the switch carries the flag: ${JSON.stringify(fake.calls())}`)
+      assert.ok(fake.calls().every((c) => c[c.indexOf('--data-dir') + 1] === data), 'the flag is keyed on the dir passed as --data-dir')
+      const before = fake.calls().length
+      disarmKillSwitch(data)
+      assert.ok(await waitFor(() => fake.calls().slice(before).some((c) => !flagged(c)), 15_000), `a respawn after the lift carries no flag: ${JSON.stringify(fake.calls())}`)
+    } finally {
+      await stopChild(child)
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

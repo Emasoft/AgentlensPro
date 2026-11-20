@@ -31,12 +31,11 @@ usage:
                                               (global, per invocation) overwrite an EXISTING telemetry
                                               setup (company gateway, managed settings) with agentlenspro's.
                                               Without it agentlenspro refuses to run beside one: it exits
-                                              non-zero, disables its hooks and skills, and touches nothing.
+                                              78, arms the kill-switch if none stands (collection off), parks its
+                                              skills, and leaves that setup untouched.
                                               Every launch also restores missing/stale skills, agents,
                                               hooks and telemetry env by itself (AGENTLENS_NO_AUTOSETUP=1 off).
-                                              Exit 69 = agentlenspro is DISABLED (the command did not run; the
-                                              message names the reactivation command, usually
-                                              'agentlenspro enable'); exit 78 = another telemetry setup blocks it.
+                                              The kill-switch (agentlenspro disable) stops only collection; it refuses no command.
   agentlenspro setup [--dry-run] [--yes] [--json]  detect → converge → verify: install or repair everything
                                               (server, DB, hooks, skill, telemetry env), then self-test.
                                               Starts with a read-only environment probe (platform,
@@ -93,12 +92,12 @@ usage:
   agentlenspro disk-monitor install|uninstall|status
                                               two launchd jobs (macOS): a resident disk-sample --volumes-only --resident (kept alive) and --walks-only
                                               every 300 s, even with no Claude session. Opt-in: setup prints the command, never installs it
-  agentlenspro search <pattern> --session ID [--role R] [--type T] [--regex] [--limit N] [--json]
-                                              search one session's transcript .jsonl (tool outputs,
-                                              agent responses, prompts) with DuckDB's streaming NDJSON
-                                              reader — fast on 60MB+ transcripts, works with the
-                                              server down. --session takes an exact id or a unique
-                                              >=6-char prefix; matches on stdout, coverage on stderr
+  agentlenspro search <pattern> [--project DIR] [--session ID] [--kind K] [--since T] [--regex|--mask|--word|--fuzzy] [--count] [--limit N] [--json]
+                                              search every transcript of this project (main and sub-agent,
+                                              every session) with DuckDB, off disk, with the server down.
+                                              --project DIR searches another project; --session narrows to
+                                              one session; --show SESSION:LINE prints one entry. Matches on
+                                              stdout, coverage on stderr. All flags: agentlenspro search --help
   agentlenspro budget --minutes N [--watch [SEC]] [--with-risks] [--window 5h|7d|binding]
                                               will the rate-limit window OUTLAST a timed run? Preflight
                                               once, or --watch the whole batch: the minutes still to go
@@ -114,13 +113,15 @@ usage:
                                               writes are coalesced (--flush-ms, default 1s) to
                                               spare the SSD; run "agentlenspro watch" with no args
                                               for the metric list
-  agentlenspro disable [reason]               GLOBAL BRAKE — turn every AgentlensPro side-effect OFF
-                                              (hooks, burn-gate, auto-revive, background ingestion) in
-                                              EVERY running Claude session, on its next hook fire. Stops
-                                              the server too. Works WITHOUT restarting any session — a
-                                              settings edit does not, because a running agent loaded its
-                                              config at launch.
-  agentlenspro enable                         undo disable — hooks resume on their next fire
+  agentlenspro disable [reason]               GLOBAL SWITCH — store NOTHING (telemetry, raw API bodies,
+                                              hook events) in EVERY running Claude session, from its next
+                                              hook fire; the server runs in no-collection mode, so the
+                                              burn-gate and the image cache-guard keep working. Works
+                                              WITHOUT restarting any session. To keep the server down too:
+                                              agentlenspro server stop --stay-down
+  agentlenspro enable                         undo disable — hooks resume on their next fire; also
+                                              restarts a server for this data dir that still reports
+                                              no-collection mode (re-run it to retry that restart)
   agentlenspro config [list]                  show data-retention knobs: effective value + source
   agentlenspro config get <key>               one retention knob's effective value + where it came from
   agentlenspro config set <key> <value>       persist a retention knob to ~/.agentlens/config.json
@@ -173,7 +174,7 @@ operations:
                         the magnitude — or "no active burn risks"
   --hooks [k=v ...]     show or flip the hook switches IN REALTIME for every running session
                         (server-side decision point — no restarts): gate=off|warn|enforce|on,
-                        cacheguard=on|off (image-read resident-cost warnings),
+                        cacheguard=on|off (image-read resident-cost warnings; independent of gate=),
                         capture=on|off (lifecycle event storage), advisor=on|off (in-band
                         PostToolUse warnings). No args = show current config + file path
   --guard [seconds]     realtime burn guard: polls the risk report (default 15s, REST fast path)
@@ -195,7 +196,9 @@ operations:
                         transaction; migrates every previous-generation registration
                         (spy-agentlens*.sh paths, agentlenspro-hook/-gate PATH bins) and
                         removes dead claude-spyglass entries + env.SPYGLASS_DIR. Other tools'
-                        hooks on the same events are never touched. Idempotent.
+                        hooks on the same events are never touched. Idempotent. Each
+                        command is registered as '<command> --stamp <version>'; setup and
+                        the launch repair keep a newer stamp in place, this verb overwrites it.
   --uninstall-hooks     remove exactly those agentlens hook entries — every generation
                         (nothing else)
   --install-otel        add the Claude Code telemetry env vars to ~/.claude/settings.json via a
@@ -245,7 +248,8 @@ examples:  (discover the rest with 'list --desc' then 'help <tool>')
 
 globals: --full (unshaped payload)   --json (always JSON, never a rendered table)   --out PATH (full JSON to disk, digest to stdout)
 exit:    0 = stdout is a result · 2 = the tool refused (JSON reason on STDERR, stdout empty) · 64 = bad command line
-server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log`
+server:  $AGENTLENS_MCP_URL (default http://localhost:4316/mcp); logs -> ~/.agentlens/server.log
+memory:  alcore exits when mimalloc commit is above AGENTLENS_RSS_HARD_CAP_MB MB (default 2048), or when footprint is above AGENTLENS_FOOTPRINT_BACKSTOP_MB MB (default 3x the cap, or half of host RAM when that is smaller but still above the cap; macOS only); culprit log -> <data dir>/rss-hard-cap.log`
 
 // Short CLI aliases → the full tool name (TRDD-EYA3X5MQ). `reload-cost` is the user-requested
 // shortcut for "how much did each /reload-plugins cost me?"; it now answers the same question for
@@ -671,7 +675,14 @@ export async function runDiagnosticsCli(argv: string[]): Promise<void> {
   // Skill install is standalone too — pure file copy, no server, no settings mutation. The AGENT
   // definitions install with them: a skill that dispatches `agentlens-tldr-worker` is broken on a
   // machine where that agent file is absent, so shipping one without the other is a half install.
-  if (ops.installSkill) { installSkills(); installAgents(); return }
+  // The backup folder is under the data dir (item 4): a skill or agent this run replaces is copied there first, so an
+  // overwrite of an edited or newer copy never loses the old bytes; installSkill/installAgents throw without a backupRoot.
+  if (ops.installSkill) {
+    const backupRoot = path.join(dataDir(), 'surface-backups')
+    installSkills({ backupRoot })
+    installAgents({ backupRoot })
+    return
+  }
 
   // One-shot realtime culprit check — REST fast path, ~50ms end-to-end incl. node boot.
   if (ops.risk) { await runRisk(); return }

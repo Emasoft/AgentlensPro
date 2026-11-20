@@ -8,6 +8,8 @@
 //! Every boot runs with hook capture ON (asserted on its first read: with capture off the hook POST
 //! would take the ring-only path for a different reason and prove nothing about the mode) and gets
 //! the same four POSTs: OTLP traces, OTLP logs, a SubagentStart hook event, a status-line sample.
+//! The status-line sample is asserted two ways: counted (`receivedSinceBoot`), then, after a graceful
+//! SIGTERM stop, read back from the status-line WAL as a row carrying the POSTed session id.
 //! The control proves each read can SEE a present item; the mutation runs recorded in
 //! reports_dev/rbbex59r/ prove each absence assertion can fail:
 //! - drop the `if no_collection` return in `lib.rs` `handle` ⇒ the span and log-event asserts go red;
@@ -74,6 +76,37 @@ impl Server {
     }
     fn log_text(&self) -> String {
         std::fs::read_to_string(&self.log).unwrap_or_default()
+    }
+    /// SIGTERM (what `agentlenspro server stop` sends), wait for the exit, then the `session_id` of every row in the status-line
+    /// WALs under `<data>/statusline`: a graceful stop flushes the buffer to the WAL without sealing it, so that is where a stored
+    /// sample lives. Kills nothing else; Drop still reaps and removes the temp dir.
+    fn stop_and_read_statusline_session_ids(&mut self) -> Vec<String> {
+        assert_eq!(unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) }, 0, "SIGTERM delivered");
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while self.child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "alcore did not exit after SIGTERM: {}", self.log_text());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let (mut ids, mut dirs) = (Vec::new(), vec![self.data.join("statusline")]);
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let file = entry.path();
+                if file.is_dir() {
+                    dirs.push(file);
+                } else if file.extension().is_some_and(|x| x == "ndjson") {
+                    let text = std::fs::read_to_string(&file).unwrap();
+                    for (i, line) in text.lines().enumerate() {
+                        // Read after a graceful stop: no write is in progress, so any unparseable line is a defect and fails here with the line and the log.
+                        let row: Value = match serde_json::from_str(line) {
+                            Ok(row) => row,
+                            Err(e) => panic!("{}:{}: unparseable ndjson line ({e}): {line}\nlog:\n{}", file.display(), i + 1, self.log_text()),
+                        };
+                        ids.push(row["session_id"].as_str().unwrap_or_default().to_owned());
+                    }
+                }
+            }
+        }
+        ids
     }
 }
 
@@ -211,7 +244,7 @@ fn exercise(s: &Server, collection: &str, started_by: Value) -> (Value, String) 
     (s.stats(), hook_body)
 }
 
-fn assert_mode_boot(s: &Server, started_by: Value) {
+fn assert_mode_boot(s: &mut Server, started_by: Value) {
     let (v, hook_body) = exercise(s, "off", started_by);
     assert_eq!(v["spans"]["inMemory"], 0, "no span may be stored in the mode");
     assert_eq!(v["spans"]["pendingAppends"], 0, "no span may be queued for the store in the mode");
@@ -222,27 +255,29 @@ fn assert_mode_boot(s: &Server, started_by: Value) {
     assert_eq!(hook_files(&s.data), 0, "no hook-events file may appear in the mode");
     assert_eq!(hook_body, r#"{"ok":true,"dropped":"collection=off"}"#);
     assert_eq!(v["hookEvents"]["receivedSinceBoot"], 1, "the hook event is accepted (ring-only)");
-    assert_eq!(v["statusline"]["receivedSinceBoot"], 1, "the status-line sample is stored");
+    assert_eq!(v["statusline"]["receivedSinceBoot"], 1, "the status-line sample is stored, log:\n{}", s.log_text());
     assert_eq!(v["bodies"]["captureDownSince"], Value::Null, "no CAPTURE DOWN for capture switched off on purpose");
+    // Not just a counter: the sample is really stored, i.e. it survives a graceful stop as a row with the POSTed session id.
+    assert_eq!(s.stop_and_read_statusline_session_ids(), ["aaaaaaaa-sl-1"], "the stored sample is read back from the WAL after a graceful stop, log:\n{}", s.log_text());
 }
 
 #[test]
 fn boot_with_the_disabled_file_runs_in_no_collection_mode() {
-    let s = launch("file", true, false, Stamp::Supervisor);
-    assert_mode_boot(&s, json!("supervisor"));
+    let mut s = launch("file", true, false, Stamp::Supervisor);
+    assert_mode_boot(&mut s, json!("supervisor"));
 }
 
 #[test]
 fn boot_with_the_flag_and_no_file_runs_in_no_collection_mode() {
-    let s = launch("flag", false, true, Stamp::Unset);
+    let mut s = launch("flag", false, true, Stamp::Unset);
     assert!(!s.data.join("DISABLED").exists());
-    assert_mode_boot(&s, Value::Null);
+    assert_mode_boot(&mut s, Value::Null);
 }
 
 /// The CONTROL: the same POSTs and the same reads see every item when the mode is off.
 #[test]
 fn normal_boot_stores_what_the_mode_drops() {
-    let s = launch("control", false, false, Stamp::Blank);
+    let mut s = launch("control", false, false, Stamp::Blank);
     let (v, hook_body) = exercise(&s, "on", Value::Null);
     assert_eq!(v["spans"]["inMemory"], 2, "the trace span and the rich log event are stored");
     assert_eq!(v["otlp"]["tracesPayloads"], 1);
@@ -250,7 +285,8 @@ fn normal_boot_stores_what_the_mode_drops() {
     assert_eq!(hook_body, r#"{"ok":true}"#);
     assert_eq!(v["hookEvents"]["receivedSinceBoot"], 1);
     assert_eq!(hook_files(&s.data), 1, "the hook-events bucket file appears");
-    assert_eq!(v["statusline"]["receivedSinceBoot"], 1);
+    assert_eq!(v["statusline"]["receivedSinceBoot"], 1, "the status-line sample is received, log:\n{}", s.log_text());
     // Status-line activity and no body ever ⇒ capture_down_since returns the boot time at once.
     assert!(v["bodies"]["captureDownSince"].is_i64() || v["bodies"]["captureDownSince"].is_u64(), "control must report CAPTURE DOWN: {}", v["bodies"]);
+    assert_eq!(s.stop_and_read_statusline_session_ids(), ["aaaaaaaa-sl-1"], "the stored sample is read back from the WAL after a graceful stop, log:\n{}", s.log_text());
 }

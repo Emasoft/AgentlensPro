@@ -5,6 +5,7 @@ model: sonnet[1m]
 effort: high
 tools: Bash, Read, Write, Edit, Grep
 permissionMode: auto
+# agentlenspro-version: 2.34.0
 ---
 
 You are a sonnet worker for one well-scoped task. You start from a fresh context — everything you

@@ -1,9 +1,9 @@
 ---
 trdd-id: BA0DCW98
 title: A quoted role marker in untrusted prompt text self-exempts an agent from its own review gate
-column: blocked
+column: todo
 created: 2026-09-13T21:35:48+0200
-updated: 2026-10-05T11:47:09+0200
+updated: 2026-11-17T19:48:21+0100
 current-owner: emanuelesabetta
 created-by: emanuelesabetta
 task-type: security
@@ -16,8 +16,8 @@ approval-judge: emanuelesabetta
 approval-datetime: 2026-09-13T21:35:48+0200
 implementation-commits: [25113e6d, 7ecc6ad7]
 related: [8YM21R5X]
-blocked-by: [8YM21R5X]
-pre-block-column: ai_review
+blocked-by: []
+pre-block-column: 
 unblock-when: [trdd:8YM21R5X]
 blocker-probe: [trddgrep, why, BA0DCW98]
 blocker-holds-if: not-match:READY
@@ -79,6 +79,7 @@ rather than an in-place fix.
 2026-09-24T09:06:30+0200 -- Implementation (worker, TRDD-BA0DCW98). Split declaredRole into two predicates in src/cli/reviewGate.ts: declaredRole (credit path, reads the parent's own Agent tool_use input.prompt -- never harness-wrapped) is now anchored to the prompt's literal FIRST non-whitespace line (candidate option 3), closing the hole for the parent-gate-release direction. declaredRoleOwnTranscript (self-exemption path, feeds ownRole/subagentExempt, reads a spawned agent's OWN first transcript entry) is LEFT UNANCHORED, unchanged, on live orchestrator direction: per TRDD-3U8AIHXK that read may carry harness-added preamble ahead of the marker, so anchoring it without measuring the real wrapped shape risks falsely de-exempting every real REVIEW/MEASURE fork and deadlocking the gate. Box 2 (implement in exemptRoleStrict, i.e. the self-exemption predicate the card's own title describes) is therefore left UNCHECKED -- the literal self-exempt scenario in the card title is NOT fully closed; only its credit-side counterpart is. Follow-up needed: measure a real MEASURE/REVIEW fork's own first transcript entry to learn the actual wrapped shape, then anchor declaredRoleOwnTranscript the same way. Sites checked: reviewGate.ts declaredRole (fixed) + declaredRoleOwnTranscript (deliberately left, documented); reviewSupervisor.ts:86 (reads b.input?.prompt, same shape as the credit site, automatically covered, no edit needed); reviewLoop.ts roleFromPromptFirstLine (already first-line-anchored, untouched per scope boundary -- file owned by TRDD-40M4UPK3) and ownFileRole (substring match on own transcript first 5 lines, feeds mayWrite's WRITE-DENIAL for role forks -- false positive only makes the agent MORE restricted, not less, so left as-is, not a self-exemption vector); reviewGateTriggers.ts NOT touched (owned by TRDD-J2K6IM4R, concurrently modified by another worker during this session -- its diff in git status is NOT mine). Tests: reviewGate.test.ts declaredRole suite rewritten for first-line semantics (cases a/b/c/d from the assignment all present); new declaredRoleOwnTranscript suite locks the deliberately-unchanged loose behavior. Checks: check-types, lint (0 errors, 456 pre-existing warnings), compile-tests all exit 0; mocha --grep reviewGate|reviewSupervisor: 95 passing. Mutation check: reverted declaredRole's anchor, confirmed 4 tests including the 50-line-buried case (b) go red, restored via file copy, reconfirmed 95 passing. Reports: reports/ba0dcw98/.
 - 2026-09-24T09:47:45+0200 — column → ai_review by main-session. first-line credit anchoring landed in 25113e6d and 7ecc6ad7; box 2 residual carded as 8YM21R5X
 - 2026-10-05T11:47:09+0200 — column → blocked by main-agent@agentlenspro. review of 2026-10-05 in the owner's stead, see the Review section
+- 2026-11-17T19:48:21+0100 — column → todo by main-agent@agentlenspro. blocker TRDD-8YM21R5X is complete and archived (validator BLOCKER-RELEASED); it stood in ai_review before the block; to todo, not ai_review, because nobody is reviewing it now; by this card's own review note the open box must be ticked on 8YM21R5X's evidence, unblocking alone does not close it Cleared blocked-by (--clear-blocker override).
 
 ## Notes
 

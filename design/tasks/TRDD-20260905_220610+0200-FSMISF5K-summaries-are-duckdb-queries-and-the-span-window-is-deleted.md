@@ -12,6 +12,8 @@ min-approval-requirement: none
 scope: project
 project-id: agentlenspro
 parent-trdd: 7YPQWKPG
+derived: true
+derived-kind: npt
 npt: [XTFDRTH2]
 related: [7YPQWKPG, Q9WD3K5R, YILE6N3T, 7RM5YW2T]
 relevant-files: [rust-core/crates/agentlens-core/src/span_window.rs, rust-core/crates/agentlens-core/src/ui.rs, rust-core/crates/agentlens-core/src/lib.rs, rust-core/crates/agentlens-spanstore/src/writer.rs]

@@ -6,7 +6,7 @@
 // `cache-expired` answers "has the deadline passed?" as `true`/`false` with exit 0 = answered, so a
 // consumer that wants to branch on "can I still ride the warm prefix?" had to invert it in the shell
 // and got no word to log. This is that row PROJECTED to one word plus the predicate exit codes. It
-// resolves the row through the same reader (`authoritativeFromWals`) — never a second copy of the
+// resolves the row through the same reader (`authoritativeFromStore`: write-ahead files first, then the last seven days of the store) — never a second copy of the
 // selection logic — and keeps the same tri-state contract: a question that cannot be resolved exits
 // 2 with stdout EMPTY, never `cold`. "The cache is cold" and "I could not tell" lead to opposite
 // actions (re-plan the turn vs find out first), so they must never share a word.
@@ -21,7 +21,7 @@
 // harness itself said not-warm; warm only when both agree. The bit is kept in the formula so a
 // future payload that says not-warm with a live deadline still reads cold, the safe direction.
 
-import { authoritativeFromWals, latestResumeStaleness, type AuthoritativeVerdict } from './cacheExpiredCli'
+import { authoritativeFromStore, latestResumeStaleness, type AuthoritativeVerdict } from './cacheExpiredCli'
 import { EXIT } from './cliErrors'
 import { assertKnownFlags, flagValue } from './argHelpers'
 
@@ -44,7 +44,7 @@ flags:
 
 exit:
   0 = warm · 1 = cold · 2 = cannot answer (stdout EMPTY: no recent sample carries the block —
-  the session is idle past the WAL window, absent, or on a Claude Code before 2.1.252) · 64 = bad flags
+  the last seven days of the store hold no such sample (write-ahead files first, then sealed parts), or a Claude Code before 2.1.252) · 64 = bad flags
 
   A shell predicate:  if agentlenspro cache-state >/dev/null; then echo "warm — keep the turn small"; fi
   A value:            [ "$(agentlenspro cache-state)" = cold ] && echo "expect a full prefix rewrite"
@@ -68,7 +68,7 @@ export function cacheStateOf(row: Pick<AuthoritativeVerdict, 'expiresAtMs' | 'wa
 const KNOWN = new Set(['--project', '--session', '--json', '--help', '-h'])
 const VALUED = new Set(['--project', '--session'])
 
-export function runCacheStateCli(argv: string[]): number {
+export async function runCacheStateCli(argv: string[]): Promise<number> {
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(CACHE_STATE_USAGE)
     return EXIT.OK
@@ -81,17 +81,17 @@ export function runCacheStateCli(argv: string[]): number {
   const session = flagValue(argv, '--session', 'a session id')
   // `--session` addresses one session directly, so a project filter could only contradict it.
   const project = flagValue(argv, '--project', 'a directory') ?? process.cwd()
-  const row = authoritativeFromWals(session ? undefined : project, session)
+  const row = await authoritativeFromStore(session ? undefined : project, session)
 
   if (!row) {
     // The ONE shape every cannot-answer takes: stdout untouched, the WHY on stderr, EX_UNKNOWN.
-    // Deliberately NO fall-through to the server's idle-time inference here (unlike cache-expired):
-    // a session whose newest row was already sealed into parquet has been idle long enough that
-    // "cannot answer" IS the honest word, and a DuckDB read for a one-word verb is not worth its cost.
+    // Deliberately NO fall-through to the server's idle-time inference here (unlike cache-expired).
+    // The last seven days of the store, sealed parts included, were already asked
+    // (`authoritativeFromStore`, TRDD-ETFX9JFM), so no row means there is no such sample in them.
     console.error(
       `cannot answer: no status-line sample with a prompt_cache block for ` +
-      `${session ? `session ${session}` : `project ${project}`} — the session is idle past the WAL ` +
-      `window, absent, or on a Claude Code before 2.1.252. For the inferred answer: agentlenspro cache-expired`,
+      `${session ? `session ${session}` : `project ${project}`} — no such sample in the last seven days of the store ` +
+      `(write-ahead files and sealed parts), or a Claude Code before 2.1.252. For the inferred answer: agentlenspro cache-expired`,
     )
     return EXIT.UNKNOWN
   }

@@ -6,6 +6,7 @@ effort: high
 tools: Bash, Read, Write, Edit, Grep
 permissionMode: auto
 color: cyan
+# agentlenspro-version: 2.34.0
 ---
 
 # Python Test Writer

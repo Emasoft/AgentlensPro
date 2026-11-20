@@ -1,9 +1,9 @@
 ---
 trdd-id: 6SPXOV0P
 title: 307 files remain parked with a ts-row mismatch after the TRDD-8TM7I49X repair
-column: human_review
+column: complete
 created: 2026-08-26T20:13:05+0200
-updated: 2026-11-16T23:00:29+0100
+updated: 2026-11-18T10:21:51+0100
 eht: [7NHUU6GK]
 current-owner: main
 task-type: bugfix
@@ -12,7 +12,10 @@ priority: 3
 labels: [bodies, ingest, silent-failure, capacity]
 relevant-rules: []
 release-via: none
-status: tasked
+status: archived
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-18T10:21:51+0100
 ---
 
 ## ⏵ AI-REVIEW VERDICT 2026-09-05 — APPROVE, and it still cannot reach `complete`.
@@ -181,6 +184,7 @@ expected to drain on a server restart with no verb, because the server holds `st
 memory while only the CLI persists `.pass-state.json`. Confirm that against the code before
 telling an operator so.
 2026-09-24 — related to TRDD-Z53IJFE9, which removes the RAM-disk body spool completely per the owner's 2026-09-24 directive; see that card for the removal plan.
+**2026-11-17 00:37 — WHAT THIS CARD WAITS ON NOW.** TRDD-7NHUU6GK (the delete gate for a ts-only verify failure). Its Rust change is written and UNCOMMITTED (body_archive.rs, agentlens-store lib.rs and pass.rs, tests/purge_ts_only.rs); it relaxes the owner directive of 2026-07-15 (TRDD-K3WDPR7M: delete only when the bytes AND the capture-ts row are verified), so it is held for the owner's word. One owner decision, not missing work.
 
 ## CORRECTION — this card's first version blamed the wrong cause
 
@@ -413,6 +417,7 @@ Sizing is the USER's call regardless, and no agent should reclaim space to paper
 - 2026-09-24T08:57:49+0200 — main-session (board update A): moved ai_review -> human_review; AI review verified per reports/board-triage ai_review-A/B/C triage rows. In this project's mono-agent rule the session moves ai_review->human_review; the owner moves human_review->complete.
 - 2026-09-24T08:58:02+0200 — main-session note: eht: [7NHUU6GK] is at column backburner (not terminal), so this move to human_review does not open the door to complete — the card cannot reach complete until 7NHUU6GK terminates.
 - 2026-10-05T03:18:02+0200 — column → human_review. returned after adversarial review - deploy lies past complete and this card has an open EHT
+- 2026-11-18T10:21:51+0100 — COMPLETE by main-agent@agentlenspro. all 7 boxes ticked; the one open follow-up TRDD-7NHUU6GK is complete; closed under the owner order to decide open matters, not reviewed by the owner.
 
 ## Notes and lessons learned
 
@@ -426,3 +431,8 @@ AI re-review at HEAD 3faa709c (2026-09-24T09:13:29+0200): acceptance still holds
 ## Owner-stead review
 
 2026-11-16 23:00 — REVIEW IN THE OWNER'S STEAD (owner order 2026-11-16, verbatim: "review in my stead. decide yourself."): NOT CLOSED, stays in human_review. All 7 boxes are ticked, but its effects card TRDD-7NHUU6GK is in backburner, and a parent cannot reach complete before its effects cards are terminal. This is an act the main agent does not take: none is needed from the owner; the card waits on TRDD-7NHUU6GK. Read from the card's own state and acceptance list on 2026-11-16; no test was run for this note.
+- 2026-11-17 00:31 (main agent): corrected reading of the blocker. This card waits on TRDD-7NHUU6GK (the delete gate for a ts-only verify failure), and that card is agent-workable: its Rust change is written and uncommitted, held for the owner's word because it relaxes the owner directive of 2026-07-15 (TRDD-K3WDPR7M: delete only when the bytes AND the capture-ts row are verified). So the wait is on one owner decision, not on missing work.
+
+## Closure 2026-11-18
+
+2026-11-18 main agent: the only card that held this one open, TRDD-7NHUU6GK, is complete (commit 70d92220). Mutation check of box 7 rerun on 2026-11-18 by a cheap-worker: mutation A at agentlens-store/src/pass.rs:737 made the test of box 7 panic at tests/pass.rs:283 (the parked set must reach 0); the file was restored and compared with cmp. Closed by the main agent under the owner order of 2026-11-18 to decide the open matters; the owner has not reviewed this card.

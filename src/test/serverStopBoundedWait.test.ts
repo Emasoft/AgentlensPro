@@ -8,7 +8,8 @@ import { freePort, alcoreTestBin, alcoreArgsFromEnv } from './helpers/freePort'
 // TRDD-N60JUWU3 — `server stop` used a bare `state.lock_timed()` (a plain blocking
 // `Mutex::lock()`) to flush on the way out, so any long lock holder starved the stop
 // indefinitely and forced an operator SIGKILL that skipped `pid_lock::release`. The fix bounds
-// the wait with `AGENTLENS_STOP_LOCK_TIMEOUT_MS` (default 10_000) and always releases the pid
+// the wait with `AGENTLENS_STOP_LOCK_TIMEOUT_MS` (default 8_000 ms in bin/alcore.rs; the CLI waits 15 s, 60 x 250 ms, in
+// serverControl.ts stopServer) and always releases the pid
 // lock, flush-or-not.
 //
 // This suite has no production hook to hold `state`'s mutex for 120s from outside the process

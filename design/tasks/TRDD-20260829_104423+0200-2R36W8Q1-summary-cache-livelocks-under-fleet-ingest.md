@@ -5,7 +5,7 @@ column: todo
 pre-block-column: 
 unblock-when: [trdd:UTFVMVT8 terminal]
 created: 2026-08-29T10:44:23+0200
-updated: 2026-10-17T20:40:39+0200
+updated: 2026-11-19T01:25:06+0100
 current-owner: main-session
 task-type: bugfix
 scope: project
@@ -360,14 +360,14 @@ is not a criterion, so it now names the sample size and the statistic.
       held ≥ 1000 ms` in the window; the 13 `state lock waited` lines name `log_reader.rs:1076`
       as holder in 9, `chores.rs:573/619` in 3, `ui.rs:1109` in 1 — the log scan, not the summary.
       Raw: `reports_dev/2r36-soak.txt`, `2r36-soak-sorted.txt`, `2r36-soak-log.txt`.**
-- [x] `/v1/traces` stays at HTTP 200 with p99 unchanged (no ingest regression). Measured:
+- [ ] `/v1/traces` stays at HTTP 200 with p99 unchanged (no ingest regression). Measured:
       24,069 of 24,093 2xx, OTLP p50 0.615 ms / p99 164 ms. **Recorded with its caveat: max
       7,571 ms.** The p99 is fine and the tail is not, and reporting only the p99 here would
       hide the one clue that read and write stall together.
-- [x] Zero spans dropped (`droppedOnFailure: 0`) — confirmed in `/api/server-stats` on every run.
+- [ ] Zero spans dropped (`droppedOnFailure: 0`) — confirmed in `/api/server-stats` on every run.
 - [x] A mutation-verified test: revert the fix and the test must fail. `a_reader_never_rebuilds_when_the_background_rebuilder_owns_it`
       fails, and only it (3 passed / 1 failed), when the `REBUILDER_ACTIVE` early return is disabled.
-- [x] RSS bounded — record the number, do not assert a target that was not measured.
+- [ ] RSS bounded — record the number, do not assert a target that was not measured.
       **10.29–11.78 GB** across the runs, at a 300,000 ms window the memory-pressure valve had
       narrowed from the configured 86,400,000 ms. Not comparable to the earlier 17.08 GB figure:
       different run length and a different effective window, so it is recorded, not claimed as
@@ -396,3 +396,9 @@ is not a criterion, so it now names the sample size and the statistic.
 ## Review 2026-10-05 (in the owner's stead)
 
 - Moved to ai_review earlier today by the main agent only because its blocker TRDD-UTFVMVT8 completed; the card was NOT read then. ai_review claims a review nobody is doing, so it is moved to todo until it is read. The directive card lists it as needing boxes 2, 3 and 5 re-measured on the live collector.
+- 2026-11-17 00:31 (main agent, in the owner's stead): this card cannot be closed from the current evidence. Acceptance boxes 2, 3 and 5 need a measurement under fleet ingest. DECISION: measure on an ISOLATED rig (own DATA_DIR and HOME, own ports, sample data of at most 4 GB), never on the live collector, which the owner keeps stopped (~/.agentlens/DISABLED is the owner's). The rig is not built yet; the card stays in its column until the three boxes are measured there.
+- 2026-11-19T01:15:19+0100 main agent: boxes 2, 3 and 5 UNTICKED to match the 2026-11-17 00:31 decision above, which says they need a new measurement under fleet ingest on an isolated rig. Their old 'Measured' text is from the 2026-09-05 build; the core crate changed by 19,605 inserted lines since v2.33.1 (HSPUF5XH RELEASE-GATE FACTS item 3), so those numbers do not describe the release build. The rig is still not built.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as POST-RELEASE CHECK (boxes 2, 3, 5). The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

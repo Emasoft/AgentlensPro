@@ -3,13 +3,17 @@ trdd-id: VNKPUAY4
 title: A CLI verb answering whether one model's own weekly window is spent, so an agent can decide before spawning the advisor
 column: complete
 created: 2026-08-29T11:22:01+0200
-updated: 2026-08-29T15:38:00+0200
+updated: 2026-11-17T19:48:58+0100
 current-owner: main-session
 task-type: feature
 scope: project
 project-id: agentlenspro
 relevant-rules: []
 implementation-commits: []
+status: archived
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-17T19:48:58+0100
 ---
 
 # `agentlenspro model-headroom <model>`
@@ -70,9 +74,13 @@ agentlenspro model-headroom fable -q && <consult advisor> || <skip>
 
 ## Acceptance
 
-- [ ] `verdictFor(null, 'fable')` -> `unknown` (no payload is not `ok`).
-- [ ] A payload with a `weekly_scoped` bucket labelled for the model at >=95% -> `exhausted`.
-- [ ] The same bucket below 95% -> `ok`.
-- [ ] A payload with only `weekly_all` -> `unknown`, NOT `ok`.
-- [ ] `bucketMatches('claude-fable-5', 'fable')` is true; a different model's label is false.
+- [x] `verdictFor(null, 'fable')` -> `unknown` (no payload is not `ok`).
+- [x] A payload with a `weekly_scoped` bucket labelled for the model at >=95% -> `exhausted`.
+- [x] The same bucket below 95% -> `ok`.
+- [x] A payload with only `weekly_all` -> `unknown`, NOT `ok`.
+- [x] `bucketMatches('claude-fable-5', 'fable')` is true; a different model's label is false.
 - [x] `tsc --noEmit` clean.
+
+## Approval log
+
+- 2026-11-17T19:48:58+0100 — COMPLETE by main-agent@agentlenspro. closing edit of a completion recorded on 2026-08-29 with five boxes open: the five boxes are the cases of src/test/modelHeadroom.test.ts (in the tree since commit 83b96f3f; file read whole by the main agent on 2026-11-17): null payload unknown, scoped bucket at the threshold exhausted, below it ok, weekly_all only unknown, bucketMatches true and false. Run on 2026-11-17 as one test file after pnpm run compile-tests (exit 0): mocha --no-config --ui tdd, 9 passing, exit 0. The STATE line 'Not yet written' is older than that commit. Full suite not run.

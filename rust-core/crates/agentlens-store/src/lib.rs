@@ -238,6 +238,37 @@ fn q(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// Make a literal path safe to hand to a DuckDB `read_*` function, which treats its argument as a glob.
+/// WHY (TRDD-C6W0SWUT): DuckDB expands `*`, `?` and `[` in a read path as a file pattern, so a data dir
+/// holding one of them read the wrong set of files (or none) while the apostrophe doubling of `q` looked
+/// correct. A one-character class (`[*]`, `[?]`, `[[]`) matches the character literally. A path with a
+/// backslash is left as is, the same rule as src/duckPath.ts `sqPath` (a Windows path, whose separator is a
+/// backslash, would not survive the class); it is not measured here. COPY TO targets and
+/// ATTACH paths are write paths, not globs: they keep plain `q`. Keep an intended glob suffix (`/*.parquet`)
+/// OUT of the argument: escape the directory, then append the suffix.
+pub fn glob_escape(p: &str) -> String {
+    if p.contains('\\') {
+        return p.to_owned();
+    }
+    let mut out = String::with_capacity(p.len());
+    for c in p.chars() {
+        match c {
+            '*' | '?' | '[' => {
+                out.push('[');
+                out.push(c);
+                out.push(']');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// A quoted SQL literal for a read path: `glob_escape`, then `q`.
+pub fn sq_path(p: &str) -> String {
+    q(&glob_escape(p))
+}
+
 fn part_files(dir: &Path, sub: &str) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = fs::read_dir(dir.join(sub))
         .map(|rd| {
@@ -283,7 +314,7 @@ pub fn parquet_scan(dir: &Path, sub: &str) -> Option<String> {
     let list = files
         .iter()
         .filter_map(|p| p.to_str())
-        .map(q)
+        .map(sq_path)
         .collect::<Vec<_>>()
         .join(",");
     Some(format!("read_parquet([{list}], union_by_name := true)"))
@@ -443,7 +474,7 @@ pub fn open_store(dir: &Path, memory_limit: &str, threads: usize) -> duckdb::Res
     // listing (TRDD-2HRA270Y step 3, A3): a part landing between two listings would be loaded here
     // but unregistered, and sync_new_parts would then load its rows a second time.
     if !body_parts.is_empty() {
-        let list = body_parts.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+        let list = body_parts.iter().map(|p| sq_path(p)).collect::<Vec<_>>().join(",");
         // The id comes from the part_file row the listing registered (the same path invariant
         // index_blob_shas relies on). EXCLUDE drops the filename column the join needs; BY NAME keeps
         // the load tolerant of older schema generations.
@@ -484,7 +515,7 @@ fn scan_of(files: &[String]) -> Option<String> {
     if files.is_empty() {
         return None;
     }
-    let list = files.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+    let list = files.iter().map(|p| sq_path(p)).collect::<Vec<_>>().join(",");
     Some(format!("read_parquet([{list}], union_by_name := true)"))
 }
 
@@ -521,7 +552,7 @@ fn seed_blob_index(con: &Connection, first_id: i32, listed: &[String], scanned: 
 /// always had, extended across sync_new_parts calls so a sha a second writer re-wrote keeps one
 /// index row (readers tolerate two, see blob_fetch_sql, but one is the invariant we keep).
 fn index_blob_shas(con: &Connection, scanned: &[String]) -> duckdb::Result<usize> {
-    let list = scanned.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+    let list = scanned.iter().map(|p| sq_path(p)).collect::<Vec<_>>().join(",");
     // ONE INSERT ... SELECT: the rows never round-trip through Rust. min(file id) keeps the old
     // first-file-wins rule (a sha lives in one part only; ingest dedups before writing).
     // LEFT JOIN + the check below, never a bare inner join: a scanned file with no matching
@@ -557,7 +588,7 @@ fn index_part_bodies(con: &Connection, scanned: &[String]) -> duckdb::Result<usi
     if scanned.is_empty() {
         return Ok(0);
     }
-    let list = scanned.iter().map(|p| q(p)).collect::<Vec<_>>().join(",");
+    let list = scanned.iter().map(|p| sq_path(p)).collect::<Vec<_>>().join(",");
     // WHY (TRDD-R36S0PS9): the parts corpus is ~438.8M rows for only ~1.5M distinct (body_id, file) pairs
     // (docs_dev/20261023-seed-spill-measure-report.md), so DISTINCT must run on the raw pair BEFORE the join,
     // and there is NO correlated NOT EXISTS: that anti-join ran per parts row and exhausted the 4GB spill cap
@@ -619,7 +650,7 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let tag = format!("part-{now_ms}-{}-{}.parquet", std::process::id(), store.next_part);
+    let tag = part_file_name(now_ms, std::process::id(), store.next_part);
     store.next_part += 1;
     let mut part_paths = Vec::new();
     let mut n = 0u64;
@@ -682,7 +713,7 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
             // sync_new_parts can remove it by id if that file later vanishes.
             "body" => format!(
                 "INSERT INTO body_durable BY NAME SELECT *, {file_id} AS file_id FROM read_parquet([{}], union_by_name := true); ",
-                q(out_str)
+                sq_path(out_str)
             ),
             _ => String::new(),
         };
@@ -719,6 +750,73 @@ pub fn flush_detailed(store: &mut Store) -> Result<FlushResult, String> {
         part_paths.push(out);
     }
     Ok(FlushResult { n, part_paths })
+}
+
+/// The one place that builds a flush part name, so the writer and `api_call_part_epoch_ms` cannot drift.
+pub fn part_file_name(now_ms: u128, pid: u32, n: u64) -> String {
+    format!("part-{now_ms}-{pid}-{n}.parquet")
+}
+
+/// The flush time in epoch ms carried by a part name built by `part_file_name`; None for any other name
+/// (prefix `part-`, three `-` separated unsigned integers, suffix `.parquet`).
+pub fn api_call_part_epoch_ms(name: &str) -> Option<u64> {
+    let fields: Vec<&str> = name.strip_prefix("part-")?.strip_suffix(".parquet")?.split('-').collect();
+    if fields.len() != 3 || !fields.iter().all(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    fields[1].parse::<u32>().ok()?;
+    fields[2].parse::<u64>().ok()?;
+    fields[0].parse::<u64>().ok()
+}
+
+/// What one api_calls purge did: the parts it removed and the parts it could not remove, with the error.
+#[derive(Debug, Default)]
+pub struct PurgeOutcome {
+    pub removed: Vec<String>,
+    pub failed: Vec<(String, std::io::Error)>,
+}
+
+/// TRDD-OBJ4FK2T: removes the api_calls parts whose name epoch is strictly older than `retention_days`.
+/// WHY by name: a part is named at flush time, so its age needs no query and no mtime (a copied or restored
+/// file keeps its name). WHY a name that does not parse is never removed: the dir can hold files this
+/// writer did not make. WHY non-finite, non-positive or underflowing retention removes NOTHING: a bad knob
+/// must never read as "older than now" and wipe the store. A vanished part is dropped from the `part_file`
+/// catalog by the next `sync_new_parts`, so no second update is needed here.
+/// WHY keep going: one part that always fails must not block every part after it in read_dir order, hour after hour, and the names already removed must still be reported.
+pub fn purge_api_call_parts(store_dir: &Path, retention_days: f64, now_ms: u64) -> std::io::Result<PurgeOutcome> {
+    let mut outcome = PurgeOutcome::default();
+    if !retention_days.is_finite() || retention_days <= 0.0 {
+        return Ok(outcome);
+    }
+    let span_ms = retention_days * 86_400_000.0;
+    if !span_ms.is_finite() || span_ms >= now_ms as f64 {
+        return Ok(outcome);
+    }
+    let cutoff = now_ms - span_ms as u64;
+    let dir = store_dir.join(API_CALLS_DIR);
+    let entries = match fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(outcome),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                outcome.failed.push(("<unreadable directory entry>".to_owned(), e));
+                continue;
+            }
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if api_call_part_epoch_ms(&name).is_some_and(|epoch| epoch < cutoff) {
+            match fs::remove_file(entry.path()) {
+                Ok(()) => outcome.removed.push(name),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => outcome.failed.push((name, e)),
+            }
+        }
+    }
+    Ok(outcome)
 }
 
 /// Rows in the four staging tables (blob, part, body, api_call) — RAM not yet flushed.
@@ -1311,7 +1409,7 @@ pub(crate) fn blob_fetch_sql(store: &Store, shas: &[String]) -> Result<String, S
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<String>, _>>()
         .map_err(|e| e.to_string())?;
-    let file_list = files.iter().map(|f| q(f)).collect::<Vec<_>>().join(",");
+    let file_list = files.iter().map(|f| sq_path(f)).collect::<Vec<_>>().join(",");
     Ok(format!("SELECT sha, data FROM read_parquet([{file_list}], union_by_name := true) WHERE sha IN ({list})"))
 }
 
@@ -1364,7 +1462,7 @@ pub fn part_fetch_sql(store: &Store, body_ids: &[&str], cols: &str) -> Result<St
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<String>, _>>()
         .map_err(|e| e.to_string())?;
-    let file_list = files.iter().map(|f| q(f)).collect::<Vec<_>>().join(",");
+    let file_list = files.iter().map(|f| sq_path(f)).collect::<Vec<_>>().join(",");
     Ok(format!("SELECT {cols} FROM read_parquet([{file_list}], union_by_name := true) WHERE body_id IN ({list})"))
 }
 
@@ -1447,6 +1545,20 @@ fn reconstruct_chunk(
 pub struct VerifyResult {
     pub ok: bool,
     pub reason: Option<String>,
+}
+
+/// True when a failed verdict's reason is the ts-only failure: `stored ts != capture time`. Why that text
+/// PROVES bytes and row: `verify_bodies_in_store_cached` runs the sha256-reconstruction check and the
+/// row-existence check (keyed on body_id AND src_name) strictly BEFORE the ts check, each with its own
+/// `continue` on failure. So this reason can only be produced when the store reproduces the file bit-exact
+/// AND already holds a row for the same src_name, i.e. a re-emission of that name at a fresh mtime
+/// (TRDD-6SPXOV0P option A, TRDD-7NHUU6GK). Keep the text here in lockstep with that format string.
+pub fn is_ts_only_failure(reason: &str) -> bool {
+    // Anchored on the TAIL, not a substring: every other reason embeds the lump name, which comes from the archive's
+    // own .idx, and every other reason ends in fixed text, so only the real format ends in `stored ts <int> != capture time <int>`.
+    let Some((head, want)) = reason.rsplit_once(" != capture time ") else { return false };
+    let Some((_, stored)) = head.rsplit_once(" stored ts ") else { return false };
+    want.parse::<i64>().is_ok() && stored.parse::<i64>().is_ok()
 }
 
 pub struct VerifyItem {
@@ -1793,5 +1905,24 @@ mod index_part_bodies_spill_tests {
         assert_eq!(rows, (FILES * BODIES) as i64);
         // belt-and-braces, index_part_bodies already returns Err on any NULL file_id.
         assert_eq!(orphans, 0);
+    }
+
+    /// The REAL reason `verify_bodies_in_store_cached` emits for a moved ts is recognised, and a lump name that embeds the phrase on another failure is not.
+    #[test]
+    fn the_real_ts_reason_is_recognised_and_a_crafted_name_is_not() {
+        let dir = std::env::temp_dir().join(format!("al-store-tsonly-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut store = open_store(&dir, "256MB", crate::cores::duckdb_threads()).expect("open");
+        let raw = "{\"model\":\"claude-opus-5\",\"messages\":[{\"role\":\"user\",\"content\":\"ts-only\"}]}";
+        ingest_body(&mut store, "aaaa0000.request.json", raw, 1_000_000).expect("ingest");
+        flush_detailed(&mut store).expect("flush");
+        let items = [VerifyItem { src_name: "aaaa0000.request.json".into(), raw: raw.into(), ts_ms: Some(1_000_000 + 60_000) }];
+        let map = verify_bodies_in_store(&store, &items).expect("verify");
+        let reason = map["aaaa0000.request.json"].reason.clone().expect("a ts failure has a reason");
+        assert_eq!(reason, "aaaa0000.request.json: stored ts 1000000 != capture time 1060000");
+        assert!(is_ts_only_failure(&reason));
+        assert!(!is_ts_only_failure("x stored ts 1 != capture time 2: no body row for this src_name (content may exist under another name)"));
+        assert!(!is_ts_only_failure("x: reconstruction != source bytes"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

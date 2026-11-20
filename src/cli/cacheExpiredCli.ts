@@ -25,16 +25,27 @@ import { statuslineRoot } from './statuslineHistoryCli'
 import { dataDir } from '../dataDir'
 import { readHookEvents } from '../hookEventStore'
 import { toLifecycleEvent, type ResumeStaleness } from '../lifecycleEvents'
+import { hookCaptureStop } from './killSwitch'
+import { queryStatusline } from '../statuslineStore'
 
 /** The harness's OWN resume-staleness verdict (CC 2.1.251 `SessionStart source=resume`) for one
  *  session — --json ONLY, never the one-word stdout contract those two fields feed. Reads the
  *  newest SessionStart hook record for this exact session id straight off disk (no server), the
- *  same store `last-compact` already reads without one. `null` covers three cases alike: no
- *  SessionStart on record, the newest one isn't a resume, or it predates 2.1.251 — all three mean
+ *  same store `last-compact` already reads without one. Walks the newest 20 SessionStart records newest-first and returns the first
+ *  one that carries a resume verdict (a newer non-resume SessionStart is skipped, an older resume still answers). `null` covers four cases alike: no
+ *  SessionStart on record, none of the 20 carries a resume verdict (pre-2.1.251, or not a resume), or the record reached first predates the armed
+ *  kill-switch (see below) — all four mean
  *  "nothing to add", not an error. */
 export function latestResumeStaleness(sessionId: string): ResumeStaleness | null {
   const recs = readHookEvents(path.join(dataDir(), 'hook-events'), { session: sessionId, ev: 'SessionStart', limit: 20 })
+  // B6 (TRDD-RBBEX59R e): under the kill-switch no SessionStart is stored, so a record stamped before the flag file's mtime may be only the
+  // last resume from BEFORE the switch (a later resume of this session would be missing). Records come newest-first and the FIRST one
+  // older than the arm time ends the walk with null, even when an older record would carry a resume verdict; a resume stamped at or after
+  // the arm time still resolves. Env half only: there is no arm time, so every record is untrusted and the result is null. Not knowable =
+  // nothing to add, the same null the no-data cases return.
+  const stopped = hookCaptureStop()
   for (const rec of recs) {
+    if (stopped && (stopped.armedAtMs === null || rec.ts < stopped.armedAtMs)) return null
     const ev = toLifecycleEvent(rec)
     if (ev?.resumeStaleness) return ev.resumeStaleness
   }
@@ -91,7 +102,7 @@ const QUIET = { EXPIRED: 0, FRESH: 1 } as const
 /** The AUTHORITATIVE answer, when Claude Code ≥2.1.252 has said it outright. The statusline payload
  *  now carries a `prompt_cache` block — `expires_at` (epoch SECONDS), `ttl`, `warm` — computed by
  *  the harness itself, so "is the cache expired?" needs no idle-time inference at all: it is a
- *  clock comparison against the newest sample's `expires_at`. Read off DISK (the capture WALs), so
+ *  clock comparison against the newest sample's `expires_at`. Read off DISK (the capture write-ahead files first, then the last seven days of the store, sealed parts included), so
  *  it works with the server down; older payloads without the block fall back to the server tool.
  *  Field names verified against a LIVE row on 2026-09-01 (TRDD-YE15B2JK step 1), flattened by
  *  `flattenSample` to `prompt_cache_expires_at` etc. */
@@ -110,16 +121,62 @@ export interface AuthoritativeVerdict {
   warm: boolean | null
   /** Every `prompt_cache_*` key of the row, VERBATIM as the store flattened it. `cache-state --json`
    *  prints these so a consumer pins its reader to the fields the harness actually sends; a field
-   *  added upstream (e.g. `prompt_cache_probe`, seen NULL on 2026-09-02) rides through untouched. */
+   *  added upstream (e.g. `prompt_cache_probe`, seen NULL on 2026-09-02) rides through untouched. A row read from a sealed part carries every prompt_cache column of the window, null where the sample had no such field. */
   promptCache: Record<string, unknown>
 }
 
+/** A write-ahead file larger than this is read from its LAST bytes only (TRDD-ETFX9JFM box 3): the newest rows are
+ *  at the end, and reading a multi-hundred-MiB file whole for a one-word verb was the measured cost. A session with
+ *  no row in that tail is answered by `authoritativeFromParts`, whose DuckDB reader streams the whole file. */
+export const WAL_TAIL_BYTES = 32 * 1024 * 1024
+
+/** The text of a write-ahead file, or of its last `maxBytes` bytes when it is larger. In the cut case the first
+ *  line is partial, so everything up to and including the first newline is dropped. */
+export function readWalTail(file: string, maxBytes: number = WAL_TAIL_BYTES): string {
+  const size = fs.statSync(file).size
+  if (size <= maxBytes) return fs.readFileSync(file, 'utf8')
+  const fd = fs.openSync(file, 'r')
+  try {
+    const buf = Buffer.alloc(maxBytes)
+    const got = fs.readSync(fd, buf, 0, maxBytes, size - maxBytes)
+    const text = buf.subarray(0, got).toString('utf8')
+    const nl = text.indexOf('\n')
+    return nl < 0 ? '' : text.slice(nl + 1)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+/** ONE parsed sample row -> a verdict, or null when the row does not answer the filter. Shared by the write-ahead
+ *  scan and the store query so the two paths cannot drift (TRDD-ETFX9JFM). */
+function verdictFromRow(row: Record<string, unknown>, session: string | undefined, wantProject: string | undefined): AuthoritativeVerdict | null {
+  const expSec = row.prompt_cache_expires_at
+  const ts = row.ts
+  if (typeof expSec !== 'number' || typeof ts !== 'number') return null // pre-2.1.252 payload
+  if (session) {
+    if (row.session_id !== session) return null
+  } else if (wantProject) {
+    const rowProject = typeof row.workspace_project_dir === 'string' ? path.resolve(row.workspace_project_dir) : null
+    if (rowProject !== wantProject) return null
+  }
+  return {
+    expired: Date.now() >= expSec * 1000,
+    sessionId: String(row.session_id ?? '?'),
+    workspace: String(row.workspace_project_dir ?? row.cwd ?? '?'),
+    expiresAtMs: expSec * 1000,
+    ttl: String(row.prompt_cache_ttl ?? '?'),
+    sampleTs: ts,
+    warm: typeof row.prompt_cache_warm === 'boolean' ? row.prompt_cache_warm : null,
+    promptCache: Object.fromEntries(Object.entries(row).filter(([k]) => k.startsWith('prompt_cache_'))),
+  }
+}
+
 export function authoritativeFromWals(project: string | undefined, session: string | undefined): AuthoritativeVerdict | null {
-  // WALs only: the newest sample of any RUNNING session is in a WAL within seconds (~3 s cadence).
-  // A session whose newest row was already sealed into parquet has been idle long enough that the
-  // server-side inference answers it fine — not worth a DuckDB dependency here. Scan the TWO newest
-  // day partitions, not one: batches are filed by WRITE day, so a row can sit in the neighbouring
-  // partition around midnight (the measured partition-slack trap).
+  // Write-ahead files only: the newest sample of any RUNNING session is in one within seconds (~3 s cadence).
+  // A session whose newest row was already sealed into a part is answered by `authoritativeFromParts`
+  // (TRDD-ETFX9JFM); callers use `authoritativeFromStore`, which asks both. Scan the TWO newest day
+  // partitions, not one: batches are filed by WRITE day, so a row can sit in the neighbouring partition
+  // around midnight (the measured partition-slack trap).
   const streamDir = path.join(statuslineRoot(), 'main')
   let days: string[]
   try {
@@ -138,7 +195,7 @@ export function authoritativeFromWals(project: string | undefined, session: stri
     for (const wal of wals) {
       let text: string
       try {
-        text = fs.readFileSync(path.join(dir, wal), 'utf8')
+        text = readWalTail(path.join(dir, wal))
       } catch { continue }
       for (const line of text.split('\n')) {
         if (!line) continue
@@ -146,30 +203,53 @@ export function authoritativeFromWals(project: string | undefined, session: stri
         // The writer appends live; the LAST line can be mid-write. A torn line is skipped, never
         // fatal — every complete row before it still counts.
         try { row = JSON.parse(line) as Record<string, unknown> } catch { continue }
-        const expSec = row.prompt_cache_expires_at
-        const ts = row.ts
-        if (typeof expSec !== 'number' || typeof ts !== 'number') continue // pre-2.1.252 payload
-        if (session) {
-          if (row.session_id !== session) continue
-        } else if (wantProject) {
-          const rowProject = typeof row.workspace_project_dir === 'string' ? path.resolve(row.workspace_project_dir) : null
-          if (rowProject !== wantProject) continue
-        }
-        if (best && ts <= best.sampleTs) continue
-        best = {
-          expired: Date.now() >= expSec * 1000,
-          sessionId: String(row.session_id ?? '?'),
-          workspace: String(row.workspace_project_dir ?? row.cwd ?? '?'),
-          expiresAtMs: expSec * 1000,
-          ttl: String(row.prompt_cache_ttl ?? '?'),
-          sampleTs: ts,
-          warm: typeof row.prompt_cache_warm === 'boolean' ? row.prompt_cache_warm : null,
-          promptCache: Object.fromEntries(Object.entries(row).filter(([k]) => k.startsWith('prompt_cache_'))),
-        }
+        if (best && typeof row.ts === 'number' && row.ts <= best.sampleTs) continue
+        const v = verdictFromRow(row, session, wantProject)
+        if (v) best = v
       }
     }
   }
   return best
+}
+
+/** How far back `authoritativeFromParts` reads. Measured on the live store 2026-11-18 (recorded on TRDD-ETFX9JFM):
+ *  this query without the session filter, two runs each: 2 days about 0.3 s of CPU and 65 MB, 7 days about 0.45 s and
+ *  77 MB; with no bound DuckDB ran out of memory at 1.8 GiB. This function itself, 7 days with the project filter:
+ *  161 ms, 0.21 s of CPU, 85 MB. Seven days covers a session sealed before a weekend. */
+export const PARTS_LOOKBACK_MS = 7 * 86_400_000
+
+/** The same verdict from the last seven days of the store (sealed parts, and the write-ahead files the store
+ *  relation also reads), through the DuckDB reader the CLI already ships. Asked only when the write-ahead scan
+ *  found no row (TRDD-ETFX9JFM): with the server down, an idle session whose last sample was sealed got no answer.
+ *  One newest row per session that carries the prompt_cache block. The columns are NAMED, not `to_json(s)`: the
+ *  all-column form failed on a window with no bound (the failing column was not identified). Each `prompt_cache_*` column comes back as JSON text, so
+ *  nested values survive; a column the sample did not carry is null (a write-ahead row has no such key at all).
+ *  Null when there is no store. */
+export async function authoritativeFromParts(project: string | undefined, session: string | undefined): Promise<AuthoritativeVerdict | null> {
+  const wantProject = project ? path.resolve(project) : undefined
+  const sessionSql = session ? ` AND s.session_id = '${session.replace(/'/g, "''")}'` : ''
+  const sql = 'SELECT s.ts AS ts, s.session_id AS session_id, s.workspace_project_dir AS workspace_project_dir, s.cwd AS cwd, '
+    + `CAST(to_json(COLUMNS('^prompt_cache_')) AS VARCHAR) FROM samples s WHERE s.prompt_cache_expires_at IS NOT NULL${sessionSql} `
+    + 'QUALIFY row_number() OVER (PARTITION BY s.session_id ORDER BY s.ts DESC) = 1'
+  const rows = await queryStatusline(statuslineRoot(), 'main', sql, { sinceMs: Date.now() - PARTS_LOOKBACK_MS })
+  if (rows === null) return null
+  let best: AuthoritativeVerdict | null = null
+  for (const r of rows) {
+    const row: Record<string, unknown> = { ts: Number(r.ts), session_id: r.session_id, workspace_project_dir: r.workspace_project_dir, cwd: r.cwd }
+    for (const [k, v] of Object.entries(r)) {
+      if (k.startsWith('prompt_cache_')) row[k] = v === null ? null : JSON.parse(String(v))
+    }
+    const v = verdictFromRow(row, session, wantProject)
+    if (v && (!best || v.sampleTs > best.sampleTs)) best = v
+  }
+  return best
+}
+
+/** What both verbs call: the write-ahead scan first (no DuckDB start for a running session), the store only when
+ *  it finds nothing. Known gap, its own card (TRDD-NY373D41): a row sealed by one writer that is NEWER than the
+ *  newest write-ahead row of another writer is missed, because the store is asked only on a miss. */
+export async function authoritativeFromStore(project: string | undefined, session: string | undefined): Promise<AuthoritativeVerdict | null> {
+  return authoritativeFromWals(project, session) ?? await authoritativeFromParts(project, session)
 }
 
 function flagValue(argv: string[], name: string): string | undefined {
@@ -218,7 +298,7 @@ export async function runCacheExpiredCli(argv: string[]): Promise<number> {
   // `--threshold-minutes` is an explicit request for the idle-cutoff INFERENCE, so it keeps the
   // server path — an override the harness's own deadline would silently ignore is worse than none.
   if (thresholdMinutes === undefined) {
-    const auth = authoritativeFromWals(session ? undefined : project, session)
+    const auth = await authoritativeFromStore(session ? undefined : project, session)
     if (auth) {
       if (asJson) {
         const resumeStaleness = latestResumeStaleness(auth.sessionId)

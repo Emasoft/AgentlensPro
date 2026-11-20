@@ -4,7 +4,7 @@ title: A log-sweeper that stops without a panic leaves a live-looking collector 
 column: plan
 status: tasked
 created: 2026-10-15T01:29:08+0200
-updated: 2026-10-28T20:47:52+0100
+updated: 2026-11-19T01:25:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -61,3 +61,7 @@ REVIEW non-blocking, accepted: drop the AGENTLENS_SWEEPER_STALL_MS env var (same
 REVIEW non-blocking, deferred with reason: progress (offsets advanced) vs liveness beat - a liveness beat matches the live failure (hang); revisit if a stuck-but-beating case is observed. Exit also takes down OTLP/UI/API (larger blast radius than the sweeper) - AGENT decision (main-agent, 2026-10-28), not a user decision — open to user veto; status quo for any alcore crash.
 NEXT: implement H3D5ZBO1 first, then re-propose this card with the four revisions above for review round 2.
 REVIEW non-blocking, deferred with reason: the file-watcher thread dying or hanging is not covered; the 60 s full-rescan backstop (FULL_RESCAN) still sweeps every path, so loss is latency only, not ingestion.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED, possible regression disclosed. The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

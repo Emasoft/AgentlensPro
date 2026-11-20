@@ -7,8 +7,12 @@ import { spawn } from 'child_process'
 import { freePort } from './helpers/freePort'
 import { assertNoSurvivingServer } from './helpers/noSurvivingServer'
 import { NO_COMPOSITION_LINE_DETAIL, runSetup, runSetupCli, SetupOutcome } from '../cli/setup'
-import { GATE_CMD, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, REVIEW_CMD, SUPERVISOR_CMD } from '../cli/hookInstall'
+import { GATE_CMD, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, REVIEW_CMD, SUPERVISOR_CMD, stampedCommand } from '../cli/hookInstall'
+import { packageVersion } from '../packageVersion'
 import { ownedTelemetryKeys } from '../telemetryConfig'
+
+// Every registered hook command carries the running version's stamp (TRDD-YL3EWT6N item 5B).
+const RUN = packageVersion()
 
 // ── `agentlenspro setup` — real-fs converge/verify tests (TRDD-7284WCW7) ───────────────────
 // Everything here is REAL: a temp HOME, ephemeral ports, the real safe_config_edit.py
@@ -191,12 +195,12 @@ suite('setup — virgin HOME full converge (real server on ephemeral ports)', ()
     // Verification through OUR OWN JSON.parse of the file — not the installer's report.
     const hooks = (readSettings(f).hooks ?? {}) as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; async?: boolean }> }>>
     for (const ev of HOOK_EVENTS) {
-      const cmds = (hooks[ev] ?? []).flatMap(m => m.hooks.map(h => h.command)).filter(c => c === HOOK_CMD)
-      assert.strictEqual(cmds.length, 1, `${ev} must carry exactly one '${HOOK_CMD}'`)
+      const cmds = (hooks[ev] ?? []).flatMap(m => m.hooks.map(h => h.command)).filter(c => c === stampedCommand(HOOK_CMD, RUN))
+      assert.strictEqual(cmds.length, 1, `${ev} must carry exactly one '${stampedCommand(HOOK_CMD, RUN)}'`)
     }
     const gates = (hooks.PreToolUse ?? []).filter(m => m.matcher === GATE_MATCHER)
     assert.strictEqual(gates.length, 1, 'exactly one gate matcher on PreToolUse')
-    assert.strictEqual(gates[0].hooks[0].command, GATE_CMD)
+    assert.strictEqual(gates[0].hooks[0].command, stampedCommand(GATE_CMD, RUN))
     assert.ok(!('async' in gates[0].hooks[0]), 'the gate must be SYNC — an async hook cannot deny')
   })
 
@@ -313,9 +317,9 @@ suite('setup — repair matrix (broken fixtures, real converge)', () => {
   test('duplicated + stale registrations (v0 spy path, v1 PATH bins, dup gate) converge to exactly one v2 entry each', () => {
     const hooks = (readSettings(f).hooks ?? {}) as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>
     const stopCmds = (hooks.Stop ?? []).flatMap(m => m.hooks.map(h => h.command))
-    assert.deepStrictEqual(stopCmds, [HOOK_CMD, REVIEW_CMD, SUPERVISOR_CMD], 'Stop must carry the v2 forwarder + the review gate + the supervisor, nothing else')
+    assert.deepStrictEqual(stopCmds, [stampedCommand(HOOK_CMD, RUN), stampedCommand(REVIEW_CMD, RUN), stampedCommand(SUPERVISOR_CMD, RUN)], 'Stop must carry the v2 forwarder + the review gate + the supervisor, each stamped with the running version, nothing else')
     const gateCmds = (hooks.PreToolUse ?? []).filter(m => m.matcher === GATE_MATCHER).flatMap(m => m.hooks.map(h => h.command))
-    assert.deepStrictEqual(gateCmds.filter(c => c === GATE_CMD), [GATE_CMD], 'the duplicated gate entries must collapse to one')
+    assert.deepStrictEqual(gateCmds.filter(c => c === stampedCommand(GATE_CMD, RUN)), [stampedCommand(GATE_CMD, RUN)], 'the duplicated gate entries must collapse to one')
     const foreign = (hooks.Notification ?? []).flatMap(m => m.hooks.map(h => h.command))
     assert.ok(foreign.includes('bash /other/janitor-hook.sh'), 'a foreign tool\'s hook must survive the repair untouched')
   })

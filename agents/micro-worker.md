@@ -8,6 +8,7 @@ effort: medium
 # 2026-09-24: first request 61,119 -> 11,167 tokens). Everything this worker needs is in the delegation prompt and the rules below.
 omitClaudeMd: true
 permissionMode: auto
+# agentlenspro-version: 2.34.0
 ---
 
 # Execute the task in your prompt

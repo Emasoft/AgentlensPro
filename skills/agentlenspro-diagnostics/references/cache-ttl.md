@@ -126,6 +126,19 @@ age=$(agentlenspro last-compact --seconds) && [ "$age" -lt 300 ] && echo "compac
   A never-compacted project prints **nothing**, never `0` — "no compaction" and "compacted 0s ago"
   are opposite claims, and `age=$(… --seconds)` must not hand a script a number it would read as
   "just now".
+- **Under the global kill-switch** no hook event is stored, so the newest record is only a pre-switch one. With the
+  `DISABLED` flag file armed, a newest record older than the flag file's mtime exits `2` (stdout **EMPTY**) with one stderr
+  line naming the arm time; a newer one answers normally. With only `AGENTLENS_DISABLED=1` set there is no arm time, so it
+  exits `2` too — that variable is read from the CLI process's **own** environment, which may differ from the server's and the hooks'
+  environment. The guard also holds under `--force-install-telemetry`. Residuals, not fixed: after `agentlenspro enable`, a
+  compaction that happened while the switch was armed is still missing and `last-compact` may report the pre-switch one; a
+  flag file whose mtime is older than the real arm time (restored with `cp -p`, a backup) lets pre-switch records stamped
+  between that mtime and the real arm time pass as the latest; and when `enable` removes the flag but does NOT restart the
+  server (three of enable's no-restart cases: the NO_REVIVE brake, the env half still set, the env-resolved data dir
+  differing from this one), the server stays in no-collection mode, hooks are still not stored, no flag file exists, and
+  `last-compact` trusts the old records again; and a record stamped in the seconds between the flag write and the server stop is
+  trusted, although later compactions are not stored.
+  `cache-expired --json` and `cache-state --json` drop `resumeStaleness` under the same conditions.
 - Flags: `--project DIR` (default: current directory; `''` = any project) · `--session ID` ·
   `--trigger manual|auto` · `--window-days N` (default 31, the store's retention) · `--json` (adds
   the ISO stamps, the matching PostCompact completion and how long the compaction took).

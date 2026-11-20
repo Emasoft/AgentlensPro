@@ -4,7 +4,7 @@ title: Idle alcore RSS grows by about 4 GB in 75 s when otel-bodies is present
 column: dev
 status: tasked
 created: 2026-10-22T13:08:46+0200
-updated: 2026-11-15T21:55:31+0100
+updated: 2026-11-19T12:57:35+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -75,3 +75,7 @@ Step 3: open the store once per process (lazy, first non-idle tick), shared by b
 Step 4: the 2 GB guard counts mimalloc committed bytes (alcore's own heap) per the owner's 2026-10-22 words. DuckDB is governed by its memory_limit, which was measured not to bound process RSS (512 MB gave 1,150 MiB RSS); the guard deliberately stops counting DuckDB, so under step 4 nothing caps whole-process memory; DuckDB's only limit is its memory_limit plus spill, which overruns. Separate commit, vetoable.
 Tension disclosed at approval: TRDD-LHCHVK9Z routes raw bodies away from the legacy Parquet path; steps 1-3 invest in that path because the crash loop is now and LHCHVK9Z's children are unlanded.
 Full plan text: ~/.claude/plans/elegant-churning-ripple.md (copied here in summary; this card is the durable record).
+
+## Progress log
+
+2026-11-19 12:57 — TRDD-569BMAGD routed this card's measurement copies through scripts/capped-copy.sh, which refuses above 4 GB (owner cap 2026-11-16). The arms copy BASE, a clone of ~/.agentlens; that copy is refused when BASE is above 4 GB (its size was not measured), so re-running them may need a sample of at most 4 GB.

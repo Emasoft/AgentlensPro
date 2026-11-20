@@ -1074,6 +1074,29 @@ fn agent_gate_route_fail_open_deny_warn_advisory_and_dedupe() {
     let r = post(ui, "/api/agent-gate", &img);
     assert!(r.starts_with("HTTP/1.1 204"), "cache-guard off: {r}");
 
+    // B8 (TRDD-RBBEX59R): the image cache-guard is governed by its OWN switch, not by Burn gate.
+    // Gate OFF + guard OFF → 204 (the guard's switch still wins). Gate OFF + guard ON → the
+    // IMG_RESIDENT warn (a fresh session id each time, so the per-session dedupe cannot mask a
+    // missing warn). The runaway Agent launch stays 204 with the gate off (asserted above).
+    let img_fresh = |sid: &str| {
+        serde_json::json!({
+            "hook_event_name": "PreToolUse", "tool_name": "Read", "session_id": sid,
+            "transcript_path": tpath.to_string_lossy(), "tool_input": { "file_path": "/tmp/shot.png" }
+        })
+        .to_string()
+    };
+    post(ui, "/api/hook-config", r#"{"gateEnabled":false,"cacheGuardEnabled":false}"#);
+    let r = post(ui, "/api/agent-gate", &img_fresh("sess-img-both-off"));
+    assert!(r.starts_with("HTTP/1.1 204"), "gate off + cache-guard off: {r}");
+    post(ui, "/api/hook-config", r#"{"cacheGuardEnabled":true}"#);
+    let r = post(ui, "/api/agent-gate", &img_fresh("sess-img-gate-off"));
+    assert!(r.starts_with("HTTP/1.1 200"), "gate off + cache-guard ON must still warn: {r}");
+    let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
+    assert!(v["systemMessage"].as_str().unwrap().contains("reading shot.png into a ~120k-token session"), "{v}");
+    let r = post(ui, "/api/agent-gate", &quiet);
+    assert!(r.starts_with("HTTP/1.1 204"), "gate off still silences the agent-launch gate: {r}");
+    post(ui, "/api/hook-config", r#"{"gateEnabled":true,"cacheGuardEnabled":false}"#);
+
     // PostToolUse advisory: 8 own launches ≥ fanoutWarn2min → ONE in-band injection, then the
     // session+code dedupe → 204, then the advisor switch → 204.
     let post_ev = serde_json::json!({
@@ -1092,19 +1115,19 @@ fn agent_gate_route_fail_open_deny_warn_advisory_and_dedupe() {
     let r = post(ui, "/api/agent-gate", &post_ev);
     assert!(r.starts_with("HTTP/1.1 204"), "advisor off: {r}");
 
-    // The counters, on BOTH server-stats surfaces: 11 parsed checks (the malformed body never
-    // built a state), 1 deny, 3 warns (the fork-in-a-wave warn added by TRDD-3EZ6SJ2Z, the
-    // downgraded deny, the image), 1 advisory. The +1 check / +1 warn over the pre-3EZ6SJ2Z tallies
+    // The counters, on BOTH server-stats surfaces: 14 parsed checks (the malformed body never
+    // built a state; +3 for the B8 gate-off image block), 1 deny, 4 warns (the fork-in-a-wave warn added by TRDD-3EZ6SJ2Z, the
+    // downgraded deny, the image, the B8 gate-off image), 1 advisory. The +1 check / +1 warn over the pre-3EZ6SJ2Z tallies
     // (10/1/2/1) is the fork case above: its own assertions (200, no hookSpecificOutput, the count
     // and "This fork is allowed" in systemMessage) pass BEFORE this tally runs, so the extra counted
     // check is that call and not an uncounted 204 plus a regression elsewhere.
     let r = get(ui, "/api/server-stats", "");
     let v: serde_json::Value = serde_json::from_str(body_of(&r)).unwrap();
-    assert_eq!(v["gate"]["checks"], 11, "{}", v["gate"]);
+    assert_eq!(v["gate"]["checks"], 14, "{}", v["gate"]);
     assert_eq!(v["gate"]["denies"], 1);
-    assert_eq!(v["gate"]["warns"], 3);
+    assert_eq!(v["gate"]["warns"], 4);
     assert_eq!(v["gate"]["advisories"], 1);
-    assert_eq!(v["persistence"]["gateChecks"], 11);
+    assert_eq!(v["persistence"]["gateChecks"], 14);
     assert_eq!(v["persistence"]["gateDenies"], 1);
     let _ = std::fs::remove_dir_all(&tdir);
 }
@@ -2397,4 +2420,28 @@ fn stripped_view_matches_strip_session_detail_byte_for_byte() {
             "input {input}"
         );
     }
+}
+
+/// TRDD-ER88PXNB C1: the windowed view and the SSE session summary write the same trailing `summaryWindow` key, and with no
+/// window the windowed view writes exactly what `StrippedView` writes.
+#[test]
+fn stripped_view_windowed_matches_the_sse_session_summary_byte_for_byte() {
+    let s = serde_json::json!({
+        "sessions": [
+            { "id": "s1", "timeline": [{"t": 1}], "fileOps": [{"op": "write"}], "cost": 1.5, "model": "opus" },
+            { "id": "s2", "fileOps": [{"op": "read"}] }
+        ],
+        "outer": "a"
+    });
+    let w = agentlens_core::SummaryWindow { card_days: 14.0, cutoff_ms: 1_763_000_000_000.0, cards_included: 2, cards_resident: 5 };
+    assert_eq!(
+        serde_json::to_string(&agentlens_core::ui::StrippedViewWindowed(&s, None)).unwrap(),
+        serde_json::to_string(&agentlens_core::ui::StrippedView(&s)).unwrap()
+    );
+    let mut expected = agentlens_core::ui::strip_session_detail(&s);
+    expected.as_object_mut().unwrap().insert("summaryWindow".into(), w.to_json());
+    let expected = expected.to_string();
+    assert_eq!(serde_json::to_string(&agentlens_core::ui::StrippedViewWindowed(&s, Some(&w))).unwrap(), expected);
+    let payload = agentlens_core::update_payload::build_update_payload(&s, Some(&w), &[], "b", vec![], 0.0);
+    assert_eq!(payload["sessionSummary"].to_string(), expected);
 }

@@ -1,10 +1,10 @@
 ---
 trdd-id: 1FWN9XBS
 title: Parts have no file index so every reconstruct reads every parts file and the export rebuilds bodies one at a time
-column: dev
+column: todo
 status: tasked
 created: 2026-10-22T23:45:36+0200
-updated: 2026-10-23T04:26:30+0200
+updated: 2026-11-18T13:58:30+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -25,6 +25,7 @@ Mechanism (docs_dev/20261023-reconstruct-body-sql.md §2, file:line in rust-core
 ## Approval log
 
 - 2026-10-22T23:45:36+0200 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T13:58:30+0100 — column → todo by main-agent@agentlenspro. no work since 2026-10-23; change 2 waits for a measurement nobody is running; dev must mean someone is on it
 
 ## Measured 2026-10-23
 

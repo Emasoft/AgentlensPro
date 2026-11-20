@@ -5,6 +5,8 @@ import { spawn } from 'child_process'
 import { cliMain, MANAGEMENT_VERBS } from '../cli/main'
 import { UsageError } from '../cli/cliErrors'
 import { serverCommand } from '../cli/serverControl'
+import { SEARCH_USAGE } from '../cli/searchCli'
+import { USAGE } from '../cli/diagnosticsCli'
 
 // Two contract defects found by RUNNING every verb against the live server
 // (reports/cli-audit/20260811_184145+0200-cli-verb-matrix.md), not by reading the code — which is
@@ -89,6 +91,17 @@ suite('CLI usage contract', () => {
     }
     assert.deepStrictEqual(broken, [],
       'every management verb must answer `help <verb>`; a failure here is the `unknown tool` dead-end returning')
+  })
+
+  test('`search --help` and `help search` print the help of the search verb, not the global usage (found 2026-11-18)', async () => {
+    // --include-attachments is a flag only the search help names: the global usage must not hold it, or this test proves nothing.
+    assert.ok(!USAGE.includes('--include-attachments'), 'the marker flag must be absent from the global usage')
+    for (const argv of [['search', '--help'], ['search', '-h'], ['search', 'needle', '--help'], ['help', 'search']]) {
+      // A startServer that throws proves no server start; the stdout comparison proves no search ran (a search prints a coverage line on stderr, never this text).
+      const { code, out } = await captureLog(() => cliMain(argv, async () => { throw new Error('help must not start a server') }))
+      assert.strictEqual(code, 0, argv.join(' '))
+      assert.strictEqual(out.trimEnd(), SEARCH_USAGE.trimEnd(), `${argv.join(' ')} must print SEARCH_USAGE`)
+    }
   })
 
   test('`help <unknown>` is NOT swallowed into usage — a typo must still be reported', async () => {

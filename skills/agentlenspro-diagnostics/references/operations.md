@@ -16,9 +16,10 @@ Pipeline (fail-fast — a FAIL stops the run, remaining steps SKIP, exit non-zer
 **environment** (read-only heuristics: platform/arch + WSL label, Node vs the engines floor,
 native-dep resolvability, foreign-process-on-OTLP-port, `~/.claude` presence, free disk —
 hard-fails on native Windows with WSL2 guidance, on old Node, or on a broken install) →
-data-store (sqlite quick_check; corrupt DB backed ASIDE, never wiped) → hooks → skill →
-otel-env → old-package migration → server → final end-to-end self-test (synthetic span
-round-trip + registered hook/gate execution). A second run over a converged install reports
+data-store (sqlite quick_check; corrupt DB backed ASIDE, never wiped) → spool-migration → otel-env →
+hooks → status line (refreshes a stale stamp of agentlenspro's own command; never installs or wraps
+one) → skill → old-package migration → server → final end-to-end self-test (synthetic span
+round-trip + registered hook/gate execution) → memory-check. A second run over a converged install reports
 **0 actions** — that is the idempotency proof. Data is NEVER deleted by setup.
 
 **Platforms: macOS and Linux; Windows ONLY via WSL2** (native win32 is refused by the
@@ -50,6 +51,14 @@ the dashboard), `daemon` is the ingestion-facing name (it drains the hook spool)
 install` only when you want ingestion to survive a full logout/reboot without any Claude session
 running; for interactive use the on-demand `--start-server` (or any tool call) is enough.
 
+### Memory guard of alcore
+
+alcore exits with status 1 when a memory limit is breached and writes a culprit log to `rss-hard-cap.log` in the data dir. Both limits are checked every 5 s:
+- `AGENTLENS_RSS_HARD_CAP_MB` (default 2048): commit cap on mimalloc committed bytes. A breach writes a `RSS HARD CAP` log.
+- `AGENTLENS_FOOTPRINT_BACKSTOP_MB` (default 3 times the commit cap, 6144 MB; half of host RAM when that is smaller and still above the cap): checked only while the commit is at or under the cap, macOS only. Above it, writes `FOOTPRINT BACKSTOP` lines to the same log. An override counts only as a positive MB value above the commit cap.
+- `alcore serve` prints its effective limits once at start on its output (a `memory guard:` line; that output is server.log when the server was started by `agentlenspro server start`).
+- Not covered: the startup work that runs before the first guard tick (the store open, the boot sweep and the inline hook-spool drain), and the time between two 5-second ticks.
+
 ## Local commands — no server needed (`config`, `env`)
 
 These two subcommands run entirely client-side (they never touch the MCP server), so they work
@@ -57,7 +66,7 @@ whether or not the server is up.
 
 ### `agentlenspro config` — persistent data retention
 
-Retention is tunable by five `AGENTLENS_*` env vars, but env vars are ephemeral and never reach the
+Retention is tunable by six `AGENTLENS_*` env vars, but env vars are ephemeral and never reach the
 launchd daemon. `config` persists them to `~/.agentlens/config.json` (in the data dir, so a value set
 once survives an uninstall / upgrade / CLI-path change, and the always-on daemon re-reads it every
 boot). Each knob resolves at boot as **env var > config.json > built-in default**, min-floored.
@@ -70,27 +79,50 @@ agentlenspro server restart                       # apply it
 ```
 
 Knobs: `spansRetentionDays` (30) · `summaryWindowHours` (24) · `bodiesMaxGb` (8) ·
-`bodiesRetentionDays` (31). Raw-body capture is mandatory (no knob): bodies land directly on the SSD at
+`bodiesRetentionDays` (31) · `logEventsRetentionDays` (31) · `apiCallsRetentionDays` (90) · `summaryCardDays` (14; the summary is built over log cards active since 00:00 UTC that many days ago, 0 = every card; answers built on it carry `summaryWindow`, and an MCP tool given a `sessionId` still answers an older session). Raw-body capture is mandatory (no knob): bodies land directly on the SSD at
 `~/.agentlens/otel-bodies` and the drain ingests them every 60 s (the RAM-disk spool and the
 `bodiesMaxAgeHours`/72h batching wait were removed in TRDD-Z53IJFE9). A
 `set` on a corrupt config file REFUSES to write rather than clobbering it. Recipe — keep a year of
 traces on a big disk: `agentlenspro config set spansRetentionDays 365 && agentlenspro server
 restart`.
 
-### Emergency stop: `agentlenspro disable [reason]` / `enable`
+### Emergency stop: the real brakes, and `agentlenspro disable [reason]` / `enable` (collection only)
 
-The global brake **on AgentlensPro itself** — one flag file that turns off server auto-revive,
-background ingestion, status-line capture (unless `disable --keep-statusline` was used) and every
-AgentlensPro hook except the review gate and the review supervisor, in **every** Claude Code
-session already running, on that session's next hook fire. No restart needed (a `settings.json` edit
-alone cannot reach a session that already loaded its config). `disable` also stops a running server
-and turns raw-body capture off; `enable` clears the flag.
+**The brakes that stop AgentlensPro doing something** (live, no restart):
 
-⚠ **This is NOT how you stop a burning workload.** It stops the *measurement*, not the burn — it
-removes the gate that was denying disaster launches and blinds you exactly when the numbers matter
-most. Reach for it only to take AgentlensPro out of the picture (debugging its own overhead,
-handing the machine to someone else). To abort a run that is draining the window, see
-**Budgeting a timed run** below.
+- the dashboard right-panel switches (the same four as `--hooks`: burn gate, image cache-guard, event capture, advisor) — per switch, in realtime for every running session;
+- `agentlenspro --hooks gate=off|warn|enforce cacheguard=off capture=off advisor=off` — the same switches from the CLI (no args shows them);
+- `AGENTLENS_GATE=off` in the environment — silences every burn-gate guard, the image guard included; read on each invocation;
+- `agentlenspro --uninstall-hooks` — removes the agentlens hook entries. A running session keeps its hooks until it restarts, and the next launch of a verb that self-heals the install registers them again (`AGENTLENS_NO_AUTOSETUP=1` stops that). The review gate and the review supervisor are never switchable.
+
+**The kill-switch stops only COLLECTION.** `agentlenspro disable [reason]` drops one flag file that stops storing telemetry, raw
+API bodies and hook events, plus the CLI hook spool (the status line is not collection: it always POSTs to the server, which stores it, and when no server takes the sample the hook appends it to the write-ahead file of the store, `<dataDir>/statusline/<stream>/<UTC day>/wal-cli.ndjson`, which `alcore statusline-seal --data-dir DIR` later turns into parquet parts with no server), in
+**every** Claude Code session already running, on that session's next hook fire. No restart needed (a `settings.json` edit alone
+cannot reach a session that already loaded its config). `AGENTLENS_DISABLED=1` in the environment is the same switch for the
+process that sees it. The server runs in **no-collection mode** (answers, stores no telemetry, raw bodies or hook events; it still stores status-line samples). The switch refuses no command and
+parks no skill: every verb runs while it is armed, and the burn-gate, the image cache-guard, the in-band advisor, the review
+gate, the review supervisor and the dashboard switches stay as they were. `disable` stops a running server (its mode is read
+only at boot) and the next hook revives it in no-collection mode; `server stop --stay-down` keeps it down. `disable` also turns
+raw-body capture off; `enable` clears the flag and restarts a server still in no-collection mode. When a server answers, in three
+cases it restarts nothing, the server stays in no-collection mode, and `enable` prints the reason and exits 2:
+
+- The NO_REVIVE brake file (`NO_REVIVE` in the data dir, `~/.agentlens` by default) exists: `enable` honours it. Run
+  `agentlenspro server restart` (with `AGENTLENS_DISABLED` unset): it restarts the server in collection mode and deletes the
+  brake file itself once the start succeeds.
+- `AGENTLENS_DISABLED=1` stays set in the environment (the verb cannot lift the env half): unset it, then re-run
+  `agentlenspro enable`. With it set, `enable` exits 2 in the exit-0 cases below too.
+- This dir's server is in no-collection mode but the data dir resolved from the environment differs from the enabled one (the
+  stop could hit another dir's server): re-run as `AGENTLENS_DATA_DIR=<enabled dir> agentlenspro enable`.
+
+It also restarts nothing, exit 0, when the answering server belongs to another data dir (not ours to restart) or already
+collects. When no server answers (exit 0, braked or not), nothing needs restarting: the next failed hook POST revives one in
+collection mode (the flag is gone), unless `AGENTLENS_NO_REVIVE=1` is set in the hook environment. If the NO_REVIVE brake file is
+armed, no hook revives one: `agentlenspro server start` lifts the brake and starts one, collecting.
+
+⚠ **Neither is how you stop a burning workload.** The kill-switch stops the *measurement*, not the burn — the guards stay on, but
+the stored numbers you would diagnose the burn from stop exactly when they matter most. Reach for it only to take AgentlensPro's
+storage out of the picture (debugging its own disk writes, handing the machine to someone else). To abort a run that is draining
+the window, see **Budgeting a timed run** below.
 
 ### `agentlenspro env` — environment / system detection
 

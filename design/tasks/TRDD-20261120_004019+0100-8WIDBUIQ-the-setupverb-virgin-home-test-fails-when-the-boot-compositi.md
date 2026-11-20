@@ -1,0 +1,43 @@
+---
+trdd-id: 8WIDBUIQ
+title: The setupVerb virgin-HOME test fails when the boot composition line is not written within 120 s on a loaded host
+column: todo
+status: tasked
+created: 2026-11-20T00:40:19+0100
+updated: 2026-11-20T01:06:42+0100
+current-owner: main-agent@agentlenspro
+created-by: main-agent@agentlenspro
+task-type: bugfix
+min-approval-requirement: none
+scope: project
+project-id: agentlenspro
+assignee: main-agent@agentlenspro
+mandate: true
+mandated-by: none
+approved: true
+approval-judge: main-agent@agentlenspro
+approval-datetime: 2026-11-20T00:40:19+0100
+---
+
+# The setupVerb virgin-HOME test fails when the boot composition line is not written within 120 s on a loaded host
+
+Found 2026-11-20T00:40:19+0100 in the pre-push full suite at HEAD 4aee03be (reports_dev/HSPUF5XH/20261119-fast/suite.txt): 3752 passing, 28 pending, 1 failing. The failure: setup, virgin HOME full converge, first run converges a virgin HOME: AssertionError no 'alcore: composition:' line in <run dir>/.agentlens/server.log within 120 s (awaitCompositionLine, src/test/setupVerb.test.ts:122-129, called at :191 when memory-check SKIPs with NO_COMPOSITION_LINE_DETAIL). The suite started at 1-minute load 56.6 and the janitor reported load 87 on 14 cores during the run. Since 0a9efdf7 (TRDD-RVKQDLRD) the boot composition pass runs at background QoS after the other boot chores, so on a loaded macOS host it can be starved past 120 s. Unknown: whether the pass ran late or never ran (the capped run dir and its server.log were removed by the wrapper). Next: run the file alone at low load; if it passes, decide between a load-aware deadline in the test and a server-side fix; if it fails at low load, it is a real defect in the composition pass. Acceptance: the cause is named with evidence that tells late from never, and the test passes at the host's normal load.
+
+## Approval log
+
+- 2026-11-20T00:40:19+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Process log
+
+2026-11-20T00:41+0100 correction: the load 87 on 14 cores came from a janitor heartbeat handled AFTER the suite ended (00:37:19); during the run only the start load is recorded ({ 56.57 66.58 76.97 } at 00:24:45).
+2026-11-20T00:41+0100 the file alone (reports_dev/HSPUF5XH/20261119-fast/setupverb-alone.txt): 19 passing in 11 s, exit 0, at load { 24.97 69.80 73.45 } (1-minute load 25). This shows the composition line IS written on a fresh HOME when the host is less loaded; it does not exclude a load-dependent ordering defect, because the failing run's server.log was deleted with the capped run dir. Prior history: archived TRDD-X4YTS5BF lists 5 failures of this suite in 2026-09 with a different cause (ENOENT on the shipped SKILL.md), so no earlier record of this composition timeout.
+2026-11-20T00:41+0100 fix plan: (1) when awaitCompositionLine fails, copy server.log out of the run dir into reports_dev/ before the wrapper removes it, so the next failure tells late from never; (2) then decide between a load-aware deadline and a server-side change.
+2026-11-20T00:45+0100 evidence from the isogate3 server logs (reports_dev/iso-run/20261119_231121+0100), all run with builds_dev/rel-2.34.0-4aee03be/alcore (the target/release build re-signed ad hoc: file sizes differ by 327,520 bytes and the code-signature sizes by 327,568, so same code INFERRED): servers A, B, C, D over the full copied data wrote their first 'alcore: composition:' line 0-4 s after listening (B wrote 63 over its hour). Server E-new (fresh card store, small e-home) listened at up=10 s and was stopped at up=41 s with NO composition line, at a load near 70. So on a fresh store under load the line can be later than 30 s; whether it is late or never is still open. A second full suite (suite61.sh) waits for 1-minute load <= 30 and copies every al-setup server.log into reports_dev/HSPUF5XH/20261119-fast/suite61-keep/ while it runs.
+2026-11-20T00:49+0100 corrections to the previous line: E-new started without a cards.duckdb file and restored 389 cards from the snapshot (not an empty store); A-D wrote the line within 4 s of listening, 4-18 s after boot (C: boot 00:14:48, line 00:15:06).
+2026-11-20T00:49+0100 code read (rust-core/crates/agentlens-core/src/chores.rs): the boot composition line comes from composition_tick, which runs on the background-QoS runtime bg as the LAST step of one spawn_blocking task: span_tick, purge_tick, bodies_pass, composition_tick (chores.rs:1529-1550); a periodic composition tick also runs every 60 s (spawn_blocking at :1767). composition_tick has no condition on store contents (chores.rs:1189-1290); a failure of the chain exits the process. So the line is late whenever an earlier boot chore or the bg runtime is slow; 'never' needs a hang in span_tick, purge_tick or bodies_pass. Unread: which runtime the 60 s tick runs on and whether it waits for the boot task. A probe (scripts_dev/probe-8WIDBUIQ-composition.sh, under scripts/test-data-cap.sh) starts alcore on a virgin data dir at the current load (1-minute load about 200) and records when the line appears, up to 360 s.
+2026-11-20T00:50+0100 probe result (reports_dev/8WIDBUIQ/20261120_004920+0100-probe.txt and -server.log): alcore (sha256 46e1345f…, the suite's binary) on a virgin data dir at 1-minute load 157.5 wrote its composition line 2 s after spawn. So host load alone does NOT delay the line on a virgin store; the suite failure (no line in 120 s) needs another cause, e.g. the server exiting after setup's memory-check step, or a boot chore stalling on what setup wrote into the fixture HOME. Unverified; the failing run's server.log is gone. suite61.sh keeps the al-setup server logs if it recurs.
+2026-11-20T00:53+0100 advisor: load is ruled out by the probe; the open question is a dead server versus an alive but silent one. suite61.sh relaunched with no load gate, timeout 7200 on pnpm, and a keeper that copies every al-setup server.log and samples server.pid plus kill -0 every 3 s (reports_dev/HSPUF5XH/20261119-fast/suite61-keep/). A pass with the line late by tens of seconds does not block the push; a pass with no hint of a server exit is reported as not reproduced, cause unknown.
+2026-11-20T00:53+0100 base rate: the test passed in 4 earlier local suite runs (reports_dev/HSPUF5XH/20261119-pair/run1, run2, pair2/run1, run2; pair/run1 took 50108 ms, i.e. it waited on the line) and on both CI Node legs (ci-fix2 job-node20/22-full.log). Failed once of 7 recorded runs (suite60).
+2026-11-20T00:58+0100 code read, chores.rs:1755-1768: the 60 s composition tick is its OWN task on bg (interval 60 s, first tick consumed, then spawn_blocking(composition_tick) every 60 s), independent of the boot-chores task. So in the failing run, more than 120 s with no composition line means the server had died, the state lock (composition_tick takes it) was held that long, or the bg runtime or blocking pool was stuck; it is NOT explained by a slow boot chore. Severity rises: this may be a first-run server death or hang on the installer path. The probe (bare alcore serve on an empty data dir, one sample) does not reproduce the setup path.
+2026-11-20T00:58+0100 checked: the failing run dir tests_dev/tmp/run-20261120_002508-24641 no longer exists (ls); server.pid holds a bare pid or JSON {pid, start} (pid_lock.rs:45-46), so the keeper's first-number parse reads the pid; the keeper's find pattern matches the failing path's layout (run-*/al-setup-*/.agentlens, depth 3). Open: whether the test's spawn scrubs OTEL_*, CLAUDE_CONFIG_DIR, AGENTLENS_DATA_DIR; which E-new chore lines differ from A and D.
+2026-11-20T01:06+0100 suite61 PASS; the test passed with the line at [up 0s] in both kept fixture logs; 3 pid samples, none dead. Status: failed once in 8 checked runs (suite60), not reproduced, cause unknown; by the 60 s-tick reading the failing run's server was dead or stuck for over 120 s. Next after the release: make awaitCompositionLine copy server.log and record kill -0 of server.pid on failure (worktree, after the tag).

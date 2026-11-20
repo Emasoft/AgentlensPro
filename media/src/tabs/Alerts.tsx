@@ -562,6 +562,7 @@ interface HookConfig {
   gateEnabled: boolean
   gateMode: 'enforce' | 'warn'
   advisorEnabled: boolean
+  cacheGuardEnabled: boolean
 }
 
 // Realtime hook switches card: every registered AgentLens hook is a dumb curl to the standalone
@@ -601,7 +602,7 @@ function HooksSection() {
 
   if (!config) return null
 
-  const toggle = (key: 'gateEnabled' | 'captureEnabled' | 'advisorEnabled', label: string, desc: string) => (
+  const toggle = (key: 'gateEnabled' | 'captureEnabled' | 'advisorEnabled' | 'cacheGuardEnabled', label: string, desc: string) => (
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
       <div style="font-size:12px;line-height:1.4">
         <strong>{label}</strong>
@@ -639,7 +640,8 @@ function HooksSection() {
           </select>
         </div>
       )}
-      {toggle('captureEnabled', 'Lifecycle capture', 'store hook lifecycle events; off = accept + drop')}
+      {toggle('cacheGuardEnabled', 'Image cache-guard', 'warns when an image Read would stay resident in context; independent of Burn gate')}
+      {toggle('captureEnabled', 'Lifecycle capture', 'store hook lifecycle events; off = not stored, still counted by the guards')}
       {toggle('advisorEnabled', 'In-band advisor', 'PostToolUse advisory messages to the model')}
       {error && <div style="font-size:11px;color:var(--error);margin-top:4px">⚠ {error}</div>}
     </div>

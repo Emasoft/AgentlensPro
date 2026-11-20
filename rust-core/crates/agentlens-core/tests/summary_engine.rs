@@ -8,7 +8,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use agentlens_core::{feed_merge, ingest_post, now_ms, ui::strip_session_detail, CoreState};
+use agentlens_core::{feed_merge, ingest_post, now_ms, summary_card_cutoff_ms, ui::strip_session_detail, CoreState, SummaryWindow};
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
@@ -48,6 +48,11 @@ fn card(id: &str, source: &str, start: &str, parent: Option<&str>, tokens: u64, 
 
 /// The full rebuild, independent of the engine.
 fn reference(st: &CoreState) -> (Value, Value) {
+    reference_at(st, None)
+}
+
+/// TRDD-ER88PXNB: the full rebuild over the cards the summary card window keeps (`cutoff` None = every card).
+fn reference_at(st: &CoreState, cutoff: Option<f64>) -> (Value, Value) {
     let accounts = st.accounts.snapshot();
     let mut summary = agentlens_core::summarize::summarizer::summarize_spans(&st.window.spans, &|sid| accounts.get(sid).cloned());
     let mut attribution = IndexMap::<String, Vec<Value>>::new();
@@ -60,7 +65,29 @@ fn reference(st: &CoreState) -> (Value, Value) {
             attribution.insert(s["sessionId"].as_str().unwrap().to_owned(), e);
         }
     }
-    let log = st.cards.cards();
+    let all = st.cards.cards();
+    let log: Vec<Value> = match cutoff {
+        None => all,
+        // The intended window, written independently of lib.rs: cards active since the cutoff, plus the other half of
+        // every link pair (placeholder X <-> agent-X) that has one half inside.
+        Some(t) => {
+            let active = |c: &Value| agentlens_core::log_reader::last_active_ms(c) >= t;
+            let id = |c: &Value| c["sessionId"].as_str().unwrap_or("").to_owned();
+            all.iter()
+                .filter(|c| {
+                    active(c) || {
+                        let cid = id(c);
+                        all.iter().any(|o| {
+                            active(o)
+                                && ((feed_merge::is_link_placeholder(c) && id(o) == format!("agent-{cid}"))
+                                    || (feed_merge::is_link_placeholder(o) && cid == format!("agent-{}", id(o))))
+                        })
+                    }
+                })
+                .cloned()
+                .collect()
+        }
+    };
     if !log.is_empty() {
         let otel = summary["sessions"].as_array().cloned().unwrap_or_default();
         let mut merged = feed_merge::link_subagent_transcripts(feed_merge::merge_otel_and_log_sessions(otel, log));
@@ -97,6 +124,31 @@ fn assert_equals_full(st: &mut CoreState, step: &str) -> Out {
     assert_eq!(serde_json::to_string(&got.attribution).unwrap(), serde_json::to_string(&want_a).unwrap(), "attribution bytes after {step}");
     assert_eq!(serde_json::to_string(&agentlens_core::ui::StrippedView(&want_s)).unwrap(), strip_session_detail(&want_s).to_string(), "StrippedView bytes after {step}");
     got
+}
+
+/// TRDD-ER88PXNB: the real flow at a given clock, recording the window the way ui::rebuild_once does.
+fn rebuild_at(st: &mut CoreState, now: f64) -> Out {
+    let mut inputs = st.summary_snapshot_at(now);
+    let build = CoreState::summary_from(&mut inputs, now);
+    let attribution = serde_json::to_value(&build.attribution).unwrap();
+    let summary = st.store_summary(inputs.version, build);
+    st.store_summary_window(inputs.version, inputs.window.take());
+    Out { summary, attribution }
+}
+
+fn assert_window_equals_full(st: &mut CoreState, now: f64, step: &str) -> Out {
+    let cutoff = summary_card_cutoff_ms(now, st.summary_card_days);
+    let (want_s, want_a) = reference_at(st, cutoff);
+    let got = rebuild_at(st, now);
+    assert_eq!(serde_json::to_string(&*got.summary).unwrap(), serde_json::to_string(&want_s).unwrap(), "summary bytes after {step}");
+    assert_eq!(serde_json::to_string(&got.attribution).unwrap(), serde_json::to_string(&want_a).unwrap(), "attribution bytes after {step}");
+    got
+}
+
+const DAY: f64 = 86_400_000.0;
+
+fn ms(iso: &str) -> f64 {
+    agentlens_core::summarize::helpers::parse_iso_ms(iso).unwrap()
 }
 
 struct Lcg(u64);
@@ -311,7 +363,6 @@ fn a_reader_holding_the_previous_summary_gets_a_consistent_old_view_and_the_patc
     assert_eq!(serde_json::to_string(&*held).unwrap(), held_bytes, "the reader's Arc was never mutated");
 }
 
-
 /// An EMPTY prune (nothing aged out, nothing narrowed) must not bump `data_version` or force a full
 /// rebuild: the 5 s flush tick calls it forever, and a forced full pass there is the churn the
 /// engine exists to remove. No wall-clock input reaches the summary (`summarize_spans` and the merge
@@ -357,7 +408,6 @@ fn a_dropped_build_makes_the_next_pass_a_full_rebuild_that_still_matches() {
     assert_eq!(got.summary["sessions"].as_array().unwrap().len(), 3);
     assert!(st.summary_engine.full_passes.load(Ordering::Relaxed) > full_before, "an unrecognised previous output forces a full rebuild");
 }
-
 
 /// The exact interleaving the empty-slot rule exists for: a slow OLD build (A) is still running while
 /// a newer pass (X) lands and a third (B) snapshots, which EMPTIES the slot again. A's late store
@@ -432,7 +482,6 @@ fn concurrent_rebuilds_never_move_the_cache_backwards_and_the_end_state_is_exact
     assert_equals_full(&mut state.lock().unwrap(), "after the race");
 }
 
-
 /// Seed an engine with a patchable previous output (two incremental-capable passes), then return
 /// the full-pass count so a test can assert the NEXT pass fell back to a full rebuild.
 fn seeded(name: &str) -> CoreState {
@@ -497,4 +546,134 @@ fn a_foreign_value_in_the_summary_cache_is_rejected_and_rebuilt_in_full() {
     let got = assert_equals_full(&mut st, "foreign summary cache value");
     assert!(st.summary_engine.full_passes.load(Ordering::Relaxed) > full_before, "an unrecognised previous output -> full rebuild");
     assert!(!serde_json::to_string(&*got.summary).unwrap().contains("987654321"), "the foreign value never reached the output");
+}
+
+// TRDD-ER88PXNB T1: only cards active since the UTC-midnight cutoff enter the summary; 0 turns the window off.
+#[test]
+fn the_card_window_keeps_only_cards_active_since_the_utc_midnight_cutoff() {
+    let mut st = CoreState::open(&tmp("window-basic"));
+    st.summary_card_days = 14.0;
+    let now = ms("2026-08-20T12:00:00.000Z");
+    st.put_log_session(card("w-recent", "claude_code", "2026-08-19T10:00:00.000Z", None, 1, 1));
+    st.put_log_session(card("w-edge", "claude_code", "2026-08-06T00:00:00.000Z", None, 1, 0));
+    st.put_log_session(card("w-old", "claude_code", "2026-08-01T10:00:00.000Z", None, 1, 0));
+    let got = assert_window_equals_full(&mut st, now, "window on");
+    let ids: Vec<&str> = got.summary["sessions"].as_array().unwrap().iter().map(|s| s["sessionId"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["w-recent", "w-edge"], "the old card is outside, the card at the cutoff is inside");
+    assert_eq!(
+        st.summary_window,
+        Some(SummaryWindow { card_days: 14.0, cutoff_ms: ms("2026-08-06T00:00:00.000Z"), cards_included: 2, cards_resident: 3 })
+    );
+    // Window off, with a new card so the data version moves and the new summary is stored.
+    st.summary_card_days = 0.0;
+    st.put_log_session(card("w-new", "claude_code", "2026-08-20T09:00:00.000Z", None, 1, 1));
+    let all = assert_window_equals_full(&mut st, now, "window off");
+    assert_eq!(all.summary["sessions"].as_array().unwrap().len(), 4);
+    assert_eq!(st.summary_window, None);
+}
+
+// TRDD-ER88PXNB T2: the cutoff moves only at a UTC midnight; 0, NaN give no window; a fraction rounds up to a whole day.
+#[test]
+fn the_card_window_cutoff_moves_only_at_a_utc_midnight() {
+    let a = summary_card_cutoff_ms(ms("2026-08-20T23:59:00.000Z"), 14.0).unwrap();
+    let b = summary_card_cutoff_ms(ms("2026-08-21T00:01:00.000Z"), 14.0).unwrap();
+    assert_eq!(a, ms("2026-08-06T00:00:00.000Z"));
+    assert_eq!(b - a, DAY);
+    let noon = ms("2026-08-20T12:00:00.000Z");
+    assert_eq!(summary_card_cutoff_ms(noon, 0.0), None);
+    assert_eq!(summary_card_cutoff_ms(noon, f64::NAN), None);
+    assert_eq!(summary_card_cutoff_ms(noon, 0.5), summary_card_cutoff_ms(noon, 1.0));
+}
+
+// TRDD-ER88PXNB T3: a card ages out while another arrives (same list length, every slot shifted); with an OTEL twin
+// on the new card, a stale slot map would keep the twin beside its log card.
+#[test]
+fn a_card_aging_out_while_another_arrives_still_matches_a_full_rebuild() {
+    let mut st = CoreState::open(&tmp("window-age-out"));
+    st.summary_card_days = 14.0;
+    st.put_log_session(card("x", "claude_code", "2026-08-06T00:00:30.000Z", None, 1, 0));
+    st.put_log_session(card("y", "claude_code", "2026-08-10T10:00:00.000Z", None, 1, 1));
+    st.put_log_session(card("z", "claude_code", "2026-08-12T10:00:00.000Z", None, 1, 1));
+    assert_window_equals_full(&mut st, ms("2026-08-20T12:00:00.000Z"), "x, y, z inside");
+    st.put_log_session(card("w", "claude_code", "2026-08-21T11:00:00.000Z", None, 1, 2));
+    ingest_post(&mut st, "/v1/traces", otel_trace("w", 1).as_bytes());
+    let got = assert_window_equals_full(&mut st, ms("2026-08-21T12:00:00.000Z"), "x aged out, w arrived");
+    let n = got.summary["sessions"].as_array().unwrap().iter().filter(|s| s["sessionId"] == "w").count();
+    assert_eq!(n, 1, "the log card w displaces its OTEL twin");
+}
+
+// TRDD-ER88PXNB T4: a resumed old session re-enters mid-list (with an OTEL twin) and still matches; a new session that
+// appends keeps the old cards an id prefix, so that pass stays incremental.
+#[test]
+fn a_card_re_entering_the_window_mid_list_matches_and_appending_stays_incremental() {
+    let mut st = CoreState::open(&tmp("window-re-enter"));
+    st.summary_card_days = 14.0;
+    let now = ms("2026-08-20T12:00:00.000Z");
+    st.put_log_session(card("p", "claude_code", "2026-08-19T08:00:00.000Z", None, 1, 1));
+    st.put_log_session(card("q", "claude_code", "2026-08-01T08:00:00.000Z", None, 1, 0));
+    st.put_log_session(card("r", "claude_code", "2026-08-18T08:00:00.000Z", None, 1, 1));
+    assert_window_equals_full(&mut st, now, "p, r inside, q outside");
+    st.put_log_session(card("q", "claude_code", "2026-08-20T09:00:00.000Z", None, 1, 2));
+    ingest_post(&mut st, "/v1/traces", otel_trace("q", 2).as_bytes());
+    assert_window_equals_full(&mut st, now, "q re-entered mid-list");
+    let (full, incr) = (st.summary_engine.full_passes.load(Ordering::Relaxed), st.summary_engine.incremental_passes.load(Ordering::Relaxed));
+    st.put_log_session(card("s", "claude_code", "2026-08-20T10:00:00.000Z", None, 1, 1));
+    assert_window_equals_full(&mut st, now, "s appended");
+    assert_eq!(st.summary_engine.full_passes.load(Ordering::Relaxed), full, "appending forces no full pass");
+    assert_eq!(st.summary_engine.incremental_passes.load(Ordering::Relaxed), incr + 1, "the append pass was incremental");
+}
+
+// TRDD-ER88PXNB T6: a link pair straddling the cutoff stays together: the placeholder ended before the cutoff, its
+// agent- transcript after it; the windowed summary shows the one linked entry, as with the window off.
+#[test]
+fn a_link_pair_straddling_the_cutoff_stays_linked() {
+    let now = ms("2026-08-20T12:00:00.000Z");
+    let mut st = CoreState::open(&tmp("window-pair"));
+    st.summary_card_days = 14.0;
+    st.put_log_session(card("root1", "claude_code", "2026-08-19T10:00:00.000Z", None, 1, 1));
+    st.put_log_session(card("sp1", "claude_code", "2026-08-05T23:59:00.000Z", Some("root1"), 0, 0));
+    st.put_log_session(card("agent-sp1", "claude_code", "2026-08-06T00:30:00.000Z", None, 5, 1));
+    let got = assert_window_equals_full(&mut st, now, "pair straddles the cutoff");
+    let sessions = got.summary["sessions"].as_array().unwrap();
+    let linked: Vec<&Value> = sessions.iter().filter(|s| s["sessionId"] == "agent-sp1").collect();
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0]["parentSessionId"], "root1", "the placeholder's parent was applied: the pair linked");
+    assert!(sessions.iter().all(|s| s["sessionId"] != "sp1"), "the placeholder was consumed by the link");
+    assert_eq!(st.summary_window.as_ref().map(|w| (w.cards_included, w.cards_resident)), Some((3, 3)));
+}
+
+// TRDD-ER88PXNB: the served summary comes with the window it was built over, and the state records that window.
+#[test]
+fn the_served_summary_carries_its_card_window() {
+    use agentlens_core::summarize::helpers::iso_from_ms;
+    let now = now_ms() as f64;
+    let st = Arc::new(std::sync::Mutex::new(CoreState::open(&tmp("window-served"))));
+    {
+        let mut g = st.lock().unwrap();
+        g.summary_card_days = 14.0;
+        g.put_log_session(card("s-new", "claude_code", &iso_from_ms(now - 2.0 * DAY), None, 1, 1));
+        g.put_log_session(card("s-old", "claude_code", &iso_from_ms(now - 40.0 * DAY), None, 1, 0));
+    }
+    let (_, summary, window) = agentlens_core::ui::summary_now_windowed(&st, now);
+    let ids: Vec<&str> = summary["sessions"].as_array().unwrap().iter().map(|s| s["sessionId"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["s-new"]);
+    let w = window.expect("the window is on");
+    assert_eq!((w.card_days, w.cards_included, w.cards_resident), (14.0, 1, 2));
+    assert_eq!(st.lock().unwrap().summary_window.as_ref(), Some(&w));
+}
+
+// TRDD-ER88PXNB: a summary stored without its window must not inherit the previous summary's window.
+#[test]
+fn storing_a_summary_without_its_window_clears_the_old_window() {
+    let mut st = CoreState::open(&tmp("window-cleared-on-store"));
+    st.summary_card_days = 14.0;
+    let now = ms("2026-08-20T12:00:00.000Z");
+    st.put_log_session(card("c-recent", "claude_code", "2026-08-19T10:00:00.000Z", None, 1, 1));
+    rebuild_at(&mut st, now);
+    assert!(st.summary_window.is_some(), "the windowed build recorded its window");
+    st.put_log_session(card("c-next", "claude_code", "2026-08-19T11:00:00.000Z", None, 1, 1));
+    // Window off for this build, so the result does not depend on the real clock.
+    st.summary_card_days = 0.0;
+    rebuild(&mut st);
+    assert_eq!(st.summary_window, None, "a store that never recorded a window leaves None, not the old window");
 }

@@ -18,7 +18,8 @@
 // Code version adds, and the store's whole value is being able to ask questions later that
 // nobody thought to ask when the capture was written.
 //
-// THE SCRIPT IS A DUMB PIPE. Read stdin, POST it, exit. No state file, no digest, no client-side
+// THE SCRIPT IS A DUMB PIPE. Read stdin, POST it, exit. When no server takes the sample it is appended
+// to the store's own write-ahead file instead (TRDD-VS1FCUMU). No digest, no client-side
 // filtering — the same contract standalone/server.ts states for the lifecycle hooks. Any thinning
 // of the sample stream belongs on the SERVER, which is the only place that can see every session
 // at once; a filter here would be N independent filters that each guess.
@@ -34,15 +35,16 @@
 //
 // CANCELLATION. Claude Code debounces at 300ms and CANCELS an in-flight script when a new update
 // triggers, so a killed capture must be harmless — it is: a lost sample, with the next tick
-// ~3s away. Nothing is half-written because nothing is written locally at all.
+// ~3s away. The only local write is one O_APPEND line to the write-ahead file, made after the POST
+// failed or at the render deadline: a kill before it loses that one sample, never half a line.
 
 import { spawn } from 'child_process'
-import { forwardHookEvent, readStdin } from './hookHandlers'
 import * as fs from 'fs'
 import * as path from 'path'
-import { agentlensDisabled, keepStatuslineArmed } from './killSwitch'
 import { dataDir } from './cliCore'
-import { flattenSample, dayKey } from '../statuslineStore'
+import { forwardHookEvent, pidfileOwnerAlive, readStdin } from './hookHandlers'
+import { alcoreBin, resolveBinNativeDir } from './serverControl'
+import { dayKey, flattenSample } from '../statuslineStore'
 
 /** The `ev` these samples are stored under. Deliberately NOT a real Claude Code hook event name:
  *  the server accepts any non-empty `hook_event_name`, so reusing the hook-event store gives us
@@ -89,7 +91,7 @@ function captureTimeoutMs(): number {
  *  an endpoint that drops — past Claude Code's own 300ms debounce, on every render. Tonight's server
  *  OOM produced exactly that state (accepting, not answering) before the process died.
  *
- *  A sample lost here is invisible and the next tick is ~3s away; a status line that stalls is not. */
+ *  At the deadline the sample is appended locally (storeLocally), so cutting the wait loses nothing. */
 function residualCaptureMs(): number {
   return Math.max(0, Number(process.env.AGENTLENS_STATUSLINE_RESIDUAL_MS) || 50)
 }
@@ -121,47 +123,135 @@ export function toStatuslineRecord(payload: Buffer, ev: string = STATUSLINE_EV):
   }))
 }
 
-// At the enable edge the revived server seals this orphan WAL immediately. A session that read the flag
-// just before it was removed can append between the seal's read and delete, losing at most a sample or
-// two — accepted, since status-line samples are periodic and redundant.
+// ── TRDD-VS1FCUMU: the sample is stored with or without a server ─────────────────────────────────
+// Owner order 2026-11-18: "status line hook must be digested at all times. disable must never disable
+// the status line hook. just calling some fast binary to add the data to the duckdb. no need for the
+// full server to be online."
+// The hook APPENDS (one O_APPEND line, no child process on the render path); the binary only COMPACTS
+// (`alcore statusline-seal`, started detached and rarely by maybeKickSeal).
+
 /** Append one sample as the server's exact NDJSON line (`flattenSample` + `ts`; the server also keeps
- *  the `hook_event_name`/`statusline_stream` stamps) to `<dataDir>/statusline/<stream>/<UTC day>/wal-cli.ndjson`.
- *  One appendFileSync = one O_APPEND write, no fsync. Throws on failure; the caller's catch is contract 2. */
-function appendSampleToDisk(record: Buffer | null): void {
-  if (!record) return
+ *  the `hook_event_name`/`statusline_stream` stamps) to
+ *  `<dataDir>/statusline/<stream>/<UTC day>/wal-cli.ndjson`. Both store readers union every
+ *  `wal-*.ndjson`, so the sample is queryable at once, with no server and no sealing.
+ *  One appendFileSync = one O_APPEND write, no fsync. Throws on failure; the caller's catch is contract 2.
+ *  `created` is true when this append made today's file (the day turned, or the sealer took the last one). */
+export function appendSampleToDisk(record: Buffer): { file: string; created: boolean } {
   const flat = flattenSample(JSON.parse(record.toString('utf-8')) as Record<string, unknown>)
   const ts = Date.now()
   flat.ts = ts
   const stream = flat.statusline_stream === 'subagent' ? 'subagent' : 'main'
   const dir = path.join(dataDir(), 'statusline', stream, dayKey(ts))
   fs.mkdirSync(dir, { recursive: true })
-  fs.appendFileSync(path.join(dir, 'wal-cli.ndjson'), JSON.stringify(flat) + '\n')
+  const file = path.join(dir, 'wal-cli.ndjson')
+  const created = !fs.existsSync(file)
+  fs.appendFileSync(file, JSON.stringify(flat) + '\n')
+  return { file, created }
+}
+
+/** Bytes at which today's write-ahead file is worth sealing. The SAME variable and default as the
+ *  sealer's `cli_seal_bytes` (rust-core statusline_store.rs), so a started sealer always finds work. */
+function cliSealBytes(): number {
+  const n = Number(process.env.AGENTLENS_STATUSLINE_CLI_SEAL_BYTES)
+  return Number.isFinite(n) && n > 0 ? n : 16 * 1024 * 1024
+}
+
+/** No second sealer start within this window, whatever the first one did (lock busy, nothing to do,
+ *  failed): without it a file sitting over the threshold would start a process on every render. */
+export const SEAL_KICK_MIN_GAP_MS = 30_000
+
+/** The detached sealer appends its output here (TRDD-RTHA7EWK item 5). Over this size the file is
+ *  rotated to `<name>.1` (an older `.1` is replaced) before the next open, so the log stays bounded. */
+const SEAL_LOG_MAX_BYTES = 1024 * 1024
+
+/** Open `<dataDir>/statusline-seal.log` for append, rotating it first when it is over SEAL_LOG_MAX_BYTES.
+ *  Returns undefined when the log cannot be opened: the sealer is then started with stdio ignored, because
+ *  a log problem must never stop the seal, and never throws out of the hook. */
+function openSealLog(): number | undefined {
+  try {
+    const log = path.join(dataDir(), 'statusline-seal.log')
+    try {
+      if (fs.statSync(log).size > SEAL_LOG_MAX_BYTES) fs.renameSync(log, `${log}.1`)
+    } catch { /* no log yet, or it cannot be rotated: opening below decides */ }
+    return fs.openSync(log, 'a')
+  } catch {
+    return undefined
+  }
+}
+
+/** Start `alcore statusline-seal` detached, and only when all of these hold:
+ *   - this append created today's file (yesterday's file is now complete) or the file reached the
+ *     seal threshold. A size test and a "created" flag, not a timer: both are O(1) on the render path;
+ *   - AGENTLENS_NO_REVIVE is not 1 (the one brake for every detached process a hook starts);
+ *   - no start in the last SEAL_KICK_MIN_GAP_MS (stamp file `<dataDir>/statusline/.seal-kick`);
+ *   - no live server owns the data dir (its own 60 s chore seals, this file included).
+ *  The sealer holds the store's seal lock and runs at nice 15; it never binds a port. Never throws. */
+function maybeKickSeal(appended: { file: string; created: boolean }): void {
+  try {
+    if (process.env.AGENTLENS_NO_REVIVE === '1') return
+    if (!appended.created && fs.statSync(appended.file).size < cliSealBytes()) return
+    const stamp = path.join(dataDir(), 'statusline', '.seal-kick')
+    try {
+      if (Date.now() - fs.statSync(stamp).mtimeMs < SEAL_KICK_MIN_GAP_MS) return
+    } catch { /* no stamp yet: this is the first start */ }
+    if (pidfileOwnerAlive()) return
+    const alcore = alcoreBin(process.env, undefined, undefined, resolveBinNativeDir())
+    if (!alcore) return
+    fs.writeFileSync(stamp, String(Date.now()))
+    // TRDD-RTHA7EWK item 5: the sealer's stdout and stderr (what it sealed, why it refused a file) were
+    // thrown away with stdio 'ignore', so a refused write-ahead file left no trace outside the server log.
+    // The detached child gets its own dup of the fd, so this process closes its copy right after spawn.
+    const logFd = openSealLog()
+    try {
+      spawn(alcore, ['statusline-seal', '--data-dir', dataDir()], {
+        detached: true,
+        stdio: logFd === undefined ? 'ignore' : ['ignore', logFd, logFd],
+      }).unref()
+    } finally {
+      if (logFd !== undefined) fs.closeSync(logFd)
+    }
+  } catch { /* contract 2: a sealer that cannot start loses nothing, the lines stay readable in the write-ahead file */ }
+}
+
+/** One capture's progress: `done` = the POST attempt has settled; `stored` = the sample was appended
+ *  locally. Two code paths can reach the local append (a failed POST, and the render deadline with the
+ *  POST still pending); `stored` makes it happen once. */
+interface CaptureState { stored: boolean; done: boolean }
+
+function storeLocally(record: Buffer, state: CaptureState): void {
+  if (state.stored) return
+  state.stored = true
+  try {
+    maybeKickSeal(appendSampleToDisk(record))
+  } catch { /* contract 2: capture cannot fail the wrapper */ }
+}
+
+/** POST one record; when the server did not take it, store it locally. Never throws. */
+async function captureRecord(record: Buffer, state: CaptureState): Promise<void> {
+  try {
+    const delivered = await forwardHookEvent(record, {
+      path: STATUSLINE_ENDPOINT,
+      timeoutMs: captureTimeoutMs(),
+      // Do NOT spool: see the note in forwardHookEvent. At this rate the shared hook-spool would
+      // evict the lifecycle events it exists to protect. The store's own write-ahead file is the
+      // durable path for a sample the server did not take.
+      spool: false,
+    })
+    if (!delivered) storeLocally(record, state)
+  } catch { /* contract 2: capture cannot fail the wrapper */ }
+  state.done = true
 }
 
 /** Forward one status-line payload to the server. Never throws, never writes to stdout, never
  *  reports failure: a telemetry sample that can break the status line would be worse than no
- *  telemetry at all. Delivery failures spool + revive inside forwardHookEvent, so a sample taken
- *  while the server is down is not lost. */
+ *  telemetry at all. It POSTS whether or not the kill switch is armed: the switch stops only the
+ *  collection of telemetry and raw bodies, and the server in no-collection mode still stores these
+ *  samples. Delivery is NOT spooled (spool false, see captureRecord). A sample the server did not take
+ *  is appended to the store's own write-ahead file by storeLocally (TRDD-VS1FCUMU), so it is not lost. */
 export async function captureStatusline(payload: Buffer, ev: string = STATUSLINE_EV): Promise<void> {
-  try {
-    if (agentlensDisabled()) {
-      // Owner request 2026-10-27, verbatim: "stop everything except the statusline data collection, so the
-      // agentlenspro cli can still answer the basic questions about the session". With the server off,
-      // POSTing records nothing, so under the keep-statusline marker the sample goes straight to the
-      // store's own layout. The server's `maybe_seal` seals this orphan WAL (name != its pid) later.
-      if (keepStatuslineArmed()) appendSampleToDisk(toStatuslineRecord(payload, ev))
-      return // the global brake reaches sessions already running
-    }
-    const record = toStatuslineRecord(payload, ev)
-    if (!record) return
-    await forwardHookEvent(record, {
-      path: STATUSLINE_ENDPOINT,
-      timeoutMs: captureTimeoutMs(),
-      // Do NOT spool: see the note in forwardHookEvent. At this rate the shared hook-spool would
-      // evict the lifecycle events it exists to protect.
-      spool: false,
-    })
-  } catch { /* contract 2: capture cannot fail the wrapper */ }
+  const record = toStatuslineRecord(payload, ev)
+  if (!record) return
+  await captureRecord(record, { stored: false, done: false })
 }
 
 /** Split `--inner <command>` out of the wrapper's own argv. The inner command is carried as ONE
@@ -218,7 +308,9 @@ export async function runStatuslineCommand(
 
   // Both started before either is awaited: the capture rides alongside the child instead of being
   // serialized in front of (or behind) the render.
-  const captured = captureStatusline(payload, subagent ? SUBAGENT_STATUSLINE_EV : STATUSLINE_EV)
+  const record = toStatuslineRecord(payload, subagent ? SUBAGENT_STATUSLINE_EV : STATUSLINE_EV)
+  const state: CaptureState = { stored: false, done: false }
+  const captured = record ? captureRecord(record, state) : Promise.resolve()
   const code = inner ? await runInner(inner, payload) : 0
   // Bound the wait to a RESIDUAL budget once the render is done. Awaiting the capture outright made
   // a wedged server cost 787ms per render (102ms healthy) — the capture's own timeout, paid on the
@@ -227,6 +319,12 @@ export async function runStatuslineCommand(
   // With NO inner command there is no render to hold up (a capture-only surface writes nothing), so
   // the capture is allowed to finish: the reason to cut it short does not exist there.
   await (inner ? Promise.race([captured, delay(residualCaptureMs())]) : captured)
+  // TRDD-VS1FCUMU: the deadline passed with the POST still pending (a server that accepted and does
+  // not answer). The sample is stored locally NOW, because this process exits next and the pending
+  // POST dies with it. The server may still store the same sample from the request it already holds:
+  // a duplicate row is accepted (the stream is re-sampled many times per turn and the views read
+  // per-turn buckets and cumulative deltas), a lost sample is not.
+  if (record && !state.done) storeLocally(record, state)
 
   // We report the INNER command's exit code, and 0 when there is no inner command or it could not
   // be spawned. Never our own failure: a non-zero exit blanks the status line, so a broken capture

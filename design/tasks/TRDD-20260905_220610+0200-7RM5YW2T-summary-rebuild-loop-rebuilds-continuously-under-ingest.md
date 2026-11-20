@@ -1,5 +1,6 @@
 ---
 trdd-id: 7RM5YW2T
+status: tasked
 title: The 25 ms summary rebuild loop rebuilds the whole window continuously under ingest and is the mimalloc churn
 column: blocked
 created: 2026-09-05T22:06:10+0200

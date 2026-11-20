@@ -178,6 +178,7 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
   let uiPort = 0
   const tmpDirs: string[] = []   // one per boot ATTEMPT — a retried attempt still left a dir behind
   let getServerLog: () => string = () => ''
+  let shortTmp: string | undefined
   const shotStamp = new Date().toISOString().replace(/[:.]/g, '-')
 
   function attachErrorCollector(page: Page): string[] {
@@ -200,10 +201,10 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
     return { page, errors }
   }
 
-  async function hookConfig(): Promise<{ captureEnabled: boolean; gateEnabled: boolean; gateMode: string; advisorEnabled: boolean }> {
+  async function hookConfig(): Promise<{ captureEnabled: boolean; gateEnabled: boolean; gateMode: string; advisorEnabled: boolean; cacheGuardEnabled: boolean }> {
     const r = await httpReq(uiPort, 'GET', '/api/hook-config')
     assert.strictEqual(r.status, 200)
-    return (r.json as { config: { captureEnabled: boolean; gateEnabled: boolean; gateMode: string; advisorEnabled: boolean } }).config
+    return (r.json as { config: { captureEnabled: boolean; gateEnabled: boolean; gateMode: string; advisorEnabled: boolean; cacheGuardEnabled: boolean } }).config
   }
 
   suiteSetup(async function () {
@@ -293,10 +294,17 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
 
     fs.mkdirSync(SCREENSHOT_DIR, { recursive: true })
     const { default: puppeteer } = await import('puppeteer-core')
+    // Chrome writes its SingletonSocket under TMPDIR. The capped TMPDIR (tests_dev/tmp/run-<ts>-<pid>) makes
+    // that path exceed the unix socket limit (107 bytes Linux, 103 macOS): Chrome dies with "Socket path too long".
+    // This short dir holds only a symlink back into the capped TMPDIR, so Chrome's temp data still lands inside
+    // the capped run dir and the 4 GB cap still counts it.
+    shortTmp = fs.mkdtempSync('/tmp/als-')
+    fs.symlinkSync(os.tmpdir(), path.join(shortTmp, 't'))
     browser = await puppeteer.launch({
       executablePath: chromePath,
       headless: true,  // HARD requirement: never open a visible window in tests
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      env: { ...process.env, TMPDIR: path.join(shortTmp, 't') },
     })
   })
 
@@ -327,6 +335,11 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
           }
         } finally {
           for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }) } catch { /* best effort */ } }
+          if (shortTmp) {
+            // Best effort, like the loop above: a teardown error must not mask an earlier failure, so a real error is logged to stderr instead of thrown.
+            try { fs.unlinkSync(path.join(shortTmp, 't')) } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write('[browser-smoke] cleanup failed under ' + shortTmp + ': ' + String(e) + '\n') }
+            try { fs.rmdirSync(shortTmp) } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write('[browser-smoke] cleanup failed under ' + shortTmp + ': ' + String(e) + '\n') }
+          }
         }
       }
     }
@@ -426,6 +439,107 @@ const TAB_CONTENT: Array<{ id: string; contentSel: string }> = [
       await page.screenshot({ path: path.join(SCREENSHOT_DIR, `p9-transcript-${theme}-${shotStamp}.png`) as `${string}.png` })
       assert.deepStrictEqual(errors, [], `zero console errors expected (${theme} transcript):\n${errors.join('\n')}`)
       await page.close()
+    })
+  }
+
+  for (const theme of ['dark', 'light'] as const) {
+    test(`Image cache-guard switch round-trips and is independent of Burn gate (${theme})`, async function () {
+      this.timeout(90_000)
+      const { page, errors } = await newPage(theme)
+      try {
+        const before = await hookConfig()
+        assert.strictEqual(before.cacheGuardEnabled, true, 'precondition: cacheGuardEnabled defaults to true')
+        assert.strictEqual(before.gateEnabled, true, 'precondition: gateEnabled defaults to true')
+        const gateBefore = before.gateEnabled
+
+        await page.click('button[title="Settings — Alerts & Automation"]')
+        await page.waitForFunction(() => {
+          const cards = Array.from(document.querySelectorAll('strong'))
+          return cards.some((s) => (s.textContent ?? '').trim() === 'Hook switches')
+        }, { timeout: 15_000 })
+        await sleep(400) // let the slide-in transition land before clicking inside the panel
+
+        // Rows are found by their <strong> label (exact text), never by index, and exactly one must
+        // match — the Burn gate description must not be mistaken for this row.
+        const rowCount = (label: string): Promise<number> => page.evaluate((l: string) =>
+          Array.from(document.querySelectorAll('strong')).filter((s) => (s.textContent ?? '').trim() === l).length, label)
+        const clickToggle = async (label: string): Promise<void> => {
+          const flipped = await page.evaluate((l: string) => {
+            const strong = Array.from(document.querySelectorAll('strong')).find((s) => (s.textContent ?? '').trim() === l)
+            const input = strong?.parentElement?.parentElement?.querySelector('label.toggle-switch input[type="checkbox"]') as HTMLInputElement | null
+            if (input) { input.click(); return true }
+            return false
+          }, label)
+          assert.ok(flipped, `${label} toggle must exist in the Hook switches card`)
+        }
+        const toggleLabel = (label: string): Promise<string> => page.evaluate((l: string) => {
+          const strong = Array.from(document.querySelectorAll('strong')).find((s) => (s.textContent ?? '').trim() === l)
+          const el = strong?.parentElement?.parentElement?.querySelector('.toggle-label')
+          return el && el.textContent ? el.textContent.trim() : ''
+        }, label)
+        const waitToggle = async (label: string, key: 'gateEnabled' | 'cacheGuardEnabled', want: boolean): Promise<void> => {
+          const deadline = Date.now() + 10_000
+          while ((await hookConfig())[key] !== want) {
+            if (Date.now() > deadline) assert.fail(`server /api/hook-config never reported ${key}=${want} after the UI flip`)
+            await sleep(200)
+          }
+          const labelDeadline = Date.now() + 5_000
+          while ((await toggleLabel(label)) !== (want ? 'On' : 'Off')) {
+            if (Date.now() > labelDeadline) assert.fail(`${label} UI label must show "${want ? 'On' : 'Off'}" after the server confirmed the flip (got "${await toggleLabel(label)}")`)
+            await sleep(100)
+          }
+        }
+
+        assert.strictEqual(await rowCount('Image cache-guard'), 1, 'exactly one "Image cache-guard" row must exist in the Hook switches card')
+
+        await clickToggle('Image cache-guard')
+        await waitToggle('Image cache-guard', 'cacheGuardEnabled', false)
+        assert.strictEqual((await hookConfig()).gateEnabled, gateBefore, 'flipping Image cache-guard must not touch Burn gate')
+        await page.screenshot({ path: path.join(SCREENSHOT_DIR, `b8-image-cache-guard-off-${theme}-${shotStamp}.png`) as `${string}.png` })
+
+        await clickToggle('Image cache-guard')
+        await waitToggle('Image cache-guard', 'cacheGuardEnabled', true)
+        assert.strictEqual((await hookConfig()).gateEnabled, gateBefore, 'restoring Image cache-guard must not touch Burn gate')
+        await page.screenshot({ path: path.join(SCREENSHOT_DIR, `b8-image-cache-guard-on-${theme}-${shotStamp}.png`) as `${string}.png` })
+
+        // Burn gate OFF: the Image cache-guard row sits OUTSIDE the `gateEnabled &&` gate-mode
+        // conditional in Alerts.tsx, so it must stay rendered and operable with the gate off.
+        // A regression that moved the row inside that conditional would only show up here.
+        await clickToggle('Burn gate')
+        await waitToggle('Burn gate', 'gateEnabled', false)
+        assert.strictEqual(await rowCount('Image cache-guard'), 1, 'Image cache-guard row must stay rendered (exactly 1) while Burn gate is OFF')
+        assert.strictEqual((await hookConfig()).cacheGuardEnabled, true, 'turning Burn gate OFF must not touch Image cache-guard')
+        await clickToggle('Image cache-guard')
+        await waitToggle('Image cache-guard', 'cacheGuardEnabled', false)
+        await clickToggle('Image cache-guard')
+        await waitToggle('Image cache-guard', 'cacheGuardEnabled', true)
+        await page.screenshot({ path: path.join(SCREENSHOT_DIR, `b8-image-cache-guard-gate-off-${theme}-${shotStamp}.png`) as `${string}.png` })
+
+        // Restore the default so later tests see Burn gate ON.
+        await clickToggle('Burn gate')
+        await waitToggle('Burn gate', 'gateEnabled', true)
+
+        assert.deepStrictEqual(errors, [], `zero console errors expected during the cache-guard round-trip:\n${errors.join('\n')}`)
+      } finally {
+        // The server is shared across the suite, so a switch left off breaks later tests: restore
+        // both. Close the page first, so it cannot send a toggle write that lands after the
+        // restore. Restore by a direct POST, not through the UI this test exercises, which can fail
+        // for the same reason the test did. Log a failed restore instead of throwing: a throw here
+        // would replace the test's own assertion error.
+        try {
+          await page.close()
+        } finally {
+          try {
+            const r = await httpReq(uiPort, 'POST', '/api/hook-config', { gateEnabled: true, cacheGuardEnabled: true })
+            const cfg = (r.json as { config?: { gateEnabled?: boolean; cacheGuardEnabled?: boolean } } | null)?.config
+            if (r.status !== 200 || cfg?.gateEnabled !== true || cfg?.cacheGuardEnabled !== true) {
+              console.error(`cache-guard test restore: POST /api/hook-config returned ${r.status}: ${r.text}`)
+            }
+          } catch (e) {
+            console.error(`cache-guard test restore failed: ${String(e)}`)
+          }
+        }
+      }
     })
   }
 

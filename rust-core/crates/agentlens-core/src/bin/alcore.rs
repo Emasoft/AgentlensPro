@@ -96,19 +96,91 @@ fn install_exit_on_panic() {
 fn usage(msg: &str) -> ! {
     eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
     eprintln!("usage: alcore serve --data-dir DIR --media-dir DIR [--otlp-port N] [--ui-port N] [--mcp-port N] [--bind HOST] [--no-log-scan] [--no-collection] [--ingest-manifest PATH --aldigest-bin PATH [--ingest-sources LIST]]");
+    eprintln!("       alcore statusline-seal --data-dir DIR");
+    eprintln!("       alcore version");
     exit(64);
 }
 
+fn statusline_seal_usage(msg: &str) -> ! {
+    eprintln!("{} alcore: {msg}", agentlens_core::log_ts());
+    eprintln!("usage: alcore statusline-seal --data-dir DIR");
+    // TRDD-RTHA7EWK item 5: the knob is named where the operator reads the usage.
+    eprintln!("env:   AGENTLENS_STATUSLINE_SEAL_RETRY_BASE_MS  wait before a refused file is tried again, doubling per refusal up to 6 h (default 300000; 0 = no backoff)");
+    exit(64);
+}
+
+/// `alcore statusline-seal --data-dir DIR` — compact the status-line store WITHOUT a server.
+/// Owner order 2026-11-18 (TRDD-VS1FCUMU): the status line is digested at all times, by "just
+/// calling some fast binary to add the data to the duckdb. no need for the full server to be
+/// online". The status-line hook appends each sample no server took to
+/// `statusline/<stream>/<day>/wal-cli.ndjson`; this command turns full and past-day write-ahead
+/// files into parquet parts. It binds no port and takes no pidfile, and it is safe beside a live
+/// server: maybe_seal holds the store's cross-process seal lock and never touches the live
+/// server's own write-ahead file. It does NOT purge: retention stays with the server, so a
+/// standalone run can never delete a day.
+fn statusline_seal(args: &[String]) -> ! {
+    let mut data_dir = String::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--data-dir" => {
+                i += 1;
+                data_dir = args.get(i).cloned().unwrap_or_default();
+            }
+            other => statusline_seal_usage(&format!("statusline-seal: unknown argument {other}")),
+        }
+        i += 1;
+    }
+    if data_dir.is_empty() {
+        statusline_seal_usage("statusline-seal: --data-dir is required");
+    }
+    // Started detached from a render-path hook: never compete with the foreground.
+    unsafe {
+        libc::nice(15);
+    }
+    let root = std::path::Path::new(&data_dir).join("statusline");
+    if !root.is_dir() {
+        println!("statusline-seal: no store at {}", root.display());
+        exit(0);
+    }
+    let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let counters = agentlens_core::statusline_store::SealCounters::default();
+    let sealed = agentlens_core::statusline_store::maybe_seal(&root, &counters, &vars, agentlens_core::now_ms() as f64);
+    // TRDD-RTHA7EWK item 5: R is the files refused in THIS call (it was corrupt_wals, a counter of a different thing);
+    // W, the files left alone because their marker is younger than its backoff, is printed only when above 0.
+    let refused = counters.refused_files.load(std::sync::atomic::Ordering::Relaxed);
+    let in_backoff = counters.backoff_skips.load(std::sync::atomic::Ordering::Relaxed);
+    let mut line = format!("statusline-seal: sealed {sealed} WAL(s), refused {refused}");
+    if in_backoff > 0 {
+        line.push_str(&format!(", in backoff {in_backoff}"));
+    }
+    println!("{line}");
+    exit(0);
+}
 fn main() {
+    // TRDD-YL3EWT6N item 10: `alcore version` prints the build's package.json version and exits. It is the FIRST statement, ahead of
+    // install_exit_on_panic and log_boot_phase, because those write to stderr: the CLI's post-verb version check (src/cli/versionRestart.ts)
+    // needs stdout to be exactly the version and stderr to be empty, and it must never reach the boot probe or a pidfile.
+    if std::env::args().nth(1).as_deref() == Some("version") {
+        println!("{}", agentlens_core::server_stats::package_version());
+        exit(0);
+    }
     install_exit_on_panic();
     // TRDD-2HRA270Y: permanent boot diagnostic — the probe slot logs mimalloc commit at each open_store phase;
     // boot_start seeds the `up=` clock of every boot-phase line.
     agentlens_core::rss_guard::install_open_phase_probe();
     agentlens_core::rss_guard::log_boot_phase("boot_start", None);
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) != Some("serve") {
-        usage("command required (serve)");
+    // TRDD-VS1FCUMU: `statusline-seal` compacts the status-line store with no server (it binds no
+    // port and takes no pidfile), so it is dispatched before the `serve` argument parsing.
+    if args.first().map(String::as_str) == Some("statusline-seal") {
+        statusline_seal(&args[1..]);
     }
+    if args.first().map(String::as_str) != Some("serve") {
+        usage("command required (serve or statusline-seal)");
+    }
+    // statusline-seal runs no guard, so it must not print a guard line; only `serve` reaches this point.
+    println!("{} alcore: {}", agentlens_core::log_ts(), agentlens_core::rss_guard::describe_limits());
     let mut data_dir = String::new();
     // REQUIRED, never guessed from the exe location: the binary reaches this process through three
     // layouts (bin-native/<plat>/ in the tarball, <dataDir>/bin/ as a dev copy, target/debug/ under
@@ -339,7 +411,15 @@ fn main() {
     // TRDD-2HRA270Y: opens the CoreState::open window; boot_start .. here is arg parsing, pid lock, embed key.
     static BEFORE_CORE_OPEN: std::sync::Once = std::sync::Once::new();
     BEFORE_CORE_OPEN.call_once(|| agentlens_core::rss_guard::log_boot_phase("before_core_open", None));
-    let state = Arc::new(Mutex::new(agentlens_core::CoreState::open(std::path::Path::new(&data_dir))));
+    let mut core = agentlens_core::CoreState::open(std::path::Path::new(&data_dir));
+    // TRDD-ER88PXNB: the summary card window is set here, at boot, and nowhere else: CoreState::open keeps 0 (every
+    // card) so tests and tools that open a state see the whole corpus. Knob precedence: env > config.json > default 14.
+    core.summary_card_days = agentlens_core::retention_config::resolve_knob(
+        std::path::Path::new(&data_dir),
+        &agentlens_core::retention_config::SUMMARY_CARD_DAYS,
+    );
+    eprintln!("{} alcore: summary card window {} days (0 = every card)", agentlens_core::log_ts(), core.summary_card_days);
+    let state = Arc::new(Mutex::new(core));
     // TRDD-2HRA270Y: with `before_core_open` brackets CoreState::open (the largest candidate for the ~780 MB).
     static AFTER_CORE_OPEN: std::sync::Once = std::sync::Once::new();
     AFTER_CORE_OPEN.call_once(|| agentlens_core::rss_guard::log_boot_phase("after_core_open", None));
@@ -603,6 +683,10 @@ fn main() {
             _ = terminate_signal() => {}
         }
     });
+    // TRDD-ER88PXNB: WHY this line: mi_peak_commit on it is the highest mimalloc commit over the whole run (reads and
+    // family builds included), which the boot-phase lines before the reads cannot show. The isolated run reads it to
+    // check the headroom under the 2048 MB cap. Logged before the flush so a slow flush cannot hide it.
+    agentlens_core::rss_guard::log_boot_phase("stop_requested", None);
     // Flush on the way out — the writer buffers, and losing the tail on SIGINT/SIGTERM would be
     // a silent hole the store cannot detect. The sweeper flushes the durable state (offsets +
     // cards) the same way: a graceful stop loses nothing.
@@ -626,6 +710,9 @@ fn main() {
         h.signal();
     }
 
+    // TRDD-N60JUWU3: a timed-out stop holds no CoreState, so its stop marker is written from disk
+    // after the runtimes stop (below).
+    let mut stop_from_disk = false;
     match agentlens_core::shutdown::flush_with_deadline(&state, remaining(stop_deadline)) {
         agentlens_core::shutdown::Outcome::Flushed(mut st) => {
             st.flush_spans();
@@ -641,6 +728,7 @@ fn main() {
             agentlens_core::collector_lifecycle::record_stop(&file, &mut st.lifecycle, agentlens_core::now_ms());
         }
         agentlens_core::shutdown::Outcome::TimedOut { holder } => {
+            stop_from_disk = true;
             let holder = holder.unwrap_or_else(|| "unknown".to_owned());
             // The CLI's own timeout message (serverControl.ts stopServer) greps server.log for
             // exactly this shape to name the holder in ITS error — keep the two in lockstep.
@@ -669,6 +757,13 @@ fn main() {
     // span flush) got any of it.
     rt.shutdown_timeout(remaining(stop_deadline));
     bg_rt.shutdown_timeout(remaining(stop_deadline));
+
+    // TRDD-N60JUWU3: after BOTH runtimes stopped, never before — the 30s lifecycle heartbeat (an
+    // `rt` task) persists the in-memory store, which has no `stoppedAt`, and would overwrite this
+    // marker. Without it the next boot classifies this timed-out stop as a crash.
+    if stop_from_disk {
+        agentlens_core::collector_lifecycle::record_stop_from_disk(std::path::Path::new(&data_dir), agentlens_core::now_ms());
+    }
 
     // The digest spool tap's last seal, AFTER both runtimes stopped: the OTLP tap writes on the
     // blocking pool and a hook/status-line write can be in flight at the signal, so sealing any

@@ -408,7 +408,11 @@ impl BodiesPoller {
         let mut d = BodiesDelta::default();
         let Ok(rd) = std::fs::read_dir(&self.dir) else { return d };
         d.listed = true;
-        let names: Vec<String> = rd.flatten().filter_map(|e| e.file_name().to_str().map(str::to_owned)).collect();
+        // Sorted, not raw read_dir order: read_dir order is filesystem-defined (it differs between Linux and macOS), and the
+        // model of a sender and other first-seen fields follow the scan order. Byte order equals the TS oracle's name order
+        // for these ASCII names, so both engines agree on every OS (burnguard_parity failed on Linux CI, TRDD-HSPUF5XH).
+        let mut names: Vec<String> = rd.flatten().filter_map(|e| e.file_name().to_str().map(str::to_owned)).collect();
+        names.sort();
         let seed_floor = if self.seeded { 0.0 } else { scan_now - SEED_LOOKBACK_MS };
         for name in &names {
             if self.seen.contains(name) {

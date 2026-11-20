@@ -34,17 +34,20 @@ import {
   formatTelemetryVerdict, ownedTelemetryKeys, rawBodiesHeldAbsent, sameTelemetryValue, shown as shownValue, telemetryVerdict, verdictConflicts as detectConflictsFromRows,
 } from '../telemetryConfig'
 import { disableForForeignTelemetry, enableIfForeign } from './foreignTelemetry'
+import { restoreParkedSurfaces } from './surfaces'
 import { effectiveBodiesDir, RAW_BODIES_KEY } from '../captureConfig'
 import { alstoreBin as resolveAlstoreBin, rustIngestPass, type RustPassResult } from '../rustStorePass'
 import { safeConfigEdit, type SafeEditOp } from '../safeConfigEdit'
 import { DEFAULT_MAX_BYTES_PER_PASS } from '../store/ingestPass'
 import { envPort, sleep } from './cliCore'
 import { dataDirFrom } from '../dataDir'
+import { packageVersion } from '../packageVersion'
 import {
   CLI_BIN, GATE_CMD, GATE_EVENTS, GATE_MATCHER, HOOK_CMD, HOOK_EVENTS, HookMatcher,
-  INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration,
+  INSTALLED_EVENTS, REVIEW_CMD, REVIEW_EVENTS, SUPERVISOR_CMD, SUPERVISOR_EVENTS, isStaleGeneration, reviewModInstalled,
+  hooksVerdict, parseOurCommand, stampedCommand, statuslineDrift, installStatusline,
   installHooks, installSkill, isOurHookCommand, rebuildEventMatchers, resolveOnPath,
-  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES,
+  HOOK_TIMEOUT_SEC, sha256File, SKILL_NAMES, findPackageRoot, skillFiles, skillTreeHash, installAgents, AGENT_NAMES, agentSurfaceState, skillSurfaceState,
 } from './hookInstall'
 import { alcoreBin, alcoreServeArgs, ALCORE_MIMALLOC_PURGE_DELAY_MS, resolveBinNativeDir, statsOwnership } from './serverControl'
 
@@ -239,6 +242,9 @@ export interface StatsShape {
   ports?: { ui: number; mcp: number; otlp: number }
   spans?: { store?: { totalSpans: number }; inMemory?: number }
   hookEvents?: { receivedSinceBoot: number }
+  // TRDD-RBBEX59R c1 item 8: "off" in no-collection mode; absent on a build that predates it.
+  collection?: 'on' | 'off'
+  startedBy?: string | null
 }
 
 async function serverStats(ctx: Ctx): Promise<StatsShape | null> {
@@ -370,43 +376,70 @@ function settingsHooks(s: Settings): Record<string, HookMatcher[]> {
 
 /** Would installHooks change anything? Mirrors the installer's change detection without writing. */
 export function hooksConverged(s: Settings): boolean {
-  const hooks = settingsHooks(s)
-  const events = new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])
-  for (const ev of events) {
-    const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
-    if (JSON.stringify(r.rebuilt) !== JSON.stringify(matchers)) return false
-  }
+  // The one verdict of hookInstall.ts: a registration stamped newer than this CLI is kept as it is (an older CLI never edits a newer CLI's
+  // entries), so it reads as converged and the launch drift check reports nothing for it.
+  const verdict = hooksVerdict(s, packageVersion())
+  if (verdict.kind === 'keep-newer') return true
+  if (verdict.kind === 'rewrite') return false
   const env = s.env as Record<string, unknown> | undefined
   if (env && env.SPYGLASS_DIR !== undefined) return false
   return true
 }
 
+/** The count message of the review-gate and supervisor checks; the `want === 1` text is the long-standing one. */
+function entryCountMessage(ev: string, cmd: string, want: number, found: number): string {
+  return want === 1
+    ? `${ev}: expected exactly one '${cmd}' entry, found ${found}`
+    : `${ev}: expected no '${cmd}' entry while the review mod is installed, found ${found}`
+}
+
 /** Independent post-install assertion: exactly one v2 entry per event, zero stale entries. */
 /** Independent post-install assertion: exactly one v2 entry per event, zero stale entries, every
  *  agentlenspro entry at HOOK_TIMEOUT_SEC (a command match alone would pass a leftover 30s registration). */
-function verifyHooksState(s: Settings): string | null {
+export function verifyHooksState(s: Settings, running: string): string | null {
+  // A newer stamp is kept, not verified against the running version (hooksVerdict).
+  if (hooksVerdict(s, running).kind === 'keep-newer') return null
   const hooks = settingsHooks(s)
+  /** The parsed entries of one base command on one event, optionally only on the matchers `onMatcher` accepts. */
+  const entriesOf = (ev: string, base: string, onMatcher: (m: HookMatcher) => boolean = () => true): Array<{ base: string; stamp: string | null }> =>
+    (hooks[ev] ?? []).filter(onMatcher).flatMap(m => m.hooks ?? [])
+      .map(h => parseOurCommand(h.command)).filter((p): p is { base: string; stamp: string | null } => p !== null && p.base === base)
+  /** Every entry of the base must carry the running stamp; names the stamp found otherwise. */
+  const stampProblem = (ev: string, base: string, entries: Array<{ stamp: string | null }>): string | null => {
+    const bad = entries.find(e => e.stamp !== running)
+    return bad ? `${ev}: '${base}' is stamped ${bad.stamp ?? 'nothing'}, expected ${running}` : null
+  }
   for (const ev of HOOK_EVENTS) {
-    const cmds = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command))
-    const ours = cmds.filter(c => c === HOOK_CMD)
+    const ours = entriesOf(ev, HOOK_CMD)
     if (ours.length !== 1) return `${ev}: expected exactly one '${HOOK_CMD}' entry, found ${ours.length}`
+    const bad = stampProblem(ev, HOOK_CMD, ours)
+    if (bad) return bad
   }
   for (const ev of GATE_EVENTS) {
-    const gates = (hooks[ev] ?? []).filter(m => m.matcher === GATE_MATCHER)
-      .flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === GATE_CMD)
+    const gates = entriesOf(ev, GATE_CMD, m => m.matcher === GATE_MATCHER)
     if (gates.length !== 1) return `${ev}: expected exactly one '${GATE_CMD}' gate entry, found ${gates.length}`
+    const bad = stampProblem(ev, GATE_CMD, gates)
+    if (bad) return bad
   }
+  // WHY: rebuildEventMatchers (hookInstall.ts) registers the review gate and the review supervisor ONLY when the
+  // review mod is NOT installed (the mod runs the review itself; both hooks would give the model contradictory
+  // orders). The verifier must expect the same, or a converge with the mod present reports "expected exactly one
+  // 'agentlenspro review-gate' entry, found 0" on every run.
+  const wantReviewEntries = reviewModInstalled() ? 0 : 1
   for (const ev of REVIEW_EVENTS) {
-    const reviews = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === REVIEW_CMD)
-    if (reviews.length !== 1) return `${ev}: expected exactly one '${REVIEW_CMD}' entry, found ${reviews.length}`
+    const reviews = entriesOf(ev, REVIEW_CMD)
+    if (reviews.length !== wantReviewEntries) return entryCountMessage(ev, REVIEW_CMD, wantReviewEntries, reviews.length)
+    const bad = stampProblem(ev, REVIEW_CMD, reviews)
+    if (bad) return bad
   }
   // The supervisor was registered by the installer but never VERIFIED here, so a converge that
   // silently dropped it still reported "registrations current". The supervisor exists to notice a
   // gate that has stopped firing; an unverified supervisor is a watchdog nobody watches.
   for (const ev of SUPERVISOR_EVENTS) {
-    const sups = (hooks[ev] ?? []).flatMap(m => (m.hooks ?? []).map(h => h.command)).filter(c => c === SUPERVISOR_CMD)
-    if (sups.length !== 1) return `${ev}: expected exactly one '${SUPERVISOR_CMD}' entry, found ${sups.length}`
+    const sups = entriesOf(ev, SUPERVISOR_CMD)
+    if (sups.length !== wantReviewEntries) return entryCountMessage(ev, SUPERVISOR_CMD, wantReviewEntries, sups.length)
+    const bad = stampProblem(ev, SUPERVISOR_CMD, sups)
+    if (bad) return bad
   }
   for (const [ev, matchers] of Object.entries(hooks)) {
     for (const m of matchers ?? []) {
@@ -423,6 +456,20 @@ function verifyHooksState(s: Settings): string | null {
   return null
 }
 
+/** The command string of `base` as registered in settings.json, so a verify runs what the hook runner will run (under keep-newer that is the
+ *  newer CLI's stamp, not the running version's). When settings.json holds no entry of that base (the review gate and supervisor are not
+ *  registered while the review mod is installed, a missing or unparseable file) the command is stamped with the running version: the verify
+ *  still proves the binary answers that command. */
+function registeredCommand(state: Settings | 'absent' | 'unparseable', base: string, running: string): string {
+  if (state !== 'absent' && state !== 'unparseable') {
+    for (const matchers of Object.values(settingsHooks(state))) {
+      for (const m of Array.isArray(matchers) ? matchers : []) {
+        for (const h of m.hooks ?? []) if (parseOurCommand(h.command)?.base === base) return h.command
+      }
+    }
+  }
+  return stampedCommand(base, running)
+}
 /** Execute a registered hook command string with a synthetic stdin payload — the strongest
  *  possible verify: the EXACT string the hook runner will exec, resolved through the same
  *  PATH. Returns null on contract compliance (exit 0), else the violation. */
@@ -1010,13 +1057,17 @@ const stepHooks: StepDef = {
       }
     }
     const settings = state === 'absent' ? {} : state
+    const running = packageVersion()
+    const verdict = state === 'absent' ? null : hooksVerdict(settings, running)
+    const keptNewer = verdict?.kind === 'keep-newer' ? verdict.newest : null
     const converged = state !== 'absent' && hooksConverged(settings)
     const staleCount = Object.values(settingsHooks(settings)).flat()
       .flatMap(m => m.hooks ?? [])
       .filter(h => isStaleGeneration(h.command)).length
     const found = state === 'absent'
       ? 'no settings.json'
-      : converged ? 'registrations current' : staleCount === 0 ? 'needs converge (registration drift: timeout or shape)' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
+      : keptNewer !== null ? `registrations stamped ${keptNewer}, newer than this CLI (${running}), kept`
+      : converged ? 'registrations current' : staleCount === 0 ? 'needs converge (registration drift: stamp, timeout or shape)' : `needs converge (${staleCount} stale/legacy entr${staleCount === 1 ? 'y' : 'ies'})`
 
     if (ctx.dryRun) {
       return {
@@ -1029,9 +1080,12 @@ const stepHooks: StepDef = {
       }
     }
 
+    // A kept newer stamp is reported in this step's found text. It is NOT announced here: ctx.log is a no-op under setup --json, so announcing
+    // through the once-per-pair store from this step would mark the notice as shown without ever printing it. The launch path announces it (autoSetup.ts).
     let acted = false
     if (!converged) {
-      await installHooks(false, { settingsPath: ctx.settingsPath, pathEnv: ctx.pathEnv, log: ctx.log })
+      // keepNewer: setup never edits a newer CLI's registrations (hooksConverged is already true then, so this is defence in depth).
+      await installHooks(false, { settingsPath: ctx.settingsPath, pathEnv: ctx.pathEnv, log: ctx.log, keepNewer: true, dataDir: ctx.dataDir })
       acted = true
     }
     // VERIFY 1 — independent re-parse (fresh fs read, our own JSON.parse; not the editor).
@@ -1039,25 +1093,25 @@ const stepHooks: StepDef = {
     if (after === 'absent' || after === 'unparseable') {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `post-state ${after}` }, acted }
     }
-    const bad = verifyHooksState(after)
+    const bad = verifyHooksState(after, running)
     if (bad) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: bad }, acted }
     }
     // VERIFY 2 — execute the REGISTERED commands with synthetic payloads (contract: exit 0;
     // the forwarder prints nothing; both fail-open even while the server is still down).
-    const hookErr = execRegisteredCommand(ctx, HOOK_CMD,
+    const hookErr = execRegisteredCommand(ctx, registeredCommand(after, HOOK_CMD, running),
       JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'setup-verify' }), true)
     if (hookErr) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${HOOK_CMD}' ${hookErr}` }, acted }
     }
-    const gateErr = execRegisteredCommand(ctx, GATE_CMD,
+    const gateErr = execRegisteredCommand(ctx, registeredCommand(after, GATE_CMD, running),
       JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: {} }), false)
     if (gateErr) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${GATE_CMD}' ${gateErr}` }, acted }
     }
     // No transcript_path resolves ⇒ nothing to scan ⇒ allow silently (exit 0, no stdout) — same
     // contract as hook/gate's synthetic-payload check above.
-    const reviewErr = execRegisteredCommand(ctx, REVIEW_CMD,
+    const reviewErr = execRegisteredCommand(ctx, registeredCommand(after, REVIEW_CMD, running),
       JSON.stringify({ hook_event_name: 'Stop', session_id: 'setup-verify', transcript_path: '/nonexistent' }), true)
     if (reviewErr) {
       return { result: { step: this.name, found, action: acted ? 'installed' : 'none', verify: 'FAIL', detail: `'${REVIEW_CMD}' ${reviewErr}` }, acted }
@@ -1072,9 +1126,74 @@ const stepHooks: StepDef = {
   },
 }
 
+// TRDD-YL3EWT6N item 8b: refresh a stale status line stamp of ours. Never creates a missing key and never wraps a foreign command (installing the
+// status line is the explicit --install-statusline verb, TRDD-FBLI5FNQ), keeps a newer stamp. An entry of ours that does not parse is a SKIP row with
+// a fix-by-hand detail: the launch repair skips it silently, so setup is where it is reported. WHY SKIP and not FAIL: runSetup is fail-fast (the STEPS
+// loop: after a FAIL every later step is "not run"), so a FAIL here would stop the skill, old-package and server steps over an entry the user owns; a
+// SKIP row is shown in the table and does not fail setup, like a kept edited skill. The verify re-reads settings.json; it does NOT run the registered
+// command, which would execute the user's own status line script and write a synthetic row into the status line store.
+const stepStatusline: StepDef = {
+  name: 'statusline',
+  async run(ctx) {
+    const state = readSettingsFresh(ctx.settingsPath)
+    if (state === 'unparseable') {
+      return { result: { step: this.name, found: `${ctx.settingsPath} is not parseable JSON`, action: 'refused', verify: 'FAIL', detail: 'fix the file manually, then re-run setup — never start fresh over user config' }, acted: false }
+    }
+    if (state === 'absent') {
+      return { result: { step: this.name, found: 'no settings.json', action: 'none', verify: 'SKIP', detail: 'setup does not install the status line; run agentlenspro --install-statusline' }, acted: false }
+    }
+    const running = packageVersion()
+    const drift = statuslineDrift(state, running)
+    const found = [
+      drift.stale.length > 0
+        ? `stale: ${drift.stale.join(', ')}`
+        : drift.current.length + drift.keptNewer.length + drift.unparseable.length === 0
+        ? 'no agentlenspro status line capture installed (setup does not install it, TRDD-FBLI5FNQ; run agentlenspro --install-statusline)'
+        : 'no stale status line stamp',
+      ...drift.keptNewer.map(k => `${k.key} stamped ${k.stamp}, newer than this CLI (${running}), kept`),
+      ...drift.unparseable.map(k => `${k} looks like ours but is not parseable`),
+    ].join('; ')
+    if (ctx.dryRun) {
+      return { result: { step: this.name, found, action: drift.stale.length > 0 ? 'would: refresh the status line stamp via safeConfigEdit' : 'none', verify: 'SKIP', detail: 'dry-run' }, acted: false }
+    }
+    let acted = false
+    if (drift.stale.length > 0) {
+      try {
+        await installStatusline(false, { settingsPath: ctx.settingsPath, pathEnv: ctx.pathEnv, log: ctx.log, repairOnly: true })
+      } catch (e) {
+        return { result: { step: this.name, found, action: 'refused', verify: 'FAIL', detail: (e as Error).message }, acted: false }
+      }
+      acted = true
+    }
+    const action = acted ? 'refreshed' : 'none'
+    const after = readSettingsFresh(ctx.settingsPath)
+    if (after === 'absent' || after === 'unparseable') return { result: { step: this.name, found, action, verify: 'FAIL', detail: `post-state ${after}` }, acted }
+    const left = statuslineDrift(after, running)
+    if (left.stale.length > 0) return { result: { step: this.name, found, action, verify: 'FAIL', detail: `still stale: ${left.stale.join(', ')}` }, acted }
+    // PASS with the same detail when this run refreshed the other key: the launch repair (autoSetup.ts defaultRepair) counts only PASS as a restore,
+    // so a SKIP there would print "could not restore status line" for a refresh that worked. SKIP only when the step did nothing.
+    if (left.unparseable.length > 0) {
+      return {
+        result: {
+          step: this.name, found, action, verify: acted ? 'PASS' : 'SKIP',
+          detail: `${left.unparseable.join(', ')} in ${ctx.settingsPath} looks like ours but is not parseable, so its stamp is never refreshed — fix that command by hand (agentlenspro --install-statusline refuses it too)`,
+        },
+        acted,
+      }
+    }
+    return { result: { step: this.name, found, action, verify: 'PASS', detail: 'stamps re-read from settings.json' }, acted }
+  },
+}
+
 const stepSkill: StepDef = {
   name: 'skill',
   async run(ctx) {
+    // P2 (TRDD-RBBEX59R D7, D14): put back the skills a pre-d2 `disable` parked BEFORE judging drift, or this step would install a second copy
+    // beside the parked one. The `setup` verb and --force-install-telemetry reach the skill step without the in-lock restore of
+    // ensureInstalled (P1). It is never reached with a foreign setup present: runSetup is fail-fast, so a refused otel-env stops the later steps.
+    const putBack = ctx.dryRun ? [] : restoreParkedSurfaces({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).restored
+    // The restore moves files and the setup verb has no other line for it, so it goes into the step's detail (ensureInstalled announces its own P1 on stderr).
+    const putBackNote = putBack.length > 0 ? `; ${putBack.length} parked skill(s) put back` : ''
     // EVERY shipped skill, not just the first: a second skill that was shipped in the tarball but
     // never checked here would be installed once and then never repaired or refreshed, and setup's
     // whole contract is "detect → converge → verify" for the things it owns.
@@ -1093,17 +1212,24 @@ const stepSkill: StepDef = {
         name, src: path.join(src, 'SKILL.md'), dst, srcExists: srcHash !== null,
         srcHash, srcFiles,
         dstHash: skillTreeHash(dst, srcFiles),
+        // The item-4 verdict, asked only for a skill that exists on both sides and differs.
+        state: srcHash !== null && skillTreeHash(dst, srcFiles) !== srcHash ? skillSurfaceState(ctx.repoRoot, ctx.skillsDir, name) : null,
       }
     })
     const missing = skills.filter(s => !s.srcExists)
     if (missing.length > 0) {
       return { result: { step: this.name, found: `shipped skill missing at ${missing.map(s => s.src).join(', ')}`, action: 'refused', verify: 'FAIL', detail: 'package is incomplete' }, acted: false }
     }
-    const stale = skills.filter(s => s.dstHash !== s.srcHash)
+    // Item 4: a skill the verdict keeps (newer stamp, or edited in a release) is listed, not repaired and not a verify failure.
+    const keptSkills = skills.filter(s => s.dstHash !== s.srcHash && (s.state?.verdict === 'keep-newer' || s.state?.verdict === 'keep-edited'))
+    const stale = skills.filter(s => s.dstHash !== s.srcHash && !keptSkills.includes(s))
+    // Replaced files are copied here first; ctx.dataDir (never the real home) so a fixture's backups stay in the fixture.
+    const backupRoot = path.join(ctx.dataDir, 'surface-backups')
     const supersededDir = path.join(ctx.skillsDir, 'agentlens-diagnostics')
     const hasSuperseded = fs.existsSync(supersededDir)
-    const found = `${skills.length - stale.length}/${skills.length} current` +
+    const found = `${skills.length - stale.length - keptSkills.length}/${skills.length} current` +
       (stale.length > 0 ? ` (${stale.map(s => `${s.name}: ${s.dstHash === null ? 'not installed' : 'content drift'}`).join(', ')})` : '') +
+      (keptSkills.length > 0 ? ` (kept: ${keptSkills.map(s => `${s.name}: ${s.state?.verdict === 'keep-newer' ? 'newer than shipped' : 'edited'}`).join(', ')})` : '') +
       (hasSuperseded ? ' + superseded agentlens-diagnostics present' : '')
 
     if (ctx.dryRun) {
@@ -1115,7 +1241,7 @@ const stepSkill: StepDef = {
 
     let acted = false
     for (const s of stale) {
-      installSkill({ repoRoot: ctx.repoRoot, skillsDir: ctx.skillsDir, log: ctx.log, name: s.name })
+      installSkill({ repoRoot: ctx.repoRoot, skillsDir: ctx.skillsDir, log: ctx.log, name: s.name, backupRoot })
       acted = true
     }
     let supersededNote = ''
@@ -1137,33 +1263,48 @@ const stepSkill: StepDef = {
     // The AGENT definitions converge with the skills, in this same step: a skill that dispatches
     // `agentlens-tldr-worker` is inert on a machine without that agent file, so a run that
     // refreshed the skills and skipped the agents would report PASS on a half-installed feature.
+    // Item 4: an installed agent the verdict keeps (newer stamp, or edited in a release) is neither stale nor a verify failure:
+    // installAgents leaves it alone, so counting it would fail this step on every run and never converge.
+    const agentKeepsOf = (name: string): 'keep-newer' | 'keep-edited' | null => {
+      const v = agentSurfaceState(ctx.repoRoot, ctx.agentsDir, name).verdict
+      return v === 'keep-newer' || v === 'keep-edited' ? v : null
+    }
+    const agentsKept = AGENT_NAMES.filter(name => {
+      const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
+      const dst = path.join(ctx.agentsDir, `${name}.md`)
+      return fs.existsSync(src) && fs.existsSync(dst) && sha256File(dst) !== sha256File(src) && agentKeepsOf(name) !== null
+    })
     const agentsStale = AGENT_NAMES.filter(name => {
       const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
       const dst = path.join(ctx.agentsDir, `${name}.md`)
-      return fs.existsSync(src) && (!fs.existsSync(dst) || sha256File(dst) !== sha256File(src))
+      return fs.existsSync(src) && (!fs.existsSync(dst) || sha256File(dst) !== sha256File(src)) && !agentsKept.includes(name)
     })
     if (agentsStale.length > 0) {
-      installAgents({ repoRoot: ctx.repoRoot, agentsDir: ctx.agentsDir, log: ctx.log })
+      installAgents({ repoRoot: ctx.repoRoot, agentsDir: ctx.agentsDir, log: ctx.log, backupRoot })
       acted = true
     }
 
     // VERIFY — hash compare on a FRESH read of both trees (not the writer's buffer), for EVERY
     // skill and agent. One bad apple fails the step and is named, so "PASS" can never mean "the
-    // first one was fine and the rest were not looked at".
-    const bad = skills.filter(s => skillTreeHash(s.dst, s.srcFiles) !== s.srcHash)
+    // first one was fine and the rest were not looked at". A kept surface is not an apple: it is listed in the detail instead.
+    const bad = skills.filter(s => !keptSkills.includes(s) && skillTreeHash(s.dst, s.srcFiles) !== s.srcHash)
     const badAgents = AGENT_NAMES.filter(name => {
       const src = path.join(ctx.repoRoot, 'agents', `${name}.md`)
       const dst = path.join(ctx.agentsDir, `${name}.md`)
-      return !(fs.existsSync(src) && fs.existsSync(dst) && sha256File(dst) === sha256File(src))
+      return !agentsKept.includes(name) && !(fs.existsSync(src) && fs.existsSync(dst) && sha256File(dst) === sha256File(src))
     })
+    const keptNote = keptSkills.length + agentsKept.length === 0 ? '' : `; kept, not overwritten: ${[
+      ...keptSkills.map(s => `skill ${s.name} (${s.state?.verdict === 'keep-newer' ? `installed ${s.state.installedStamp} is newer than shipped ${s.state.shippedStamp}` : `edited, same version ${s.state?.installedStamp}`})`),
+      ...agentsKept.map(name => `agent ${name} (${agentKeepsOf(name) === 'keep-newer' ? 'newer than shipped' : 'edited, same version'})`),
+    ].join(', ')}`
     return {
       result: {
-        step: this.name, found: `${found}; agents ${AGENT_NAMES.length - agentsStale.length}/${AGENT_NAMES.length} current`,
+        step: this.name, found: `${found}; agents ${AGENT_NAMES.length - agentsStale.length - agentsKept.length}/${AGENT_NAMES.length} current`,
         action: acted ? 'installed/refreshed' : 'none',
         verify: bad.length === 0 && badAgents.length === 0 ? 'PASS' : 'FAIL',
         detail: (bad.length === 0 && badAgents.length === 0
-          ? `sha256 match on ${skills.length} skill tree(s) + ${AGENT_NAMES.length} agent(s)${supersededNote}`
-          : `installed hash differs from shipped hash: ${[...bad.map(s => s.name), ...badAgents].join(', ')}`),
+          ? `sha256 match on ${skills.length - keptSkills.length} skill tree(s) + ${AGENT_NAMES.length - agentsKept.length} agent(s)${supersededNote}${putBackNote}${keptNote}`
+          : `installed hash differs from shipped hash: ${[...bad.map(s => s.name), ...badAgents].join(', ')}${putBackNote}${keptNote}`),
       },
       acted,
     }
@@ -1216,9 +1357,11 @@ const stepOtel: StepDef = {
     // A foreign pipeline (owner order 2026-10-02): refuse and write NOTHING unless --force-install-telemetry
     // was given. A conflicting SHELL export can never be fixed by a settings edit, so it refuses even then.
     if (conflicts.length > 0 && (!ctx.forceInstall || conflicts.some(c => c.scope === 'shell'))) {
-      // Disable again, like the launch path (kill-switch re-armed, skills parked) — but never in a dry run.
-      const note = ctx.dryRun ? '' : `\nagentlenspro has disabled itself: ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}, hooks are no-ops`
-      return { result: { step: this.name, found, action: ctx.dryRun ? 'would: refuse, disable agentlenspro, exit non-zero (dry-run: nothing done)' : 'refused', verify: ctx.dryRun ? 'SKIP' : 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
+      // Park the skills like the launch path (TRDD-RBBEX59R D10, D16) — never in a dry run. The kill-switch is armed only when none stands: it
+      // keeps the reason of an operator `disable` that already stands. No replaceReason: only the operator's `enable` replaces a reason, and a
+      // `setup` run is not that. The skills are parked either way. The message says what is true: collection is off, nothing else is.
+      const note = ctx.dryRun ? '' : `\nagentlenspro has parked its skills while this foreign setup stands: collection is off, ${disableForForeignTelemetry({ dataDir: ctx.dataDir, skillsDir: ctx.skillsDir, rulesDir: path.join(ctx.home, '.claude', 'rules') }).moved.length} skill(s) moved to ${path.join(ctx.dataDir, 'disabled-surfaces')}`
+      return { result: { step: this.name, found, action: ctx.dryRun ? 'would: refuse, park the skills, arm the kill-switch if none stands, exit non-zero (dry-run: nothing done)' : 'refused', verify: ctx.dryRun ? 'SKIP' : 'FAIL', detail: formatTelemetryConflicts(conflicts) + note + (ctx.dryRun ? `\nverdict (dry-run, nothing written):\n${formatTelemetryVerdict(rows)}` : '') }, acted: !ctx.dryRun }
     }
 
     if (ctx.dryRun) {
@@ -1390,20 +1533,16 @@ export const stepServer: StepDef = {
         return { result: { step: this.name, found, action: 'stop old server', verify: 'FAIL', detail: `pid ${stopPid} did not stop within 10s` }, acted: true }
       }
     }
-    // The kill-switch gates EVERY spawn path, including setup (TRDD-K3WDPR7M): this was the one
-    // spawn site with no guard, discovered when a server booted minutes after `agentlenspro
-    // disable`. The server now also refuses at its own boot — this check just makes setup report
-    // the refusal honestly instead of spawning a child that immediately exits 78.
-    if (agentlensDisabled(ctx.dataDir)) {
-      return { result: { step: this.name, found, action: 'start server', verify: 'FAIL', detail: 'AgentlensPro is DISABLED — run `agentlenspro enable` first' }, acted: false }
-    }
-    // The NO_REVIVE brake refuses this spawn too: `setup` is idempotent and re-run casually, so a
+    // No kill-switch refusal here any more (TRDD-RBBEX59R c2): under the switch setup starts the server in
+    // no-collection mode (alcoreServeArgs, below, adds --no-collection for ctx.dataDir), so the spawn guards
+    // stay fed. It used to refuse here because the server refused at its own boot (exit 78); since c1 it does not.
+    // The NO_REVIVE brake refuses this spawn: `setup` is idempotent and re-run casually, so a
     // silent override here would resurrect a server mid store-swap exactly like the hook path did
     // (TRDD-8VGQK9L9). Reported, not skipped — a setup step that quietly does nothing looks healthy.
-    // Sits BELOW the graceful stop of a mismatched/unresponsive server on purpose, beside the
-    // DISABLED gate: the brake forbids a SPAWN, not a stop, and "braked ⇒ no server" is the state
+    // Sits BELOW the graceful stop of a mismatched/unresponsive server on purpose: the brake forbids a
+    // SPAWN, not a stop, and "braked ⇒ no server" is the state
     // an operator armed it for — leaving a stale server up would be the surprising outcome.
-    // Both flags are read in ctx.dataDir, the dir this step is about to start a server in, not the env-resolved one:
+    // The brake is read in ctx.dataDir, the dir this step is about to start a server in, not the env-resolved one:
     // they differ whenever the data dir comes from options (TRDD-TYOQA14F).
     // DELIBERATE ASYMMETRY (TRDD-TYOQA14F): setup honours the FILE brake but NOT the AGENTLENS_NO_REVIVE env. That
     // env is documented as a brake on AUTOMATIC revives (hookHandlers.ts reviveDaemonDetached, `server revive`),
@@ -1538,33 +1677,70 @@ const stepSelfTest: StepDef = {
     if (post.status !== 200) {
       return { result: { step: this.name, found: 'server up', action: 'OTLP POST', verify: 'FAIL', detail: `OTLP ingest HTTP ${post.status}` }, acted: false }
     }
-    // …2. and back out through the DIAGNOSTICS door (the get_recent_sessions MCP tool):
-    // the round-trip proves collector → span store → summarizer → repository → MCP in one go.
-    let seen = false
-    // 10s of wall clock, not 40 tries: each MCP call can itself take seconds (TRDD-V2HFI30L).
-    const seenBy = Date.now() + 10_000
-    while (!seen && Date.now() < seenBy) {
-      try {
-        // The stateless Streamable-HTTP endpoint still wants the MCP handshake once per
-        // client; it is cheap, so re-issue it per attempt rather than track session state.
-        await mcpCall(ctx.mcpPort, 'initialize', {
-          protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'agentlenspro-setup', version: '2.0.0' },
-        })
-        const r = await mcpCall(ctx.mcpPort, 'tools/call', {
-          name: 'get_recent_sessions',
-          arguments: { limit: 50, verbosity: 'full' },
-        })
-        seen = JSON.stringify(r).includes(marker)
-      } catch { /* MCP may need a beat after boot */ }
-      if (!seen) await sleep(250)
+    // One get_recent_sessions read through the DIAGNOSTICS door (the MCP tool): true when the synthetic span is in
+    // it. Throws when MCP does not answer, so a caller can tell "not visible" from "could not ask".
+    const spanVisible = async (): Promise<boolean> => {
+      // The stateless Streamable-HTTP endpoint still wants the MCP handshake once per
+      // client; it is cheap, so re-issue it per attempt rather than track session state.
+      await mcpCall(ctx.mcpPort, 'initialize', {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'agentlenspro-setup', version: '2.0.0' },
+      })
+      const r = await mcpCall(ctx.mcpPort, 'tools/call', {
+        name: 'get_recent_sessions',
+        arguments: { limit: 50, verbosity: 'full' },
+      })
+      return JSON.stringify(r).includes(marker)
     }
-    if (!seen) {
-      return { result: { step: this.name, found: 'server up', action: 'OTLP→MCP round-trip', verify: 'FAIL', detail: `synthetic span ${marker} not visible via get_recent_sessions within 10s` }, acted: false }
+    // TRDD-RBBEX59R c2 item 6: under the kill-switch the server runs in no-collection mode, which answers the OTLP POST
+    // (200, above) and drops the span. The positive checks there are that 200 and collection "off"; every read for 10 s then
+    // asserts the span is NOT visible. That absence read is unproven here — a broken read path would also pass it; the
+    // proof for the server half is the mutation-recorded c1 test (rust-core no_collection_boot.rs). Outside the mode
+    // the round-trip below is unchanged.
+    const noCollection = agentlensDisabled(ctx.dataDir)
+    if (noCollection) {
+      const stats = await serverStats(ctx)
+      if (stats?.collection !== 'off') {
+        return { result: { step: this.name, found: 'server up', action: 'no-collection check', verify: 'FAIL', detail: `the kill-switch is armed for ${ctx.dataDir} but the server reports collection "${stats?.collection ?? 'unknown'}"` }, acted: false }
+      }
+      // The FULL 10 s of wall clock, every answered read checked (round 2, G): a span the server wrongly stored can
+      // appear a beat after the POST, so stopping at the first answer would read too early. At least one read must
+      // answer, or the check could not ask at all.
+      let answered = 0
+      const watchUntil = Date.now() + 10_000
+      while (Date.now() < watchUntil) {
+        let visible: boolean
+        // 1 s apart (round 3): each read is a full get_recent_sessions call, too heavy to repeat every 250 ms.
+        try { visible = await spanVisible() } catch { await sleep(1_000); continue }
+        answered++
+        if (visible) {
+          return { result: { step: this.name, found: 'server up', action: 'no-collection check', verify: 'FAIL', detail: `synthetic span ${marker} is visible via get_recent_sessions although the server reports collection "off"` }, acted: false }
+        }
+        await sleep(1_000)
+      }
+      if (answered === 0) {
+        return { result: { step: this.name, found: 'server up', action: 'no-collection check', verify: 'FAIL', detail: 'get_recent_sessions did not answer within 10s' }, acted: false }
+      }
+    } else {
+      // …2. and back out through the DIAGNOSTICS door (the get_recent_sessions MCP tool):
+      // the round-trip proves collector → span store → summarizer → repository → MCP in one go.
+      let seen = false
+      // 10s of wall clock, not 40 tries: each MCP call can itself take seconds (TRDD-V2HFI30L).
+      const seenBy = Date.now() + 10_000
+      while (!seen && Date.now() < seenBy) {
+        try { seen = await spanVisible() } catch { /* MCP may need a beat after boot */ }
+        if (!seen) await sleep(250)
+      }
+      if (!seen) {
+        return { result: { step: this.name, found: 'server up', action: 'OTLP→MCP round-trip', verify: 'FAIL', detail: `synthetic span ${marker} not visible via get_recent_sessions within 10s` }, acted: false }
+      }
     }
     // 3. Hook + gate handlers against synthetic stdin payloads, via the REGISTERED strings.
     const preStats = await serverStats(ctx)
     const preHookCount = preStats?.hookEvents?.receivedSinceBoot ?? 0
-    const hookErr = execRegisteredCommand(ctx, HOOK_CMD,
+    // The commands as REGISTERED in settings.json (a newer CLI's stamp included), exactly what the hook runner will exec.
+    const running = packageVersion()
+    const registeredState = readSettingsFresh(ctx.settingsPath)
+    const hookErr = execRegisteredCommand(ctx, registeredCommand(registeredState, HOOK_CMD, running),
       JSON.stringify({ hook_event_name: 'SessionStart', session_id: marker }), true)
     if (hookErr) {
       return { result: { step: this.name, found: 'round-trip ok', action: 'hook exec', verify: 'FAIL', detail: `'${HOOK_CMD}' ${hookErr}` }, acted: false }
@@ -1579,7 +1755,7 @@ const stepSelfTest: StepDef = {
     if (!counted) {
       return { result: { step: this.name, found: 'round-trip ok', action: 'hook exec', verify: 'FAIL', detail: 'hook ran but the server never counted the event' }, acted: false }
     }
-    const gateErr = execRegisteredCommand(ctx, GATE_CMD,
+    const gateErr = execRegisteredCommand(ctx, registeredCommand(registeredState, GATE_CMD, running),
       JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Task', tool_input: { subagent_type: 'general-purpose' } }), false)
     if (gateErr) {
       return { result: { step: this.name, found: 'round-trip ok', action: 'gate exec', verify: 'FAIL', detail: `'${GATE_CMD}' ${gateErr}` }, acted: false }
@@ -1587,7 +1763,9 @@ const stepSelfTest: StepDef = {
     return {
       result: {
         step: this.name, found: 'server up', action: 'span round-trip + hook/gate exec',
-        verify: 'PASS', detail: `span ${marker} visible via get_recent_sessions; hook event counted`,
+        verify: 'PASS', detail: noCollection
+          ? `no-collection mode: OTLP answered 200, collection "off", span ${marker} not visible via get_recent_sessions; hook event counted`
+          : `span ${marker} visible via get_recent_sessions; hook event counted`,
       },
       acted: false,
     }
@@ -1700,28 +1878,34 @@ function printDetection(ctx: Ctx): void {
 
 // stepOtel runs BEFORE hooks and skills: the telemetry verdict comes first, so a foreign setup stops the run
 // before anything else is installed (owner order 2026-10-02; the same order as autoSetup.ensureInstalled).
-const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOtel, stepHooks, stepSkill, stepOldPackage, stepServerGuarded, stepSelfTest, stepMemoryCheck]
+const STEPS: StepDef[] = [stepEnvironment, stepData, stepSpoolMigration, stepOtel, stepHooks, stepStatusline, stepSkill, stepOldPackage, stepServerGuarded, stepSelfTest, stepMemoryCheck]
 
-/** The three steps the auto-launch path may run on their own (autoSetup.ts) — a partial repair must
+/** The four steps the auto-launch path may run on their own (autoSetup.ts) — a partial repair must
  *  not start the server or run the self-test, which is what a full runSetup would do. */
-export const REPAIR_STEPS = { hooks: stepHooks, skill: stepSkill, 'otel-env': stepOtel } as const
+export const REPAIR_STEPS = { hooks: stepHooks, statusline: stepStatusline, skill: stepSkill, 'otel-env': stepOtel } as const
 
 /** Full hook drift list, per event: what differs (timeout old→new, command form, missing). Read-only. */
 export function hookDriftList(settingsPath: string): Array<{ event: string; problem: string }> {
   const s = readSettingsFresh(settingsPath)
   if (s === 'unparseable') return [{ event: '*', problem: 'settings.json is not parseable' }]
+  const running = packageVersion()
+  // A registration stamped newer than this CLI is kept as it is, so it is no drift (hooksVerdict).
+  if (s !== 'absent' && hooksVerdict(s, running).kind === 'keep-newer') return []
   const hooks = settingsHooks(s === 'absent' ? {} : s)
   const out: Array<{ event: string; problem: string }> = []
   const events = new Set([...Object.keys(hooks), ...INSTALLED_EVENTS])
   for (const ev of events) {
     const matchers = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const r = rebuildEventMatchers(matchers, ev, false, HOOK_CMD, GATE_CMD, REVIEW_CMD)
+    const r = rebuildEventMatchers(matchers, ev, false, running)
     if (JSON.stringify(r.rebuilt) === JSON.stringify(matchers)) continue
     const ours = matchers.flatMap(m => m.hooks ?? []).filter(h => isOurHookCommand(h.command))
     if (ours.length === 0) { out.push({ event: ev, problem: 'missing: no agentlenspro registration' }); continue }
     let any = false
     for (const h of ours) {
       if (h.timeout !== undefined && h.timeout !== HOOK_TIMEOUT_SEC) { out.push({ event: ev, problem: `timeout ${h.timeout} → ${HOOK_TIMEOUT_SEC} (${h.command})` }); any = true }
+      // A current-generation entry whose stamp is not the running version: stamp X -> Y, or unstamped -> Y (never reached for a newer stamp).
+      const parsed = parseOurCommand(h.command)
+      if (parsed !== null && parsed.stamp !== running) { out.push({ event: ev, problem: `${parsed.stamp === null ? 'unstamped' : `stamp ${parsed.stamp}`} -> ${running} (${parsed.base})` }); any = true }
     }
     for (const c of r.removedCommands) if (isStaleGeneration(c)) { out.push({ event: ev, problem: `command form: ${c} → current` }); any = true }
     if (!any) out.push({ event: ev, problem: 'registration shape differs (matcher / duplicates / ordering)' })

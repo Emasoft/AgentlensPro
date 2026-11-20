@@ -25,7 +25,9 @@ suite('logReader — output-file harvest (TRDD-ZS1GDXVY)', () => {
 
     // 2. A real scratch tree under a temp claude-* dir; the file path must match the scratch matcher
     //    (logReader harvests via the real regex). os.tmpdir() gives a realpath-stable root.
-    const scratchDir = path.join(os.tmpdir(), `claude-gfh-${process.pid}`, 'proj', sessionId, 'scratchpad')
+    // The segment named tmp is load-bearing: isClaudeScratchPath accepts claude-<name> only directly under a folder named tmp,
+    // and the 4 GB test-data cap points TMPDIR at tests_dev/tmp/run-<stamp>, where the bare claude-gfh folder did not match.
+    const scratchDir = path.join(os.tmpdir(), 'tmp', `claude-gfh-${process.pid}`, 'proj', sessionId, 'scratchpad')
     fs.mkdirSync(scratchDir, { recursive: true })
     const outFile = path.join(scratchDir, 'report.md')
     fs.writeFileSync(outFile, '# generated report\n' + 'x'.repeat(200))
@@ -34,7 +36,7 @@ suite('logReader — output-file harvest (TRDD-ZS1GDXVY)', () => {
       const orig = savedEnv
       if (orig === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = orig
       fs.rmSync(cfgRoot, { recursive: true, force: true })
-      fs.rmSync(path.join(os.tmpdir(), `claude-gfh-${process.pid}`), { recursive: true, force: true })
+      fs.rmSync(path.join(os.tmpdir(), 'tmp', `claude-gfh-${process.pid}`), { recursive: true, force: true })
     }
     const savedEnv = process.env.CLAUDE_CONFIG_DIR
     process.env.CLAUDE_CONFIG_DIR = cfgRoot

@@ -235,7 +235,23 @@ const isTestPath = (rel) =>
 const MAX_NON_TEST_OPENERS = 27
 // 2026-09-24: lowered to the measured count (raised again 2026-10-17, see above) after TRDD-4BZPAQWM
 // deleted src/database/* and sessionRepository.ts (a81972f9).
-const MAX_TEST_OPENERS = 11
+// 2026-11-18 (TRDD-CXNUWXX7): DEFENDED RAISE 11 -> 12, and it moves the ratchet the wrong way, for one file:
+//   src/test/duckPathPattern.test.ts (f2374de6): its canary tests prove that a quote-doubled path holding
+//     * ? or [ is read by DuckDB as a file pattern, and its fix tests prove that the repo read sites are not,
+//     so it runs plain SQL on a raw `:memory:` handle with fixed settings. Routing it through `openStore`
+//     would lower the count without lowering the coupling (a helper that hands back a connection, see
+//     above) and would change what the canary runs on (three store sub-directories, the half-of-RAM limit,
+//     a proxied connection). Folding its cases into another opener test file would hide the same construction.
+//     The file became an opener in f2374de6, which landed with no `pnpm run compile`; the cap was first
+//     seen exceeded by the compile of 2026-11-18.
+// 2026-11-19 (TRDD-HSPUF5XH): DEFENDED RAISE 12 -> 13, the same wrong-way move for the Rust twin of the file above:
+//   rust-core/crates/agentlens-store/tests/duck_path_pattern.rs (290f0bc8, TRDD-C6W0SWUT): its canary tests (canary_tree and the
+//     three tests after it) open raw `Connection::open_in_memory()` handles to prove that DuckDB `read_*` reads a quote-doubled
+//     path holding * ? or [ as a glob and that `glob_escape` / `sq_path` fix it; its production-chain test already goes through
+//     `open_store`. The reasons given above for duckPathPattern.test.ts apply unchanged. The file became an opener in 290f0bc8,
+//     which landed with no `pnpm run compile`; the cap was first seen exceeded by the release-gate compile of 2026-11-19.
+//     `git log -G` over the three opener patterns since da8fe5af names 290f0bc8 only.
+const MAX_TEST_OPENERS = 13
 
 // WHAT THIS CAP DOES NOT MEASURE — stated here because the commit that added it overclaimed.
 // It counts CONSTRUCTION (`X::open`, `new SQL.Database`, `DuckDBInstance.create`). The card says

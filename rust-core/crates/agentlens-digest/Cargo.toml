@@ -13,6 +13,8 @@ test = false
 doctest = false
 
 [dependencies]
+# glob_escape: the digest binds the spool file path to read_ndjson, which glob-expands it (TRDD-C6W0SWUT).
+agentlens-store = { path = "../agentlens-store" }
 duckdb = { version = "1.10506.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: column order == property order of the schema file, whatever else in the

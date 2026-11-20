@@ -195,13 +195,18 @@ pub struct CardPage {
 /// "Out of Memory Error" inside a scan, which is how DuckDB reports that condition.
 enum Refusal {
     NotEligible(String),
+    /// The previous run was killed between `/api/clear` and the end of its rescan (`clear_in_progress` is 1).
+    /// Its own variant, not a `NotEligible` text: `DurableState::restore` must tell a clear from a
+    /// schema or version refusal, because the snapshot cards mean the opposite in the two cases
+    /// (TRDD-JDQR0HDT).
+    ClearInProgress(String),
     OutOfMemory(String),
 }
 
 impl Refusal {
     fn text(&self) -> &str {
         match self {
-            Refusal::NotEligible(text) | Refusal::OutOfMemory(text) => text,
+            Refusal::NotEligible(text) | Refusal::OutOfMemory(text) | Refusal::ClearInProgress(text) => text,
         }
     }
 }
@@ -232,6 +237,9 @@ pub(crate) enum OpenOutcome {
     RewriteFailed(String),
     /// The reuse was refused; the file was rebuilt from the snapshot.
     Rebuilt(String),
+    /// The reuse was refused because an `/api/clear` was in progress; the file was rebuilt EMPTY from the
+    /// snapshot path. `CardStore::clear_was_interrupted` reads it (TRDD-JDQR0HDT).
+    ClearInterrupted(String),
 }
 
 /// The memory limits and the vacuum setting of `open_with_limits` (TRDD-0BDOV3WC, TRDD-USSG465Q). Production passes MEMORY_LIMIT
@@ -276,6 +284,13 @@ pub struct CardStore {
     /// Bumped by every `clear`; slots restart from 0 after one, so a consumer that remembers slot
     /// positions (the summary engine) can tell a restart from ordinary growth.
     epoch: u64,
+    /// TRDD-AXJH3WTU: the store write generation. Bumped by `put_arc` (the one card write path, so also every `CoreState::put_log_session`),
+    /// by `discard_cards`, and by `demote_cold` once per card it demotes (its stored text changes: `strip_timeline_value` sets
+    /// `timelineTruncatedCount` and `timelineRetainedBytes`, which the persisted record keeps). NOT by `clear`
+    /// (the clear path has `epoch` and `finish_clear_after_save`). WHY: `DurableState` compares it with the generation its last card save covered, so a writer that
+    /// never calls `mark_dirty` (the `/api/import` handler, the on-demand reparse in ui.rs) still reaches the card log at the next
+    /// timed tick. A plain `u64`: every writer holds `&mut CardStore` (under the CoreState mutex), so no atomic is needed.
+    write_generation: u64,
 
     /// TRDD-T0G38TZ4 — the corpus byte total, TRACKED on the write path instead of scanned.
     /// WHY a counter: `corpus_bytes` used to run `SELECT count(*), SUM(strlen(card))` over the
@@ -312,6 +327,10 @@ impl CardStore {
     /// exactly as before. NEVER a cold scan with the offsets kept: a store emptied behind valid
     /// offsets would never refill (the tailer cold-scans only when it holds no offsets).
     ///
+    /// TRDD-JDQR0HDT: the one refusal that does NOT refill from the snapshot is `clear_in_progress` = 1 (a killed
+    /// `/api/clear`): `DurableState::restore` discards the snapshot cards and tombstones both logs, because the
+    /// clear meant to drop them. The rebuilt file keeps the flag at 1 until those tombstones are durable.
+    ///
     /// TRDD-0BDOV3WC: a reuse that runs out of memory at [`MEMORY_LIMIT`] is not a refusal. The file
     /// is complete but too big for one scan, so it is compacted by a rewrite and reused instead; see
     /// `open_with_limits`.
@@ -343,6 +362,8 @@ impl CardStore {
     ///    rewrite is the corpus only after its rename, so they are never reused.
     /// b. The reuse attempt at `read`: a file reused as it stands gives `Reused`.
     /// c. Refused as NotEligible: the rebuild-from-snapshot path, `Rebuilt(reason)`.
+    ///    A clear in progress (`ClearInProgress`) takes the same path as `ClearInterrupted(reason)`, and
+    ///    `DurableState::restore` then also discards the snapshot cards instead of restoring them (TRDD-JDQR0HDT).
     /// d. Refused as OutOfMemory: the compacting rewrite (`rewrite_in_place`). A failure BEFORE the
     ///    rename removes the rebuild files and takes the rebuild-from-snapshot path,
     ///    `RewriteFailed(reason)`. A failure AFTER the rename never deletes `cards.duckdb` (see
@@ -372,6 +393,7 @@ impl CardStore {
                 return Self::assemble(conn, resident, next_seq, OpenOutcome::Reused);
             }
             Err(Refusal::NotEligible(reason)) => (reason.clone(), OpenOutcome::Rebuilt(reason)),
+            Err(Refusal::ClearInProgress(reason)) => (reason.clone(), OpenOutcome::ClearInterrupted(reason)),
             Err(Refusal::OutOfMemory(reason)) => {
                 eprintln!(
                     "{} alcore: card store — reusing {CARD_DB_FILE} ran out of memory at {} ({reason}); rewriting it compactly at {}",
@@ -403,12 +425,18 @@ impl CardStore {
         let conn = open_conn(&path, limits.vacuum_rebuild_indexes)
             .unwrap_or_else(|e| panic!("open the card store at {}: {e}", path.display()));
         Self::configure(&conn, limits.reopen).expect("configure the card store connection");
+        // TRDD-JDQR0HDT: a rebuild that follows an interrupted clear keeps `clear_in_progress` at 1. WHY: the
+        // card snapshot is still on disk and `DurableState::restore` has not yet tombstoned it. A death (or a load
+        // error) in that window would otherwise leave a store flagged 0 next to the full snapshot, and the next
+        // start would restore every snapshot card, which is the bug again. `finish_clear` runs only after the
+        // tombstones are durable.
+        let clear_flag = u8::from(matches!(outcome, OpenOutcome::ClearInterrupted(_)));
         // `restore_complete` starts at 0: only the end of a full restore (`mark_restore_complete`)
         // vouches for the corpus, so a boot killed half-way through the restore is rebuilt.
         conn.execute_batch(&format!(
             "DROP TABLE IF EXISTS cards; DROP TABLE IF EXISTS meta; {SCHEMA}; {META_SCHEMA};
              INSERT INTO meta VALUES ('ingest_version', '{}'), ('card_schema_version', '{CARD_SCHEMA_VERSION}'),
-                                     ('restore_complete', '0'), ('clear_in_progress', '0');",
+                                     ('restore_complete', '0'), ('clear_in_progress', '{clear_flag}');",
             crate::log_reader::LOG_INGEST_VERSION
         ))
         .expect("create the card store schema");
@@ -433,6 +461,7 @@ impl CardStore {
             // `load_resident`); for a fresh one it is 0, because the table is empty.
             card_bytes: resident.bytes,
             epoch: 0,
+            write_generation: 0,
             outcome,
         }
     }
@@ -529,6 +558,16 @@ impl CardStore {
         let want_ingest = crate::log_reader::LOG_INGEST_VERSION.to_string();
         let want_schema = CARD_SCHEMA_VERSION.to_string();
         let get = |k: &str| meta.get(k).map(String::as_str);
+        // TRDD-JDQR0HDT: checked FIRST. A store rebuilt after an interrupted clear carries `clear_in_progress` = 1 AND
+        // `restore_complete` = 0 until the tombstones are written; if the restore-complete check ran first, a death in
+        // that window would be refused as a plain "restore never completed" and the snapshot would be restored.
+        // Only an explicit "1" is a clear; a missing or garbled value stays an ordinary refusal below. Because this runs
+        // before the version checks, a clear in progress next to a stale ingest or schema version is still a clear and
+        // discards the snapshot: a clear the user asked for wins over a layout change (intended; tested by
+        // `a_clear_in_progress_wins_over_a_schema_version_mismatch`).
+        if get("clear_in_progress") == Some("1") {
+            return Err(Refusal::ClearInProgress("an /api/clear was in progress".to_owned()));
+        }
         if get("ingest_version") != Some(want_ingest.as_str()) {
             return Err(Refusal::NotEligible(format!("ingest version {:?} != {want_ingest}", get("ingest_version"))));
         }
@@ -542,7 +581,7 @@ impl CardStore {
             return Err(Refusal::NotEligible("the previous restore never completed".to_owned()));
         }
         if get("clear_in_progress") != Some("0") {
-            return Err(Refusal::NotEligible("an /api/clear was in progress".to_owned()));
+            return Err(Refusal::NotEligible(format!("clear_in_progress {:?} is not 0", get("clear_in_progress"))));
         }
         // The table itself must be readable too: a header that opens but a card table that does not
         // is exactly the damage a reuse must not paper over.
@@ -645,7 +684,7 @@ impl CardStore {
                     let warning = format!("the fresh file does not load at the reopen limit {}: {reason}", limits.reopen);
                     (conn, resident, next_seq, Some(warning))
                 }
-                Err(Refusal::NotEligible(reason)) => panic!(
+                Err(Refusal::NotEligible(reason) | Refusal::ClearInProgress(reason)) => panic!(
                     "the rewritten {} does not load at the reopen limit {}: {reason}; the file is kept",
                     path.display(),
                     limits.reopen
@@ -673,6 +712,13 @@ impl CardStore {
         matches!(self.outcome, OpenOutcome::Reused | OpenOutcome::Rewritten { .. })
     }
 
+    /// True when `open` refused the previous run's file because an `/api/clear` was in progress. The rebuilt file
+    /// is empty but keeps `clear_in_progress` at 1 until `DurableState::restore` has tombstoned the snapshot and
+    /// calls `finish_clear`; this accessor is how `restore` learns the reason (TRDD-JDQR0HDT).
+    pub fn clear_was_interrupted(&self) -> bool {
+        matches!(self.outcome, OpenOutcome::ClearInterrupted(_))
+    }
+
     /// How `open` got this store (see [`OpenOutcome`]). Read by the tests only.
     #[cfg(test)]
     pub(crate) fn open_outcome(&self) -> &OpenOutcome {
@@ -696,6 +742,16 @@ impl CardStore {
         self.set_meta("clear_in_progress", "0");
     }
 
+    /// TRDD-PGMMB2QG increment B: the `clear_in_progress` flag of this LIVE store, for the tests only. WHY: the
+    /// test helper that reads the flag from the file needs the store closed (a second connection to a file this
+    /// process has open is a second writer), and the two-clear test must read the flag between two calls on the same store.
+    #[cfg(test)]
+    pub(crate) fn clear_in_progress_for_test(&self) -> String {
+        self.conn
+            .query_row("SELECT value FROM meta WHERE key = 'clear_in_progress'", [], |r| r.get(0))
+            .expect("read the clear_in_progress flag")
+    }
+
     /// Drop every row WITHOUT the `/api/clear` flag — for `restore`, which found a reused database
     /// whose offsets are version-stale and must fall back to the cold-rescan path on an empty
     /// store (the flag would be wrong: no rescan is pending on a sweeper message).
@@ -705,6 +761,8 @@ impl CardStore {
         self.conn
             .execute_batch("DELETE FROM cards; UPDATE meta SET value = '0' WHERE key = 'restore_complete'")
             .expect("discard the stale card store");
+        // TRDD-AXJH3WTU: a removal outside the clear path moves the generation too (see the field).
+        self.write_generation += 1;
         self.next_seq = 0;
         self.parsed.clear();
         // TRDD-T0G38TZ4: the table is empty, so the tracked byte total is 0.
@@ -810,6 +868,8 @@ impl CardStore {
         self.next_seq += 1;
         // `IndexMap::insert` on an existing key replaces the value and KEEPS the slot, like the
         // table keeps `seq`.
+        // TRDD-AXJH3WTU: every card put moves the generation, see the field.
+        self.write_generation += 1;
         self.parsed.insert(id, ResidentCard { card, stored_len: new_len });
         // TRDD-T0G38TZ4 — the tracked total follows the table: the old card's bytes leave, the
         // new card's bytes enter. A first insert adds; an upsert replaces.
@@ -910,6 +970,11 @@ impl CardStore {
         // TRDD-T0G38TZ4: the table is empty, so the tracked byte total is 0.
         self.card_bytes = 0;
         self.epoch += 1;
+    }
+
+    /// TRDD-AXJH3WTU: see the field. `DurableState::tick` and `save_cards` read it under the state lock.
+    pub fn write_generation(&self) -> u64 {
+        self.write_generation
     }
 
     /// Bumped by every `clear`; see the field.
@@ -1030,6 +1095,10 @@ impl CardStore {
             // same delta. Applied AFTER the UPDATE committed, for the same reason the resident
             // strip is: a failed UPDATE must leave the counter describing the table.
             self.card_bytes = (self.card_bytes as i64 + bytes_delta) as u64;
+            // TRDD-AXJH3WTU: the table holds the new text, so the generation moves here, once per UPDATE. A bump after the loop would be
+            // skipped by the `?` returns above it, which leave the cards demoted before the failing one changed in the table.
+            // WHY the card log must see it: a demotion alone, with no put in the same lock hold, must still reach the card log.
+            self.write_generation += 1;
             demoted += 1;
         }
         Ok(demoted)
@@ -1338,6 +1407,18 @@ fn card_db_config(value: &str) -> agentlens_store::duckdb::Result<agentlens_stor
 /// unchanged; no caller matches on error text.
 fn open_conn(path: &Path, value: &str) -> agentlens_store::duckdb::Result<Connection> {
     Connection::open_with_flags(path, card_db_config(value)?)
+}
+
+/// TRDD-PGMMB2QG: the `clear_in_progress` flag of the card store under `store_dir`, read from the file.
+/// The store must be closed (two live stores over one file are two writers). The `log_reader` tests call
+/// it; it lives here, in the module that owns the file, so `log_reader.rs` opens no store itself
+/// (`scripts/check-duckdb-only.js` counts the files that open one). It returns the value, never a handle.
+#[cfg(test)]
+pub(crate) fn clear_flag_on_disk_for_test(store_dir: &Path) -> String {
+    Connection::open(store_dir.join(CARD_DB_FILE))
+        .unwrap()
+        .query_row("SELECT value FROM meta WHERE key = 'clear_in_progress'", [], |r| r.get(0))
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -1791,7 +1872,7 @@ mod tests {
             Err(Refusal::OutOfMemory(text)) => {
                 assert!(text.contains("Out of Memory Error"), "precondition: unexpected text: {text}")
             }
-            Err(Refusal::NotEligible(text)) => panic!("precondition: the one-shot read must run out of memory: {text}"),
+            Err(Refusal::NotEligible(text) | Refusal::ClearInProgress(text)) => panic!("precondition: the one-shot read must run out of memory: {text}"),
             Ok(_) => panic!("precondition: the one-shot read at 4MiB must be refused"),
         }
         let store = CardStore::open_with_limits(

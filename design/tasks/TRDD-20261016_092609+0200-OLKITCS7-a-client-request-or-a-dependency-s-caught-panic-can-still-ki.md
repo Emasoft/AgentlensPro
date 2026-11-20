@@ -4,7 +4,7 @@ title: A client request or a dependency's caught panic can still kill or restart
 column: todo
 status: tasked
 created: 2026-10-16T09:26:09+0200
-updated: 2026-10-16T09:29:18+0200
+updated: 2026-11-19T01:25:05+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -37,3 +37,7 @@ Residual risks of TRDD-3RVTC1HY (542ceca2), which made every panic exit alcore; 
 
 2026-10-16: created from the review of c5136f6d: closing 3RVTC1HY and HFY30YBT would otherwise have frozen these risks out of sight.
 2026-10-16: VERIFIED by the main agent: [profile.release] in rust-core/Cargo.toml sets no overflow-checks, so arithmetic overflow wraps rather than panics in shipped builds; publish.yml runs pnpm lint, check-types, check-identities and test:unit but no cargo test and does not call ci.yml (grep for cargo test, uses: ./, nextest, pnpm run). Line numbers hookHandlers.ts:159 and ci.yml:299 are carried from 3RVTC1HY; re-verify when the card is pulled.
+
+## Notes
+
+2026-11-19T01:25:02+0100 main agent: removed from TRDD-HSPUF5XH blocked-by as RISK ACCEPTED. The line with its failure mode and whether the mechanism existed at v2.33.1 is in HSPUF5XH, section 'Release list decision 2026-11-19'. This card stays open; only the release gate changed.

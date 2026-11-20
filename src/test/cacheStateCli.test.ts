@@ -51,62 +51,62 @@ suite('cache-state — warm/cold verb over the persisted prompt_cache block (TRD
     fs.rmSync(tmp, { recursive: true, force: true })
   })
 
-  test('exit 0: a live deadline with the harness saying warm prints exactly "warm"', () => {
+  test('exit 0: a live deadline with the harness saying warm prints exactly "warm"', async () => {
     writeWal([row({})])
-    assert.strictEqual(runCacheStateCli(['--project', '/proj/alpha']), CACHE_STATE_EXIT.WARM)
+    assert.strictEqual(await runCacheStateCli(['--project', '/proj/alpha']), CACHE_STATE_EXIT.WARM)
     assert.deepStrictEqual(out, ['warm'])
     assert.ok(err[0].includes('aaaaaaaa'), 'the measured session is announced on stderr')
   })
 
-  test('exit 1: a passed deadline is "cold" even though the stale row still says warm:true', () => {
+  test('exit 1: a passed deadline is "cold" even though the stale row still says warm:true', async () => {
     // The stale-in-one-direction case the verb exists for: the status line refreshes only on activity.
     writeWal([row({ prompt_cache_expires_at: Math.floor(Date.now() / 1000) - 10 })])
-    assert.strictEqual(runCacheStateCli(['--project', '/proj/alpha']), CACHE_STATE_EXIT.COLD)
+    assert.strictEqual(await runCacheStateCli(['--project', '/proj/alpha']), CACHE_STATE_EXIT.COLD)
     assert.deepStrictEqual(out, ['cold'])
   })
 
-  test('exit 1: the harness saying warm:false is "cold" even with a live deadline (formula pinned)', () => {
+  test('exit 1: the harness saying warm:false is "cold" even with a live deadline (formula pinned)', async () => {
     const future = Date.now() + 60_000
     assert.strictEqual(cacheStateOf({ expiresAtMs: future, warm: false }), 'cold')
     assert.strictEqual(cacheStateOf({ expiresAtMs: future, warm: true }), 'warm')
     assert.strictEqual(cacheStateOf({ expiresAtMs: future, warm: true }, future), 'cold')
     writeWal([row({ prompt_cache_warm: false })])
-    assert.strictEqual(runCacheStateCli(['--project', '/proj/alpha']), CACHE_STATE_EXIT.COLD)
+    assert.strictEqual(await runCacheStateCli(['--project', '/proj/alpha']), CACHE_STATE_EXIT.COLD)
     assert.deepStrictEqual(out, ['cold'])
   })
 
-  test('exit 2 with EMPTY stdout: no sample carries the block (pre-2.1.252 row, or another project only)', () => {
+  test('exit 2 with EMPTY stdout: no sample carries the block (pre-2.1.252 row, or another project only)', async () => {
     writeWal([
       row({ workspace_project_dir: '/proj/beta' }),
       JSON.stringify({ session_id: SID, workspace_project_dir: '/proj/alpha', ts: Date.now() }),
     ])
-    assert.strictEqual(runCacheStateCli(['--project', '/proj/alpha']), EXIT.UNKNOWN)
+    assert.strictEqual(await runCacheStateCli(['--project', '/proj/alpha']), EXIT.UNKNOWN)
     assert.deepStrictEqual(out, [], 'never a word on stdout for a question it could not resolve')
     assert.ok(err[0].startsWith('cannot answer:'))
   })
 
-  test('exit 2, not cold: a row with a live deadline but NO warm bit cannot be answered (adversarial-review finding)', () => {
+  test('exit 2, not cold: a row with a live deadline but NO warm bit cannot be answered (adversarial-review finding)', async () => {
     // The proxy trap: collapsing the bit to `=== true` turned "no bit" into "not warm" → `cold`.
     const future = Date.now() + 60_000
     assert.strictEqual(cacheStateOf({ expiresAtMs: future, warm: null }), null)
     assert.strictEqual(cacheStateOf({ expiresAtMs: future - 120_000, warm: null }), 'cold', 'a PASSED deadline settles it alone')
     writeWal([JSON.stringify({ session_id: SID, workspace_project_dir: '/proj/alpha', prompt_cache_ttl: '1h',
       prompt_cache_expires_at: Math.floor(future / 1000), ts: Date.now() })])
-    assert.strictEqual(runCacheStateCli(['--project', '/proj/alpha']), EXIT.UNKNOWN)
+    assert.strictEqual(await runCacheStateCli(['--project', '/proj/alpha']), EXIT.UNKNOWN)
     assert.deepStrictEqual(out, [])
     assert.ok(err[0].includes('no warm bit'))
   })
 
-  test('exit 64: an unknown flag is refused, never silently ignored', () => {
+  test('exit 64: an unknown flag is refused, never silently ignored', async () => {
     writeWal([row({})])
-    assert.throws(() => runCacheStateCli(['--sesion', SID]), UsageError)
+    await assert.rejects(runCacheStateCli(['--sesion', SID]), UsageError)
     assert.deepStrictEqual(out, [])
   })
 
-  test('--json prints the stored prompt_cache_* fields verbatim plus state, session_id, captured_at', () => {
+  test('--json prints the stored prompt_cache_* fields verbatim plus state, session_id, captured_at', async () => {
     const ts = Date.now()
     writeWal([row({ ts })])
-    assert.strictEqual(runCacheStateCli(['--session', SID, '--json']), CACHE_STATE_EXIT.WARM)
+    assert.strictEqual(await runCacheStateCli(['--session', SID, '--json']), CACHE_STATE_EXIT.WARM)
     const j = JSON.parse(out.join('\n')) as Record<string, unknown>
     assert.strictEqual(j.state, 'warm')
     assert.strictEqual(j.session_id, SID)

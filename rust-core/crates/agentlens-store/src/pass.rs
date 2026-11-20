@@ -654,7 +654,7 @@ pub fn ingest_pass_observed_with(
                                             // impostor (Claude Code re-emits the same name and bytes at a new mtime). So reclaim, leave the row alone,
                                             // and do NOT park: parking here looped, because the "repair rows from mtimes" remedy would overwrite the
                                             // true capture time with the re-emit mtime, and the next pass would park it again forever.
-                                            if reason.contains("stored ts ") && reason.contains("!= capture time") {
+                                            if crate::is_ts_only_failure(&reason) {
 
                                                 // Gated on the CONTENT, exactly like the verified arm above: the
                                                 // re-emission can preserve the size AND the mtime (a `mv` back, a

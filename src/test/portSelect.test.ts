@@ -11,6 +11,7 @@ import { chooseServerPorts, freeOnProbeError, isPortFree, pickPort, readChosenPo
 import { ALCORE_MIMALLOC_PURGE_DELAY_MS, alcoreSpawnEnv, cliJsPath, findServerPid, REVIVE_STARTED_BY, serverCommand } from '../cli/serverControl'
 import { STARTED_BY_ENV } from '../cli/killSwitch'
 import { freePort } from './helpers/freePort'
+import { makeFakeAlcore } from './helpers/fakeAlcore'
 
 // Real sockets, real files — no mocks. Each test that opens a listener closes it in finally.
 const hold = (port: number, host = '127.0.0.1'): Promise<net.Server> => new Promise((resolve, reject) => {
@@ -230,19 +231,36 @@ suite('portSelect — probe verdicts, revive spawn identity, REST identity, revi
     } finally { await new Promise<void>(r => srv.close(() => r())); fs.rmSync(dir, { recursive: true, force: true }) }
   })
 
-  test('`server revive` refuses under NO_REVIVE env, kill-switch env, and the on-disk brake — before any spawn', async () => {
+  test('`server revive` refuses under NO_REVIVE env and the on-disk brake; under the kill-switch env half it PROCEEDS — and still refuses a squatted OTLP port', async () => {
     const dir = tmpDir()
+    // A port WE hold stands in for a stranger on 4318: OTLP_PORT pins it, and OTLP never moves (chooseServerPorts).
+    const squatter = net.createServer()
+    await new Promise<void>(r => squatter.listen(0, '127.0.0.1', r))
+    const squatted = (squatter.address() as net.AddressInfo).port
+    const fake = makeFakeAlcore(path.join(dir, 'fake'))
     try {
       await withEnv({ AGENTLENS_DATA_DIR: dir, AGENTLENS_NO_REVIVE: '1' }, async () => {
         await assert.rejects(serverCommand(['revive']), /server revive refused/)
       })
-      await withEnv({ AGENTLENS_DATA_DIR: dir, AGENTLENS_DISABLED: '1' }, async () => {
-        await assert.rejects(serverCommand(['revive']), /server revive refused/)
+      // TRDD-RBBEX59R c2: the env half of the switch is no longer a revive refusal — the revive starts a
+      // no-collection server (the fake alcore records the argv and exits, so the start fails after the spawn).
+      // AGENTLENS_NO_REVIVE='' because src/test/setup.js arms it suite-wide; this leg is about the switch, not the brake.
+      await withEnv({ AGENTLENS_DATA_DIR: dir, AGENTLENS_DISABLED: '1', AGENTLENS_NO_REVIVE: '', AGENTLENS_ALCORE: fake.bin, AGENTLENS_MCP_URL: 'http://127.0.0.1:1/mcp' }, async () => {
+        await assert.rejects(serverCommand(['revive']), /exited during startup/)
+        assert.strictEqual(fake.calls().length, 1)
+        assert.ok(fake.calls()[0].includes('--no-collection'), fake.calls()[0].join(' '))
+        await withEnv({ OTLP_PORT: String(squatted) }, async () => {
+          await assert.rejects(serverCommand(['revive']), new RegExp(`OTLP port ${squatted} is in use .* refusing to start`))
+        })
+        assert.strictEqual(fake.calls().length, 1, 'a squatted OTLP port refuses before any spawn')
       })
       fs.writeFileSync(path.join(dir, 'NO_REVIVE'), 'test')
       await withEnv({ AGENTLENS_DATA_DIR: dir }, async () => {
         await assert.rejects(serverCommand(['revive']), /server revive refused/)
       })
-    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    } finally {
+      await new Promise<void>(r => squatter.close(() => r()))
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -514,11 +514,11 @@ fn query(
     limit: i64,
 ) -> Result<(Vec<String>, Vec<Value>, bool, i64), String> {
     let (_heavy, con) = open_spilling(tmp_dir)?;
-    // Paths come from OUR directory walk (never from the caller); the quote-escape is
-    // belt-and-braces.
+    // Paths come from OUR directory walk (never from the caller); sq_path escapes the glob characters too, because a
+    // data dir holding a star, a question mark or an open bracket is otherwise read as a file pattern (TRDD-C6W0SWUT).
     let list = files
         .iter()
-        .map(|p| format!("'{}'", p.to_string_lossy().replace('\'', "''")))
+        .map(|p| crate::sq_path(&p.to_string_lossy()))
         .collect::<Vec<_>>()
         .join(",");
     con.execute_batch(&format!(

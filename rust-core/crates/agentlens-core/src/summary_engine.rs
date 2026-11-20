@@ -172,6 +172,12 @@ impl SummaryEngine {
             let ok = !force
                 && st.epoch == epoch
                 && cards.len() >= st.cards.len()
+                // TRDD-ER88PXNB: the old cards must still be an id-for-id prefix of the new list. The card window
+                // drops cards from the front and the middle as they age out, so the count can grow while every slot
+                // shifts; slot_of and the per-slot Arc checks are positional, so a shifted list must take a full pass,
+                // or OTEL twins and agent-<id> links would resolve to the wrong card. Arc::ptr_eq first: an unchanged
+                // slot is the same Arc, so the steady state costs one pointer compare per slot, not two id lookups.
+                && st.cards.iter().zip(cards.iter()).all(|(old, new)| Arc::ptr_eq(old, new) || card_id(old) == card_id(new))
                 && prev.summary.as_ref().is_some_and(|(v, a)| *v == st.version && std::ptr::eq(Arc::as_ptr(a), st.summary_ref.as_ptr()));
             if ok {
                 old_sessions = take_sessions(prev.summary.expect("checked").1);

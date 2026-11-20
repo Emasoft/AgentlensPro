@@ -144,6 +144,9 @@ fn load_in_transaction(
         )
         .map_err(|e| err("ledger insert", e))?;
     let path = file.to_str().ok_or_else(|| format!("{}: path is not UTF-8", file.display()))?;
+    // WHY (TRDD-C6W0SWUT): the macro hands this path to `read_ndjson`, and DuckDB glob-expands even a bound parameter, so a spool path holding `*`, `?` or `[`
+    // read every sibling the pattern matched (rows of other files loaded under this ingest id). `glob_escape` makes the value match only itself; no quoting, it is bound.
+    let path = agentlens_store::glob_escape(path);
     let mut rows: Option<u64> = None;
     for (producer_type, stmt) in stmts.iter_mut() {
         let n = stmt.execute(params![path, ingest_id, ingested_at]).map_err(|e| err(producer_type, e))? as u64;
