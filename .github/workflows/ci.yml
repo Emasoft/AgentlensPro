@@ -124,7 +124,7 @@ jobs:
       # Full unit suite under the matrix node — mocha directly (out/test via .mocharc.cjs).
       # The P9 browser smoke suite stays PENDING here (gated on AGENTLENSPRO_BROWSER_TESTS=1)
       # so this matrix is untouched; the dedicated browser-smoke job below runs it.
-      # AGENTLENS_ALCORE names the binary for alcoreBin() (src/rustBinResolve.ts), which
+      # AGENTLENS_ALCORE names the binary for alcoreBin() (src/cli/serverControl.ts), which
       # setupVerb/hookSpool tests spawn directly — freePort.ts's own fallback path finds it
       # by relative path, but alcoreBin() does not (TRDD-EJDNNDY3).
       - name: Unit tests
