@@ -60,7 +60,12 @@ fn spawn_append_with(dir: &Path, spool: &str, stdin: &[u8], extra: &[&str]) -> C
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(stdin).unwrap(); // dropped: EOF
+    // WHY (TRDD-JCUXA6Z4): a child may exit before it reads stdin (a usage error exits 64 while
+    // parsing arguments), and then this write fails with BrokenPipe. The test's exit-code assertion
+    // decides the outcome; any other write error is still a test failure.
+    if let Err(e) = child.stdin.take().unwrap().write_all(stdin) {
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "stdin write: {e}");
+    } // the handle is dropped here: EOF
     child
 }
 
