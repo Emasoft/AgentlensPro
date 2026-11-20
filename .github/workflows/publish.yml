@@ -246,7 +246,10 @@ jobs:
         include:
           # Native runners only — no cross-compiling a statically-linked DuckDB (17k+ symbols).
           - suffix: darwin-arm64
-            runner: macos-14
+            # WHY: GitHub no longer runs macos-14; the v2.34.0 publish leg failed at once with
+            # "The configuration 'macos-14-arm64-us-default' is not supported". macos-15 is the
+            # arm64 image of the same family the darwin-x64 leg uses (macos-15-intel).
+            runner: macos-15
           - suffix: darwin-x64
             runner: macos-15-intel
           - suffix: linux-x64
