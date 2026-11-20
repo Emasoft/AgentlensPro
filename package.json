@@ -94,6 +94,7 @@
     "test:browser": "pnpm run compile-tests && node esbuild.js && AGENTLENSPRO_BROWSER_TESTS=1 bash scripts/test-data-cap.sh mocha --no-config --ui tdd out/test/test/browser/dashboardSmoke.test.js"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.1",
@@ -107,7 +108,6 @@
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.4-r.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@preact/signals": "^2.9.0",
     "clsx": "^2.1.1",
     "fflate": "^0.8.3",
