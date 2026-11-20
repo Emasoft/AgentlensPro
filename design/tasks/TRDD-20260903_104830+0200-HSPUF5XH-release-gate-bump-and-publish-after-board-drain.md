@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: todo
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-20T03:23:30+0100
+updated: 2026-11-20T03:46:06+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -484,3 +484,4 @@ FROM TRDD-12FGMAEP (commit 73211a46, footprint backstop in the memory guard of a
 2026-11-20: publish run 44653115494 failed in the package job's Unit tests (3718 passing, 56 pending, 6 failing): setupVerb and hookSpool could not find the server ('no server available for linux-x64 — set AGENTLENS_ALCORE or build rust-core'). ci.yml's Unit tests step sets AGENTLENS_ALCORE (TRDD-EJDNNDY3, commit 48e8193a); publish.yml's package job never got it. Fix: add the same env to publish.yml. npm still at 2.33.1. The darwin-arm64 build log (742 lines) has no 'built for newer macOS' line; weak evidence, since rustc may hide linker warnings.
 2026-11-20: commit 4697d4db adds AGENTLENS_ALCORE to the publish Unit tests step; merged into main as c2392a4c (--no-ff) and pushed; publish dispatched on main as run 44657500944. The SDK move (package.json, pnpm-lock.yaml) is left out of 2.34.0 on purpose: it changes the dependency list relative to the v2.34.0 tag and goes in the next release under TRDD-87HO5IFJ.
 2026-11-20: 37bc7de0 (workflow comment path fix) and 376dd76f (SDK move) sit on branch fix/drop-mcp-sdk-runtime-dep and are NOT part of 2.34.0.
+2026-11-20: publish run 44657500944 succeeded (all 6 jobs). Registry: version 2.34.0, _npmUser GitHub Actions npm-oidc-no-reply (OIDC), dist.attestations.provenance SLSA v1. The run artifact npm-tarball matches the registry (sha1 1f0677f9..., sha512 equal). GitHub Release v2.34.0 created by hand with the tarball and SHA256SUMS.txt; no in-toto attestation and no SBOM (dispatch run). Local deploy: the CLI is npm-linked to this repo (bundle built 2026-11-19 23:10); an ordinary verb ran the launch repair and restored hooks, status line, 5 skills, 9 agents; setup --dry-run now shows them current; no server started (DISABLED and NO_REVIVE kept). Main CI rust job timed out at 40 min: TRDD-2LXKMRE3.
