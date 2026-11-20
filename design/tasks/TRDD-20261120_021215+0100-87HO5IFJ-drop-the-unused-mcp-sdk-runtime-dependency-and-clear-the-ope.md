@@ -4,7 +4,7 @@ title: Drop the unused MCP SDK runtime dependency and clear the open Dependabot 
 column: dev
 status: tasked
 created: 2026-11-20T02:12:15+0100
-updated: 2026-11-20T05:28:29+0100
+updated: 2026-11-20T05:42:03+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: security
@@ -35,3 +35,4 @@ On 2026-11-20 the push to main reported 56 open Dependabot alerts (3 critical, 1
 2026-11-20: SDK move committed as 376dd76f on branch fix/drop-mcp-sdk-runtime-dep (not merged; goes in the release after 2.34.0). Still open: zod 3.25.76 below 4.6.6, js-yaml and shell-quote dev bumps, CHANGELOG entry.
 2026-11-20: the lockfile diff also adds a supports-color@8.1.1 peer context to express, express-rate-limit, body-parser, router, send and finalhandler. Inferred side effect of pnpm re-resolving the SDK's peer graph after its zod moved to 4.6.7; no package version changed in those entries (debug was already 4.4.3(supports-color@8.1.1)).
 2026-11-20: branch fix/deps-87ho5ifj (worktree builds_dev/wt-deps-87ho5ifj, based on main 6934e941) carries 7d5fde63 (SDK to devDependencies) and 773883b2 (overrides: shell-quote >=1.11.0, js-yaml >=4.3.2 <5, SDK-scoped zod >=4.6.6 <5; CHANGELOG [Unreleased]). The CHANGELOG line was checked byte-exact against the reviewed text plus the appended fix-route sentence. Open: zod 3.25.76 under chromium-bidi 16.0.1, split to TRDD-4G1TZBSW. Not pushed yet: waiting for PR #30 to merge so the deps PR diff carries only these two commits. Then: push, PR, CI, merge, re-read the Dependabot list (acceptance).
+2026-11-20: PR #30 merged (main pushed to 7f3f1002, so fix/deps-87ho5ifj now differs from main by only 7d5fde63 and 773883b2). Branch pushed and PR #31 opened: https://github.com/Emasoft/AgentlensPro/pull/31. The push reported 64 open Dependabot alerts on main (3 critical, 17 high, 37 moderate, 7 low). Next: PR #31 CI, merge, then re-read the alert list for the acceptance (each open critical or high alert closed or recorded with a reason; the zip crate alerts are a libduckdb-sys build-dependency, per this card's body).
