@@ -40,9 +40,9 @@ allowBuilds:
 # backport fix without the 5.x major bump.
 overrides:
   hono: '>=4.12.25'
-  shell-quote: '>=1.8.4'
+  shell-quote: '>=1.11.0'
   serialize-javascript: '>=7.0.5'
-  js-yaml: '>=4.2.0 <5'
+  js-yaml: '>=4.3.2 <5'
   # 2026-07-28 round. All seven alerts were TRANSITIVE — nothing in `dependencies`
   # was itself vulnerable — and three of the four packages arrive via the one
   # parent, @modelcontextprotocol/sdk.
@@ -76,3 +76,11 @@ overrides:
   # 3.x/4.x line, 5.0.7 is the fix. Still bounded <6 for the same reason every other entry is: an
   # open upper bound admits whatever major lands next, which is a decision nobody made.
   'brace-expansion@>=3.0.0 <5.0.7': '>=5.0.7 <6'
+  # zod < 4.6.6 is GHSA-mrhx-c7xc-m3w5 and zod 3.x has no patch, so the fix crosses to 4.x. Only the MCP
+  # SDK (dev only; declares '^3.25 || ^4.0') is moved: chromium-bidi 16.0.1 (puppeteer-core, dev only)
+  # declares '^3.24.1' and its parse-failure path reads zod 3's error.errors, which zod 4 removed
+  # (measured: parseCloseParams({}) throws TypeError 'reading map' on zod 4.6.7), so a global
+  # override would break it. Its zod 3.25.76 therefore stays flagged until puppeteer-core takes a
+  # chromium-bidi that declares zod 4: puppeteer-core 25.18.1 depends on chromium-bidi 157.0.8090-0,
+  # which declares zod ^4.6.5 (npm view, 2026-11-20). Tracked in TRDD-4G1TZBSW.
+  '@modelcontextprotocol/sdk>zod': '>=4.6.6 <5'
