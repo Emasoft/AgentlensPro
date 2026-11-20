@@ -4,7 +4,7 @@ title: spool test s16 races a usage-error exit and fails on BrokenPipe
 column: testing
 status: tasked
 created: 2026-11-20T01:34:58+0100
-updated: 2026-11-20T02:33:30+0100
+updated: 2026-11-20T03:00:07+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -33,3 +33,4 @@ CI run 44643561993 (commit a55074a8, docs-only) failed the rust job: s16_a_faile
 2026-11-20: fix applied in rust-core/crates/agentlens-spool/tests/spool.rs spawn_append_with (single hunk: tolerate BrokenPipe on the stdin write, assert any other error kind). Worker run: spool tests 19/19 and clippy -D warnings exit 0 (no-regression only). Premise proven deterministically by the main agent: target/debug/alspool append --seal-bytes lots fed 4 MiB on stdin exits 64 with the usage message and the writer gets BrokenPipe, so the child exits without reading stdin, the exact error kind the helper now tolerates. A 200-run loop of s16 is running as a further no-regression check.
 2026-11-20: s16 passed 200 of 200 local runs (no-regression only: the 9-byte write almost never loses the race locally). The helper's BrokenPipe branch has not yet executed in Rust; the premise is proven (alspool exits 64 before reading stdin, a 4 MiB Python writer gets BrokenPipe). NEXT: add one deterministic case that sends more than 64 KiB through spawn_append_with with --seal-bytes lots and expects exit 64, so the branch runs on every test run.
 2026-11-20: deterministic case added to s16 (1 MiB of stdin with --seal-bytes lots, expects exit 64 and no inbox). Worker evidence: s16 alone 20 of 20 ok, clippy -D warnings exit 0. The full-file 20-run loop was stopped after one iteration (about 172 s each because of s12); that iteration failed s08, a different test that does not use the changed helper, now card filed separately. The branch is not instrumented; with a default 64 KiB pipe buffer a 1 MiB write cannot complete before the child exits, so it ends in BrokenPipe.
+2026-11-20: CI run 44653093604 on 0946dc28 was cancelled (superseded) before its rust job finished; the rust result for 6a234115 comes from CI run 44657487085 on main c2392a4c.

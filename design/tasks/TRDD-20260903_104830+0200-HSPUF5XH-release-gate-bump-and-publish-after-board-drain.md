@@ -3,7 +3,7 @@ trdd-id: HSPUF5XH
 title: Bump and publish agentlenspro only after every open card is terminal and every known issue is fixed
 column: todo
 created: 2026-09-03T10:48:30+0200
-updated: 2026-11-20T02:54:05+0100
+updated: 2026-11-20T02:59:14+0100
 current-owner: main-session
 task-type: infra
 min-approval-requirement: user
@@ -482,3 +482,4 @@ FROM TRDD-12FGMAEP (commit 73211a46, footprint backstop in the memory guard of a
 2026-11-20 correction: same SOURCE, rebuilt binaries. The darwin-arm64 binaries of this publish are built on macos-15 instead of macos-14, so 'shipped content is the tagged content' holds for source and bundles, not byte-for-byte for the binaries. Neither publish.yml nor any cargo config sets MACOSX_DEPLOYMENT_TARGET; the minimum-macOS (LC_BUILD_VERSION minos) of the new darwin-arm64 alcore is checked against 2.33.1 once the artifact exists. Worker evidence read by the main agent: reports_dev/JCUXA6Z4/spool-test.txt has 'test result: ok. 19 passed'; clippy.txt has Finished and no error or warning line. CI run 44653093604 runs on the main push 0946dc28 (the push run 44651344770 for 7edd1f25 was cancelled by it).
 2026-11-20: publish run 44653115494 darwin-arm64 leg passed on macos-15. Its artifact's four binaries (alcore, alstore, alscan, allogscan) all carry LC_BUILD_VERSION minos 11.0, sdk 15.5 (otool -l). The locally built binaries in the current global install also carry minos 11.0, so the minimum macOS did not rise. The 2.33.1 registry tarball itself was not downloaded for this comparison.
 2026-11-20: publish run 44653115494 failed in the package job's Unit tests (3718 passing, 56 pending, 6 failing): setupVerb and hookSpool could not find the server ('no server available for linux-x64 — set AGENTLENS_ALCORE or build rust-core'). ci.yml's Unit tests step sets AGENTLENS_ALCORE (TRDD-EJDNNDY3, commit 48e8193a); publish.yml's package job never got it. Fix: add the same env to publish.yml. npm still at 2.33.1. The darwin-arm64 build log (742 lines) has no 'built for newer macOS' line; weak evidence, since rustc may hide linker warnings.
+2026-11-20: commit 4697d4db adds AGENTLENS_ALCORE to the publish Unit tests step; merged into main as c2392a4c (--no-ff) and pushed; publish dispatched on main as run 44657500944. The SDK move (package.json, pnpm-lock.yaml) is left out of 2.34.0 on purpose: it changes the dependency list relative to the v2.34.0 tag and goes in the next release under TRDD-87HO5IFJ.
