@@ -428,19 +428,71 @@ jobs:
             npm view "agentlenspro@$VER" dist.tarball > /tmp/url.txt 2>/dev/null && break
             echo "metadata not ready yet (attempt $i) — CDN propagation"; sleep 15
           done
+          # INTEGRITY GATE: PROVE THE PUBLISHED BYTES FROM REGISTRY METADATA (TRDD-JX7DI01O).
+          #
+          # The tarball fetch below can exhaust its budget on a ~149 MB package and then only
+          # warns, which left the registry bytes unproven. The metadata does not depend on the CDN:
+          # measured for 2.34.0, `npm view agentlenspro@2.34.0 dist.integrity` returned exactly
+          # "sha512-" + base64(sha512 of the local artifact tarball) and dist.shasum equalled its
+          # sha1, live within seconds, while the tarball 404'd on the CDN edge for more than 10
+          # minutes (publish run 44657500944). The local tarball in this job is the verified file
+          # that `npm publish` uploaded unchanged, so equality of the two proves the registry holds
+          # exactly those bytes even when the CDN has not caught up. Retries and `|| true` because
+          # a not-yet-live metadata read must not abort the step under `set -e`.
+          shopt -s nullglob
+          tgz=(agentlenspro-*.tgz)
+          if [ "${#tgz[@]}" -ne 1 ]; then
+            echo "::error::expected exactly 1 local tarball to compare against the registry, found ${#tgz[@]}: ${tgz[*]-none}"
+            exit 1
+          fi
+          want="sha512-$(openssl dgst -sha512 -binary "${tgz[0]}" | openssl base64 -A)"
+          got=""
+          for i in 1 2 3 4 5; do
+            got=$(npm view "agentlenspro@$VER" dist.integrity 2>/dev/null || true)
+            [ -n "$got" ] && break
+            echo "dist.integrity not readable yet (attempt $i) — registry propagation"; sleep 15
+          done
+          if [ -z "$got" ]; then
+            # Empty means the metadata has not propagated, not that the bytes are wrong: warn here; the
+            # step goes red only if the CDN download below also fails, i.e. when nothing at all is
+            # proven (a re-run dies on cannot-republish). A downloaded-file sha512 below still proves
+            # the bytes if the CDN serves them.
+            echo "::warning::agentlenspro@$VER dist.integrity was not readable after 5 attempts — registry integrity NOT verified from metadata; the downloaded tarball is still hash-checked below if the CDN serves it"
+          elif [ "$got" != "$want" ]; then
+            echo "::error::registry integrity mismatch for agentlenspro@$VER: registry=$got local=$want"
+            exit 1
+          else
+            echo "registry integrity OK: agentlenspro@$VER dist.integrity matches the verified local tarball"
+          fi
           # 30 × 20 s = 10 minutes. v2.33.1 (2026-09-01) measured the old 10 × 20 s budget as too
           # short: the tarball 404'd on the edge for the whole 200 s, the job went red, and the
           # package was fetchable (HTTP 200, 16/16 executable binaries) minutes later. Propagation
-          # is not a publish failure — so exhausting even this budget is a WARNING, not an error:
-          # metadata being live already proves the publish landed, and a red run here invites the
-          # one reaction that IS destructive (a re-run that dies on cannot-republish).
+          # is not a publish failure — so exhausting even this budget is a WARNING when dist.integrity
+          # already proved the bytes, and an error only when nothing was proven. A red run on a landed
+          # publish invites the one reaction that IS destructive (a re-run that dies on cannot-republish).
           for i in $(seq 1 30); do
-            curl -fsSL "$(cat /tmp/url.txt)" -o /tmp/published.tgz && break
+            if curl -fsSL "$(cat /tmp/url.txt)" -o /tmp/published.tgz; then break; fi
+            # a failed curl can leave a partial file, even on the last attempt; it must not reach
+            # the sha512 compare
+            rm -f /tmp/published.tgz
             echo "tarball not on the CDN edge yet (attempt $i/30) — retrying"; sleep 20
           done
           if [ ! -s /tmp/published.tgz ]; then
-            echo "::warning::agentlenspro@$VER metadata is live but its tarball was not fetchable within 10 min — CDN propagation; verify later with: npm view agentlenspro@$VER dist.tarball && curl -fsSLo /dev/null \$(npm view agentlenspro@$VER dist.tarball)"
+            if [ -z "$got" ]; then
+              # Nothing is proven here: dist.integrity was unreadable AND no tarball was fetched. A green
+              # run would claim a check that never happened (TRDD-JX7DI01O), so this one case goes red.
+              # The message names the reaction to avoid: re-running the publish dies on cannot-republish (E403).
+              echo "::error::agentlenspro@$VER: registry bytes NOT verified: dist.integrity was unreadable and the tarball was not fetchable within 10 min. Do NOT re-run the publish: if npm view shows $VER it is already published and a re-run fails with E403. Verify by hand: compare npm view agentlenspro@$VER dist.integrity with the sha512 of the npm-tarball artifact."
+              exit 1
+            fi
+            echo "::warning::agentlenspro@$VER registry integrity WAS verified (dist.integrity matches the verified local tarball); only CDN availability is unconfirmed: the tarball was not fetchable within 10 min. Verify later with: curl -fsSLo /dev/null \$(npm view agentlenspro@$VER dist.tarball)"
             exit 0
+          fi
+          # The CDN served the file: prove those bytes too, not just the metadata (TRDD-JX7DI01O).
+          fetched="sha512-$(openssl dgst -sha512 -binary /tmp/published.tgz | openssl base64 -A)"
+          if [ "$fetched" != "$want" ]; then
+            echo "::error::downloaded agentlenspro@$VER tarball sha512 mismatch: downloaded=$fetched expected=$want"
+            exit 1
           fi
           n=$(tar -tzf /tmp/published.tgz | grep -c 'package/bin-native/.*/' || true)
           if [ "$n" -ne 16 ]; then
