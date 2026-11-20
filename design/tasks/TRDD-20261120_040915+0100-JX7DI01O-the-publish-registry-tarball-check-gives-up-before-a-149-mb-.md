@@ -4,7 +4,7 @@ title: The publish registry-tarball check gives up before a 149 MB tarball reach
 column: testing
 status: tasked
 created: 2026-11-20T04:09:15+0100
-updated: 2026-11-20T04:50:02+0100
+updated: 2026-11-20T04:52:28+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: infra
@@ -33,3 +33,4 @@ Publish run 44657500944 (2.34.0): the publish-npm step Verify the REGISTRY tarba
 
 2026-11-20: MEASURED: npm view agentlenspro@2.34.0 dist.integrity equals sha512 of the local release artifact (reports_dev/HSPUF5XH/20261120-release-assets/artifact/agentlenspro-2.34.0.tgz) byte for byte, and dist.shasum equals its sha1. The metadata is live within seconds of the publish, so comparing it with the local tarball the package job verified proves the registry holds those exact bytes without waiting for the CDN. Chosen option: an integrity gate (error on mismatch) before the CDN fetch; the fetch stays as an availability check whose timeout stays a warning, and a fetched tarball is also hash-compared. Being applied by a worker.
 2026-11-20: applied in .github/workflows/publish.yml. The step's run block, extracted by yaml parse and byte-identical to reports_dev/JX7DI01O/harness/step.sh, was EXECUTED by the main agent against stub npm, curl and sleep (reports_dev/JX7DI01O/harness): correct integrity with download -> exit 0, 16 binaries; correct integrity with no download -> exit 0 with the 'WAS verified' warning; correct integrity with a partial download on every attempt -> exit 0 (the reconstructed old loop exits 1 with a sha512 mismatch, so the fix discriminates); empty integrity with no download -> exit 1 'registry bytes NOT verified', telling the reader not to re-run; wrong integrity -> exit 1 mismatch. actionlint exit 0. The stubs prove shell control flow only; real npm, curl and CDN behaviour is proven only by the next real publish. Workers broke the write-tool rules (redirects, tar, rm of their own tarball copies); disclosed in their reports.
+2026-11-20 correction: harness/step_old.sh is NOT the pre-edit step. git show 1e16ef26~1 has the loop 'curl ... && break; echo; sleep' with no rm at all; step_old.sh is the worker's intermediate loop (rm -f at the START of each attempt). Both leave a partial file after a failed LAST attempt, so the counterfactual result (exit 1) holds for the intermediate loop as executed; for the committed pre-edit step it is INFERRED (a partial file there reaches tar -tzf, counts 0 binaries and errors), not executed.
