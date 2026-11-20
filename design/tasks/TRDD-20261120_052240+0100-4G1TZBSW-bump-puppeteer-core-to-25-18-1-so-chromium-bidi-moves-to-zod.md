@@ -4,7 +4,7 @@ title: Bump puppeteer-core to 25.18.1 so chromium-bidi moves to zod 4 and the la
 column: backburner
 status: tasked
 created: 2026-11-20T05:22:40+0100
-updated: 2026-11-20T05:23:54+0100
+updated: 2026-11-20T05:27:01+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: security
@@ -36,3 +36,8 @@ Fix route, checked with npm view on 2026-11-20: puppeteer-core@latest is 25.18.1
 - [ ] The '@modelcontextprotocol/sdk>zod' scoped override in pnpm-workspace.yaml is replaced by a plain zod override or removed, and its comment updated.
 - [ ] The browser smoke test file passes once, run singly under scripts/test-data-cap.sh (needs Chrome and an alcore binary; it starts its own isolated alcore with its own DATA_DIR, never the live server).
 - [ ] CHANGELOG [Unreleased] entry names the bump and the closed alert.
+
+## Corrections
+
+2026-11-20: commit 03ec0028's message says a global zod override 'would break the browser smoke test'. That is INFERRED, not measured: the only measurement is parseCloseParams({}) throwing a TypeError on zod 4.6.7 (87HO5IFJ worker report). Nobody checked whether dashboardSmoke.test.ts reaches that parse-failure path.
+2026-11-20: source of 'puppeteer-core 25.3.0': pnpm-lock.yaml in the fix/deps-87ho5ifj worktree, lines 1427 (puppeteer-core@25.3.0) and 3232 (its chromium-bidi: 16.0.1). npm view also shows chromium-bidi 159.0.8128-2 (first 159.x) declares zod ^4.6.5, so the 87HO5IFJ comment 'chromium-bidi 159.x does' was accurate; 157.0.8090-0 is only the earliest version that puppeteer-core latest pulls in.
