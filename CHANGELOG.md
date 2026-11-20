@@ -4,6 +4,12 @@ All notable changes to AgentlensPro are documented here.
 
 > **Lineage note:** AgentlensPro continues the history of [AgentLens](https://github.com/RogerReed/agentlens), from which it was forked. Entries below that predate the fork refer to the original AgentLens lineage.
 
+## [Unreleased]
+
+### Changed
+
+- **The MCP SDK (`@modelcontextprotocol/sdk`) moved from `dependencies` to `devDependencies` (TRDD-87HO5IFJ).** Installs no longer download it or the packages only it pulls in; the shipped bundles (`standalone/cli.js`, `media/*.js`) contain no reference to it, and the server that serves MCP is alcore. Dev-only transitive packages were raised for Dependabot alerts through `pnpm-workspace.yaml` overrides: `shell-quote` to `>=1.11.0`, `js-yaml` to `>=4.3.2 <5`, and `zod` to `>=4.6.6 <5` for the MCP SDK only (GHSA-mrhx-c7xc-m3w5; zod 3.x has no patch). Not fixed: `zod` 3.25.76 stays under `chromium-bidi` (puppeteer-core, dev only), because that package declares zod ^3.24.1 and breaks its error path on zod 4. Bumping puppeteer-core to 25.18.1 (chromium-bidi 157.0.8090-0, zod ^4.6.5) would clear it; tracked in TRDD-4G1TZBSW.
+
 ## [2.34.0] - 2026-11-19
 
 ### Upgrade notes
