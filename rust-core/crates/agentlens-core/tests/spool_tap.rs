@@ -35,10 +35,20 @@ fn manifest() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../agentlens-digest/schemas/manifest.json")
 }
 
-/// `aldigest`, built once into a private target dir (agentlens-core must not link DuckDB for this).
+/// `aldigest`: the binary named by `AGENTLENS_TEST_ALDIGEST` when set, else built once into a private target dir
+/// (agentlens-core must not link DuckDB for this).
 fn aldigest() -> PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
     BIN.get_or_init(|| {
+        // WHY (TRDD-2LXKMRE3): CI sets AGENTLENS_TEST_ALDIGEST to the aldigest executable that cargo reports
+        // (--message-format=json) for the same workspace test build (agentlens-digest's own tests use
+        // env!("CARGO_BIN_EXE_aldigest")). The nested build below goes into a fresh temp target dir and
+        // recompiles bundled DuckDB every run; no cache can serve it. A set-but-missing path panics: no fallback.
+        if let Ok(p) = std::env::var("AGENTLENS_TEST_ALDIGEST") {
+            let p = PathBuf::from(p);
+            assert!(p.is_file(), "AGENTLENS_TEST_ALDIGEST names a missing file: {}", p.display());
+            return p;
+        }
         // temp_dir(), not env!("CARGO_TARGET_TMPDIR") (compile-time path, escapes the cap): see scratch().
         // Cost: the bundled-DuckDB aldigest build (~1.5 GB) is rebuilt in the capped run dir every run.
         let target = std::env::temp_dir().join("aldigest-build");

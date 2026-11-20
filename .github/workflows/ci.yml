@@ -301,5 +301,23 @@ jobs:
       - name: Clippy (warnings are errors)
         run: cargo clippy --manifest-path rust-core/Cargo.toml --workspace --all-targets -- -D warnings
 
+      # WHY (TRDD-2LXKMRE3): build every test target once, take the aldigest executable path cargo
+      # reports for this exact build, and export it for the Tests step. Without it spool_tap.rs
+      # rebuilds bundled DuckDB into a fresh temp dir every run (5.5-7.8 min measured up to its
+      # first aldigest-dependent test); the Tests step then finds everything already built.
+      - name: Build test binaries and locate aldigest
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust-core/Cargo.toml --workspace --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/cargo-test-build.json"
+          # jq runs in a plain assignment, not inside mapfile < <(...): set -e then surfaces a jq failure itself.
+          out=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "aldigest" and (.target.kind | any(. == "bin")) and .profile.test == false and .executable != null) | .executable' "$RUNNER_TEMP/cargo-test-build.json" | sort -u)
+          mapfile -t exe <<< "$out"
+          if [ "${#exe[@]}" -ne 1 ] || [ ! -x "${exe[0]}" ]; then
+            echo "::error::expected exactly one executable aldigest from the workspace test build, found ${#exe[@]}: ${exe[*]-none}"
+            exit 1
+          fi
+          echo "aldigest: ${exe[0]}"
+          echo "AGENTLENS_TEST_ALDIGEST=${exe[0]}" >> "$GITHUB_ENV"
+
       - name: Tests
         run: cargo test --manifest-path rust-core/Cargo.toml --workspace
