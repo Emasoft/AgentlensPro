@@ -513,6 +513,12 @@ fn s16_a_failed_seal_after_the_write_exits_2_and_keeps_the_line() {
     let out = append_with(&bad, SP, br#"{"seq":1}"#, &["--seal-bytes", "lots"]);
     assert_eq!(out.status.code(), Some(64));
     assert!(!bad.join("inbox").exists());
+    // TRDD-JCUXA6Z4: 1 MiB of stdin is more than a pipe buffer, so the write is still blocked when
+    // alspool exits 64 on the usage error, and the helper's BrokenPipe branch runs on every run.
+    let big = vec![b'x'; 1 << 20];
+    let out = append_with(&bad, SP, &big, &["--seal-bytes", "lots"]);
+    assert_eq!(out.status.code(), Some(64), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!bad.join("inbox").exists());
 }
 
 

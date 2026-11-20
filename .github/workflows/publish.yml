@@ -97,6 +97,12 @@ jobs:
         run: chmod +x rust-core/target/release/alcore rust-core/target/release/alstore rust-core/target/release/alscan rust-core/target/release/allogscan
 
       - name: Unit tests
+        env:
+          # WHY (TRDD-EJDNNDY3, TRDD-HSPUF5XH): alcoreBin() (src/rustBinResolve.ts) does not find
+          # rust-core/target/release/alcore by relative path; without this the setupVerb and hookSpool
+          # tests fail with "no server available for linux-x64" (publish run 44653115494). ci.yml's
+          # Unit tests step sets the same variable.
+          AGENTLENS_ALCORE: ${{ github.workspace }}/rust-core/target/release/alcore
         run: pnpm run test:unit
 
       # The npm tarball IS the release artifact for this npm-first distribution:
