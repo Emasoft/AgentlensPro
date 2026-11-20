@@ -1,10 +1,10 @@
 ---
 trdd-id: 2LXKMRE3
 title: CI rust job exceeds its 40 minute limit on main
-column: dev
+column: ai_review
 status: tasked
 created: 2026-11-20T03:40:48+0100
-updated: 2026-11-20T05:43:47+0100
+updated: 2026-11-20T06:11:26+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -27,6 +27,7 @@ CI run 44657487085 on main c2392a4c: the rust job hit timeout-minutes 40 (ci.yml
 
 - 2026-11-20T03:40:48+0100 — MANDATE issued by main-agent@agentlenspro (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-20T04:35:39+0100 — column → dev by main-agent@agentlenspro. cause measured; aldigest override being applied by a worker
+- 2026-11-20T06:11:26+0100 — column → ai_review by main-agent@agentlenspro. cold main run finished in 26m59s, all tests passed; review round before complete
 
 ## Process log
 
@@ -36,6 +37,7 @@ CI run 44657487085 on main c2392a4c: the rust job hit timeout-minutes 40 (ci.yml
 2026-11-20 correction to commit e6f51ade's message: 'the workspace test build enables only the crashpoints feature on aldigest' is stronger than checked. Only agentlens-digest's own crashpoints feature was compared (inert unless ALDIGEST_CRASH_AT is set); workspace feature unification of its dependencies (e.g. duckdb) was not compared. The first main run after the PR merge, not the PR run, is the cold-cache acceptance check: rust-cache entries saved under the PR ref are not readable by main.
 2026-11-20: PR #30 (branch fix/ci-rust-aldigest at 6934e941), run 44672073873, all checks green. The rust job started with NO cache ('No cache found.', log line 408) and still finished in 26m34s (04:05:59Z to 04:32:33Z), under the 40-minute limit. Steps: clippy 385 s, 'Build test binaries and locate aldigest' 106 s, Tests 1078 s (earlier runs: 1262 s, 1857 s, and a cancel at 1876 s). Per binary: spool_tap 137.9 s (earlier 432.9 s and 649.0 s), card_store 470.3 s, card_reuse 155.7 s, summary_alloc 44.8 s, digest 43.9 s. 173 'test result: ok' lines, 0 'test result: FAILED'; the two 'precondition FAILED' log lines are alcore messages from the shutdown tests' unmounted-volume case, not test failures. Post Cache saved 382,854,251 bytes under the PR ref. Table: scripts_dev/rust-log-table.sh over the job log. One cold run, not a distribution: the first main run after the merge is the acceptance check.
 2026-11-20: main run 44676052072 (head 7f3f1002) is EXPECTED cold, not yet shown: its rust 'Cache cargo registry + target' step took 1 s (04:41:23Z to 04:41:24Z) and clippy is still running at the time of writing; the log line ('No cache found.' or a restore) can be read only after the job ends. Acceptance waits for that line and the job's total time.
+2026-11-20: ACCEPTANCE RUN, main run 44676052072 (head 7f3f1002), rust job 136088030139: started COLD ('No cache found.', job log line 396) and finished in 26m59s (04:41:11Z to 05:08:10Z), under the 40-minute limit. Steps from log timestamps: clippy 382 s, 'Build test binaries and locate aldigest' 108 s, Tests 1102 s. Test result lines sum to 1311 passed, 0 failed. Slowest binaries 459.2 s, 164.5 s, 141.2 s, 56.2 s, 45.3 s, 35.6 s (binary names not mapped in this pass). Post Cache saved 382,832,989 bytes under the main ref, so later main runs can restore it. One cold main run, not a distribution; card_store and card_reuse remain in TRDD-F3ZUOQBK.
 
 ## Corrections
 
