@@ -1,10 +1,10 @@
 ---
 trdd-id: 6MG5N1ZF
 title: The Docker image still copies and runs the retired standalone server bundle
-column: testing
+column: ai_review
 status: tasked
 created: 2026-11-19T01:23:56+0100
-updated: 2026-11-20T06:04:10+0100
+updated: 2026-11-20T06:06:32+0100
 current-owner: main-agent@agentlenspro
 created-by: main-agent@agentlenspro
 task-type: bugfix
@@ -22,7 +22,7 @@ approval-datetime: 2026-11-19T01:23:56+0100
 Split out of TRDD-YL3EWT6N (its OPEN item "the Dockerfile repair") on 2026-11-19 as a release blocker of TRDD-HSPUF5XH. Facts (harness measure 2026-11-19): .github/workflows/docker.yml runs on every v* tag push (lines 3-6); Dockerfile line 39 copies /app/standalone/server.js and line 65 runs `node standalone/server.js`; git ls-files lists neither standalone/server.js nor standalone/server.ts (the TypeScript server was retired in 567fc5c2). That the image build fails or ships a broken image is INFERRED; the build was not run. HSPUF5XH line 211 also names a missing target-platform alcore build, media/index.html and sidebar.js in the image.
 
 ## Acceptance
-- [ ] The Dockerfile builds and starts alcore (the only server) for the image platform, with the dashboard assets it serves.
+- [x] The Dockerfile builds and starts alcore (the only server) for the image platform, with the dashboard assets it serves.
 - [x] A local `docker build` of the release tree succeeds, and the container answers on its UI and OTLP ports (or the reason a local build cannot run here is recorded and CI docker.yml is run by workflow_dispatch instead).
 - 2026-11-19T01:37:23+0100 main agent notes: (1) The local check (W74) builds linux/arm64 natively while docker.yml will ship linux/amd64 only, so the amd64 image (TARGETARCH amd64, bin-native/linux-x64) is UNVERIFIED until docker.yml runs; run it by workflow_dispatch before the tag. (2) Why not stage the prebuilt bin-native binaries of publish.yml (named by two harness reviews of W72): docker.yml is a separate workflow started by the same tag, and a workflow run cannot download another run's artifacts without a cross-run artifact lookup that neither workflow has; compiling in the image keeps docker.yml self-contained. (3) The docs gate owes one CHANGELOG/README line: the image is linux/amd64 only until TRDD-6J96UCTJ. (4) The user rule github.md asks to update outdated action versions in a touched workflow: the action pins of docker.yml are to be checked (gh api releases/latest per action, then pinact) before this card closes.
 
@@ -33,6 +33,7 @@ Split out of TRDD-YL3EWT6N (its OPEN item "the Dockerfile repair") on 2026-11-19
 - 2026-11-19T01:51:16+0100 — column → testing by main-agent@agentlenspro. box 2 waits on an OTLP probe and the docker.yml workflow_dispatch run before the tag
 - 2026-11-20T06:00:27+0100 — column → ai_review by main-agent@agentlenspro. both boxes met by the v2.34.0 docker.yml run and the amd64 image probe; waits one review round before complete; defect split to TRDD-A88PF0WA
 - 2026-11-20T06:04:10+0100 — column → testing by main-agent@agentlenspro. box 1 unticked: sidebar.js and dashboard.css not yet shown served by the amd64 image
+- 2026-11-20T06:06:32+0100 — column → ai_review by main-agent@agentlenspro. both boxes met: every dashboard asset served by the amd64 image; waits one review round
 
 ## Notes and lessons learned
 
@@ -47,3 +48,4 @@ Split out of TRDD-YL3EWT6N (its OPEN item "the Dockerfile repair") on 2026-11-19
 2026-11-19T03:33+0100 main agent POINTER. The release decision for this card lives on TRDD-HSPUF5XH: RISK ACCEPTED for boxes 1 and 2 (commit 8073fbe1); this card left the HSPUF5XH blocked-by list and its boxes run as POST-RELEASE CHECKS after the docker.yml tag run. Box 1 evidence so far: the arm64 container answered the UI root only; the dashboard bundles were not fetched on either platform.
 2026-11-20 post-release check (main agent, from cheap-worker report reports_dev/6MG5N1ZF/20261120_055157+0100-amd64-image-probe.md, read whole). docker.yml run 44651312460 on tag v2.34.0 succeeded. The published ghcr.io/emasoft/agentlenspro:2.34.0 pulled for linux/amd64 (inspect: amd64 linux, 413,908,086 bytes, digest sha256:674c8341298bc5f442c526db4611a25dbfee68307f78582a64f5391a610e6f2e), run with its own ports and no host mount on an aarch64 Docker host (emulated amd64). Box 1: alcore started (log: OTLP, UI/API and MCP listening one second after boot), GET / returned 200, GET /dashboard.js returned 200 with 464,401 bytes. Box 2: the release tree was built by docker.yml (not locally, per the 2026-11-19 decision), and the container answered the UI and accepted POST /v1/traces with an empty resourceSpans payload (200). Health: a second run logged two health checks with exit 0 at 5.2 s and 36.0 s and read healthy at 45 s. Limits: content of the page and bundle not checked, no real span sent, ingestion and persistence not verified. Defect found: the image never creates /data/otel-bodies, so alcore logs 'bodies sink precondition FAILED' at every start; filed as TRDD-A88PF0WA.
 2026-11-20 corrections (harness review). (1) Box 1 UNTICKED again: the 2026-11-19 correction asks for the dashboard bundles (plural) to be served, and only /dashboard.js was fetched; /sidebar.js and /dashboard.css were not. A probe of those is dispatched. (2) The run-2 health figures are in the rewritten report (Checks table, health row), re-read whole after the worker's rewrite. (3) Box 2 was ticked on the route the 2026-11-19 decision chose (the docker.yml tag run plus a pull of the published image), not on the box's literal local docker build or workflow_dispatch; its OTLP check covered the endpoint only (empty payload), not ingestion.
+2026-11-20 box 1 ticked again on the asset probe (report reports_dev/6MG5N1ZF/20261120_060452+0100-amd64-assets.md, read whole): a fresh container of the published 2.34.0 image (image metadata linux/amd64, started with --platform linux/amd64, emulated on an aarch64 host) returned 200 for / (29,706 bytes, text/html), /dashboard.js (464,401, application/javascript), /dashboard.css (25,744, text/css), /sidebar.js (7,887, application/javascript), /help-mascot.png (124,761, image/png) and /mascot.png (81,535, image/png); these are every script src and link href in the page's HTML. Each asset has its own size, unlike an SPA fallback, which would answer every path with the 29,706-byte page; bodies and PNG magic bytes were not checked. First 200 about 11 s after docker run.
